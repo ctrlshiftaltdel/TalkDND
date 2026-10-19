@@ -38,12 +38,16 @@ fn main() {
     println!("clone+init: {:.2} us", start.elapsed().as_secs_f64() / n as f64 * 1e6);
 
     for rounds in [1u32, 100] {
+        combat_sim::prof::reset();
         let m = if rounds == 1 { n } else { 2000 };
         let start = Instant::now();
         for _ in 0..m {
             let c = base.clone();
             std::hint::black_box(sim::play_quiet(c, &ai, &mut rng, rounds).unwrap());
         }
-        println!("play rounds={rounds}: {:.2} us", start.elapsed().as_secs_f64() / m as f64 * 1e6);
+        let total = start.elapsed().as_secs_f64();
+        println!("play rounds={rounds}: {:.2} us", total / m as f64 * 1e6);
+        combat_sim::prof::dump();
+        println!("(sum per run: turn {:.1}us next {:.1}us init {:.1}us)", 0.0, 0.0, 0.0);
     }
 }

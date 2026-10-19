@@ -191,6 +191,9 @@ fn ability_name_from_attack_kind(
 
 fn has_flag(state: &EncounterState, index: usize, flag: ConditionFlag) -> bool {
     let combatant = &state.combatants[index];
+    if combatant.conditions.is_empty() {
+        return false;
+    }
     active_condition_ids(&state.content, combatant)
         .iter()
         .any(|id| {
@@ -249,6 +252,9 @@ fn effective_speed(state: &EncounterState, index: usize) -> i32 {
         return 0;
     }
     let base = state.combatants[index].base_speed();
+    if !has_modifier_sources(state, index) {
+        return base;
+    }
     let modifiers = collect_modifiers(
         state,
         index,
@@ -886,6 +892,7 @@ pub fn init(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    let _profile = crate::prof::Prof::scope(&crate::prof::INIT);
     state.initiative.clear();
     state.round = 1;
     state.turn = 0;
@@ -966,6 +973,7 @@ pub fn next_turn(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    let _profile = crate::prof::Prof::scope(&crate::prof::NEXT_TURN);
     if state.initiative.is_empty() {
         bail!("initiative has not been rolled; run `init` first");
     }
@@ -2044,41 +2052,43 @@ pub fn save_fail_chance(
     attacker: Option<usize>,
 ) -> f64 {
     let combatant = &state.combatants[target];
-    let context = PredicateContext {
-        self_idx: target,
-        actor: target,
-        target: Some(target),
-        attacker,
-        linked: None,
-        attack: AttackFacts::default(),
-        has_advantage: false,
-        has_disadvantage: false,
-        damage_dealt: 0,
-        slot_level: None,
-        current_attack_total: None,
-        current_ac: None,
-        ability: Some(ability),
-        damage_type: None,
-        source_tags: Vec::new(),
-    };
     let mut mode = RollMode::Normal;
     let mut auto_fail = false;
     let mut bonus = 0.0;
-    for collected in collect_modifiers(state, target, ModifierApplies::Save, &context, None) {
-        match collected.modifier.effect {
-            ModifierEffect::Advantage => mode = add_advantage(mode),
-            ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
-            ModifierEffect::AutoFail => auto_fail = true,
-            ModifierEffect::Bonus => {
-                if let Some(value) = &collected.modifier.value {
-                    if let Ok(average) =
-                        average_expression(state, target, value, &BTreeMap::new(), None, None)
-                    {
-                        bonus += average;
+    if has_modifier_sources(state, target) {
+        let context = PredicateContext {
+            self_idx: target,
+            actor: target,
+            target: Some(target),
+            attacker,
+            linked: None,
+            attack: AttackFacts::default(),
+            has_advantage: false,
+            has_disadvantage: false,
+            damage_dealt: 0,
+            slot_level: None,
+            current_attack_total: None,
+            current_ac: None,
+            ability: Some(ability),
+            damage_type: None,
+            source_tags: Vec::new(),
+        };
+        for collected in collect_modifiers(state, target, ModifierApplies::Save, &context, None) {
+            match collected.modifier.effect {
+                ModifierEffect::Advantage => mode = add_advantage(mode),
+                ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
+                ModifierEffect::AutoFail => auto_fail = true,
+                ModifierEffect::Bonus => {
+                    if let Some(value) = &collected.modifier.value {
+                        if let Ok(average) =
+                            average_expression(state, target, value, &BTreeMap::new(), None, None)
+                        {
+                            bonus += average;
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
     if auto_fail {
@@ -2127,6 +2137,15 @@ pub fn damage_multiplier(
         .any(|entry| entry.eq_ignore_ascii_case(damage_type));
     if static_immune {
         return 0.0;
+    }
+    let has_static_lists = combatant.creature.resistances.as_deref().is_some_and(|list| !list.is_empty())
+        || combatant
+            .creature
+            .vulnerabilities
+            .as_deref()
+            .is_some_and(|list| !list.is_empty());
+    if !has_static_lists && !has_modifier_sources(state, target) {
+        return 1.0;
     }
     let mut multiplier = 1.0f64;
     if combatant
@@ -2243,6 +2262,7 @@ pub fn attack(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    let _profile = crate::prof::Prof::scope(&crate::prof::ATTACK);
     let attacker_index = state
         .find_index(attacker)
         .map_err(|error| anyhow!(error.to_string()))?;
@@ -2406,6 +2426,7 @@ fn resolve_attack(
     economy_spent: bool,
     ignore_range: bool,
 ) -> Result<()> {
+    let _p = crate::prof::Prof::scope(&crate::prof::RESOLVE);
     if economy_spent {
         // Caller already spent the action (multiattack / ability effect).
     }

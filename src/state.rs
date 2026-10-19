@@ -250,6 +250,9 @@ impl CombatantState {
     }
 
     pub fn has_condition(&self, content: &ContentRegistry, condition: &str) -> bool {
+        if self.conditions.is_empty() {
+            return false;
+        }
         active_condition_ids(content, self)
             .iter()
             .any(|id| id.eq_ignore_ascii_case(condition))
@@ -1441,6 +1444,9 @@ fn zone_list(scene: &Scene, grid: Option<&GridMap>) -> String {
 
 /// Condition ids active on a creature, including recursively implied ones.
 pub fn active_condition_ids(content: &ContentRegistry, combatant: &CombatantState) -> Vec<String> {
+    if combatant.conditions.is_empty() {
+        return Vec::new();
+    }
     let mut ids: Vec<String> = Vec::new();
     let mut stack: Vec<String> = combatant
         .conditions
