@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 
 use crate::content::schema::{
-    AbilityCost, AbilityName, Activation, AiAssignment, AiParams, AiRole, AiTargeting,
-    Attack, AttackEffect, AttackKind, AttackProperty, BasicAction, ConditionDef, Effect, ExprValue,
-    RangePreference, TargetRef, TargetSide, TargetType,
+    AbilityCost, AbilityName, Activation, AiAssignment, AiParams, AiRole, AiTargeting, Attack,
+    AttackEffect, AttackKind, BasicAction, ConditionDef, Effect, ExprValue, RangePreference,
+    TargetRef, TargetSide, TargetType,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::DiceRng;
@@ -72,10 +72,7 @@ struct PlannedAction {
     reach: i32,
     attack_range: Option<[i32; 2]>,
     attack_kind: Option<AttackKind>,
-    properties: Vec<AttackProperty>,
-    ability: Option<AbilityName>,
     tags: Vec<String>,
-    params: BTreeMap<String, ExprValue>,
     slot_level: Option<i32>,
     raw_damage: f64,
 }
@@ -159,6 +156,10 @@ struct Score {
 }
 
 impl Score {
+    fn total(&self) -> f64 {
+        self.damage + self.heal + self.control + self.buff + self.defense
+    }
+
     fn add(self, other: Score) -> Score {
         Score {
             damage: self.damage + other.damage,
@@ -382,7 +383,12 @@ impl Ai {
             {
                 continue;
             }
+            let used_action = action.activation == Activation::Action;
+            let used_bonus = action.activation == Activation::Bonus;
             self.execute(state, actor, action, target, None, rng, log)?;
+            if used_action || used_bonus {
+                break;
+            }
         }
         Ok(())
     }
@@ -562,7 +568,7 @@ impl Ai {
         target: usize,
     ) -> f64 {
         if action.role == AiRole::Heal || action.role == AiRole::SelfHeal {
-            return Score::default();
+            return 0.0;
         }
         let mut score = match &action.kind {
             PlannedKind::Attack(attack) => {
@@ -860,11 +866,19 @@ impl Ai {
         }
         let count = action.target_count.max(1) as usize;
         let side = action.target_side.unwrap_or(TargetSide::Any);
-        let mut targets = vec![primary];
+        let mut targets = if side == TargetSide::Ally {
+            if state.combatants[primary].side == state.combatants[actor].side {
+                vec![primary]
+            } else {
+                vec![actor]
+            }
+        } else {
+            vec![primary]
+        };
         if count > 1 {
             let mut others: Vec<usize> = (0..state.combatants.len())
                 .filter(|&index| {
-                    index != primary
+                    index != targets[0]
                         && !state.combatants[index].dormant
                         && !state.combatants[index].is_dead()
                 })
@@ -881,12 +895,13 @@ impl Ai {
             others.sort_by_key(|&index| state.combatants[index].hp);
             targets.extend(others.into_iter().take(count - 1));
         }
-        if action.role == AiRole::Buff || action.role == AiRole::Defense {
-            if !targets.contains(&actor) && action.target_side == Some(TargetSide::Ally) {
-                targets.insert(0, actor);
-            }
-            targets.truncate(count);
+        if (action.role == AiRole::Buff || action.role == AiRole::Defense)
+            && !targets.contains(&actor)
+            && action.target_side == Some(TargetSide::Ally)
+        {
+            targets.insert(0, actor);
         }
+        targets.truncate(count);
         targets
     }
 
@@ -952,13 +967,13 @@ impl Ai {
         Ok(())
     }
 
-    fn best_action_for_position(
+    fn best_action_for_position<'a>(
         &self,
         state: &EncounterState,
         actor: usize,
-        plan: &CombatantPlan,
+        plan: &'a CombatantPlan,
         target: usize,
-    ) -> Option<&PlannedAction> {
+    ) -> Option<&'a PlannedAction> {
         plan.actions
             .iter()
             .filter(|action| {
@@ -1096,12 +1111,14 @@ impl Ai {
         let mut best: Option<(f64, i32, Position)> = None;
         for (cost, position) in candidates {
             let zone = space.zone_of(&position);
-            if let Some(guard) = guard_zone.as_deref() {
-                if nearest <= leash && !in_guard {
-                    // Chasing is allowed, but do not wander away from the
-                    // guard zone beyond the leash.
-                } else if zone.as_deref() != Some(guard) {
-                    continue;
+            if !fleeing {
+                if let Some(guard) = guard_zone.as_deref() {
+                    if nearest <= leash && !in_guard {
+                        // Chasing is allowed, but do not wander away from the
+                        // guard zone beyond the leash.
+                    } else if zone.as_deref() != Some(guard) {
+                        continue;
+                    }
                 }
             }
             let min_enemy = hostiles
@@ -1128,31 +1145,13 @@ impl Ai {
                         .and_then(|zone| space.distance(&position, &zone))
                         .unwrap_or(9999);
                     -f64::from(zone_distance) * 10.0 - f64::from(cost) * 0.01
-                } else if let Some(target) = target_position.as_ref() {
-                    approach_score(
-                        &space,
-                        &position,
-                        target,
-                        &hostiles,
-                        keep,
-                        range_pref,
-                        min_enemy,
-                        distance_target,
-                    )
+                } else if target_position.is_some() {
+                approach_score(keep, range_pref, min_enemy, distance_target)
                 } else {
                     0.0
                 }
-            } else if let Some(target) = target_position.as_ref() {
-                approach_score(
-                    &space,
-                    &position,
-                    target,
-                    &hostiles,
-                    keep,
-                    range_pref,
-                    min_enemy,
-                    distance_target,
-                )
+            } else if target_position.is_some() {
+                approach_score(keep, range_pref, min_enemy, distance_target)
             } else {
                 -f64::from(cost) * 0.01
             };
@@ -1226,17 +1225,11 @@ impl Ai {
 }
 
 fn approach_score(
-    space: &dyn Space,
-    position: &Position,
-    target: &Position,
-    hostiles: &[Position],
     keep: i32,
     range_pref: Option<RangePreference>,
     min_enemy: i32,
     distance_target: i32,
 ) -> f64 {
-    let _ = space;
-    let _ = hostiles;
     if keep > 0
         && matches!(range_pref, Some(RangePreference::Ranged))
         && min_enemy < keep
@@ -1315,10 +1308,7 @@ fn build_plan(state: &EncounterState, actor: usize) -> CombatantPlan {
             reach: 5,
             attack_range: None,
             attack_kind: None,
-            properties: Vec::new(),
-            ability: None,
             tags: ability.tags.clone(),
-            params: resolved.params.clone(),
             slot_level,
             raw_damage,
         });
@@ -1410,10 +1400,7 @@ fn planned_attack(state: &EncounterState, actor: usize, attack: &Attack) -> Plan
         reach: attack.reach.unwrap_or(5),
         attack_range: attack.range,
         attack_kind: Some(attack.kind),
-        properties: attack.properties.clone(),
-        ability: attack.ability,
         tags: Vec::new(),
-        params,
         slot_level: None,
         raw_damage,
     }
@@ -1666,7 +1653,7 @@ fn condition_value(content: &ContentRegistry, id: &str) -> f64 {
 
 fn condition_def_value(definition: &ConditionDef) -> f64 {
     use crate::content::schema::{ConditionFlag, ModifierApplies, ModifierEffect};
-    let mut value = 0.0;
+    let mut value: f64 = 0.0;
     for flag in &definition.flags {
         value += match flag {
             ConditionFlag::Incapacitated => 1.2,
