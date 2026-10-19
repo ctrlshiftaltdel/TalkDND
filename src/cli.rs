@@ -196,8 +196,31 @@ pub enum Command {
         command: ConditionCommand,
     },
 
-    /// Move a combatant to another zone.
-    Move { who: String, zone: String },
+    /// Move a combatant to another zone or grid cell.
+    Move {
+        who: String,
+        /// Destination zone (grid: any free cell with that zone tag).
+        #[arg(conflicts_with = "to")]
+        zone: Option<String>,
+        /// Exact grid destination, for example `--to 3,2`.
+        #[arg(long, value_name = "X,Y")]
+        to: Option<String>,
+        /// Skip opportunity attacks from creatures being left.
+        #[arg(long)]
+        no_oa: bool,
+    },
+
+    /// Interact with a scene object.
+    Interact {
+        who: String,
+        object: String,
+        /// 1-based option number for an object with an options list.
+        #[arg(long)]
+        option: Option<usize>,
+    },
+
+    /// Print zones, edges, objects, triggers and positions.
+    Scene,
 
     /// Roll a death saving throw.
     Deathsave { who: String },
@@ -492,7 +515,6 @@ pub fn run() -> Result<()> {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
-                let targets = canonical_names(state, &targets)?;
                 let options = UseOptions {
                     targets,
                     option,
@@ -517,7 +539,6 @@ pub fn run() -> Result<()> {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
-                let targets = canonical_names(state, &targets)?;
                 let options = UseOptions {
                     targets: targets.clone(),
                     option,
@@ -589,13 +610,49 @@ pub fn run() -> Result<()> {
                 })
             }
         },
-        Command::Move { who, zone } => {
+        Command::Move {
+            who,
+            zone,
+            to,
+            no_oa,
+        } => {
+            if zone.is_none() && to.is_none() {
+                return Err(anyhow!("move needs a destination zone or --to X,Y"));
+            }
+            let target = if let Some(to) = to {
+                let (x, y) = to
+                    .split_once(',')
+                    .ok_or_else(|| anyhow!("--to expects X,Y"))?;
+                let x: i32 = x
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("invalid x coordinate in `{to}`"))?;
+                let y: i32 = y
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("invalid y coordinate in `{to}`"))?;
+                engine::MoveTarget::Cell(x, y)
+            } else {
+                engine::MoveTarget::Zone(zone.unwrap())
+            };
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, _rng, lines| {
+            run_state_command(&path, seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
-                engine::move_to(state, &who, &zone, lines)
+                engine::move_to(state, &who, &target, no_oa, rng, lines)
             })
         }
+        Command::Interact {
+            who,
+            object,
+            option,
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                let who = canonical_name(state, &who)?;
+                engine::interact(state, &who, &object, option, rng, lines)
+            })
+        }
+        Command::Scene => print_scene(&state_path(&sources, state.as_deref())),
         Command::Deathsave { who } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
@@ -825,13 +882,6 @@ fn canonical_name(state: &EncounterState, query: &str) -> Result<String> {
     Ok(state.combatants[index].name.clone())
 }
 
-fn canonical_names(state: &EncounterState, queries: &[String]) -> Result<Vec<String>> {
-    queries
-        .iter()
-        .map(|query| canonical_name(state, query))
-        .collect()
-}
-
 fn known_combatants(state: &EncounterState) -> String {
     if state.combatants.is_empty() {
         "(none)".to_string()
@@ -885,6 +935,15 @@ fn print_log(state_path: &Path, tail: Option<usize>) -> Result<()> {
     Ok(())
 }
 
+fn print_scene(state_path: &Path) -> Result<()> {
+    let state = EncounterState::load(state_path)
+        .with_context(|| format!("failed to load state {}", state_path.display()))?;
+    for line in engine::scene_text(&state) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 struct StatusOutput {
     round: u32,
@@ -906,6 +965,8 @@ struct CombatantStatus {
     temp_hp: i32,
     ac: i32,
     zone: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pos: Option<[i32; 2]>,
     conditions: Vec<ConditionStatus>,
     resources: BTreeMap<String, ResourceStatus>,
     death_saves: Option<crate::state::DeathSaves>,
@@ -948,6 +1009,7 @@ impl StatusOutput {
                     temp_hp: combatant.temp_hp,
                     ac: engine::armor_class(state, index),
                     zone: combatant.zone.clone(),
+                    pos: combatant.cell(),
                     conditions: combatant
                         .conditions
                         .iter()

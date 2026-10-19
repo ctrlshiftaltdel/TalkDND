@@ -1,0 +1,241 @@
+rules:
+  dying_conditions: [downed-test]
+  basic_actions:
+    dodge: dodging-test
+    disengage: disengaged-test
+    hide: hidden-test
+    help: helped-test
+  cover: {half: 2, three_quarters: 5}
+
+conditions:
+  - id: no-oa-test
+    flags: [no_opportunity_attacks]
+  - id: no-oa-against-test
+    flags: [no_opportunity_attacks_against]
+
+abilities:
+  - id: cover-save
+    name: Cover Save
+    activation: action
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - save:
+          ability: dex
+          dc: 12
+          on_fail:
+            - damage: {dice: "1d6", type: fire}
+  - id: cover-save-ignore
+    name: Cover Save Ignore
+    activation: action
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - save:
+          ability: dex
+          dc: 12
+          ignore_cover: true
+          on_fail:
+            - damage: {dice: "1d6", type: fire}
+  - id: zone-burst
+    name: Zone Burst
+    activation: action
+    range: 60
+    target: {type: zone}
+    area: {radius: 5}
+    effects:
+      - apply_condition: {condition: dazed, to: target, duration: {permanent: true}}
+  - id: shove-test
+    name: Shove Test
+    activation: action
+    range: 5
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - forced_move: {distance: 5, direction: away}
+  - id: toggle-trap
+    name: Toggle Trap
+    activation: action
+    target: {type: self}
+    effects:
+      - toggle_trigger: {trigger: trap-b, enabled: false}
+
+creatures:
+  - id: adept-a
+    name: Adept A
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 2
+    prof: 2
+    abilities: {str: 10, dex: 14, con: 12, int: 12, wis: 10, cha: 10}
+    skills: {athletics: 4, arcana: 3}
+    attacks:
+      - {id: test-sword, name: Test Sword, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5}
+      - {id: test-bow, name: Test Bow, kind: ranged, ability: dex, to_hit: 5, damage: [{dice: "1d6+2", type: piercing}], range: [80, 320]}
+    actions:
+      - {ref: cover-save}
+      - {ref: cover-save-ignore}
+      - {ref: zone-burst}
+      - {ref: shove-test}
+      - {ref: toggle-trap}
+  - id: dusk-scout
+    name: Dusk Scout
+    kind: monster
+    side: enemy
+    ac: 13
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 2
+    prof: 2
+    abilities: {str: 10, dex: 14, con: 10, int: 8, wis: 12, cha: 8}
+    senses: "Darkvision 60 ft."
+    attacks:
+      - {id: test-bow, name: Test Bow, kind: ranged, ability: dex, to_hit: 5, damage: [{dice: "1d6+2", type: piercing}], range: [80, 320]}
+  - id: sentinel-t
+    name: Sentinel T
+    kind: monster
+    side: enemy
+    ac: 13
+    hp: 30
+    speed: {walk: 30}
+    init_bonus: 1
+    prof: 2
+    abilities: {str: 14, dex: 10, con: 12, int: 8, wis: 10, cha: 8}
+    attacks:
+      - {id: club, name: Club, kind: melee, ability: str, to_hit: 4, damage: [{dice: "1d8+2", type: bludgeoning}], reach: 5}
+
+scenes:
+  - id: zone-space
+    name: Zone Space
+    mode: zones
+    light: bright
+    zones:
+      - {id: alpha}
+      - {id: beta}
+      - {id: gamma}
+      - {id: delta, cover: half}
+      - {id: vault, cover: total}
+      - {id: dark-room, light: dark}
+      - {id: high-ledge, elevation: 10}
+      - {id: locked-room}
+      - {id: far}
+    edges:
+      - {a: alpha, b: beta, distance: 5}
+      - {a: beta, b: gamma, distance: 10}
+      - {a: beta, b: delta, distance: 5}
+      - {a: beta, b: dark-room, distance: 5}
+      - {a: alpha, b: vault, distance: 5}
+      - {a: alpha, b: high-ledge, distance: 5, climb: {skill: athletics, dc: 10}}
+      - {a: beta, b: locked-room, distance: 5, door: {locked: true}}
+      - {a: beta, b: far, distance: 10, difficult: true}
+    objects:
+      - id: lever
+        zone: beta
+        name: Rusty Lever
+        interact:
+          effects: [{note: "The lever moves with a clunk."}]
+      - id: console
+        zone: beta
+        name: Control Console
+        interact:
+          options:
+            - name: "Trace the glyphs"
+              check: {skill: arcana, dc: 10}
+              on_success: [{note: "The glyphs glow and settle."}]
+              on_fail: [{note: "The glyphs stay dark."}]
+            - name: "Press the red button"
+              effects: [{note: "A bell rings somewhere."}]
+      - id: sigil
+        zone: alpha
+        name: Carved Sigil
+        interact:
+          check: {skill: arcana, dc: 10}
+          on_success: [{note: "The sigil accepts your touch."}]
+          on_fail: [{note: "The sigil rejects your touch."}]
+    triggers:
+      - id: enter-beta
+        on: on_enter_area
+        zone: beta
+        once: true
+        effects: [{note: "beta entered"}]
+      - id: party-delta
+        on: on_enter_area
+        zone: delta
+        side: party
+        effects: [{note: "party delta"}]
+      - id: occupants-gamma
+        on: on_enter_area
+        zone: gamma
+        affects: zone_occupants
+        effects:
+          - apply_condition: {condition: dazed, to: target, duration: {permanent: true}}
+      - id: high-note
+        on: on_enter_area
+        zone: high-ledge
+        effects: [{note: "high entered"}]
+      - id: forced-enter
+        on: on_enter_area
+        zones: [delta, dark-room]
+        effects: [{note: "forced entered"}]
+      - id: wake-trigger
+        on: on_enter_area
+        zone: high-ledge
+        side: party
+        once: true
+        effects: [{activate: {creature: dormant-d}}]
+      - id: trap-b
+        on: on_enter_area
+        zone: beta
+        effects: [{note: "trap fired"}]
+
+  - id: grid-space
+    name: Grid Space
+    mode: grid
+    light: bright
+    grid:
+      cell: 5
+      legend:
+        "#": {wall: true}
+        ".": {}
+        "h": {cover: half}
+        "H": {cover: three_quarters}
+        "~": {difficult: true}
+        "S": {zone: statue}
+        "D": {zone: door}
+        "T": {}
+        "^": {elevation: 5}
+      rows:
+        - "#########"
+        - "#..h.TT.#"
+        - "#.#.#...#"
+        - "#..~..D.#"
+        - "#S....H.#"
+        - "#########"
+      zones: {tables: T}
+
+encounters:
+  - id: zone-fight
+    name: Zone Fight
+    scene: zone-space
+    party_zone: alpha
+    members:
+      - {creature: sentinel-t, zone: beta}
+  - id: zone-empty
+    name: Zone Empty
+    scene: zone-space
+    party_zone: alpha
+    members: []
+  - id: grid-fight
+    name: Grid Fight
+    scene: grid-space
+    party_zone: door
+    members:
+      - {creature: sentinel-t, count: 2, zone: tables}
+  - id: grid-pos-fight
+    name: Grid Position Fight
+    scene: grid-space
+    party_zone: door
+    members:
+      - {creature: sentinel-t, pos: [2, 1]}

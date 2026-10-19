@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use combat_sim::content::schema::{AbilityName, Duration, DurationUntil};
 use combat_sim::content::{ContentRegistry, ContentSources};
 use combat_sim::dice::DiceRng;
-use combat_sim::engine::{self, AddConditionOptions, AttackOptions, RestKind, UseOptions};
+use combat_sim::engine::{self, AddConditionOptions, AttackOptions, MoveTarget, RestKind, UseOptions};
+use combat_sim::space::{Cover, Position};
 use combat_sim::state::{ActiveDuration, AddSpec, CombatOutcome, EncounterState, NewEncounter};
 
 fn fixture(relative: &str) -> PathBuf {
@@ -1155,6 +1156,761 @@ fn until_subject_ends_condition_at_the_subjects_next_turn() {
             .any(|line| line.contains("Striker A is no longer hindered")),
         "{log:?}"
     );
+}
+
+#[test]
+fn zone_graph_distance_uses_path_edges_and_elevation() {
+    let state = state("zone-empty", &["adept-a"], &[]);
+    let space = state.space().expect("zone space");
+    let alpha = Position::zone("alpha");
+    let beta = Position::zone("beta");
+    let gamma = Position::zone("gamma");
+    let far = Position::zone("far");
+    let high = Position::zone("high-ledge");
+
+    assert_eq!(space.distance(&alpha, &gamma), Some(15));
+    assert_eq!(space.distance(&alpha, &alpha), Some(0));
+    assert_eq!(space.travel_distance(&beta, &far), Some(20));
+    assert_eq!(
+        space.distance(&beta, &far),
+        Some(10),
+        "difficult doubles movement only, not range"
+    );
+    assert_eq!(space.distance(&alpha, &high), Some(15));
+    assert!(space.can_reach(&alpha, &beta, 5));
+    assert!(
+        !space.can_reach(&alpha, &high, 5),
+        "a 10-ft-up ledge blocks 5-ft melee reach"
+    );
+}
+
+#[test]
+fn zone_cover_applies_to_ac_and_dex_saves_and_ignore_cover_skips_it() {
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "delta")]);
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Adept A",
+        "Sentinel T",
+        "test-bow",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 1]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("AC 13+2(half cover)")),
+        "{log:?}"
+    );
+
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "delta")]);
+    let options = UseOptions {
+        targets: vec!["Sentinel T".to_string()],
+        ..UseOptions::default()
+    };
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Adept A",
+        "cover-save",
+        &options,
+        &mut ScriptedRng::new(&[10]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("+2[half cover]")),
+        "{log:?}"
+    );
+
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "delta")]);
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Adept A",
+        "cover-save-ignore",
+        &options,
+        &mut ScriptedRng::new(&[10]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        !log.iter().any(|line| line.contains("half cover")),
+        "ignore_cover must skip the save bonus: {log:?}"
+    );
+}
+
+#[test]
+fn total_cover_rejects_targeting_but_same_zone_attacks_work() {
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "vault")]);
+    let mut log = Vec::new();
+    let error = engine::attack(
+        &mut state,
+        "Adept A",
+        "Sentinel T",
+        "test-bow",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("total cover"), "{error:#}");
+
+    let sentinel = index(&state, "Sentinel T");
+    state.combatants[sentinel].set_zone("alpha");
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Adept A",
+        "Sentinel T",
+        "test-bow",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 1]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(log.iter().any(|line| line.contains("HIT")), "{log:?}");
+}
+
+#[test]
+fn darkness_imposes_disadvantage_unless_the_attacker_has_darkvision() {
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "dark-room")]);
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Adept A",
+        "Sentinel T",
+        "test-bow",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 1]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("dis: darkness")),
+        "{log:?}"
+    );
+
+    let mut state = state("zone-empty", &["dusk-scout"], &[("sentinel-t", "dark-room")]);
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Dusk Scout",
+        "Sentinel T",
+        "test-bow",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 1]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        !log.iter().any(|line| line.contains("dis: darkness")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn climbing_up_rolls_and_down_needs_no_check() {
+    let mut state = state("zone-empty", &["adept-a"], &[("dormant-d", "high-ledge")]);
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("high-ledge".to_string()),
+        false,
+        &mut ScriptedRng::new(&[12, 10]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(state.combatants[index(&state, "Adept A")].zone, "high-ledge");
+    assert!(
+        log.iter().any(|line| line.contains("athletics check") && line.contains("PASS")),
+        "{log:?}"
+    );
+    assert!(!state.combatants[index(&state, "Dormant D")].dormant);
+    assert!(log.iter().any(|line| line.contains("activates")), "{log:?}");
+
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("alpha".to_string()),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(state.combatants[index(&state, "Adept A")].zone, "alpha");
+    assert!(
+        !log.iter().any(|line| line.contains("athletics check")),
+        "climbing down must not roll: {log:?}"
+    );
+
+    let mut state = state("zone-empty", &["adept-a"], &[("dormant-d", "high-ledge")]);
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("high-ledge".to_string()),
+        false,
+        &mut ScriptedRng::new(&[5]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(state.combatants[index(&state, "Adept A")].zone, "alpha");
+    assert!(
+        log.iter().any(|line| line.contains("FAIL") && line.contains("climb")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn locked_doors_stop_movement() {
+    let mut state = state("zone-empty", &["adept-a"], &[]);
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("locked-room".to_string()),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(state.combatants[index(&state, "Adept A")].zone, "beta");
+    assert!(
+        log.iter().any(|line| line.contains("locked door")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn leaving_a_zone_provokes_an_opportunity_attack() {
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("beta".to_string()),
+        false,
+        &mut ScriptedRng::new(&[15, 3]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter()
+            .any(|line| line.contains("makes an opportunity attack")),
+        "{log:?}"
+    );
+    assert_eq!(hp(&state, "Adept A"), 15);
+    assert_eq!(
+        state.combatants[index(&state, "Sentinel T")].reaction_round,
+        Some(state.round)
+    );
+
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
+    engine::add_condition(
+        &mut state,
+        "Adept A",
+        "disengaged-test",
+        &AddConditionOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("beta".to_string()),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(!log.iter().any(|line| line.contains("opportunity attack")), "{log:?}");
+    assert_eq!(hp(&state, "Adept A"), 20);
+
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("beta".to_string()),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(!log.iter().any(|line| line.contains("opportunity attack")), "{log:?}");
+
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
+    engine::add_condition(
+        &mut state,
+        "Adept A",
+        "no-oa-against-test",
+        &AddConditionOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("beta".to_string()),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(!log.iter().any(|line| line.contains("opportunity attack")), "{log:?}");
+}
+
+#[test]
+fn enter_triggers_respect_once_and_side_filters() {
+    let mut state = state("zone-empty", &["adept-a"], &[]);
+    let mut log = Vec::new();
+    for zone in ["beta", "alpha", "beta"] {
+        engine::move_to(
+            &mut state,
+            "Adept A",
+            &MoveTarget::Zone(zone.to_string()),
+            true,
+            &mut ScriptedRng::new(&[]),
+            &mut log,
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        log.iter().filter(|line| *line == "beta entered").count(),
+        1,
+        "once triggers fire only once: {log:?}"
+    );
+    assert_eq!(
+        log.iter().filter(|line| *line == "trap fired").count(),
+        2,
+        "enabled non-once triggers fire every entry: {log:?}"
+    );
+
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "beta")]);
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Sentinel T",
+        &MoveTarget::Zone("delta".to_string()),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        !log.iter().any(|line| line.contains("party delta")),
+        "enemy entry must not fire a party-only trigger: {log:?}"
+    );
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("delta".to_string()),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("party delta")),
+        "party entry must fire it: {log:?}"
+    );
+}
+
+#[test]
+fn zone_occupant_triggers_affect_everyone_in_the_zone() {
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "gamma")]);
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("gamma".to_string()),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(state.combatants[index(&state, "Adept A")].has_condition(&state.content, "dazed"));
+    assert!(state.combatants[index(&state, "Sentinel T")].has_condition(&state.content, "dazed"));
+}
+
+#[test]
+fn toggle_trigger_disables_an_enter_trigger() {
+    let mut state = state("zone-empty", &["adept-a"], &[]);
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Adept A",
+        "toggle-trap",
+        &UseOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("now disabled")),
+        "{log:?}"
+    );
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("beta".to_string()),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        !log.iter().any(|line| *line == "trap fired"),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn forced_movement_fires_enter_triggers_without_opportunity_attacks() {
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "beta")]);
+    let options = UseOptions {
+        targets: vec!["Sentinel T".to_string()],
+        ..UseOptions::default()
+    };
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Adept A",
+        "shove-test",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| *line == "forced entered"),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter().any(|line| line.contains("opportunity attack")),
+        "{log:?}"
+    );
+    assert_ne!(state.combatants[index(&state, "Sentinel T")].zone, "beta");
+}
+
+#[test]
+fn area_targeting_hits_every_zone_in_radius() {
+    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "beta")]);
+    let options = UseOptions {
+        targets: vec!["beta".to_string()],
+        ..UseOptions::default()
+    };
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Adept A",
+        "zone-burst",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(state.combatants[index(&state, "Sentinel T")].has_condition(&state.content, "dazed"));
+    assert!(state.combatants[index(&state, "Adept A")].has_condition(&state.content, "dazed"));
+}
+
+#[test]
+fn interact_runs_direct_effects_and_option_checks() {
+    let mut state = state("zone-empty", &["adept-a"], &[]);
+    let mut log = Vec::new();
+    engine::interact(
+        &mut state,
+        "Adept A",
+        "lever",
+        None,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("lever moves")),
+        "{log:?}"
+    );
+
+    let mut log = Vec::new();
+    engine::interact(
+        &mut state,
+        "Adept A",
+        "console",
+        Some(1),
+        &mut ScriptedRng::new(&[15]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(log.iter().any(|line| line.contains("arcana check") && line.contains("PASS")), "{log:?}");
+    assert!(log.iter().any(|line| line.contains("glyphs glow")), "{log:?}");
+
+    let mut log = Vec::new();
+    engine::interact(
+        &mut state,
+        "Adept A",
+        "console",
+        Some(2),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(log.iter().any(|line| line.contains("bell rings")), "{log:?}");
+
+    let error = engine::interact(
+        &mut state,
+        "Adept A",
+        "console",
+        None,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("requires --option"), "{error:#}");
+
+    let mut log = Vec::new();
+    engine::interact(
+        &mut state,
+        "Adept A",
+        "sigil",
+        None,
+        &mut ScriptedRng::new(&[2]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(log.iter().any(|line| line.contains("rejects")), "{log:?}");
+}
+
+#[test]
+fn grid_distance_and_line_of_sight_cover() {
+    let mut state = state("grid-pos-fight", &["adept-a"], &[]);
+    let space = state.space().expect("grid space");
+    assert_eq!(
+        space.distance(&Position::cell(1, 1), &Position::cell(3, 3)),
+        Some(10),
+        "diagonals are one 5-ft step"
+    );
+
+    let mut state2 = state("grid-fight", &["adept-a"], &[]);
+    let adept = index(&state2, "Adept A");
+    let sentinel = index(&state2, "Sentinel T 1");
+    state2.combatants[adept].set_cell(1, 1, "open");
+    state2.combatants[sentinel].set_cell(5, 1, "tables");
+    let space = state2.space().unwrap();
+    assert_eq!(
+        space.cover(&Position::cell(1, 1), &Position::cell(5, 1)),
+        Cover::Half
+    );
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state2,
+        "Adept A",
+        "Sentinel T 1",
+        "test-bow",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 1]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("AC 13+2(half cover)")),
+        "{log:?}"
+    );
+
+    let mut state3 = state("grid-fight", &["adept-a"], &[]);
+    state3.combatants[index(&state3, "Adept A")].set_cell(1, 2, "open");
+    state3.combatants[index(&state3, "Sentinel T 1")].set_cell(5, 2, "open");
+    let mut log = Vec::new();
+    let error = engine::attack(
+        &mut state3,
+        "Adept A",
+        "Sentinel T 1",
+        "test-bow",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("total cover"), "{error:#}");
+
+    let mut state4 = state("grid-fight", &["adept-a"], &[]);
+    state4.combatants[index(&state4, "Adept A")].set_cell(1, 4, "statue");
+    state4.combatants[index(&state4, "Sentinel T 1")].set_cell(7, 4, "open");
+    let space = state4.space().unwrap();
+    assert_eq!(
+        space.cover(&Position::cell(1, 4), &Position::cell(7, 4)),
+        Cover::ThreeQuarters
+    );
+    assert_eq!(
+        space.cover(&Position::cell(2, 1), &Position::cell(3, 1)),
+        Cover::None,
+        "an adjacent target does not get its own cell's cover"
+    );
+}
+
+#[test]
+fn grid_movement_routes_around_walls_difficult_cells_and_hostiles() {
+    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let adept = index(&state, "Adept A");
+    state.combatants[adept].set_cell(1, 2, "open");
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Cell(3, 2),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(state.combatants[adept].cell(), Some([3, 2]));
+    assert_eq!(
+        state.combatants[adept].speed_left, 10,
+        "the wall forces a 20-ft route instead of a 10-ft diagonal"
+    );
+
+    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let adept = index(&state, "Adept A");
+    state.combatants[adept].set_cell(2, 3, "open");
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Cell(3, 3),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(state.combatants[adept].speed_left, 20);
+
+    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let adept = index(&state, "Adept A");
+    state.combatants[adept].set_cell(1, 3, "open");
+    state.combatants[index(&state, "Sentinel T 1")].set_cell(2, 3, "open");
+    state.combatants[index(&state, "Sentinel T 2")].set_cell(6, 1, "tables");
+    let space = state.space().unwrap();
+    let route = space
+        .move_route(
+            &Position::cell(1, 3),
+            &Position::cell(3, 3),
+            &[Position::cell(2, 3)],
+        )
+        .unwrap();
+    assert!(route.iter().all(|step| step.position != Position::cell(2, 3)));
+    assert!(route.iter().map(|step| step.cost).sum::<i32>() > 10);
+}
+
+#[test]
+fn grid_encounters_place_by_zone_and_explicit_position() {
+    let state = state("grid-fight", &["adept-a"], &[]);
+    assert_eq!(state.combatants[index(&state, "Sentinel T 1")].cell(), Some([5, 1]));
+    assert_eq!(state.combatants[index(&state, "Sentinel T 2")].cell(), Some([6, 1]));
+    assert_eq!(state.combatants[index(&state, "Adept A")].cell(), Some([6, 3]));
+    assert_eq!(state.combatants[index(&state, "Adept A")].zone, "door");
+
+    let state = state("grid-pos-fight", &["adept-a"], &[]);
+    assert_eq!(state.combatants[index(&state, "Sentinel T")].cell(), Some([2, 1]));
+}
+
+#[test]
+fn grid_zone_placement_falls_back_to_the_nearest_free_cell() {
+    let options = NewEncounter {
+        encounter: "grid-fight".to_string(),
+        party: vec!["adept-a".to_string()],
+        party_zone: None,
+        adds: vec![AddSpec {
+            creature: "sentinel-t".to_string(),
+            count: 1,
+            zone: Some("tables".to_string()),
+        }],
+    };
+    let state = EncounterState::from_encounter(registry(), &options).unwrap();
+    let cells: Vec<[i32; 2]> = state
+        .combatants
+        .iter()
+        .filter(|combatant| combatant.creature.id == "sentinel-t")
+        .filter_map(|combatant| combatant.cell())
+        .collect();
+    assert_eq!(cells.len(), 3);
+    let unique: std::collections::BTreeSet<[i32; 2]> = cells.iter().copied().collect();
+    assert_eq!(unique.len(), 3, "third member falls back to a free cell");
+    assert!(
+        state.log.iter().any(|line| line.contains("has no free cell")),
+        "{:?}",
+        state.log
+    );
+}
+
+#[test]
+fn grid_zone_and_exact_destinations_work() {
+    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Zone("statue".to_string()),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    let adept = index(&state, "Adept A");
+    assert_eq!(state.combatants[adept].cell(), Some([1, 4]));
+    assert_eq!(state.combatants[adept].zone, "statue");
+
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Cell(2, 4),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(state.combatants[adept].cell(), Some([2, 4]));
+    assert_eq!(state.combatants[adept].zone, "open");
+}
+
+#[test]
+fn grid_scene_text_reports_coordinates_and_zone_cells() {
+    let state = state("grid-fight", &["adept-a"], &[]);
+    let text = engine::scene_text(&state).join("\n");
+    assert!(text.contains("Grid 5 ft per cell"), "{text}");
+    assert!(text.contains("grid zone tables: (5,1) (6,1)"), "{text}");
+    assert!(text.contains("Adept A party 20 HP at (6,3) [door]"), "{text}");
+}
+
+#[test]
+fn grid_state_round_trip_keeps_positions() {
+    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let mut log = Vec::new();
+    engine::move_to(
+        &mut state,
+        "Adept A",
+        &MoveTarget::Cell(4, 2),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    let root = unique_temp_dir("grid-roundtrip");
+    let path = root.join("grid.state.json");
+    state.save(&path).unwrap();
+    let loaded = EncounterState::load(&path).unwrap();
+    assert_eq!(loaded, state);
+    assert_eq!(
+        loaded.combatants[index(&loaded, "Adept A")].cell(),
+        Some([4, 2])
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 fn unique_temp_dir(label: &str) -> PathBuf {

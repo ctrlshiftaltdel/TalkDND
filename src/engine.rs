@@ -22,7 +22,7 @@ use crate::content::schema::{
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
-use crate::space::{MoveStep, Position, Space};
+use crate::space::{Position, Space, OPEN_ZONE};
 use crate::state::{
     ability_from_text, active_condition_ids, active_duration, ActiveCondition, ActiveDuration,
     ActiveSaveEnds, CombatOutcome, CombatantState, DeathSaves, EncounterState,
@@ -727,6 +727,19 @@ fn finish_collected_modifiers(
 struct BonusTerm {
     label: String,
     record: RollRecord,
+}
+
+fn flat_bonus_term(value: i32, label: impl Into<String>) -> BonusTerm {
+    BonusTerm {
+        label: label.into(),
+        record: RollRecord {
+            formula: value.to_string(),
+            dice: Vec::new(),
+            modifier: value,
+            total: value,
+            text: value.to_string(),
+        },
+    }
 }
 
 fn roll_bonus_terms(
@@ -1671,7 +1684,7 @@ fn resolve_named_entry(
     if let Ok(attack) = combatant.find_attack(name) {
         let profile = AttackProfile::from_attack(attack);
         return resolve_attack(
-            state, attacker, target, &profile, None, options, rng, log, false,
+            state, attacker, target, &profile, None, options, rng, log, false, false,
         );
     }
     let resolved = combatant
@@ -1684,6 +1697,7 @@ fn resolve_named_entry(
         &resolved,
         &source,
         &[target],
+        None,
         options,
         None,
         None,
@@ -1740,6 +1754,17 @@ fn spend_reaction(state: &mut EncounterState, index: usize, _log: &mut Vec<Strin
     Ok(())
 }
 
+fn has_dark_sense(combatant: &CombatantState) -> bool {
+    combatant
+        .creature
+        .senses
+        .as_deref()
+        .is_some_and(|senses| {
+            let senses = senses.to_ascii_lowercase();
+            senses.contains("darkvision") || senses.contains("blindsight")
+        })
+}
+
 fn resolve_attack(
     state: &mut EncounterState,
     attacker: usize,
@@ -1750,6 +1775,7 @@ fn resolve_attack(
     rng: &mut dyn DiceRng,
     log: &mut Vec<String>,
     economy_spent: bool,
+    ignore_range: bool,
 ) -> Result<()> {
     if economy_spent {
         // Caller already spent the action (multiattack / ability effect).
@@ -1847,58 +1873,64 @@ fn resolve_attack(
         }
     }
 
-    // Range and reach.
+    // Range, reach and light.
     let space = state
         .space()
         .ok_or_else(|| anyhow!("this state has no scene"))?;
+    let attacker_position = state.combatants[attacker].position();
+    let target_position = state.combatants[target].position();
     let distance = space
-        .distance(
-            &state.combatants[attacker].zone,
-            &state.combatants[target].zone,
-        )
-        .ok_or_else(|| anyhow!("no path between the combatants' zones"))?;
-    let mut kind = profile.kind;
-    if kind == AttackKind::MeleeOrRanged {
-        kind = if space.can_reach(
-            &state.combatants[attacker].zone,
-            &state.combatants[target].zone,
-            profile.reach,
-        ) {
-            AttackKind::Melee
-        } else {
-            AttackKind::Ranged
-        };
-    }
-    match kind {
-        AttackKind::Melee => {
-            if !space.can_reach(
-                &state.combatants[attacker].zone,
-                &state.combatants[target].zone,
-                profile.reach,
-            ) {
-                bail!(
-                    "`{target_name}` is out of reach ({distance} ft; reach {})",
-                    profile.reach
-                );
-            }
-        }
-        AttackKind::Ranged | AttackKind::MeleeOrRanged => {
-            let Some([normal, long]) = profile.range else {
-                bail!("`{}` has no range", profile.name);
+        .distance(&attacker_position, &target_position)
+        .ok_or_else(|| anyhow!("no path between the combatants"))?;
+    if !ignore_range {
+        let mut kind = profile.kind;
+        if kind == AttackKind::MeleeOrRanged {
+            kind = if space.can_reach(&attacker_position, &target_position, profile.reach) {
+                AttackKind::Melee
+            } else {
+                AttackKind::Ranged
             };
-            if distance > long {
-                bail!("`{target_name}` is out of range ({distance} ft; long range {long})");
+        }
+        match kind {
+            AttackKind::Melee => {
+                if !space.can_reach(&attacker_position, &target_position, profile.reach) {
+                    bail!(
+                        "`{target_name}` is out of reach ({distance} ft; reach {})",
+                        profile.reach
+                    );
+                }
             }
-            if distance > normal {
-                disadvantage_sources.push("long range".to_string());
-                mode = add_disadvantage(mode);
-            }
-            if hostile_within_5(state, attacker) {
-                disadvantage_sources.push("ranged in melee".to_string());
-                mode = add_disadvantage(mode);
+            AttackKind::Ranged | AttackKind::MeleeOrRanged => {
+                let Some([normal, long]) = profile.range else {
+                    bail!("`{}` has no range", profile.name);
+                };
+                if distance > long {
+                    bail!("`{target_name}` is out of range ({distance} ft; long range {long})");
+                }
+                if distance > normal {
+                    disadvantage_sources.push("long range".to_string());
+                    mode = add_disadvantage(mode);
+                }
+                if hostile_within_5(state, attacker) {
+                    disadvantage_sources.push("ranged in melee".to_string());
+                    mode = add_disadvantage(mode);
+                }
             }
         }
     }
+    if space.light_at(&target_position) == Light::Dark
+        && !has_dark_sense(&state.combatants[attacker])
+    {
+        disadvantage_sources.push("darkness".to_string());
+        mode = add_disadvantage(mode);
+    }
+    if space.light_at(&attacker_position) == Light::Dark
+        && !has_dark_sense(&state.combatants[target])
+    {
+        advantage_sources.push("unseen".to_string());
+        mode = add_advantage(mode);
+    }
+    drop(space);
 
     // Attack roll bonuses.
     let mut bonuses = Vec::new();
@@ -2127,7 +2159,7 @@ fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
     let Some(space) = state.space() else {
         return false;
     };
-    let zone = &state.combatants[index].zone;
+    let position = state.combatants[index].position();
     state
         .combatants
         .iter()
@@ -2137,7 +2169,7 @@ fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
                 && combatant.is_active()
                 && combatant.side != state.combatants[index].side
                 && space
-                    .distance(zone, &combatant.zone)
+                    .distance(&position, &combatant.position())
                     .is_some_and(|distance| distance <= 5)
         })
 }
@@ -2686,6 +2718,7 @@ fn apply_effect(
                 rng,
                 log,
                 true,
+                false,
             )
         }
         Effect::Save(effect) => apply_save_effect(state, context, effect, rng, log),
@@ -2761,7 +2794,7 @@ fn apply_effect(
             remove_condition_from(state, target, &effect.condition, log);
             Ok(())
         }
-        Effect::ForcedMove(effect) => apply_forced_move(state, context, effect, log),
+        Effect::ForcedMove(effect) => apply_forced_move(state, context, effect, rng, log),
         Effect::Use(reference) => {
             let resolved = state.combatants[context.actor]
                 .find_owned_ability(&state.content, reference)
@@ -2790,17 +2823,22 @@ fn apply_effect(
                         rng,
                         log,
                         true,
+                        false,
                     );
                 }
             }
             let source = EffectSource::from_ability(&resolved.ability, &resolved.params);
             let targets: Vec<usize> = context.target.into_iter().collect();
+            let zone_center = context
+                .target
+                .map(|target| state.combatants[target].position());
             use_resolved_ability(
                 state,
                 context.actor,
                 &resolved,
                 &source,
                 &targets,
+                zone_center.as_ref(),
                 &AttackOptions::default(),
                 context.option,
                 context.source.as_ref().and_then(|source| source.slot_level),
@@ -2922,8 +2960,16 @@ fn apply_save_effect(
     );
     let (_, dc) = evaluate_value(&expr_context, &effect.dc)?;
     let dc = dc.modifier;
-    let (mode, bonuses, adv_sources, dis_sources, auto_fail) =
+    let (mode, mut bonuses, adv_sources, dis_sources, auto_fail) =
         save_modifiers(state, target, effect.ability, &expr_context, rng)?;
+    if effect.ability == AbilityName::Dex && !effect.ignore_cover && target != context.actor {
+        let cover = cover_between(state, context.actor, target);
+        if let Some(bonus) = cover_bonus(cover, &state.content.rules) {
+            if bonus != 0 {
+                bonuses.push(flat_bonus_term(bonus, cover_label(cover)));
+            }
+        }
+    }
     if auto_fail {
         log.push(format!(
             "{} automatically fails the {} save (DC {dc})",
@@ -3237,38 +3283,96 @@ fn apply_forced_move(
     state: &mut EncounterState,
     context: &EffectContext,
     effect: &ForcedMoveEffect,
+    rng: &mut dyn DiceRng,
     log: &mut Vec<String>,
 ) -> Result<()> {
     let Some(target) = context.target else {
         bail!("forced_move needs a target");
     };
-    let source_zone = state.combatants[context.actor].zone.clone();
-    let target_zone = state.combatants[target].zone.clone();
     if !check_size_limit(state.combatants[target].creature.size(), effect.max_size) {
         return Ok(());
     }
     let Some(space) = state.space() else {
         return Ok(());
     };
-    let mut candidates = Vec::new();
-    for (zone, cost) in space.neighbours(&target_zone) {
-        if cost > effect.distance.max(0) {
-            continue;
+    let source = state.combatants[context.actor].position();
+    let start = state.combatants[target].position();
+    let max_distance = effect.distance.max(0);
+    let steps: Vec<Position> = match space.mode() {
+        SceneMode::Zones => {
+            let mut candidates = Vec::new();
+            for step in space.neighbours(&start) {
+                if step.locked || step.edge_distance > max_distance {
+                    continue;
+                }
+                let Some(distance) = space.distance(&source, &step.position) else {
+                    continue;
+                };
+                candidates.push((step.position, distance));
+            }
+            let chosen = match effect.direction {
+                Direction::Away => candidates.into_iter().max_by_key(|(_, distance)| *distance),
+                Direction::Toward => candidates.into_iter().min_by_key(|(_, distance)| *distance),
+            };
+            chosen.map(|(position, _)| vec![position]).unwrap_or_default()
         }
-        let Some(distance) = space.distance(&source_zone, &zone) else {
-            continue;
-        };
-        candidates.push((zone, distance));
-    }
-    let chosen = match effect.direction {
-        Direction::Away => candidates.into_iter().max_by_key(|(_, distance)| *distance),
-        Direction::Toward => candidates.into_iter().min_by_key(|(_, distance)| *distance),
+        SceneMode::Grid => {
+            let (Some((tx, ty)), Some((sx, sy))) = (start.cell_coords(), source.cell_coords())
+            else {
+                return Ok(());
+            };
+            let (dx, dy) = match effect.direction {
+                Direction::Away => ((tx - sx).signum(), (ty - sy).signum()),
+                Direction::Toward => ((sx - tx).signum(), (sy - ty).signum()),
+            };
+            if dx == 0 && dy == 0 {
+                return Ok(());
+            }
+            let occupied: Vec<(i32, i32)> = state
+                .combatants
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != target)
+                .filter_map(|(_, combatant)| combatant.cell())
+                .map(|cell| (cell[0], cell[1]))
+                .collect();
+            let cell_size = space.distance(&start, &Position::cell(tx + 1, ty)).unwrap_or(5);
+            let max_steps = max_distance / cell_size.max(1);
+            let mut positions = Vec::new();
+            let (mut x, mut y) = (tx, ty);
+            for _ in 0..max_steps {
+                let (nx, ny) = (x + dx, y + dy);
+                let next = Position::cell(nx, ny);
+                if !space.contains(&next) {
+                    break;
+                }
+                let adjacent = space
+                    .neighbours(&Position::cell(x, y))
+                    .iter()
+                    .any(|step| step.position == next);
+                if !adjacent || occupied.contains(&(nx, ny)) {
+                    break;
+                }
+                positions.push(next);
+                x = nx;
+                y = ny;
+            }
+            positions
+        }
     };
-    if let Some((zone, _)) = chosen {
+    drop(space);
+    for position in steps {
+        let display = state
+            .space()
+            .and_then(|space| space.zone_of(&position))
+            .unwrap_or_else(|| OPEN_ZONE.to_string());
+        match &position {
+            Position::Cell { x, y } => state.combatants[target].set_cell(*x, *y, display.clone()),
+            Position::Zone { zone } => state.combatants[target].set_zone(zone.clone()),
+        }
         let name = state.combatants[target].name.clone();
-        let from = state.combatants[target].zone.clone();
-        state.combatants[target].zone = zone.clone();
-        log.push(format!("{name} is moved {from} -> {zone}"));
+        log.push(format!("{name} is moved to {display}"));
+        fire_enter_triggers(state, target, &position, rng, log)?;
     }
     Ok(())
 }
@@ -3740,6 +3844,7 @@ fn use_resolved_ability(
     resolved: &ResolvedAbility,
     source: &EffectSource,
     targets: &[usize],
+    zone_center: Option<&Position>,
     options: &AttackOptions,
     option: Option<usize>,
     slot_level: Option<i32>,
@@ -3750,8 +3855,29 @@ fn use_resolved_ability(
     let ability = &resolved.ability;
     ensure_can_act(state, actor)?;
     let target_spec = ability.target.clone().unwrap_or_default();
+    let mut effective_targets: Vec<usize> = targets.to_vec();
     match target_spec.target_type {
-        TargetType::Zone => bail!("zone/area targeting arrives in step 3"),
+        TargetType::Zone => {
+            let center = zone_center
+                .cloned()
+                .or_else(|| targets.first().map(|target| state.combatants[*target].position()))
+                .unwrap_or_else(|| state.combatants[actor].position());
+            if let (Some(range), Some(space)) = (ability.range, state.space()) {
+                if range > 0 {
+                    let distance = space
+                        .distance(&state.combatants[actor].position(), &center)
+                        .unwrap_or(i32::MAX);
+                    if distance > range {
+                        bail!(
+                            "area centre is out of range for {} ({distance} ft; range {range})",
+                            ability.display_name()
+                        );
+                    }
+                }
+            }
+            let radius = ability.area.as_ref().map(|area| area.radius).unwrap_or(0);
+            effective_targets = area_targets(state, &center, radius);
+        }
         TargetType::SelfTarget => {
             if !targets.is_empty() && targets.iter().any(|target| *target != actor) {
                 bail!("`{}` targets self", ability.display_name());
@@ -3780,8 +3906,8 @@ fn use_resolved_ability(
                     if let (Some(range), Some(space)) = (ability.range, state.space()) {
                         let distance = space
                             .distance(
-                                &state.combatants[actor].zone,
-                                &state.combatants[*target].zone,
+                                &state.combatants[actor].position(),
+                                &state.combatants[*target].position(),
                             )
                             .unwrap_or(i32::MAX);
                         if distance > range {
@@ -3793,6 +3919,7 @@ fn use_resolved_ability(
                         }
                     }
                 }
+                ensure_cover_allows(state, actor, *target)?;
                 ensure_targetable(state, *target)?;
             }
         }
@@ -3854,7 +3981,7 @@ fn use_resolved_ability(
             apply_effects(state, &context, &ability.effects, rng, log)?;
         }
         TargetType::Creature => {
-            for target in targets {
+            for target in &effective_targets {
                 let context = EffectContext {
                     target: Some(*target),
                     ..context_base.clone()
@@ -3862,7 +3989,15 @@ fn use_resolved_ability(
                 apply_effects(state, &context, &ability.effects, rng, log)?;
             }
         }
-        TargetType::Zone => unreachable!("zone targeting was rejected above"),
+        TargetType::Zone => {
+            for target in &effective_targets {
+                let context = EffectContext {
+                    target: Some(*target),
+                    ..context_base.clone()
+                };
+                apply_effects(state, &context, &ability.effects, rng, log)?;
+            }
+        }
     }
     if source_is_spell {
         fire_ends_on(state, actor, EndsOn::OwnSpell, log);
@@ -3884,6 +4019,22 @@ fn target_matches_side(
     }
 }
 
+/// Every non-dormant, living creature inside an area.
+fn area_targets(state: &EncounterState, center: &Position, radius: i32) -> Vec<usize> {
+    let Some(space) = state.space() else {
+        return Vec::new();
+    };
+    let positions = space.area_positions(center, radius);
+    state
+        .combatants
+        .iter()
+        .enumerate()
+        .filter(|(_, combatant)| !combatant.dormant && !combatant.is_dead())
+        .filter(|(_, combatant)| positions.contains(&combatant.position()))
+        .map(|(index, _)| index)
+        .collect()
+}
+
 /// CLI `cast`/`use` for an owned ability.
 pub fn use_ability(
     state: &mut EncounterState,
@@ -3899,12 +4050,27 @@ pub fn use_ability(
     ensure_can_act(state, actor)?;
     let resolved = state.combatants[actor].find_owned_ability(&state.content, ability_name)?;
     let source = EffectSource::from_ability(&resolved.ability, &resolved.params);
+    let target_type = resolved
+        .ability
+        .target
+        .clone()
+        .unwrap_or_default()
+        .target_type;
     let mut targets = Vec::new();
-    for name in &options.targets {
-        let index = state
-            .find_index(name)
-            .map_err(|error| anyhow!(error.to_string()))?;
-        targets.push(index);
+    let mut zone_center = None;
+    if target_type == TargetType::Zone {
+        zone_center = options
+            .targets
+            .first()
+            .map(|name| resolve_area_center(state, name))
+            .transpose()?;
+    } else {
+        for name in &options.targets {
+            let index = state
+                .find_index(name)
+                .map_err(|error| anyhow!(error.to_string()))?;
+            targets.push(index);
+        }
     }
     let attack_options = AttackOptions {
         advantage: options.advantage,
@@ -3918,6 +4084,7 @@ pub fn use_ability(
         &resolved,
         &source,
         &targets,
+        zone_center.as_ref(),
         &attack_options,
         options.option,
         options.slot_level,
@@ -3927,6 +4094,27 @@ pub fn use_ability(
     )?;
     log_outcome(state, log);
     Ok(())
+}
+
+/// Resolves a zone id, `x,y` grid cell, or creature name to an area centre.
+fn resolve_area_center(state: &EncounterState, label: &str) -> Result<Position> {
+    let label = label.trim();
+    if let Some((x, y)) = label.split_once(',') {
+        if let (Ok(x), Ok(y)) = (x.trim().parse::<i32>(), y.trim().parse::<i32>()) {
+            return Ok(Position::cell(x, y));
+        }
+    }
+    if let Some(space) = state.space() {
+        if space.has_zone(label) {
+            return Ok(Position::Zone {
+                zone: label.to_string(),
+            });
+        }
+    }
+    if let Ok(index) = state.find_index(label) {
+        return Ok(state.combatants[index].position());
+    }
+    bail!("unknown zone or area target `{label}`")
 }
 
 /// CLI `use <who> <attack-or-ability>`: falls back to a creature attack.
@@ -3961,7 +4149,7 @@ pub fn use_entry(
             no_reactions: options.no_reactions,
         };
         resolve_attack(
-            state, actor, target, &profile, None, &options, rng, log, false,
+            state, actor, target, &profile, None, &options, rng, log, false, false,
         )?;
         log_outcome(state, log);
         return Ok(());
@@ -4692,56 +4880,795 @@ pub fn roll_expression(
 // Movement, activation, death saves, rests
 // ---------------------------------------------------------------------------
 
-/// CLI `move`.
+/// CLI `move` destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoveTarget {
+    Zone(String),
+    Cell(i32, i32),
+}
+
+/// CLI `move` / forced movement destination helpers.
+///
+/// Resolves the route step by step so opportunity attacks and on-enter scene
+/// triggers fire at every zone/cell boundary. Movement is never blocked for
+/// exceeding the remaining speed; the overrun is logged instead.
 pub fn move_to(
     state: &mut EncounterState,
     who: &str,
-    zone: &str,
+    target: &MoveTarget,
+    no_oa: bool,
+    rng: &mut dyn DiceRng,
     log: &mut Vec<String>,
 ) -> Result<()> {
     let index = state
         .find_index(who)
         .map_err(|error| anyhow!(error.to_string()))?;
-    if state.combatants[index].dormant {
-        bail!(
-            "`{}` is dormant and cannot move",
-            state.combatants[index].name
-        );
+    let combatant = &state.combatants[index];
+    if combatant.dormant {
+        bail!("`{}` is dormant and cannot move", combatant.name);
+    }
+    if combatant.is_dead() || combatant.hp <= 0 {
+        bail!("`{}` cannot move", combatant.name);
     }
     let Some(space) = state.space() else {
         bail!("this state has no scene");
     };
-    if !space.has_zone(zone) {
-        bail!("unknown zone `{zone}`");
-    }
-    let from = state.combatants[index].zone.clone();
-    if from == zone {
+    let start = state.combatants[index].position();
+    let destination = match (space.mode(), target) {
+        (SceneMode::Zones, MoveTarget::Cell(..)) => {
+            bail!("`--to` needs a grid scene; this scene uses zones")
+        }
+        (SceneMode::Zones, MoveTarget::Zone(zone)) => {
+            if !space.has_zone(zone) {
+                bail!("unknown zone `{zone}`");
+            }
+            Position::Zone { zone: zone.clone() }
+        }
+        (SceneMode::Grid, MoveTarget::Cell(x, y)) => {
+            let position = Position::cell(*x, *y);
+            if !space.contains(&position) {
+                bail!("cell ({x},{y}) is a wall or outside the grid");
+            }
+            if state
+                .combatants
+                .iter()
+                .enumerate()
+                .any(|(other, combatant)| other != index && combatant.position() == position)
+            {
+                bail!("cell ({x},{y}) is occupied");
+            }
+            position
+        }
+        (SceneMode::Grid, MoveTarget::Zone(zone)) => {
+            if !space.has_zone(zone) {
+                bail!("unknown zone `{zone}`");
+            }
+            let occupied: Vec<Position> = state
+                .combatants
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .map(|(_, combatant)| combatant.position())
+                .collect();
+            let mut candidates = Vec::new();
+            for cell in space.zone_positions(zone) {
+                if cell == start || occupied.contains(&cell) {
+                    continue;
+                }
+                if let Some(route) = space.move_route(&start, &cell, &occupied) {
+                    let cost: i32 = route.iter().map(|step| step.cost).sum();
+                    candidates.push((cost, cell));
+                }
+            }
+            candidates.sort_by_key(|(cost, cell)| {
+                (
+                    *cost,
+                    cell.cell_coords().map(|(_, y)| y).unwrap_or(0),
+                    cell.cell_coords().map(|(x, _)| x).unwrap_or(0),
+                )
+            });
+            match candidates.into_iter().next() {
+                Some((_, cell)) => cell,
+                None => {
+                    if space.zone_of(&start).as_deref() == Some(zone) {
+                        log.push(format!(
+                            "{} is already in {zone}",
+                            state.combatants[index].name
+                        ));
+                        return Ok(());
+                    }
+                    bail!("no free cell tagged `{zone}`");
+                }
+            }
+        }
+    };
+    if destination == start {
         log.push(format!(
-            "{} is already in {zone}",
-            state.combatants[index].name
+            "{} is already in {}",
+            state.combatants[index].name,
+            state.combatants[index].zone
         ));
         return Ok(());
     }
-    let distance = space
-        .travel_distance(&from, zone)
-        .ok_or_else(|| anyhow!("no path from `{from}` to `{zone}`"))?;
-    if distance > state.combatants[index].speed_left {
-        bail!(
-            "`{}` needs {distance} ft of movement but only {} ft remain",
-            state.combatants[index].name,
-            state.combatants[index].speed_left
-        );
+    let blocked: Vec<Position> = state
+        .combatants
+        .iter()
+        .enumerate()
+        .filter(|(other, combatant)| {
+            *other != index
+                && !combatant.dormant
+                && !combatant.is_dead()
+                && combatant.hp > 0
+                && combatant.side != state.combatants[index].side
+        })
+        .map(|(_, combatant)| combatant.position())
+        .collect();
+    let route = space
+        .move_route(&start, &destination, &blocked)
+        .ok_or_else(|| anyhow!("no path to the destination"))?;
+    drop(space);
+    let name = state.combatants[index].name.clone();
+    let mut current = start;
+    for step in route {
+        if state.combatants[index].is_dead() || state.combatants[index].hp <= 0 {
+            break;
+        }
+        if step.locked {
+            log.push(format!(
+                "{name} finds a locked door and stops at {}",
+                state.combatants[index].zone
+            ));
+            break;
+        }
+        if step.elevation_change > 0 {
+            if let Some(climb) = &step.climb {
+                if !roll_climb(state, index, climb, rng, log)? {
+                    log.push(format!(
+                        "{name} fails the climb and stops at {}",
+                        state.combatants[index].zone
+                    ));
+                    break;
+                }
+            }
+        }
+        if !no_oa {
+            opportunity_attacks(state, index, &current, rng, log)?;
+            if state.combatants[index].is_dead() || state.combatants[index].hp <= 0 {
+                break;
+            }
+        }
+        state.combatants[index].speed_left -= step.cost;
+        let (from_label, to_label) = {
+            let space = state.space();
+            let from_label = state.combatants[index].zone.clone();
+            let to_label = space
+                .as_ref()
+                .and_then(|space| space.zone_of(&step.position))
+                .unwrap_or_else(|| match &step.position {
+                    Position::Zone { zone } => zone.clone(),
+                    Position::Cell { .. } => OPEN_ZONE.to_string(),
+                });
+            (from_label, to_label)
+        };
+        match &step.position {
+            Position::Cell { x, y } => {
+                state.combatants[index].set_cell(*x, *y, to_label.clone())
+            }
+            Position::Zone { zone } => state.combatants[index].set_zone(zone.clone()),
+        }
+        log.push(format!(
+            "{name} moves {from_label} -> {to_label} ({} ft)",
+            step.cost
+        ));
+        fire_enter_triggers(state, index, &step.position, rng, log)?;
+        current = step.position;
     }
-    state.combatants[index].speed_left -= distance;
-    state.combatants[index].zone = zone.to_string();
-    log.push(format!(
-        "{} moves {from} -> {zone} ({distance} ft)",
-        state.combatants[index].name
-    ));
+    if state.combatants[index].speed_left < 0 {
+        log.push(format!(
+            "{name} has used {} ft more than the remaining movement",
+            -state.combatants[index].speed_left
+        ));
+    }
     Ok(())
 }
 
-/// `activate` command and effect. Matches instance name, creature id or tag.
+fn roll_climb(
+    state: &mut EncounterState,
+    index: usize,
+    climb: &crate::content::schema::ClimbSpec,
+    rng: &mut dyn DiceRng,
+    log: &mut Vec<String>,
+) -> Result<bool> {
+    let skill = climb.skill.clone();
+    let base = state.combatants[index].skill_bonus(&skill);
+    let (mode, advantages, disadvantages) =
+        check_modifiers(state, index, ability_from_text(&skill), &skill);
+    let result = roll_d20(
+        state,
+        index,
+        base,
+        mode,
+        Vec::new(),
+        advantages,
+        disadvantages,
+        rng,
+    );
+    let name = state.combatants[index].name.clone();
+    let success = result.total >= climb.dc;
+    log.push(format!(
+        "{name} {skill} check: {} vs DC {} {}",
+        result.text(),
+        climb.dc,
+        if success { "PASS" } else { "FAIL" }
+    ));
+    Ok(success)
+}
+
+fn is_disengaged(state: &EncounterState, index: usize) -> bool {
+    state
+        .content
+        .rules
+        .basic_actions
+        .as_ref()
+        .and_then(|actions| actions.get("disengage"))
+        .is_some_and(|condition| state.combatants[index].has_condition(&state.content, condition))
+}
+
+fn first_melee_attack(state: &EncounterState, index: usize) -> Option<Attack> {
+    state.combatants[index]
+        .creature
+        .attacks
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .find(|attack| {
+            matches!(
+                attack.kind,
+                AttackKind::Melee | AttackKind::MeleeOrRanged
+            )
+        })
+        .cloned()
+}
+
+fn opportunity_attacks(
+    state: &mut EncounterState,
+    mover: usize,
+    departure: &Position,
+    rng: &mut dyn DiceRng,
+    log: &mut Vec<String>,
+) -> Result<()> {
+    if is_disengaged(state, mover)
+        || has_flag(state, mover, ConditionFlag::NoOpportunityAttacksAgainst)
+    {
+        return Ok(());
+    }
+    let Some(space) = state.space() else {
+        return Ok(());
+    };
+    let candidates: Vec<usize> = state
+        .combatants
+        .iter()
+        .enumerate()
+        .filter(|(index, combatant)| {
+            *index != mover
+                && combatant.is_active()
+                && combatant.side != state.combatants[mover].side
+                && combatant.has_reaction(state.round)
+                && !has_flag(state, *index, ConditionFlag::NoReactions)
+                && !has_flag(state, *index, ConditionFlag::NoOpportunityAttacks)
+                && !is_incapacitated(state, *index)
+                && space.opportunity_threat(&combatant.position(), departure)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    drop(space);
+    for hostile in candidates {
+        if state.combatants[mover].is_dead() || state.combatants[mover].hp <= 0 {
+            break;
+        }
+        let Some(attack) = first_melee_attack(state, hostile) else {
+            continue;
+        };
+        let profile = AttackProfile::from_attack(&attack);
+        state.combatants[hostile].reaction_round = Some(state.round);
+        log.push(format!(
+            "{} makes an opportunity attack against {}",
+            state.combatants[hostile].name, state.combatants[mover].name
+        ));
+        resolve_attack(
+            state,
+            hostile,
+            mover,
+            &profile,
+            None,
+            &AttackOptions::default(),
+            rng,
+            log,
+            true,
+            true,
+        )?;
+    }
+    Ok(())
+}
+
+fn fire_enter_triggers(
+    state: &mut EncounterState,
+    mover: usize,
+    position: &Position,
+    rng: &mut dyn DiceRng,
+    log: &mut Vec<String>,
+) -> Result<()> {
+    let Some(scene) = state.scene.clone() else {
+        return Ok(());
+    };
+    let Some(entered) = state.space().and_then(|space| space.zone_of(position)) else {
+        return Ok(());
+    };
+    for (index, trigger) in scene.triggers.iter().enumerate() {
+        if trigger.on != TriggerWhen::OnEnterArea {
+            continue;
+        }
+        let key = EncounterState::trigger_key(index, trigger);
+        if !state.trigger_enabled(&key) {
+            continue;
+        }
+        let fired = state
+            .triggers
+            .get(&key)
+            .map(|runtime| runtime.fired)
+            .unwrap_or(false);
+        if trigger.once && fired {
+            continue;
+        }
+        let mut zones = Vec::new();
+        if let Some(zone) = &trigger.zone {
+            zones.push(zone.as_str());
+        }
+        zones.extend(trigger.zones.iter().map(String::as_str));
+        if !zones
+            .iter()
+            .any(|zone| zone.eq_ignore_ascii_case(&entered))
+        {
+            continue;
+        }
+        if let Some(side) = &trigger.side {
+            if !state.combatants[mover]
+                .side
+                .as_str()
+                .eq_ignore_ascii_case(side.as_str())
+            {
+                continue;
+            }
+        }
+        if let Some(predicate) = &trigger.when {
+            let context = PredicateContext {
+                target: Some(mover),
+                ..PredicateContext::for_owner(mover)
+            };
+            if !eval_predicate(state, predicate, &context) {
+                continue;
+            }
+        }
+        if let Some(manual) = &trigger.manual {
+            log.push(format!("MANUAL: {manual}"));
+        }
+        let occupants: Vec<usize> = match trigger.affects.unwrap_or_default() {
+            crate::content::schema::TriggerAffects::Entering => vec![mover],
+            crate::content::schema::TriggerAffects::ZoneOccupants => {
+                let space = state.space();
+                state
+                    .combatants
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, combatant)| !combatant.dormant)
+                    .filter(|(_, combatant)| {
+                        space.as_ref().is_some_and(|space| {
+                            space
+                                .zone_of(&combatant.position())
+                                .is_some_and(|zone| {
+                                    zones
+                                        .iter()
+                                        .any(|candidate| candidate.eq_ignore_ascii_case(&zone))
+                                })
+                        })
+                    })
+                    .map(|(index, _)| index)
+                    .collect()
+            }
+        };
+        let source = EffectContext {
+            actor: mover,
+            target: Some(mover),
+            source: None,
+            attack: None,
+            option: None,
+            crit: false,
+            damage_dealt: 0,
+            damage_scale: 1.0,
+            has_advantage: false,
+            has_disadvantage: false,
+        };
+        for occupant in occupants {
+            let context = EffectContext {
+                target: Some(occupant),
+                ..source.clone()
+            };
+            apply_effects(state, &context, &trigger.effects, rng, log)?;
+        }
+        state.set_trigger_fired(&key);
+    }
+    Ok(())
+}
+
+
+/// `interact <who> <object> [--option N]`.
+pub fn interact(
+    state: &mut EncounterState,
+    who: &str,
+    object_query: &str,
+    option: Option<usize>,
+    rng: &mut dyn DiceRng,
+    log: &mut Vec<String>,
+) -> Result<()> {
+    let actor = state
+        .find_index(who)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    ensure_can_act(state, actor)?;
+    let scene = state
+        .scene
+        .clone()
+        .ok_or_else(|| anyhow!("this state has no scene"))?;
+    let needle = object_query.trim().to_ascii_lowercase();
+    let matches: Vec<&crate::content::schema::SceneObject> = scene
+        .objects
+        .iter()
+        .filter(|object| {
+            object.id.eq_ignore_ascii_case(&needle)
+                || object
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&needle))
+        })
+        .collect();
+    let objects = if matches.is_empty() {
+        scene
+            .objects
+            .iter()
+            .filter(|object| {
+                object.id.to_ascii_lowercase().starts_with(&needle)
+                    || object
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.to_ascii_lowercase().starts_with(&needle))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        matches
+    };
+    let object = match objects.as_slice() {
+        [object] => (*object).clone(),
+        [] => bail!(
+            "no scene object matches `{object_query}` (objects: {})",
+            scene
+                .objects
+                .iter()
+                .map(|object| object.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        _ => bail!(
+            "scene object `{object_query}` is ambiguous; matches: {}",
+            objects
+                .iter()
+                .map(|object| object.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let actor_name = state.combatants[actor].name.clone();
+    log.push(format!(
+        "{actor_name} interacts with {}",
+        object.name.as_deref().unwrap_or(&object.id)
+    ));
+    if let Some(manual) = &object.manual {
+        log.push(format!("MANUAL: {manual}"));
+    }
+    let Some(interact) = object.interact.clone() else {
+        if object.manual.is_some() {
+            return Ok(());
+        }
+        bail!("scene object `{}` has no interaction", object.id);
+    };
+    let context = EffectContext {
+        actor,
+        target: Some(actor),
+        source: None,
+        attack: None,
+        option,
+        crit: false,
+        damage_dealt: 0,
+        damage_scale: 1.0,
+        has_advantage: false,
+        has_disadvantage: false,
+    };
+    run_interaction(state, &context, &interact, option, rng, log)
+}
+
+fn run_interaction(
+    state: &mut EncounterState,
+    context: &EffectContext,
+    interact: &crate::content::schema::Interact,
+    option: Option<usize>,
+    rng: &mut dyn DiceRng,
+    log: &mut Vec<String>,
+) -> Result<()> {
+    if let Some(options) = &interact.options {
+        if options.is_empty() {
+            bail!("interaction has an empty options list");
+        }
+        let index = match option {
+            Some(option) if option >= 1 && option <= options.len() => option - 1,
+            Some(option) => bail!(
+                "option {option} is out of range; choose 1-{}: {}",
+                options.len(),
+                describe_interact_options(options)
+            ),
+            None if options.len() == 1 => 0,
+            None => bail!(
+                "this interaction requires --option N (1-{}): {}",
+                options.len(),
+                describe_interact_options(options)
+            ),
+        };
+        let option = &options[index];
+        if let Some(effects) = &option.effects {
+            apply_effects(state, context, effects, rng, log)?;
+        }
+        if let Some(check) = &option.check {
+            let success = roll_check_spec(state, context.actor, check, rng, log)?;
+            let effects = if success {
+                &option.on_success
+            } else {
+                &option.on_fail
+            };
+            if let Some(effects) = effects {
+                apply_effects(state, context, effects, rng, log)?;
+            }
+        } else {
+            let effects = option.on_success.as_ref().or(option.on_fail.as_ref());
+            if let Some(effects) = effects {
+                apply_effects(state, context, effects, rng, log)?;
+            }
+        }
+        return Ok(());
+    }
+    if let Some(effects) = &interact.effects {
+        apply_effects(state, context, effects, rng, log)?;
+    }
+    if let Some(check) = &interact.check {
+        let success = roll_check_spec(state, context.actor, check, rng, log)?;
+        let effects = if success {
+            &interact.on_success
+        } else {
+            &interact.on_fail
+        };
+        if let Some(effects) = effects {
+            apply_effects(state, context, effects, rng, log)?;
+        }
+    }
+    Ok(())
+}
+
+fn describe_interact_options(options: &[crate::content::schema::InteractOption]) -> String {
+    options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| format!("{}: {}", index + 1, option.name))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn roll_check_spec(
+    state: &mut EncounterState,
+    who: usize,
+    check: &crate::content::schema::CheckSpec,
+    rng: &mut dyn DiceRng,
+    log: &mut Vec<String>,
+) -> Result<bool> {
+    let (label, base, ability) = if let Some(skill) = &check.skill {
+        (
+            skill.clone(),
+            state.combatants[who].skill_bonus(skill),
+            check.ability.or_else(|| ability_from_text(skill)),
+        )
+    } else if let Some(ability) = check.ability {
+        (
+            ability.as_str().to_string(),
+            state.combatants[who].creature.ability_modifier(ability),
+            Some(ability),
+        )
+    } else {
+        bail!("interaction check needs `skill` or `ability`");
+    };
+    let (mode, advantages, disadvantages) = check_modifiers(state, who, ability, &label);
+    let result = roll_d20(
+        state,
+        who,
+        base,
+        mode,
+        Vec::new(),
+        advantages,
+        disadvantages,
+        rng,
+    );
+    let name = state.combatants[who].name.clone();
+    let success = result.total >= check.dc;
+    log.push(format!(
+        "{name} {label} check: {} vs DC {} {}",
+        result.text(),
+        check.dc,
+        if success { "PASS" } else { "FAIL" }
+    ));
+    Ok(success)
+}
+
+/// Compact text description of the scene (no map drawing).
+pub fn scene_text(state: &EncounterState) -> Vec<String> {
+    let Some(scene) = state.scene.as_ref() else {
+        return vec!["(this state has no scene)".to_string()];
+    };
+    let mut lines = Vec::new();
+    let light = scene
+        .light
+        .map(|light| format!("{light:?}").to_ascii_lowercase())
+        .unwrap_or_else(|| "bright".to_string());
+    lines.push(format!("Scene {} ({:?}) light {light}", scene.display_name(), scene.mode));
+    if state.space().is_some() {
+        if scene.grid.is_some() {
+            let map = crate::space::GridMap::parse(scene);
+            if let Some(map) = map {
+                lines.push(format!(
+                    "Grid {} ft per cell, {}x{} cells",
+                    map.cell, map.width, map.height
+                ));
+                for zone in map.zone_ids() {
+                    let cells = map
+                        .cells_in_zone(&zone)
+                        .into_iter()
+                        .map(|(x, y)| format!("({x},{y})"))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    lines.push(format!("  grid zone {zone}: {cells}"));
+                }
+                if let Some(grid) = scene.grid.as_ref() {
+                  if !grid.zones.is_empty() {
+                    let mapped = grid
+                        .zones
+                        .iter()
+                        .map(|(zone, character)| format!("{zone}={character}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(format!("  grid zone chars: {mapped}"));
+                  }
+                }
+            }
+        } else {
+            for zone in &scene.zones {
+                let cover = match zone.cover {
+                    Cover::None => "none",
+                    Cover::Half => "half",
+                    Cover::ThreeQuarters => "three-quarters",
+                    Cover::Total => "total",
+                };
+                let zone_light = zone
+                    .light
+                    .map(|light| format!("{light:?}").to_ascii_lowercase())
+                    .unwrap_or_else(|| "scene".to_string());
+                lines.push(format!(
+                    "  zone {}: cover {cover}, elevation {}, light {zone_light}",
+                    zone.id,
+                    zone.elevation.unwrap_or(0)
+                ));
+            }
+        }
+        if !scene.edges.is_empty() {
+            for edge in &scene.edges {
+                let mut flags = Vec::new();
+                if edge.difficult {
+                    flags.push("difficult".to_string());
+                }
+                if edge.one_way {
+                    flags.push("one-way".to_string());
+                }
+                if let Some(climb) = &edge.climb {
+                    flags.push(format!("climb {} DC {}", climb.skill, climb.dc));
+                }
+                if let Some(door) = &edge.door {
+                    flags.push(if door.locked {
+                        "locked door".to_string()
+                    } else {
+                        "door".to_string()
+                    });
+                }
+                let suffix = if flags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", flags.join(", "))
+                };
+                lines.push(format!(
+                    "  edge {} <-> {} {} ft{suffix}",
+                    edge.a, edge.b, edge.distance
+                ));
+            }
+        }
+        for object in &scene.objects {
+            let interaction = match &object.interact {
+                None => "manual".to_string(),
+                Some(interact) => match &interact.options {
+                    Some(options) => format!("{} option(s)", options.len()),
+                    None => "direct".to_string(),
+                },
+            };
+            lines.push(format!(
+                "  object {} in {} ({}), interact: {interaction}",
+                object.id,
+                object.zone,
+                object.name.as_deref().unwrap_or(&object.id)
+            ));
+        }
+        for (index, trigger) in scene.triggers.iter().enumerate() {
+            let key = EncounterState::trigger_key(index, trigger);
+            let mut zones = Vec::new();
+            if let Some(zone) = &trigger.zone {
+                zones.push(zone.clone());
+            }
+            zones.extend(trigger.zones.clone());
+            let fired = state
+                .triggers
+                .get(&key)
+                .map(|runtime| runtime.fired)
+                .unwrap_or(false);
+            let side = trigger
+                .side
+                .as_ref()
+                .map(|side| format!(" side {}", side.as_str()))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  trigger {} on {:?} zone {}{} once={} {}{}",
+                key,
+                trigger.on,
+                zones.join(","),
+                side,
+                trigger.once,
+                if state.trigger_enabled(&key) {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                if fired { " fired" } else { "" }
+            ));
+        }
+        lines.push("Positions:".to_string());
+        for index in status_order(state) {
+            let combatant = &state.combatants[index];
+            let where_text = match combatant.cell() {
+                Some([x, y]) => format!("({x},{y}) [{}]", combatant.zone),
+                None => combatant.zone.clone(),
+            };
+            lines.push(format!(
+                "  {} {} {} HP at {where_text}",
+                combatant.name,
+                combatant.side.as_str(),
+                combatant.hp
+            ));
+        }
+    } else {
+        lines.push("  (no usable space for this scene)".to_string());
+    }
+    lines
+}
+
+
 pub fn activate(
     state: &mut EncounterState,
     query: &str,
@@ -5032,11 +5959,15 @@ fn combatant_status_line(state: &EncounterState, index: usize, current: bool) ->
     } else {
         ""
     };
+    let location = match combatant.cell() {
+        Some([x, y]) => format!("{} ({x},{y})", combatant.zone),
+        None => combatant.zone.clone(),
+    };
     format!(
         "{marker}{initiative} {} {} HP {hp} AC {} {}{dormant}{concentration} | conditions: {conditions} | resources: {resources} | saves: {saves}",
         combatant.name,
         combatant.side.as_str(),
         armor_class(state, index),
-        combatant.zone
+        location
     )
 }

@@ -112,6 +112,9 @@ pub trait Space {
 
     fn has_zone(&self, zone: &str) -> bool;
 
+    /// Whether a position exists and is passable.
+    fn contains(&self, at: &Position) -> bool;
+
     fn elevation(&self, at: &Position) -> i32;
 
     /// Whether a creature at `observer` threatens a creature leaving
@@ -225,9 +228,16 @@ impl Space for SpaceView<'_> {
         }
     }
 
+    fn contains(&self, at: &Position) -> bool {
+        match self {
+            Self::Zones(space) => space.contains(at),
+            Self::Grid(space) => space.contains(at),
+        }
+    }
+
     fn elevation(&self, at: &Position) -> i32 {
         match self {
-            Self::Zones(space) => space.elevation(at),
+            Self::Zones(space) => <ZoneGraph as Space>::elevation(space, at),
             Self::Grid(space) => space.elevation(at),
         }
     }
@@ -262,7 +272,7 @@ impl<'a> ZoneGraph<'a> {
         self.scene.zones.iter().find(|zone| zone.id == id)
     }
 
-    fn elevation(&self, id: &str) -> i32 {
+    fn height(&self, id: &str) -> i32 {
         self.zone(id).and_then(|zone| zone.elevation).unwrap_or(0)
     }
 
@@ -340,7 +350,7 @@ impl<'a> ZoneGraph<'a> {
             edge_distance: edge.distance,
             climb: edge.climb.clone(),
             locked: edge.door.as_ref().is_some_and(|door| door.locked),
-            elevation_change: self.elevation(to) - self.elevation(from),
+            elevation_change: self.height(to) - self.height(from),
         }
     }
 }
@@ -358,7 +368,7 @@ impl Space for ZoneGraph<'_> {
         if from == to {
             Some(travel)
         } else {
-            Some(travel.saturating_add((self.elevation(from) - self.elevation(to)).abs()))
+            Some(travel.saturating_add((self.height(from) - self.height(to)).abs()))
         }
     }
 
@@ -375,14 +385,14 @@ impl Space for ZoneGraph<'_> {
         };
         let reach = reach.max(5);
         if from == to {
-            return self.elevation(from) == self.elevation(to);
+            return self.height(from) == self.height(to);
         }
         let Some(edge) = self.edge_between(from, to) else {
             return false;
         };
         let distance = edge
             .distance
-            .saturating_add((self.elevation(from) - self.elevation(to)).abs());
+            .saturating_add((self.height(from) - self.height(to)).abs());
         distance <= reach
     }
 
@@ -448,7 +458,10 @@ impl Space for ZoneGraph<'_> {
                 }
             }
         }
-        zones.into_iter().map(Position::Zone).collect()
+        zones
+            .into_iter()
+            .map(|zone| Position::Zone { zone })
+            .collect()
     }
 
     fn zone_positions(&self, zone: &str) -> Vec<Position> {
@@ -473,8 +486,12 @@ impl Space for ZoneGraph<'_> {
         self.zone(zone).is_some()
     }
 
+    fn contains(&self, at: &Position) -> bool {
+        at.zone_id().is_some_and(|zone| self.zone(zone).is_some())
+    }
+
     fn elevation(&self, at: &Position) -> i32 {
-        at.zone_id().map(|id| self.elevation(id)).unwrap_or(0)
+        at.zone_id().map(|id| self.height(id)).unwrap_or(0)
     }
 
     fn opportunity_threat(&self, observer: &Position, departure: &Position) -> bool {
@@ -497,7 +514,7 @@ impl Space for ZoneGraph<'_> {
 }
 
 /// Parsed, immutable view of a scene grid.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GridMap {
     pub cell: i32,
     pub width: i32,
@@ -534,7 +551,7 @@ impl GridMap {
         let mut cells = Vec::with_capacity((width * height) as usize);
         let mut zone_tags = Vec::with_capacity((width * height) as usize);
         let mut zones = BTreeSet::new();
-        for (y, row) in grid.rows.iter().enumerate() {
+        for (_y, row) in grid.rows.iter().enumerate() {
             let characters: Vec<char> = row.chars().collect();
             for x in 0..width as usize {
                 let character = characters.get(x).copied().unwrap_or(' ');
@@ -955,6 +972,13 @@ impl Space for GridSpace<'_> {
     fn has_zone(&self, zone: &str) -> bool {
         self.scene.zones.iter().any(|known| known.id == zone)
             || self.map.zone_ids().iter().any(|known| known == zone)
+    }
+
+    fn contains(&self, at: &Position) -> bool {
+        match at {
+            Position::Cell { x, y } => !self.map.is_wall(*x, *y),
+            Position::Zone { zone } => self.has_zone(zone),
+        }
     }
 
     fn elevation(&self, at: &Position) -> i32 {
