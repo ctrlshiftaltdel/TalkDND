@@ -97,6 +97,7 @@ struct PlannedAction {
     reach: i32,
     attack_range: Option<[i32; 2]>,
     attack_kind: Option<AttackKind>,
+    to_hit: i32,
     tags: Vec<String>,
     slot_level: Option<i32>,
     raw_damage: f64,
@@ -119,6 +120,7 @@ enum PlanEffect {
         params: BTreeMap<String, ExprValue>,
         slot_level: Option<i32>,
         range: Option<i32>,
+        to_hit: i32,
     },
     Save {
         ability: AbilityName,
@@ -611,7 +613,21 @@ impl Ai {
         }
         let mut score = match &action.kind {
             PlannedKind::Attack(attack) => {
-                let forecast = engine::forecast_attack(state, actor, target, attack);
+                let forecast = if engine::combatant_has_modifier_sources(state, actor)
+                    || engine::combatant_has_modifier_sources(state, target)
+                {
+                    engine::forecast_attack(state, actor, target, attack)
+                } else {
+                    engine::simple_attack_forecast(
+                        state,
+                        actor,
+                        target,
+                        action.to_hit,
+                        attack.kind,
+                        action.reach,
+                        attack.range,
+                    )
+                };
                 let hit = hit_chance(
                     forecast.to_hit,
                     forecast.ac,
@@ -719,17 +735,32 @@ impl Ai {
                 params,
                 slot_level,
                 range,
+                to_hit,
             } => {
-                let forecast = engine::forecast_attack_effect(
-                    state,
-                    actor,
-                    target,
-                    effect,
-                    tags,
-                    params,
-                    *slot_level,
-                    *range,
-                );
+                let forecast = if !engine::combatant_has_modifier_sources(state, actor)
+                    && !engine::combatant_has_modifier_sources(state, target)
+                {
+                    engine::simple_attack_forecast(
+                        state,
+                        actor,
+                        target,
+                        *to_hit,
+                        effect.kind,
+                        5,
+                        range.map(|range| [range, range]),
+                    )
+                } else {
+                    engine::forecast_attack_effect(
+                        state,
+                        actor,
+                        target,
+                        effect,
+                        tags,
+                        params,
+                        *slot_level,
+                        *range,
+                    )
+                };
                 let hit = hit_chance(
                     forecast.to_hit,
                     forecast.ac,
@@ -1394,6 +1425,7 @@ fn build_plan(state: &EncounterState, actor: usize) -> CombatantPlan {
             reach: 5,
             attack_range: None,
             attack_kind: None,
+            to_hit: 0,
             tags: ability.tags.clone(),
             slot_level,
             raw_damage,
@@ -1486,6 +1518,16 @@ fn planned_attack(state: &EncounterState, actor: usize, attack: &Attack) -> Plan
         reach: attack.reach.unwrap_or(5),
         attack_range: attack.range,
         attack_kind: Some(attack.kind),
+        to_hit: engine::evaluate_for_actor(
+            state,
+            actor,
+            &attack.to_hit.clone().unwrap_or(ExprValue::Number(0)),
+            &BTreeMap::new(),
+            attack_mod,
+            None,
+        )
+        .map(|expression| expression.modifier)
+        .unwrap_or(0),
         tags: Vec::new(),
         slot_level: None,
         raw_damage,
@@ -1598,6 +1640,16 @@ fn build_effect(
             params: params.clone(),
             slot_level,
             range: None,
+            to_hit: engine::evaluate_for_actor(
+                state,
+                actor,
+                &effect.to_hit,
+                params,
+                attack_mod,
+                slot_level,
+            )
+            .map(|expression| expression.modifier)
+            .unwrap_or(0),
         },
         Effect::Save(effect) => {
             let dc = engine::average_expression(state, actor, &effect.dc, params, attack_mod, slot_level)

@@ -1621,6 +1621,27 @@ fn effective_ac(
     let combatant = &state.combatants[target];
     let mut ac = combatant.creature.ac();
     let mut terms = Vec::new();
+    if !has_modifier_sources(state, target) {
+        if let Some(attacker) = attacker {
+            if attacker != target {
+                let cover = cover_between(state, attacker, target);
+                if cover != Cover::None {
+                    match cover_bonus(cover, &state.content.rules) {
+                        Some(bonus) => {
+                            ac += bonus;
+                            terms.push((bonus, cover_label(cover).to_string()));
+                        }
+                        None => bail!(
+                            "`{}` has total cover from `{}`",
+                            combatant.name,
+                            state.combatants[attacker].name
+                        ),
+                    }
+                }
+            }
+        }
+        return Ok((ac, terms));
+    }
     let context = PredicateContext {
         self_idx: target,
         actor: target,
@@ -1849,6 +1870,89 @@ pub fn forecast_attack(
 ) -> AttackForecast {
     let profile = AttackProfile::from_attack(attack);
     forecast_profile(state, attacker, target, &profile, None)
+}
+
+/// Cheap forecast for an attack when neither combatant has modifier sources.
+pub fn simple_attack_forecast(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+    to_hit: i32,
+    kind: AttackKind,
+    reach: i32,
+    range: Option<[i32; 2]>,
+) -> AttackForecast {
+    let space = state.space();
+    let mut ac = state.combatants[target].creature.ac();
+    let mut in_range = true;
+    let mut total_cover = false;
+    let mut mode = RollMode::Normal;
+    if let (Some(space), Some(attacker_position), Some(target_position)) = (
+        space.as_ref(),
+        Some(state.combatants[attacker].position()),
+        Some(state.combatants[target].position()),
+    ) {
+        if attacker != target {
+            match cover_bonus(space.cover(&attacker_position, &target_position), &state.content.rules) {
+                Some(bonus) => ac += bonus,
+                None => total_cover = true,
+            }
+        }
+        if let Some(distance) = space.distance(&attacker_position, &target_position) {
+            let mut effective_kind = kind;
+            if effective_kind == AttackKind::MeleeOrRanged {
+                effective_kind = if space.can_reach(&attacker_position, &target_position, reach) {
+                    AttackKind::Melee
+                } else {
+                    AttackKind::Ranged
+                };
+            }
+            in_range = match effective_kind {
+                AttackKind::Melee => space.can_reach(&attacker_position, &target_position, reach),
+                AttackKind::Ranged | AttackKind::MeleeOrRanged => {
+                    range.is_some_and(|[_, long]| distance <= long)
+                }
+            };
+            if effective_kind != AttackKind::Melee
+                && range.is_some_and(|[normal, _]| distance > normal)
+            {
+                mode = add_disadvantage(mode);
+            }
+            if effective_kind != AttackKind::Melee && hostile_within_5(state, attacker) {
+                mode = add_disadvantage(mode);
+            }
+            if space.light_at(&target_position) == Light::Dark
+                && !has_dark_sense(&state.combatants[attacker])
+            {
+                mode = add_disadvantage(mode);
+            }
+            if space.light_at(&attacker_position) == Light::Dark
+                && !has_dark_sense(&state.combatants[target])
+            {
+                mode = add_advantage(mode);
+            }
+        } else {
+            in_range = false;
+        }
+    }
+    if total_cover {
+        in_range = false;
+    }
+    let advantage = mode == RollMode::Advantage;
+    let disadvantage = mode == RollMode::Disadvantage;
+    let crit_chance = match mode {
+        RollMode::Normal => 0.05,
+        RollMode::Advantage => 0.0975,
+        RollMode::Disadvantage => 0.0025,
+    };
+    AttackForecast {
+        to_hit,
+        ac,
+        advantage,
+        disadvantage,
+        crit_chance,
+        in_range,
+    }
 }
 
 /// Forecasts an ability `attack` effect against one target without rolling.
@@ -2703,6 +2807,12 @@ fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Whether a combatant has conditions or passive abilities that can emit
+/// modifiers. AI uses this to take a cheap forecast path.
+pub fn combatant_has_modifier_sources(state: &EncounterState, owner: usize) -> bool {
+    has_modifier_sources(state, owner)
+}
+
 fn has_modifier_sources(state: &EncounterState, owner: usize) -> bool {
     let combatant = &state.combatants[owner];
     if !combatant.conditions.is_empty() {
@@ -2966,16 +3076,20 @@ fn apply_attack_damage_parts(
         rolls.push((record, part.damage_type.as_str().to_string()));
     }
     if let Some(first) = parts.first() {
-        if let Some(bonus) = damage_roll_bonus(
-            state,
-            context.actor,
-            context.source.as_ref(),
-            Some(first.damage_type.as_str()),
-            rng,
-        )? {
-            if let Some((record, _)) = rolls.first_mut() {
-                record.total += bonus.record.total;
-                record.text.push_str(&format!(" +{}", bonus.record.total));
+        if context.source.is_some() || has_modifier_sources(state, context.actor) {
+            if let Some(bonus) = damage_roll_bonus(
+                state,
+                context.actor,
+                context.source.as_ref(),
+                Some(first.damage_type.as_str()),
+                rng,
+            )? {
+                if let Some((record, _)) = rolls.first_mut() {
+                    record.total += bonus.record.total;
+                    if log.enabled() {
+                        record.text.push_str(&format!(" +{}", bonus.record.total));
+                    }
+                }
             }
         }
     }
@@ -3760,16 +3874,20 @@ fn apply_damage_effect(
             ));
         }
     }
-    if let Some(bonus) = damage_roll_bonus(
-        state,
-        context.actor,
-        context.source.as_ref(),
-        Some(&damage_type),
-        rng,
-    )? {
-        if let Some((record, _)) = rolls.first_mut() {
-            record.total += bonus.record.total;
-            record.text.push_str(&format!(" +{}", bonus.record.total));
+    if context.source.is_some() || has_modifier_sources(state, context.actor) {
+        if let Some(bonus) = damage_roll_bonus(
+            state,
+            context.actor,
+            context.source.as_ref(),
+            Some(&damage_type),
+            rng,
+        )? {
+            if let Some((record, _)) = rolls.first_mut() {
+                record.total += bonus.record.total;
+                if log.enabled() {
+                    record.text.push_str(&format!(" +{}", bonus.record.total));
+                }
+            }
         }
     }
     let tags = context
@@ -5144,6 +5262,9 @@ fn run_damage_taken_triggers(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) {
+    if !has_owned_trigger(state, target, TriggerWhen::OnDamageTaken) {
+        return;
+    }
     let Ok(abilities) = state.combatants[target].owned_abilities(&state.content) else {
         return;
     };
