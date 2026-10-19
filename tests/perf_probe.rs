@@ -73,6 +73,20 @@ fn probe() {
         }
         std::hint::black_box(&run);
     }
+    let p = combat_sim::ai::profile::dump();
+    let runs_f = runs as f64;
+    println!(
+        "ai phases target {:.1} self {:.1} ally {:.1} open {:.1} move {:.1} action {:.1} outcome {:.1} choose {:.1} exec {:.1}",
+        p[0] as f64 / runs_f / 1000.0,
+        p[1] as f64 / runs_f / 1000.0,
+        p[2] as f64 / runs_f / 1000.0,
+        p[3] as f64 / runs_f / 1000.0,
+        p[4] as f64 / runs_f / 1000.0,
+        p[5] as f64 / runs_f / 1000.0,
+        p[6] as f64 / runs_f / 1000.0,
+        p[7] as f64 / runs_f / 1000.0,
+        p[8] as f64 / runs_f / 1000.0,
+    );
     println!(
         "clone {:.1}us init {:.1}us ai {:.1}us next {:.1}us turns {}/{}",
         t_clone as f64 / runs as f64 / 1000.0,

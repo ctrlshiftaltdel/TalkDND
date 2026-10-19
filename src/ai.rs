@@ -11,6 +11,8 @@
 //! rebuild static data.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use anyhow::Result;
 
@@ -24,6 +26,29 @@ use crate::dice::DiceRng;
 use crate::engine::{self, AttackOptions, LogSink};
 use crate::space::{Position, Space};
 use crate::state::EncounterState;
+
+/// Temporary phase counters used by the local profiling probe.
+#[doc(hidden)]
+pub mod profile {
+    use super::*;
+    pub static TARGET: AtomicU64 = AtomicU64::new(0);
+    pub static SELF_HEAL: AtomicU64 = AtomicU64::new(0);
+    pub static HEAL_ALLY: AtomicU64 = AtomicU64::new(0);
+    pub static OPENING: AtomicU64 = AtomicU64::new(0);
+    pub static MOVE: AtomicU64 = AtomicU64::new(0);
+    pub static ACTION: AtomicU64 = AtomicU64::new(0);
+    pub static CHOOSE: AtomicU64 = AtomicU64::new(0);
+    pub static EXECUTE: AtomicU64 = AtomicU64::new(0);
+    pub static OUTCOME: AtomicU64 = AtomicU64::new(0);
+    pub fn reset() {
+        for counter in [&TARGET, &SELF_HEAL, &HEAL_ALLY, &OPENING, &MOVE, &ACTION, &OUTCOME, &CHOOSE, &EXECUTE] {
+            counter.store(0, Ordering::Relaxed);
+        }
+    }
+    pub fn dump() -> [u64; 9] {
+        [TARGET.load(Ordering::Relaxed), SELF_HEAL.load(Ordering::Relaxed), HEAL_ALLY.load(Ordering::Relaxed), OPENING.load(Ordering::Relaxed), MOVE.load(Ordering::Relaxed), ACTION.load(Ordering::Relaxed), OUTCOME.load(Ordering::Relaxed), CHOOSE.load(Ordering::Relaxed), EXECUTE.load(Ordering::Relaxed)]
+    }
+}
 
 /// Default ratio for costed damage abilities when a template omits it.
 const DEFAULT_RESOURCE_THRESHOLD: f64 = 1.2;
@@ -206,9 +231,11 @@ impl Ai {
         rng: &mut dyn DiceRng,
         log: &mut dyn LogSink,
     ) -> Result<()> {
+        let started = Instant::now();
         if engine::combat_outcome(state).is_some() {
             return Ok(());
         }
+        profile::OUTCOME.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
         let Some(actor) = state.current_index() else {
             return Ok(());
         };
@@ -239,14 +266,27 @@ impl Ai {
             return Ok(());
         }
 
+        let started = Instant::now();
         self.maybe_self_heal(state, actor, plan, rng, log)?;
+        profile::SELF_HEAL.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let started = Instant::now();
         self.maybe_heal_ally(state, actor, plan, rng, log)?;
+        profile::HEAL_ALLY.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let started = Instant::now();
         self.maybe_opening(state, actor, plan, rng, log)?;
+        profile::OPENING.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
         if !state.combatants[actor].action_used {
-            if let Some(target) = self.choose_target(state, actor, plan, rng) {
+            let started = Instant::now();
+            let target = self.choose_target(state, actor, plan, rng);
+            profile::TARGET.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            if let Some(target) = target {
+                let started = Instant::now();
                 self.move_for_action(state, actor, plan, target, rng, log)?;
+                profile::MOVE.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                let started = Instant::now();
                 self.take_action(state, actor, plan, target, rng, log)?;
+                profile::ACTION.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
             }
         }
         state.combatants[actor].opening_used = true;
@@ -470,8 +510,11 @@ impl Ai {
         if state.combatants[actor].action_used {
             return Ok(());
         }
+        let started = Instant::now();
         let choice = self.choose_action(state, actor, plan, target);
-        match choice {
+        profile::CHOOSE.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let started = Instant::now();
+        let result = match choice {
             Some(TargetChoice::Action(index)) => {
                 let action = &plan.actions[index];
                 self.execute(state, actor, action, target, None, rng, log)
@@ -479,12 +522,6 @@ impl Ai {
             Some(TargetChoice::Multiattack) => {
                 let actor_name = state.combatants[actor].name.clone();
                 let target_name = state.combatants[target].name.clone();
-                let fallback = plan
-                    .multiattack
-                    .first()
-                    .map(|action| action.id.clone())
-                    .unwrap_or_default();
-                let _ = fallback;
                 engine::attack(
                     state,
                     &actor_name,
@@ -499,7 +536,9 @@ impl Ai {
                 )
             }
             None => Ok(()),
-        }
+        };
+        profile::EXECUTE.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        result
     }
 
     fn choose_action(
