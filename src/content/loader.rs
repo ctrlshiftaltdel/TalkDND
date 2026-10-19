@@ -166,7 +166,7 @@ impl<T> ItemStore<T> {
 }
 
 /// All content loaded for one campaign (or one set of explicit sources).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContentRegistry {
     #[serde(default)]
     pub conditions: ItemStore<ConditionDef>,

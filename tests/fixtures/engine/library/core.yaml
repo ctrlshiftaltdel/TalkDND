@@ -1,0 +1,249 @@
+rules:
+  dying_conditions: [downed-test]
+  dead_monster_condition: null
+  basic_actions:
+    dodge: dodging-test
+    disengage: disengaged-test
+    hide: hidden-test
+    help: helped-test
+  cover: {half: 2, three_quarters: 5}
+  concentration_condition: focus-test
+
+conditions:
+  - id: dazed
+  - id: exposed
+    modifiers:
+      - {applies: incoming_attack, effect: advantage}
+      - {applies: incoming_attack, effect: auto_crit, when: {attacker_within: 5}}
+  - id: guarded
+    modifiers:
+      - {applies: ac, effect: bonus, value: 5}
+  - id: hindered
+    modifiers:
+      - {applies: attack_roll, effect: disadvantage}
+  - id: empowered
+    modifiers:
+      - {applies: attack_roll, effect: advantage, consume: true}
+  - id: insulated
+    modifiers:
+      - {applies: damage_taken, effect: resistance, filter: {damage_type: [fire]}}
+  - id: downed-test
+  - id: focus-test
+  - id: marked-test
+  - id: dodging-test
+  - id: disengaged-test
+  - id: hidden-test
+  - id: helped-test
+  - id: slowed-test
+    modifiers:
+      - {applies: speed, effect: bonus, value: -10}
+
+masteries:
+  - id: dazing
+    triggers:
+      - on: on_hit
+        effects:
+          - save:
+              ability: con
+              dc: 12
+              on_fail:
+                - apply_condition: {condition: dazed, to: target, duration: {permanent: true}}
+
+abilities:
+  - id: sneaky
+    activation: passive
+    triggers:
+      - on: on_hit
+        once_per: turn
+        when:
+          all:
+            - attack_has_property: [finesse, ranged]
+            - any:
+                - has_advantage: true
+                - all:
+                    - ally_within_5_of_target: true
+                    - not: {has_disadvantage: true}
+        effects:
+          - damage: {dice: "{param.dice}", type: weapon}
+  - id: warding
+    name: Warding Reaction
+    activation: reaction
+    cost: {resource: ward, amount: 1}
+    target: {type: self}
+    triggers:
+      - on: on_hit_taken
+        reaction: true
+        when: {would_miss_with_ac_bonus: 5}
+        effects:
+          - apply_condition: {condition: guarded, to: self, duration: {until: start_of_source_next_turn}}
+  - id: focus-spell
+    name: Focus Spell
+    activation: action
+    cost: {resource: slot, amount: 1}
+    slot_level: 1
+    range: 30
+    target: {type: creature, side: enemy, count: 1}
+    concentration: true
+    effects:
+      - apply_condition: {condition: marked-test, to: target, duration: {minutes: 1}}
+  - id: mend-test
+    name: Mend Test
+    activation: action
+    cost: {resource: slot, amount: 1}
+    slot_level: 1
+    range: 30
+    target: {type: creature, side: ally, count: 1}
+    effects:
+      - heal: {dice: "1d8+2"}
+
+creatures:
+  - id: striker-a
+    name: Striker A
+    kind: pc
+    side: party
+    ac: 15
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 3
+    prof: 2
+    abilities: {str: 10, dex: 16, con: 12, int: 10, wis: 10, cha: 10}
+    attacks:
+      - {id: test-sword, name: Test Sword, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5, properties: [finesse, light]}
+      - {id: test-bow, name: Test Bow, kind: ranged, ability: dex, to_hit: 5, damage: [{dice: "1d6+2", type: piercing}], range: [80, 320], properties: [ranged, two-handed]}
+    features:
+      - {ref: sneaky, params: {dice: 1d6}}
+  - id: brute-a
+    name: Brute A
+    kind: monster
+    side: enemy
+    ac: 13
+    hp: 40
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 16, dex: 10, con: 14, int: 8, wis: 10, cha: 8}
+    resistances: [fire]
+    vulnerabilities: [cold]
+    attacks:
+      - {id: club, name: Club, kind: melee, ability: str, to_hit: 3, damage: [{dice: "1d8+1", type: bludgeoning}], reach: 5, mastery: dazing}
+  - id: warden-b
+    name: Warden B
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 2
+    prof: 2
+    abilities: {str: 12, dex: 12, con: 12, int: 10, wis: 10, cha: 10}
+    resources:
+      ward: {max: 1, recharge: long}
+    actions:
+      - {ref: warding}
+  - id: caster-c
+    name: Caster C
+    kind: pc
+    side: party
+    ac: 12
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 1
+    prof: 2
+    abilities: {str: 8, dex: 12, con: 14, int: 16, wis: 10, cha: 10}
+    spellcasting: {ability: int, attack: 5, dc: 13}
+    resources:
+      slot: {max: 2, recharge: long}
+    actions:
+      - {ref: focus-spell}
+  - id: dormant-d
+    name: Dormant D
+    kind: monster
+    side: enemy
+    ac: 12
+    hp: 10
+    speed: {walk: 30}
+    init_bonus: 1
+    prof: 2
+    abilities: {str: 12, dex: 12, con: 10, int: 6, wis: 8, cha: 6}
+    dormant: true
+    attacks:
+      - {id: claw, name: Claw, kind: melee, ability: str, to_hit: 3, damage: [{dice: "1d4+1", type: slashing}], reach: 5}
+  - id: rampage-e
+    name: Rampage E
+    kind: monster
+    side: rampage
+    ac: 12
+    hp: 12
+    speed: {walk: 30}
+    init_bonus: 2
+    prof: 2
+    abilities: {str: 12, dex: 12, con: 10, int: 6, wis: 8, cha: 6}
+    attacks:
+      - {id: bite, name: Bite, kind: melee, ability: str, to_hit: 3, damage: [{dice: "1d6+1", type: piercing}], reach: 5}
+  - id: recharger-r
+    name: Recharger R
+    kind: monster
+    side: enemy
+    ac: 12
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10}
+    resources:
+      turn-res: {max: 1, recharge: turn}
+      round-res: {max: 1, recharge: round}
+      short-res: {max: 1, recharge: short}
+      long-res: {max: 1, recharge: long}
+      rolled-res: {max: 1, recharge: recharge 5-6}
+    attacks:
+      - {id: tap, name: Tap, kind: melee, ability: str, to_hit: 2, damage: [{dice: "1d4", type: bludgeoning}], reach: 5}
+
+scenes:
+  - id: arena
+    name: Test Arena
+    mode: zones
+    zones:
+      - {id: alpha, elevation: 0}
+      - {id: beta, cover: half, elevation: 0}
+      - {id: gamma, elevation: 0}
+    edges:
+      - {a: alpha, b: beta, distance: 5}
+      - {a: beta, b: gamma, distance: 10}
+  - id: grid-arena
+    name: Grid Arena
+    mode: grid
+    zones:
+      - {id: start}
+      - {id: floor}
+    grid:
+      cell: 5
+      legend: {"#": {wall: true}, ".": {}}
+      rows: ["#####", "#...#", "#####"]
+
+encounters:
+  - id: test-fight
+    name: Test Fight
+    scene: arena
+    party_zone: alpha
+    members:
+      - {creature: brute-a, zone: beta}
+  - id: dormant-fight
+    name: Dormant Fight
+    scene: arena
+    party_zone: alpha
+    members:
+      - {creature: dormant-d, zone: beta}
+  - id: multi-side
+    name: Multi Side
+    scene: arena
+    party_zone: alpha
+    members:
+      - {creature: brute-a, zone: beta}
+      - {creature: rampage-e, zone: gamma}
+  - id: grid-fight
+    name: Grid Fight
+    scene: grid-arena
+    party_zone: start
+    members:
+      - {creature: brute-a, zone: floor}

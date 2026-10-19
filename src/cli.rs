@@ -913,7 +913,7 @@ impl StatusOutput {
                     hp: combatant.hp,
                     max_hp: combatant.max_hp,
                     temp_hp: combatant.temp_hp,
-                    ac: combatant.creature.ac(),
+                    ac: engine::armor_class(state, index),
                     zone: combatant.zone.clone(),
                     conditions: combatant
                         .conditions

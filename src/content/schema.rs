@@ -757,7 +757,7 @@ pub struct DamagePart {
 }
 
 /// Ranges and targets for an ability.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetSpec {
     #[serde(rename = "type")]
@@ -1376,6 +1376,7 @@ pub enum Predicate {
     Not(Box<Predicate>),
     HasAdvantage(Flag),
     HasDisadvantage(Flag),
+    #[serde(rename = "ally_within_5_of_target")]
     AllyWithin5OfTarget(Flag),
     TargetHasCondition(String),
     SelfHasCondition(String),
@@ -1590,6 +1591,12 @@ pub struct ConditionDef {
 }
 
 impl ConditionDef {
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+}
+
+impl MasteryDef {
     pub fn display_name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.id)
     }

@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use crate::content::expr::ExprContext;
 use crate::content::schema::{
     Ability, AbilityCost, AbilityName, Activation, Attack, AttackEffect, AttackKind,
-    AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionDef, ConditionFlag, CritMode,
+    AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag, CritMode,
     DamageEffect, DamagePart, Direction, Duration, DurationUntil, Effect, EndsOn, ExprValue,
     ForcedMoveEffect, Modifier, ModifierApplies, ModifierEffect, ModifierFilter, OncePer, Predicate,
     Recharge, SaveEndsAt, SaveEffect, Size, TargetRef, TargetSide, TargetType, Trigger, TriggerWhen,
@@ -23,7 +23,7 @@ use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
 use crate::space::Space;
 use crate::state::{
     ability_from_text, active_condition_ids, active_duration, ActiveCondition, ActiveDuration,
-    ActiveSaveEnds, CombatOutcome, CombatantState, DeathSaves, EncounterState, ResourceState,
+    ActiveSaveEnds, CombatOutcome, CombatantState, DeathSaves, EncounterState,
 };
 
 /// Attack command options.
@@ -133,21 +133,6 @@ fn roll_value(
     Ok((formula, record))
 }
 
-fn roll_dice_expr(
-    context: &ExprContext,
-    text: &str,
-    crit: bool,
-    rng: &mut dyn DiceRng,
-) -> Result<(String, DiceExpr, RollRecord)> {
-    let (formula, expression) = context.evaluate(text)?;
-    let record = if crit {
-        expression.roll_doubled(rng)
-    } else {
-        expression.roll(rng)
-    };
-    Ok((formula, expression, record))
-}
-
 fn ability_name_from_attack_kind(kind: AttackKind, creature: &CombatantState) -> Option<AbilityName> {
     match kind {
         AttackKind::Melee => Some(AbilityName::Str),
@@ -179,15 +164,6 @@ fn has_flag(state: &EncounterState, index: usize, flag: ConditionFlag) -> bool {
 
 fn is_incapacitated(state: &EncounterState, index: usize) -> bool {
     has_flag(state, index, ConditionFlag::Incapacitated)
-}
-
-fn is_dormant(combatant: &CombatantState) -> bool {
-    combatant.dormant
-}
-
-fn can_take_turns(state: &EncounterState, index: usize) -> bool {
-    let combatant = &state.combatants[index];
-    !combatant.dormant && !combatant.is_dead() && !is_incapacitated(state, index)
 }
 
 fn ensure_can_act(state: &EncounterState, index: usize) -> Result<()> {
@@ -457,7 +433,6 @@ struct CollectedModifier {
     label: String,
     key: String,
     origin_condition: Option<String>,
-    owner: usize,
 }
 
 fn modifier_filter_matches(filter: &ModifierFilter, context: &PredicateContext) -> bool {
@@ -535,7 +510,6 @@ fn collect_modifiers(
                         instance.condition, instance_index
                     ),
                     origin_condition: Some(instance.condition.clone()),
-                    owner,
                 });
             }
         }
@@ -563,7 +537,6 @@ fn collect_modifiers(
                     label: resolved.ability.display_name().to_string(),
                     key: format!("ability:{}:mod:{modifier_index}", resolved.ability.id),
                     origin_condition: None,
-                    owner,
                 });
             }
         }
@@ -586,7 +559,6 @@ fn collect_modifiers(
                 label: source.name.clone(),
                 key: format!("source:{}:mod:{modifier_index}", source.id),
                 origin_condition: None,
-                owner,
             });
         }
     }
@@ -949,7 +921,7 @@ fn start_turn(
     if state.combatants[index].is_dying() {
         let name = state.combatants[index].name.clone();
         log.push(format!("{name} is dying and must make a death saving throw"));
-        let _ = death_save(state, index, rng, log);
+        let _ = death_save_at(state, index, rng, log);
     }
     run_owned_triggers(state, index, TriggerWhen::StartOfTurn, None, rng, log);
 }
@@ -1097,14 +1069,11 @@ fn recharge_resources(
         }
         let in_range = match (&recharge, phase) {
             (Recharge::Single(minimum), RechargePhase::Turn) => {
-                let roll = D20Roll::roll(0, RollMode::Normal, rng).kept;
-                roll >= i32::try_from(*minimum).unwrap_or(20)
+                rng.roll_die(6) >= *minimum
             }
             (Recharge::Range { min, max }, RechargePhase::Turn) => {
-                let roll = D20Roll::roll(0, RollMode::Normal, rng).kept;
-                let roll_i = roll;
-                roll_i >= i32::try_from(*min).unwrap_or(1)
-                    && roll_i <= i32::try_from(*max).unwrap_or(6)
+                let roll = rng.roll_die(6);
+                roll >= *min && roll <= *max
             }
             _ => false,
         };
@@ -1250,8 +1219,8 @@ struct EffectSource {
     slot_level: Option<i32>,
     concentration: bool,
     params: BTreeMap<String, String>,
-    manual: Option<String>,
     duration: Option<Duration>,
+    range: Option<i32>,
     modifiers: Vec<Modifier>,
 }
 
@@ -1267,8 +1236,8 @@ impl EffectSource {
                 .iter()
                 .map(|(key, value)| (key.clone(), value.as_text()))
                 .collect(),
-            manual: ability.manual.clone(),
             duration: ability.duration.clone(),
+            range: ability.range,
             modifiers: ability.modifiers.clone(),
         }
     }
@@ -1339,8 +1308,8 @@ fn bonus_text(terms: &[BonusTerm]) -> String {
 }
 
 fn roll_d20(
-    state: &EncounterState,
-    owner: usize,
+    _state: &EncounterState,
+    _owner: usize,
     base: i32,
     mode: RollMode,
     bonuses: Vec<BonusTerm>,
@@ -1348,7 +1317,6 @@ fn roll_d20(
     disadvantage_sources: Vec<String>,
     rng: &mut dyn DiceRng,
 ) -> D20Result {
-    let _ = state;
     let roll = D20Roll::roll(base, mode, rng);
     let bonus_total: i32 = bonuses.iter().map(|term| term.record.total).sum();
     D20Result {
@@ -1431,10 +1399,15 @@ fn effective_ac(
     Ok((ac, terms))
 }
 
-fn ac_text(base: i32, terms: &[(i32, String)]) -> String {
+fn ac_text(total: i32, terms: &[(i32, String)]) -> String {
+    let bonus: i32 = terms.iter().map(|(value, _)| *value).sum();
+    let base = total - bonus;
     let mut text = format!("AC {base}");
     for (value, label) in terms {
-        text.push_str(&format!("{}{}[{label}]", signed(*value), value.abs()));
+        text.push_str(&format!("{}[{label}]", signed(*value)));
+    }
+    if !terms.is_empty() {
+        text.push_str(&format!("={total}"));
     }
     text
 }
@@ -1528,6 +1501,7 @@ fn resolve_named_entry(
         &source,
         &[target],
         options,
+        None,
         None,
         auto,
         rng,
@@ -1738,7 +1712,6 @@ fn resolve_attack(
                 mode = add_disadvantage(mode);
             }
         }
-        _ => {}
     }
 
     // Attack roll bonuses.
@@ -1783,7 +1756,7 @@ fn resolve_attack(
     )
     .with_context(|| format!("attack `{}` to_hit", profile.name))?;
     let base = to_hit_expr.modifier;
-    let mut result = roll_d20(
+    let result = roll_d20(
         state,
         attacker,
         base,
@@ -1793,22 +1766,18 @@ fn resolve_attack(
         disadvantage_sources,
         rng,
     );
-    log.push(format!(
-        "{attacker_name} attacks {target_name} with {}: {} vs {}",
-        profile.name,
-        result.text(),
-        ac_text(base_ac, &ac_terms)
-    ));
     let _ = to_hit_formula;
-
     let mut hit = result.nat20 || (!result.nat1 && result.total >= base_ac);
     let mut crit = result.nat20;
-    if !hit {
-        // Auto-crit modifiers (for example a target that is unaware) only
-        // matter on a hit; a miss stays a miss.
-    }
     let mut current_ac = base_ac;
     let mut current_terms = ac_terms.clone();
+    log.push(format!(
+        "{attacker_name} attacks {target_name} with {}: {} vs {} {}",
+        profile.name,
+        result.text(),
+        ac_text(base_ac, &current_terms),
+        if hit { "HIT" } else { "MISS" }
+    ));
 
     if hit && !options.no_reactions {
         let converted = try_hit_reactions(
@@ -2200,7 +2169,7 @@ fn apply_attack_damage_parts(
 fn run_mastery_triggers(
     state: &mut EncounterState,
     attacker: usize,
-    target: usize,
+    _target: usize,
     profile: &AttackProfile,
     base_context: &EffectContext,
     when: TriggerWhen,
@@ -2238,8 +2207,8 @@ fn run_mastery_triggers(
             slot_level: None,
             concentration: false,
             params: BTreeMap::new(),
-            manual: mastery.manual.clone(),
             duration: None,
+            range: None,
             modifiers: mastery.modifiers.clone(),
         };
         let mut context = base_context.clone();
@@ -2250,7 +2219,7 @@ fn run_mastery_triggers(
 }
 
 fn predicate_from_effect(
-    state: &EncounterState,
+    _state: &EncounterState,
     context: &EffectContext,
     facts: AttackFacts,
 ) -> PredicateContext {
@@ -2483,11 +2452,11 @@ fn apply_effect(
                 slot_level: None,
                 concentration: false,
                 params: BTreeMap::new(),
-                manual: None,
                 duration: None,
+                range: None,
                 modifiers: Vec::new(),
             });
-            let profile = AttackProfile::from_effect(effect, &source, None);
+            let profile = AttackProfile::from_effect(effect, &source, source.range);
             let options = AttackOptions {
                 advantage: context.has_advantage,
                 disadvantage: context.has_disadvantage,
@@ -2536,8 +2505,7 @@ fn apply_effect(
                     context
                         .source
                         .as_ref()
-                        .and_then(|source| state.content.abilities.get(&source.id))
-                        .and_then(|ability| ability.duration.clone())
+                        .and_then(|source| source.duration.clone())
                 }),
                 save_ends,
                 effect.ends_on.clone(),
@@ -2599,6 +2567,7 @@ fn apply_effect(
                 &targets,
                 &AttackOptions::default(),
                 context.option,
+                context.source.as_ref().and_then(|source| source.slot_level),
                 true,
                 rng,
                 log,
@@ -2825,6 +2794,15 @@ fn apply_damage_effect(
         context.source.as_ref().and_then(|source| source.slot_level),
     );
     let crit = context.crit && effect.crit == CritMode::Inherit;
+    let mut damage_type = effect.damage_type.as_str().to_string();
+    if damage_type.eq_ignore_ascii_case("weapon") {
+        damage_type = context
+            .attack
+            .as_ref()
+            .and_then(|attack| attack.damage.first())
+            .map(|part| part.damage_type.as_str().to_string())
+            .unwrap_or_else(|| "untyped".to_string());
+    }
     let mut rolls = Vec::new();
     for _ in 0..effect.repeat.max(1) {
         let (_, record) = roll_value(&expr_context, &effect.dice, crit, rng)?;
@@ -2841,14 +2819,14 @@ fn apply_damage_effect(
                 ..record
             }
             .clone(),
-            effect.damage_type.as_str().to_string(),
+            damage_type.clone(),
         ));
     }
     if let Some(bonus) = damage_roll_bonus(
         state,
         context.actor,
         context.source.as_ref(),
-        Some(effect.damage_type.as_str()),
+        Some(&damage_type),
         rng,
     )? {
         if let Some((record, _)) = rolls.first_mut() {
@@ -2859,6 +2837,7 @@ fn apply_damage_effect(
     let dealt = apply_damage_rolls(state, target, context.actor, rolls, rng, log)?;
     if dealt > 0 {
         fire_ends_on(state, target, EndsOn::DamageTaken, log);
+        fire_ends_on(state, context.actor, EndsOn::DealsDamage, log);
     }
     Ok(())
 }
@@ -3451,6 +3430,7 @@ fn use_resolved_ability(
     targets: &[usize],
     options: &AttackOptions,
     option: Option<usize>,
+    slot_level: Option<i32>,
     auto: bool,
     rng: &mut dyn DiceRng,
     log: &mut Vec<String>,
@@ -3507,7 +3487,7 @@ fn use_resolved_ability(
     if let Some(manual) = &ability.manual {
         log.push(format!("MANUAL: {manual}"));
     }
-    let slot_level = options.slot_level.or(ability.slot_level);
+    let slot_level = slot_level.or(ability.slot_level);
     let mut effect_source = source.clone();
     if let Some(slot_level) = slot_level {
         effect_source.slot_level = Some(slot_level);
@@ -3594,32 +3574,6 @@ pub fn use_ability(
         multi: false,
         no_reactions: options.no_reactions,
     };
-    if resolved
-        .ability
-        .effects
-        .iter()
-        .any(|effect| matches!(effect, Effect::Attack(_)))
-    {
-        if targets.is_empty() {
-            bail!("`{}` needs a target", resolved.ability.display_name());
-        }
-        for target in &targets {
-            use_resolved_ability(
-                state,
-                actor,
-                &resolved,
-                &source,
-                &[*target],
-                &attack_options,
-                options.option,
-                false,
-                rng,
-                log,
-            )?;
-        }
-        log_outcome(state, log);
-        return Ok(());
-    }
     use_resolved_ability(
         state,
         actor,
@@ -3628,6 +3582,7 @@ pub fn use_ability(
         &targets,
         &attack_options,
         options.option,
+        options.slot_level,
         false,
         rng,
         log,
@@ -4036,6 +3991,8 @@ fn run_damage_taken_triggers(
                 crit: false,
                 damage_dealt: damage,
                 damage_scale: 1.0,
+                has_advantage: false,
+                has_disadvantage: false,
             };
             let _ = apply_effects(state, &effect_context, &trigger.effects, rng, log);
         }
@@ -4542,6 +4499,13 @@ pub fn rest(
 // Status helpers
 // ---------------------------------------------------------------------------
 
+/// Armour class including active condition modifiers (but no cover bonus).
+pub fn armor_class(state: &EncounterState, index: usize) -> i32 {
+    effective_ac(state, index, None, &AttackFacts::default())
+        .map(|(ac, _)| ac)
+        .unwrap_or_else(|_| state.combatants[index].creature.ac())
+}
+
 pub fn status_lines(state: &EncounterState) -> Vec<String> {
     let mut lines = Vec::new();
     match state.current() {
@@ -4628,7 +4592,7 @@ fn combatant_status_line(state: &EncounterState, index: usize, current: bool) ->
         "{marker}{initiative} {} {} HP {hp} AC {} {}{dormant}{concentration} | conditions: {conditions} | resources: {resources} | saves: {saves}",
         combatant.name,
         combatant.side.as_str(),
-        combatant.creature.ac(),
+        armor_class(state, index),
         combatant.zone
     )
 }

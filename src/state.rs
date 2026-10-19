@@ -17,7 +17,7 @@ use crate::content::schema::{
     EndsOn, ResourceDef, Rules, SaveEndsAt, Scene, SceneMode, SceneTrigger, Side, Speed,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
-use crate::space::{Space, ZoneSpace};
+use crate::space::ZoneSpace;
 
 /// State file used when no `--state` is supplied.
 pub const DEFAULT_STATE_FILE: &str = "combat-state.json";
@@ -559,7 +559,7 @@ impl EncounterState {
             .get(&options.encounter)
             .cloned()
             .ok_or_else(|| anyhow!("unknown encounter `{}`", options.encounter))?;
-        let mut scene = content
+        let scene = content
             .scenes
             .get(&encounter.scene)
             .cloned()
@@ -1042,7 +1042,7 @@ fn zone_list(scene: &Scene) -> String {
 
 /// Condition ids active on a creature, including recursively implied ones.
 pub fn active_condition_ids(content: &ContentRegistry, combatant: &CombatantState) -> Vec<String> {
-    let mut ids = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
     let mut stack: Vec<String> = combatant
         .conditions
         .iter()
