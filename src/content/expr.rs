@@ -13,6 +13,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use crate::dice::DiceExpr;
 
 /// The variables available to content expressions.
+pub const ABILITY_NAMES: [&str; 6] = ["str", "dex", "con", "int", "wis", "cha"];
+
 pub const VARIABLES: &[&str] = &[
     "str",
     "dex",
@@ -32,7 +34,9 @@ pub const VARIABLES: &[&str] = &[
 /// Values used when evaluating an expression for a specific creature/action.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ExprContext {
-    pub ability_mods: BTreeMap<String, i32>,
+    /// Modifiers in the fixed order strength, dexterity, constitution,
+    /// intelligence, wisdom, charisma.
+    pub ability_mods: [i32; 6],
     pub prof: i32,
     pub level: i32,
     pub spell_mod: Option<i32>,
@@ -50,10 +54,9 @@ impl ExprContext {
 
     /// Fills ability modifiers from ability scores (10 => +0).
     pub fn with_ability_scores(mut self, scores: &BTreeMap<String, i32>) -> Self {
-        for ability in ["str", "dex", "con", "int", "wis", "cha"] {
-            let score = scores.get(ability).copied().unwrap_or(10);
-            self.ability_mods
-                .insert(ability.to_string(), (score - 10).div_euclid(2));
+        for (index, ability) in ABILITY_NAMES.iter().enumerate() {
+            let score = scores.get(*ability).copied().unwrap_or(10);
+            self.ability_mods[index] = (score - 10).div_euclid(2);
         }
         self
     }
@@ -120,8 +123,8 @@ impl ExprContext {
     }
 
     fn variable(&self, name: &str) -> Result<String> {
-        if let Some(value) = self.ability_mods.get(name) {
-            return Ok(value.to_string());
+        if let Some(index) = ABILITY_NAMES.iter().position(|ability| *ability == name) {
+            return Ok(self.ability_mods[index].to_string());
         }
         match name {
             "str" | "dex" | "con" | "int" | "wis" | "cha" => {
