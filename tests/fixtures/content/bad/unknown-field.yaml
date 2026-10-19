@@ -1,0 +1,5 @@
+creatures:
+  - id: bad-field-a
+    ac: 10
+    hp: 5
+    armor_class: 12

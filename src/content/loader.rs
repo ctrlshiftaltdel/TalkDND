@@ -275,6 +275,47 @@ impl ContentRegistry {
         }
     }
 
+    /// All `(id, source)` pairs for one kind, sorted by id.
+    pub fn entries(&self, kind: ItemKind) -> Vec<(&str, &ContentSource)> {
+        match kind {
+            ItemKind::Condition => self
+                .conditions
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Mastery => self
+                .masteries
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Ability => self
+                .abilities
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Creature => self
+                .creatures
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::AiTemplate => self
+                .ai_templates
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Scene => self
+                .scenes
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Encounter => self
+                .encounters
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+        }
+    }
+
     /// Resolves `base:` chains. Scalars, objects and lists replace when the
     /// child supplies them; `abilities`, `saves`, `skills` and `resources`
     /// merge child-over-base. Missing bases and cycles are errors.
@@ -312,7 +353,7 @@ impl ContentRegistry {
                     .expect("base chain was checked above")
             })
             .collect();
-        let mut resolved = chain.last().expect("base chain is never empty").clone();
+        let mut resolved = (*chain.last().expect("base chain is never empty")).clone();
         for child in chain.iter().rev().skip(1) {
             resolved.merge_from((*child).clone());
         }
@@ -350,25 +391,28 @@ impl ContentRegistry {
 
     fn insert_item(&mut self, item: ContentItem, source: &ContentSource) {
         match item {
-            ContentItem::Condition(item) => self
-                .conditions
-                .insert(item.id.clone(), item, source.clone()),
+            ContentItem::Condition(item) => {
+                self.conditions
+                    .insert(item.id.clone(), item, source.clone())
+            }
             ContentItem::Mastery(item) => {
                 self.masteries.insert(item.id.clone(), item, source.clone())
             }
-            ContentItem::Ability(item) => self
-                .abilities
-                .insert(item.id.clone(), item, source.clone()),
-            ContentItem::Creature(item) => self
-                .creatures
-                .insert(item.id.clone(), item, source.clone()),
-            ContentItem::AiTemplate(item) => self
-                .ai_templates
-                .insert(item.id.clone(), item, source.clone()),
+            ContentItem::Ability(item) => {
+                self.abilities.insert(item.id.clone(), item, source.clone())
+            }
+            ContentItem::Creature(item) => {
+                self.creatures.insert(item.id.clone(), item, source.clone())
+            }
+            ContentItem::AiTemplate(item) => {
+                self.ai_templates
+                    .insert(item.id.clone(), item, source.clone())
+            }
             ContentItem::Scene(item) => self.scenes.insert(item.id.clone(), item, source.clone()),
-            ContentItem::Encounter(item) => self
-                .encounters
-                .insert(item.id.clone(), item, source.clone()),
+            ContentItem::Encounter(item) => {
+                self.encounters
+                    .insert(item.id.clone(), item, source.clone())
+            }
         }
     }
 
@@ -379,6 +423,7 @@ impl ContentRegistry {
 }
 
 /// A single parsed item, before it is stored in the registry.
+#[allow(clippy::large_enum_variant)]
 enum ContentItem {
     Condition(ConditionDef),
     Mastery(MasteryDef),
@@ -534,7 +579,10 @@ fn collect_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
             );
         }
     } else {
-        bail!("content source {} is not a file or directory", path.display());
+        bail!(
+            "content source {} is not a file or directory",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -575,8 +623,8 @@ fn load_file(path: &Path, registry: &mut ContentRegistry) -> Result<()> {
         }
         Some("yaml" | "yml") => {
             let source = ContentSource::new(path, None);
-            let value = parse_value(&text, Format::Yaml)
-                .map_err(|error| anyhow!("{source}: {error}"))?;
+            let value =
+                parse_value(&text, Format::Yaml).map_err(|error| anyhow!("{source}: {error}"))?;
             apply_document(&value, &source, registry)
                 .map_err(|error| anyhow!("{source}: {error}"))?;
         }
@@ -644,9 +692,7 @@ fn apply_document(
     let object = value
         .as_object()
         .ok_or_else(|| anyhow!("top-level content must be a map"))?;
-    let has_container_key = CONTAINER_KEYS
-        .iter()
-        .any(|key| object.contains_key(*key));
+    let has_container_key = CONTAINER_KEYS.iter().any(|key| object.contains_key(*key));
     let looks_like_item = object.contains_key("id");
     if has_container_key && !looks_like_item {
         let file: ContentFile = serde_json::from_value(value.clone())

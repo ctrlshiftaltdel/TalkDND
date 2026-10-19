@@ -1,0 +1,3 @@
+conditions:
+  - id: bad-duration
+    duration_default: {rounds: 1, minutes: 1}

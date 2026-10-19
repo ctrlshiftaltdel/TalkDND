@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 use crate::ai::Ai;
+use crate::content::{self, ContentSources, ItemKind, ShownItem};
 use crate::dice::{self, DiceRng, RollMode};
 use crate::engine::{self, AttackOptions, CheckOptions, ConditionOptions};
 use crate::model::{Kind, Resource, Side};
@@ -42,6 +43,22 @@ pub struct Cli {
     /// Emit machine-readable JSON where supported.
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Additional content library directory (repeatable).
+    #[arg(long = "lib", global = true, value_name = "DIR")]
+    pub lib: Vec<PathBuf>,
+
+    /// Additional adventure content directory (repeatable).
+    #[arg(long = "adventure", global = true, value_name = "DIR")]
+    pub adventure: Vec<PathBuf>,
+
+    /// Additional character file or directory (repeatable).
+    #[arg(long = "chars", global = true, value_name = "PATH")]
+    pub chars: Vec<PathBuf>,
+
+    /// Campaign manifest; falls back to COMBAT_SIM_CAMPAIGN.
+    #[arg(long = "campaign", global = true, value_name = "FILE")]
+    pub campaign: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -217,6 +234,30 @@ pub enum Command {
         #[arg(long)]
         threads: Option<usize>,
     },
+
+    /// Inspect and validate campaign content without loading an encounter.
+    Content {
+        #[command(subcommand)]
+        command: ContentCommand,
+    },
+}
+
+/// Content subcommands (SPEC §4).
+#[derive(Debug, Subcommand)]
+pub enum ContentCommand {
+    /// List loaded content items and their source files.
+    List {
+        /// Restrict to one kind (conditions, masteries, abilities, creatures,
+        /// ai-templates, scenes, encounters).
+        #[arg(long, value_name = "KIND")]
+        kind: Option<String>,
+    },
+
+    /// Print one item as JSON, including its kind and source file.
+    Show { id: String },
+
+    /// Validate references, expressions and TODO notes.
+    Check,
 }
 
 /// Condition subcommands.
@@ -260,8 +301,19 @@ pub fn run() -> Result<()> {
         state,
         seed,
         json,
+        lib,
+        adventure,
+        chars,
+        campaign,
         command,
     } = Cli::parse();
+
+    let sources = ContentSources {
+        libraries: lib,
+        adventures: adventure,
+        characters: chars,
+        campaign,
+    };
 
     match command {
         Command::New { encounter, specs } => new_state(&state, encounter.as_deref(), &specs),
@@ -463,6 +515,68 @@ pub fn run() -> Result<()> {
                 threads,
             },
         ),
+        Command::Content { command } => run_content(&sources, command),
+    }
+}
+
+fn load_content(sources: &ContentSources) -> Result<content::ContentRegistry> {
+    sources.load().context("failed to load content")
+}
+
+fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> {
+    match command {
+        ContentCommand::List { kind } => {
+            let registry = load_content(sources)?;
+            let filter = match kind {
+                Some(kind) => Some(ItemKind::parse(&kind).ok_or_else(|| {
+                    anyhow!(
+                        "unknown content kind `{kind}`; expected conditions, masteries, abilities, creatures, ai-templates, scenes or encounters"
+                    )
+                })?),
+                None => None,
+            };
+            let kinds: Vec<ItemKind> = match filter {
+                Some(kind) => vec![kind],
+                None => ItemKind::ALL.to_vec(),
+            };
+            for kind in kinds {
+                for (id, source) in registry.entries(kind) {
+                    println!("{}\t{id}\t{source}", kind.as_str());
+                }
+            }
+            Ok(())
+        }
+        ContentCommand::Show { id } => {
+            let registry = load_content(sources)?;
+            let item = registry
+                .find_any(&id)
+                .ok_or_else(|| anyhow!("no content item with id `{id}`"))?;
+            let shown = ShownItem::new(&registry, item);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&shown).context("failed to serialize content item")?
+            );
+            Ok(())
+        }
+        ContentCommand::Check => {
+            let registry = load_content(sources)?;
+            let report = content::check(&registry);
+            for issue in &report.issues {
+                println!("{issue}");
+            }
+            println!(
+                "content check: {} error(s), {} warning(s)",
+                report.error_count(),
+                report.warning_count()
+            );
+            if report.has_errors() {
+                bail!(
+                    "content check failed with {} error(s)",
+                    report.error_count()
+                );
+            }
+            Ok(())
+        }
     }
 }
 

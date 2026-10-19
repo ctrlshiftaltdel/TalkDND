@@ -29,7 +29,7 @@ pub const VARIABLES: &[&str] = &[
 ];
 
 /// Values used when evaluating an expression for a specific creature/action.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ExprContext {
     pub ability_mods: BTreeMap<String, i32>,
     pub prof: i32,
@@ -42,22 +42,6 @@ pub struct ExprContext {
     pub params: BTreeMap<String, String>,
 }
 
-impl Default for ExprContext {
-    fn default() -> Self {
-        Self {
-            ability_mods: BTreeMap::new(),
-            prof: 0,
-            level: 0,
-            spell_mod: None,
-            spell_attack: None,
-            spell_dc: None,
-            slot_level: None,
-            attack_mod: None,
-            params: BTreeMap::new(),
-        }
-    }
-}
-
 impl ExprContext {
     pub fn new() -> Self {
         Self::default()
@@ -67,7 +51,8 @@ impl ExprContext {
     pub fn with_ability_scores(mut self, scores: &BTreeMap<String, i32>) -> Self {
         for ability in ["str", "dex", "con", "int", "wis", "cha"] {
             let score = scores.get(ability).copied().unwrap_or(10);
-            self.ability_mods.insert(ability.to_string(), (score - 10).div_euclid(2));
+            self.ability_mods
+                .insert(ability.to_string(), (score - 10).div_euclid(2));
         }
         self
     }
@@ -125,9 +110,9 @@ impl ExprContext {
             return Ok(value.to_string());
         }
         match name {
-            "str" | "dex" | "con" | "int" | "wis" | "cha" => bail!(
-                "missing ability modifier `{name}` in expression context"
-            ),
+            "str" | "dex" | "con" | "int" | "wis" | "cha" => {
+                bail!("missing ability modifier `{name}` in expression context")
+            }
             "prof" => Ok(self.prof.to_string()),
             "level" => Ok(self.level.to_string()),
             "spell_mod" => optional_variable(name, self.spell_mod),
@@ -140,11 +125,9 @@ impl ExprContext {
                     if param.is_empty() {
                         return Err(unknown_variable(name));
                     }
-                    return self
-                        .params
-                        .get(param)
-                        .cloned()
-                        .ok_or_else(|| anyhow!("missing parameter `{param}` in expression context"));
+                    return self.params.get(param).cloned().ok_or_else(|| {
+                        anyhow!("missing parameter `{param}` in expression context")
+                    });
                 }
                 Err(unknown_variable(name))
             }
@@ -187,9 +170,9 @@ pub fn validate_template(template: &str) -> Result<()> {
         }
     })?;
     let formula = normalize_signs(&substituted);
-    formula.parse::<DiceExpr>().with_context(|| {
-        format!("invalid expression `{template}` (substituted to `{formula}`)")
-    })?;
+    formula
+        .parse::<DiceExpr>()
+        .with_context(|| format!("invalid expression `{template}` (substituted to `{formula}`)"))?;
     Ok(())
 }
 
@@ -208,9 +191,9 @@ where
         }
         output.push_str(before);
         let after = &rest[open + 1..];
-        let close = after.find('}').ok_or_else(|| {
-            anyhow!("unmatched `{{` in expression `{template}`")
-        })?;
+        let close = after
+            .find('}')
+            .ok_or_else(|| anyhow!("unmatched `{{` in expression `{template}`"))?;
         if let Some(inner_open) = after[..close].find('{') {
             let _ = inner_open;
             return Err(anyhow!(
@@ -320,7 +303,10 @@ mod tests {
     #[test]
     fn unknown_variable_is_an_error() {
         let error = context().evaluate("1d6+{nope}").unwrap_err();
-        assert!(error.to_string().contains("unknown expression variable"), "{error}");
+        assert!(
+            error.to_string().contains("unknown expression variable"),
+            "{error}"
+        );
         validate_template("1d6+{nope}").unwrap_err();
     }
 
@@ -341,6 +327,7 @@ mod tests {
         let context = context()
             .with_spellcasting(Some(3), Some(5), Some(13))
             .with_slot_level(1)
+            .with_attack_mod(0)
             .with_params(params);
         assert_eq!(
             context.evaluate("8+{attack_mod}+{prof}").unwrap().0,

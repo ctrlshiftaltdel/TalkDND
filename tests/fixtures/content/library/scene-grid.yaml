@@ -1,0 +1,24 @@
+scenes:
+  - id: grid-a
+    name: Grid A
+    mode: grid
+    light: bright
+    grid:
+      cell: 5
+      legend:
+        "#": {wall: true}
+        ".": {}
+        "t": {cover: half, difficult: true, zone: tables}
+        "D": {zone: door}
+        "P": {}
+      rows:
+        - "#####"
+        - "#.tD#"
+        - "##P##"
+        - "#####"
+      zones: {pillar: "P"}
+    objects:
+      - id: pillar-a
+        zone: pillar
+        name: Pillar
+        manual: "A generic obstacle."

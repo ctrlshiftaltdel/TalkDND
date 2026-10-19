@@ -369,3 +369,99 @@ fn simulate_from_state_continues_without_rerolling_initiative() {
     let after = std::fs::read_to_string(temp.path()).unwrap();
     assert_eq!(before, after, "simulate must not modify the state file");
 }
+
+fn content_fixture(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/content")
+        .join(relative)
+}
+
+#[test]
+fn content_list_and_show_read_the_campaign() {
+    let temp = TempState::new("content-list");
+    let manifest = content_fixture("manifest.yaml");
+    let output = run(
+        temp.path(),
+        &["content", "list", "--campaign", manifest.to_str().unwrap()],
+    );
+    assert_success(&output, "content list");
+    let text = stdout(&output);
+    assert!(
+        text.contains("creature\tdummy-a\t"),
+        "creature row missing: {text}"
+    );
+    assert!(
+        text.contains("scene\thall-a\t"),
+        "scene row missing: {text}"
+    );
+    assert!(text.contains("core.yaml"), "source path missing: {text}");
+
+    let output = run(
+        temp.path(),
+        &[
+            "content",
+            "list",
+            "--kind",
+            "creatures",
+            "--campaign",
+            manifest.to_str().unwrap(),
+        ],
+    );
+    assert_success(&output, "content list --kind creatures");
+    let text = stdout(&output);
+    assert!(text.contains("dummy-a"));
+    assert!(!text.contains("hall-a"), "kind filter leaked: {text}");
+
+    let output = run(
+        temp.path(),
+        &[
+            "content",
+            "show",
+            "dummy-a",
+            "--campaign",
+            manifest.to_str().unwrap(),
+        ],
+    );
+    assert_success(&output, "content show dummy-a");
+    let shown: Value = serde_json::from_slice(&output.stdout).expect("show output is JSON");
+    assert_eq!(shown["kind"], "creature");
+    assert_eq!(shown["item"]["id"], "dummy-a");
+    assert!(
+        shown["source"].as_str().unwrap().contains("core.yaml"),
+        "source missing: {shown}"
+    );
+}
+
+#[test]
+fn content_check_passes_and_fails_appropriately() {
+    let temp = TempState::new("content-check");
+    let manifest = content_fixture("manifest.yaml");
+    let output = run(
+        temp.path(),
+        &["content", "check", "--campaign", manifest.to_str().unwrap()],
+    );
+    assert_success(&output, "content check");
+    let text = stdout(&output);
+    assert!(text.contains("content check: 0 error(s)"), "{text}");
+    assert!(text.contains("TODO: replace with final numbers"), "{text}");
+
+    let bad = content_fixture("bad/refs");
+    let output = run(
+        temp.path(),
+        &["content", "check", "--lib", bad.to_str().unwrap()],
+    );
+    assert!(
+        !output.status.success(),
+        "failing content must exit nonzero\nstdout:\n{}\nstderr:\n{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert!(text.contains("ERROR"), "error lines missing: {text}");
+    assert!(text.contains("unknown mastery"), "{text}");
+    assert!(
+        stderr(&output).contains("content check failed"),
+        "failure summary missing from stderr: {}",
+        stderr(&output)
+    );
+}

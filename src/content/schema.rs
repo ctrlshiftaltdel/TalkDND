@@ -149,23 +149,21 @@ pub enum Activation {
 }
 
 /// Whether a limited-use resource resets.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub enum Recharge {
     Turn,
     Round,
     Short,
+    #[default]
     Long,
     Never,
     /// `recharge N`
     Single(u32),
     /// `recharge N-M`
-    Range { min: u32, max: u32 },
-}
-
-impl Default for Recharge {
-    fn default() -> Self {
-        Self::Long
-    }
+    Range {
+        min: u32,
+        max: u32,
+    },
 }
 
 impl fmt::Display for Recharge {
@@ -1345,6 +1343,7 @@ pub enum OncePer {
 /// A condition-style predicate. Exactly one map key selects the leaf or
 /// combinator.
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Predicate {
     All(Vec<Predicate>),
     Any(Vec<Predicate>),
@@ -1425,9 +1424,7 @@ impl<'de> Deserialize<'de> for Predicate {
                     "not" => Predicate::Not(map.next_value()?),
                     "has_advantage" => Predicate::HasAdvantage(map.next_value()?),
                     "has_disadvantage" => Predicate::HasDisadvantage(map.next_value()?),
-                    "ally_within_5_of_target" => {
-                        Predicate::AllyWithin5OfTarget(map.next_value()?)
-                    }
+                    "ally_within_5_of_target" => Predicate::AllyWithin5OfTarget(map.next_value()?),
                     "target_has_condition" => Predicate::TargetHasCondition(map.next_value()?),
                     "self_has_condition" => Predicate::SelfHasCondition(map.next_value()?),
                     "attacker_within" => Predicate::AttackerWithin(map.next_value()?),
@@ -1666,7 +1663,7 @@ pub enum RangePreference {
     Any,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AiAssignment {
     pub template: String,

@@ -11,8 +11,8 @@ use super::expr;
 use super::loader::{ContentRegistry, ContentSource};
 use super::schema::{
     Ability, AbilityCost, AbilityEntry, AiAssignment, AiParams, Attack, AttackEffect, ConditionDef,
-    Creature, Duration, Effect, Encounter, ExprValue, MasteryDef, Modifier, Predicate, Scene,
-    SceneTrigger, Trigger,
+    Creature, Duration, Effect, ExprValue, MasteryDef, Modifier, Predicate, Scene, SceneTrigger,
+    Trigger,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,9 +101,9 @@ pub fn check(registry: &ContentRegistry) -> CheckReport {
     let (resolved, unresolved) = resolve_creatures(registry, &mut report);
     let creature_refs = collect_creature_refs(registry, &resolved);
 
-    check_global_abilities(registry, &mut report);
-    check_conditions(registry, &mut report);
-    check_masteries(registry, &mut report);
+    check_global_abilities(registry, &creature_refs, &mut report);
+    check_conditions(registry, &creature_refs, &mut report);
+    check_masteries(registry, &creature_refs, &mut report);
     check_ai_templates(registry, &mut report, &creature_refs);
     check_scenes(registry, &mut report, &creature_refs);
     check_encounters(registry, &mut report);
@@ -131,7 +131,9 @@ fn check_id(report: &mut CheckReport, source: Option<&ContentSource>, kind: &str
     if !valid_id(id) {
         report.error(
             source,
-            format!("{kind} id `{id}` is invalid; ids must be lowercase words separated by hyphens"),
+            format!(
+                "{kind} id `{id}` is invalid; ids must be lowercase words separated by hyphens"
+            ),
         );
     }
 }
@@ -154,6 +156,14 @@ fn check_ids_and_todos(registry: &ContentRegistry, report: &mut CheckReport) {
             &format!("mastery `{id}`"),
             &sourced.item.todo,
         );
+        for (index, trigger) in sourced.item.triggers.iter().enumerate() {
+            add_todos(
+                report,
+                Some(&sourced.source),
+                &format!("mastery `{id}` trigger #{}", index + 1),
+                &trigger.todo,
+            );
+        }
     }
     for (id, sourced) in registry.abilities.iter_sourced() {
         check_id(report, Some(&sourced.source), "ability", id);
@@ -208,6 +218,18 @@ fn check_ids_and_todos(registry: &ContentRegistry, report: &mut CheckReport) {
                     &format!("creature `{id}` ability `{}`", ability.id),
                     &ability.todo,
                 );
+                for (index, trigger) in ability.triggers.iter().enumerate() {
+                    add_todos(
+                        report,
+                        Some(&sourced.source),
+                        &format!(
+                            "creature `{id}` ability `{}` trigger #{}",
+                            ability.id,
+                            index + 1
+                        ),
+                        &trigger.todo,
+                    );
+                }
             }
         }
     }
@@ -237,6 +259,14 @@ fn check_ids_and_todos(registry: &ContentRegistry, report: &mut CheckReport) {
                 &zone.todo,
             );
         }
+        for edge in &sourced.item.edges {
+            add_todos(
+                report,
+                Some(&sourced.source),
+                &format!("scene `{id}` edge {} <-> {}", edge.a, edge.b),
+                &edge.todo,
+            );
+        }
         for object in &sourced.item.objects {
             check_id(report, Some(&sourced.source), "object", &object.id);
             add_todos(
@@ -253,7 +283,10 @@ fn check_ids_and_todos(registry: &ContentRegistry, report: &mut CheckReport) {
             add_todos(
                 report,
                 Some(&sourced.source),
-                &format!("scene `{id}` trigger `{}`", trigger.id.as_deref().unwrap_or("?")),
+                &format!(
+                    "scene `{id}` trigger `{}`",
+                    trigger.id.as_deref().unwrap_or("?")
+                ),
                 &trigger.todo,
             );
         }
@@ -282,14 +315,6 @@ fn check_ids_and_todos(registry: &ContentRegistry, report: &mut CheckReport) {
             &sourced.item.todo,
         );
         for member in &sourced.item.members {
-            if let Some(name) = &member.name {
-                check_id(
-                    report,
-                    Some(&sourced.source),
-                    &format!("encounter `{id}` member name"),
-                    name,
-                );
-            }
             add_todos(
                 report,
                 Some(&sourced.source),
@@ -374,11 +399,23 @@ fn check_rules(registry: &ContentRegistry, report: &mut CheckReport) {
     let source = registry.rules_source.as_ref();
     if let Some(conditions) = &registry.rules.dying_conditions {
         for condition in conditions {
-            check_condition(report, registry, source, condition, "rules.dying_conditions");
+            check_condition(
+                report,
+                registry,
+                source,
+                condition,
+                "rules.dying_conditions",
+            );
         }
     }
     if let Some(condition) = &registry.rules.dead_monster_condition {
-        check_condition(report, registry, source, condition, "rules.dead_monster_condition");
+        check_condition(
+            report,
+            registry,
+            source,
+            condition,
+            "rules.dead_monster_condition",
+        );
     }
     if let Some(actions) = &registry.rules.basic_actions {
         for (action, condition) in actions {
@@ -410,7 +447,10 @@ fn check_condition(
     context: &str,
 ) {
     if registry.conditions.get(condition).is_none() {
-        report.error(source, format!("{context}: unknown condition `{condition}`"));
+        report.error(
+            source,
+            format!("{context}: unknown condition `{condition}`"),
+        );
     }
 }
 
@@ -418,7 +458,11 @@ fn check_condition(
 // Global ability / condition / mastery checks
 // ---------------------------------------------------------------------------
 
-fn check_global_abilities(registry: &ContentRegistry, report: &mut CheckReport) {
+fn check_global_abilities(
+    registry: &ContentRegistry,
+    creature_refs: &BTreeSet<String>,
+    report: &mut CheckReport,
+) {
     for (id, sourced) in registry.abilities.iter_sourced() {
         let mut walker = Walker::new(
             registry,
@@ -426,12 +470,17 @@ fn check_global_abilities(registry: &ContentRegistry, report: &mut CheckReport) 
             format!("ability `{id}`"),
             None,
         );
-        walker.ability(sourced.item);
+        walker.creature_refs = creature_refs.clone();
+        walker.ability(&sourced.item);
         report.issues.extend(walker.finish().issues);
     }
 }
 
-fn check_conditions(registry: &ContentRegistry, report: &mut CheckReport) {
+fn check_conditions(
+    registry: &ContentRegistry,
+    creature_refs: &BTreeSet<String>,
+    report: &mut CheckReport,
+) {
     for (id, sourced) in registry.conditions.iter_sourced() {
         let mut walker = Walker::new(
             registry,
@@ -439,12 +488,17 @@ fn check_conditions(registry: &ContentRegistry, report: &mut CheckReport) {
             format!("condition `{id}`"),
             None,
         );
-        walker.condition(sourced.item);
+        walker.creature_refs = creature_refs.clone();
+        walker.condition(&sourced.item);
         report.issues.extend(walker.finish().issues);
     }
 }
 
-fn check_masteries(registry: &ContentRegistry, report: &mut CheckReport) {
+fn check_masteries(
+    registry: &ContentRegistry,
+    creature_refs: &BTreeSet<String>,
+    report: &mut CheckReport,
+) {
     for (id, sourced) in registry.masteries.iter_sourced() {
         let mut walker = Walker::new(
             registry,
@@ -452,7 +506,8 @@ fn check_masteries(registry: &ContentRegistry, report: &mut CheckReport) {
             format!("mastery `{id}`"),
             None,
         );
-        walker.mastery(sourced.item);
+        walker.creature_refs = creature_refs.clone();
+        walker.mastery(&sourced.item);
         report.issues.extend(walker.finish().issues);
     }
 }
@@ -487,10 +542,7 @@ fn check_ai_assignment(
     if registry.ai_templates.get(&assignment.template).is_none() {
         report.error(
             source,
-            format!(
-                "{context}: unknown ai-template `{}`",
-                assignment.template
-            ),
+            format!("{context}: unknown ai-template `{}`", assignment.template),
         );
     }
     if let Some(params) = &assignment.params {
@@ -510,7 +562,9 @@ fn check_ai_params(
             if registry.conditions.get(condition).is_none() {
                 report.error(
                     source,
-                    format!("{context}: avoid_targets_with references unknown condition `{condition}`"),
+                    format!(
+                        "{context}: avoid_targets_with references unknown condition `{condition}`"
+                    ),
                 );
             }
         }
@@ -638,9 +692,7 @@ fn check_encounters(registry: &ContentRegistry, report: &mut CheckReport) {
             if !zones.contains(party_zone) {
                 report.error(
                     Some(&sourced.source),
-                    format!(
-                        "encounter `{id}` party_zone references unknown zone `{party_zone}`"
-                    ),
+                    format!("encounter `{id}` party_zone references unknown zone `{party_zone}`"),
                 );
             }
         }
@@ -657,10 +709,7 @@ fn check_encounters(registry: &ContentRegistry, report: &mut CheckReport) {
             if member.count() == 0 {
                 report.error(
                     Some(&sourced.source),
-                    format!(
-                        "encounter `{id}` member `{}` has count 0",
-                        member.creature
-                    ),
+                    format!("encounter `{id}` member `{}` has count 0", member.creature),
                 );
             }
             if let (Some(zone), Some(zones)) = (&member.zone, &zones) {
@@ -711,10 +760,13 @@ fn check_creature_content(
         {
             use_refs.insert(entry.id().to_string());
         }
-        let resources = creature
-            .resources
-            .as_ref()
-            .map(|resources| resources.keys().cloned().collect());
+        let resources = Some(
+            creature
+                .resources
+                .as_ref()
+                .map(|resources| resources.keys().cloned().collect())
+                .unwrap_or_default(),
+        );
         let mut walker = Walker::new(
             registry,
             source.as_ref(),
@@ -741,10 +793,13 @@ fn check_unresolved_creature_content(
             continue;
         };
         let source = registry.creatures.source(id).cloned();
-        let resources = creature
-            .resources
-            .as_ref()
-            .map(|resources| resources.keys().cloned().collect());
+        let resources = Some(
+            creature
+                .resources
+                .as_ref()
+                .map(|resources| resources.keys().cloned().collect())
+                .unwrap_or_default(),
+        );
         let mut walker = Walker::new(
             registry,
             source.as_ref(),
@@ -891,10 +946,7 @@ impl<'a> Walker<'a> {
                 match resolved {
                     Ok(resolved) => {
                         if let Some(cost) = entry.cost().or(resolved.ability.cost.as_ref()) {
-                            self.cost(
-                                cost,
-                                &format!("ability `{}`", reference.reference),
-                            );
+                            self.cost(cost, &format!("ability `{}`", reference.reference));
                         }
                         for (index, trigger) in resolved.ability.triggers.iter().enumerate() {
                             if let Some(cost) = &trigger.cost {
@@ -1035,7 +1087,9 @@ impl<'a> Walker<'a> {
             Effect::ForcedMove(_) => {}
             Effect::Use(reference) => {
                 if !self.use_refs.contains(reference) {
-                    self.error(format!("`use` references unknown ability/attack `{reference}`"));
+                    self.error(format!(
+                        "`use` references unknown ability/attack `{reference}`"
+                    ));
                 }
             }
             Effect::Activate(activate) => {
@@ -1078,7 +1132,9 @@ impl<'a> Walker<'a> {
         }
         if let Some(mastery) = &attack.mastery {
             if self.registry.masteries.get(mastery).is_none() {
-                self.error(format!("attack effect references unknown mastery `{mastery}`"));
+                self.error(format!(
+                    "attack effect references unknown mastery `{mastery}`"
+                ));
             }
         }
         self.effects(&attack.on_hit);
@@ -1093,8 +1149,9 @@ impl<'a> Walker<'a> {
                 }
             }
             Predicate::Not(child) => self.predicate(child),
-            Predicate::TargetHasCondition(condition)
-            | Predicate::SelfHasCondition(condition) => self.condition_ref(condition),
+            Predicate::TargetHasCondition(condition) | Predicate::SelfHasCondition(condition) => {
+                self.condition_ref(condition)
+            }
             _ => {}
         }
     }
