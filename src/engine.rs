@@ -1510,6 +1510,32 @@ fn bonus_text(terms: &[BonusTerm]) -> String {
     text
 }
 
+fn evaluate_dice(context: &ExprContext, value: &ExprValue) -> Result<DiceExpr> {
+    context.evaluate_dice(&value.as_text())
+}
+
+fn roll_d20_quiet(
+    base: i32,
+    mode: RollMode,
+    advantage_sources: Vec<String>,
+    disadvantage_sources: Vec<String>,
+    rng: &mut dyn DiceRng,
+) -> D20Result {
+    let roll = D20Roll::roll_total(base, mode, rng);
+    D20Result {
+        dice: Vec::new(),
+        kept: roll.kept,
+        base,
+        bonus_terms: Vec::new(),
+        total: roll.total,
+        nat1: roll.nat1,
+        nat20: roll.nat20,
+        mode,
+        advantage_sources,
+        disadvantage_sources,
+    }
+}
+
 fn roll_d20(
     _state: &EncounterState,
     _owner: usize,
@@ -2457,31 +2483,46 @@ fn resolve_attack(
     let (base_ac, ac_terms) = effective_ac(state, target, Some(attacker), &facts)?;
     let attack_mod = profile.attack_modifier(&state.combatants[attacker]);
     let context = source_context(state, attacker, source, Some(attack_mod), None);
-    let (to_hit_formula, to_hit_expr) = evaluate_value(&context, &profile.to_hit)
-        .with_context(|| format!("attack `{}` to_hit", profile.name))?;
-    let base = to_hit_expr.modifier;
-    let result = roll_d20(
-        state,
-        attacker,
-        base,
-        mode,
-        bonuses,
-        advantage_sources,
-        disadvantage_sources,
-        rng,
-    );
-    let _ = to_hit_formula;
+    let base = if log.enabled() {
+        let (_, to_hit_expr) = evaluate_value(&context, &profile.to_hit)
+            .with_context(|| format!("attack `{}` to_hit", profile.name))?;
+        to_hit_expr.modifier
+    } else {
+        evaluate_dice(&context, &profile.to_hit)
+            .with_context(|| format!("attack `{}` to_hit", profile.name))?
+            .modifier
+    };
+    let result = if log.enabled() {
+        roll_d20(
+            state,
+            attacker,
+            base,
+            mode,
+            bonuses,
+            advantage_sources,
+            disadvantage_sources,
+            rng,
+        )
+    } else {
+        roll_d20_quiet(base, mode, advantage_sources, disadvantage_sources, rng)
+    };
     let mut hit = result.nat20 || (!result.nat1 && result.total >= base_ac);
     let mut crit = result.nat20;
     let mut current_ac = base_ac;
-    let mut current_terms = ac_terms.clone();
-    log.log(format_args!(
-        "{attacker_name} attacks {target_name} with {}: {} vs {} {}",
-        profile.name,
-        result.text(),
-        ac_text(base_ac, &current_terms),
-        if hit { "HIT" } else { "MISS" }
-    ));
+    let mut current_terms = if log.enabled() {
+        ac_terms.clone()
+    } else {
+        Vec::new()
+    };
+    if log.enabled() {
+        log.log(format_args!(
+            "{attacker_name} attacks {target_name} with {}: {} vs {} {}",
+            profile.name,
+            result.text(),
+            ac_text(base_ac, &current_terms),
+            if hit { "HIT" } else { "MISS" }
+        ));
+    }
 
     if hit && !options.no_reactions {
         let converted = try_hit_reactions(
@@ -2654,6 +2695,27 @@ fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn has_owned_trigger(state: &EncounterState, owner: usize, when: TriggerWhen) -> bool {
+    let combatant = &state.combatants[owner];
+    let actions = combatant.creature.actions.as_deref().unwrap_or(&[]);
+    let features = combatant.creature.features.as_deref().unwrap_or(&[]);
+    for entry in actions.iter().chain(features.iter()) {
+        let ability: &Ability = match entry {
+            AbilityEntry::Inline(ability) => ability,
+            AbilityEntry::Ref(reference) => {
+                let Some(ability) = state.content.abilities.get(&reference.reference) else {
+                    continue;
+                };
+                ability
+            }
+        };
+        if ability.triggers.iter().any(|trigger| trigger.on == when) {
+            return true;
+        }
+    }
+    false
+}
+
 fn try_hit_reactions(
     state: &mut EncounterState,
     attacker: usize,
@@ -2666,6 +2728,9 @@ fn try_hit_reactions(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<Option<(i32, Vec<(i32, String)>)>> {
+    if !has_owned_trigger(state, target, TriggerWhen::OnHitTaken) {
+        return Ok(None);
+    }
     let abilities = state.combatants[target].owned_abilities(&state.content)?;
     let mut converted = None;
     let mut new_ac = current_ac;
@@ -2849,7 +2914,23 @@ fn apply_attack_damage_parts(
     );
     let mut rolls = Vec::new();
     for part in parts {
-        let (_, record) = roll_value(&expr_context, &part.dice, context.crit, rng)?;
+        let record = if log.enabled() {
+            roll_value(&expr_context, &part.dice, context.crit, rng)?.1
+        } else {
+            let expression = evaluate_dice(&expr_context, &part.dice)?;
+            let total = if context.crit {
+                expression.roll_doubled_total(rng)
+            } else {
+                expression.roll_total(rng)
+            };
+            RollRecord {
+                formula: String::new(),
+                dice: Vec::new(),
+                modifier: expression.modifier,
+                total,
+                text: String::new(),
+            }
+        };
         rolls.push((record, part.damage_type.as_str().to_string()));
     }
     if let Some(first) = parts.first() {
@@ -2979,6 +3060,9 @@ fn run_owned_triggers_for(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    if !has_owned_trigger(state, owner, when) {
+        return Ok(());
+    }
     let abilities = state.combatants[owner].owned_abilities(&state.content)?;
     for resolved in abilities {
         for (index, trigger) in resolved.ability.triggers.iter().enumerate() {
@@ -3035,6 +3119,9 @@ fn run_owned_triggers(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) {
+    if !has_owned_trigger(state, owner, when) {
+        return;
+    }
     let Ok(abilities) = state.combatants[owner].owned_abilities(&state.content) else {
         return;
     };
@@ -3600,26 +3687,46 @@ fn apply_damage_effect(
     }
     let mut rolls = Vec::new();
     for _ in 0..effect.repeat.max(1) {
-        let (_, record) = roll_value(&expr_context, &effect.dice, crit, rng)?;
-        let damage = ((record.total as f64) * context.damage_scale).floor() as i32;
-        let text = if (context.damage_scale - 1.0).abs() > f64::EPSILON {
-            format!("{} x{}", record.text, context.damage_scale)
-        } else {
-            record.text.clone()
-        };
-        let mut text = text;
-        if let Some(source) = &context.source {
-            text.push_str(&format!(" [{}]", source.name));
-        }
-        rolls.push((
-            RollRecord {
-                total: damage,
-                text,
-                ..record
+        if log.enabled() {
+            let (_, record) = roll_value(&expr_context, &effect.dice, crit, rng)?;
+            let damage = ((record.total as f64) * context.damage_scale).floor() as i32;
+            let text = if (context.damage_scale - 1.0).abs() > f64::EPSILON {
+                format!("{} x{}", record.text, context.damage_scale)
+            } else {
+                record.text.clone()
+            };
+            let mut text = text;
+            if let Some(source) = &context.source {
+                text.push_str(&format!(" [{}]", source.name));
             }
-            .clone(),
-            damage_type.clone(),
-        ));
+            rolls.push((
+                RollRecord {
+                    total: damage,
+                    text,
+                    ..record
+                }
+                .clone(),
+                damage_type.clone(),
+            ));
+        } else {
+            let expression = evaluate_dice(&expr_context, &effect.dice)?;
+            let rolled = if crit {
+                expression.roll_doubled_total(rng)
+            } else {
+                expression.roll_total(rng)
+            };
+            let damage = ((rolled as f64) * context.damage_scale).floor() as i32;
+            rolls.push((
+                RollRecord {
+                    formula: String::new(),
+                    dice: Vec::new(),
+                    modifier: expression.modifier,
+                    total: damage,
+                    text: String::new(),
+                },
+                damage_type.clone(),
+            ));
+        }
     }
     if let Some(bonus) = damage_roll_bonus(
         state,
@@ -4792,31 +4899,46 @@ fn apply_damage_rolls(
     if rolls.is_empty() {
         return Ok(0);
     }
-    let name = state.combatants[target].name.clone();
-    let mut grouped: BTreeMap<String, (i32, Vec<String>)> = BTreeMap::new();
-    for (record, damage_type) in &rolls {
-        let mitigated = mitigate(
-            state,
-            target,
-            source,
-            record.total,
-            damage_type,
-            source_tags,
-        )?;
-        let entry = grouped
-            .entry(damage_type.clone())
-            .or_insert_with(|| (0, Vec::new()));
-        entry.0 += mitigated;
-        entry.1.push(record.text.clone());
-    }
-    let mut total = 0;
-    let mut parts = Vec::new();
-    for (damage_type, (amount, formulas)) in grouped {
-        total += amount;
-        parts.push(format!("{amount} {damage_type} ({})", formulas.join(", ")));
-    }
+    let name = if log.enabled() {
+        state.combatants[target].name.clone()
+    } else {
+        String::new()
+    };
+    let (total, parts) = if log.enabled() {
+        let mut grouped: BTreeMap<String, (i32, Vec<String>)> = BTreeMap::new();
+        for (record, damage_type) in &rolls {
+            let mitigated = mitigate(
+                state,
+                target,
+                source,
+                record.total,
+                damage_type,
+                source_tags,
+            )?;
+            let entry = grouped
+                .entry(damage_type.clone())
+                .or_insert_with(|| (0, Vec::new()));
+            entry.0 += mitigated;
+            entry.1.push(record.text.clone());
+        }
+        let mut total = 0;
+        let mut parts = Vec::new();
+        for (damage_type, (amount, formulas)) in grouped {
+            total += amount;
+            parts.push(format!("{amount} {damage_type} ({})", formulas.join(", ")));
+        }
+        (total, parts)
+    } else {
+        let mut total = 0;
+        for (record, damage_type) in &rolls {
+            total += mitigate(state, target, source, record.total, damage_type, source_tags)?;
+        }
+        (total, Vec::new())
+    };
     if total <= 0 {
-        log.log(format_args!("{name} takes no damage ({})", parts.join("; ")));
+        if log.enabled() {
+            log.log(format_args!("{name} takes no damage ({})", parts.join("; ")));
+        }
         return Ok(0);
     }
 
@@ -4829,21 +4951,25 @@ fn apply_damage_rolls(
     let before = state.combatants[target].hp;
     let was_at_zero = before <= 0;
     state.combatants[target].hp = (before - hp_damage).max(0);
-    log.log(format_args!(
-        "{name} takes {total} damage ({}){}",
-        parts.join("; "),
-        if absorbed > 0 {
-            format!("; {absorbed} absorbed by temporary HP")
-        } else {
-            String::new()
-        }
-    ));
+    if log.enabled() {
+        log.log(format_args!(
+            "{name} takes {total} damage ({}){}",
+            parts.join("; "),
+            if absorbed > 0 {
+                format!("; {absorbed} absorbed by temporary HP")
+            } else {
+                String::new()
+            }
+        ));
+    }
 
     // Massive damage.
     let overflow = hp_damage.saturating_sub(before.max(0));
     let max_hp = state.combatants[target].max_hp;
     if state.combatants[target].hp == 0 && overflow >= max_hp {
-        log.log(format_args!("{name} dies from massive damage"));
+        if log.enabled() {
+            log.log(format_args!("{name} dies from massive damage"));
+        }
         state.combatants[target].dead = true;
         if state.combatants[target].is_pc() {
             state.combatants[target].death_saves.dead = true;
@@ -4888,7 +5014,9 @@ fn apply_damage_rolls(
                     log,
                 );
             }
-            log.log(format_args!("{name} is dead"));
+            if log.enabled() {
+                log.log(format_args!("{name} is dead"));
+            }
         }
     }
 

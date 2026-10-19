@@ -5,7 +5,8 @@
 //! sign runs produced by negative modifiers, and parses the result with the
 //! existing [`DiceExpr`] parser.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -99,10 +100,23 @@ impl ExprContext {
     pub fn evaluate(&self, template: &str) -> Result<(String, DiceExpr)> {
         let substituted = substitute(template, |name| self.variable(name))?;
         let formula = normalize_signs(&substituted);
-        let expression = formula.parse::<DiceExpr>().with_context(|| {
+        let expression = parse_cached(&formula).with_context(|| {
             format!("invalid expression `{template}` (substituted to `{formula}`)")
         })?;
         Ok((formula, expression))
+    }
+
+    /// Evaluates a template to a parsed dice expression without keeping the
+    /// substituted formula. Static templates use a thread-local parse cache.
+    pub fn evaluate_dice(&self, template: &str) -> Result<DiceExpr> {
+        if !template.contains('{') {
+            return parse_cached(template)
+                .with_context(|| format!("invalid expression `{template}`"));
+        }
+        let substituted = substitute(template, |name| self.variable(name))?;
+        let formula = normalize_signs(&substituted);
+        parse_cached(&formula)
+            .with_context(|| format!("invalid expression `{template}` (substituted to `{formula}`)"))
     }
 
     fn variable(&self, name: &str) -> Result<String> {
@@ -236,6 +250,21 @@ fn normalize_signs(input: &str) -> String {
         }
         compact = next;
     }
+}
+
+thread_local! {
+    static PARSE_CACHE: RefCell<HashMap<String, DiceExpr>> = RefCell::new(HashMap::new());
+}
+
+fn parse_cached(text: &str) -> Result<DiceExpr> {
+    PARSE_CACHE.with(|cache| {
+        if let Some(expression) = cache.borrow().get(text) {
+            return Ok(expression.clone());
+        }
+        let expression = text.parse::<DiceExpr>()?;
+        cache.borrow_mut().insert(text.to_string(), expression.clone());
+        Ok(expression)
+    })
 }
 
 #[cfg(test)]
