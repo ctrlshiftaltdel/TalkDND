@@ -6,6 +6,7 @@
 
 pub mod ai;
 pub mod cli;
+pub mod content;
 pub mod dice;
 pub mod engine;
 pub mod model;
