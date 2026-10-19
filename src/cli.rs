@@ -230,7 +230,11 @@ pub enum Command {
     },
 
     /// Batch simulation (arrives in v2 step 4).
-    Simulate,
+    Simulate {
+        /// Ignored in step 2; kept so old invocations still parse.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -257,8 +261,11 @@ pub enum ConditionCommand {
         minutes: Option<u32>,
         #[arg(long, conflicts_with_all = ["rounds", "minutes", "until"])]
         permanent: bool,
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, conflicts_with = "until_end_of_turn")]
         until: Option<UntilArg>,
+        /// Backwards-compatible shorthand: ends at the named creature's next turn.
+        #[arg(long = "until-end-of-turn", value_name = "NAME")]
+        until_end_of_turn: Option<String>,
         /// Creature whose next turn ends the condition (defaults to the target).
         #[arg(long = "until-subject", value_name = "NAME")]
         until_subject: Option<String>,
@@ -530,6 +537,7 @@ pub fn run() -> Result<()> {
                 minutes,
                 permanent,
                 until,
+                until_end_of_turn,
                 until_subject,
                 source,
                 linked,
@@ -553,11 +561,18 @@ pub fn run() -> Result<()> {
                         }
                         None => None,
                     };
+                    let (until, until_subject) = match until_end_of_turn {
+                        Some(name) => (
+                            Some(crate::content::schema::DurationUntil::EndOfTargetNextTurn),
+                            Some(name),
+                        ),
+                        None => (until.map(Into::into), until_subject),
+                    };
                     let options = AddConditionOptions {
                         rounds,
                         minutes,
                         permanent,
-                        until: until.map(Into::into),
+                        until,
                         until_subject,
                         source,
                         linked,
@@ -613,7 +628,7 @@ pub fn run() -> Result<()> {
             })
         }
         Command::Content { command } => run_content(&sources, command),
-        Command::Simulate => {
+        Command::Simulate { .. } => {
             println!("not yet (v2 step 4)");
             Ok(())
         }

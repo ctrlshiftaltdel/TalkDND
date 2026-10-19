@@ -396,6 +396,37 @@ fn mastery_predicate_damage_dealt_gates_its_condition() {
 }
 
 #[test]
+fn mastery_save_dc_can_use_attack_modifier_and_proficiency() {
+    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut rng = ScriptedRng::new(&[15, 3, 1]);
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Striker A",
+        "Brute A",
+        "topple-blade",
+        &AttackOptions::default(),
+        &mut rng,
+        &mut log,
+    )
+    .unwrap();
+    assert!(log.iter().any(|line| line.contains("vs DC 13")), "{log:?}");
+    assert!(state.combatants[index(&state, "Brute A")].has_condition(&state.content, "dazed"));
+}
+
+#[test]
+fn duplicate_party_names_get_numbered() {
+    let state = state("test-fight", &["striker-a", "striker-a"], &[]);
+    let names: Vec<&str> = state
+        .combatants
+        .iter()
+        .map(|combatant| combatant.name.as_str())
+        .collect();
+    assert!(names.contains(&"Striker A 1"));
+    assert!(names.contains(&"Striker A 2"));
+}
+
+#[test]
 fn static_and_condition_resistance_apply() {
     let mut state = state("test-fight", &["striker-a"], &[]);
     engine::damage(

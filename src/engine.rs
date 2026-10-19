@@ -206,6 +206,9 @@ fn hostile_to(state: &EncounterState, a: usize, b: usize) -> bool {
 }
 
 fn effective_speed(state: &EncounterState, index: usize) -> i32 {
+    if has_flag(state, index, ConditionFlag::SpeedZero) {
+        return 0;
+    }
     let base = state.combatants[index].base_speed();
     let modifiers = collect_modifiers(
         state,
@@ -504,6 +507,9 @@ fn collect_modifiers(
         let mut condition_ids = Vec::new();
         collect_condition_chain(&state.content, &instance.condition, &mut condition_ids);
         for condition_id in condition_ids {
+            if state.combatants[owner].is_immune_to_condition(&condition_id) {
+                continue;
+            }
             let Some(def) = state.content.conditions.get(&condition_id) else {
                 continue;
             };
@@ -1309,7 +1315,17 @@ fn signed(value: i32) -> String {
 fn bonus_text(terms: &[BonusTerm]) -> String {
     let mut text = String::new();
     for term in terms {
-        text.push_str(&format!("{}[{}]", signed(term.record.total), term.label));
+        let base = term
+            .record
+            .text
+            .split('=')
+            .next()
+            .unwrap_or(&term.record.text);
+        if base.parse::<i32>().is_ok() {
+            text.push_str(&format!("{}[{}]", signed(term.record.total), term.label));
+        } else {
+            text.push_str(&format!("+{base}[{}]", term.label));
+        }
     }
     text
 }
@@ -2175,7 +2191,12 @@ fn apply_attack_damage_parts(
             }
         }
     }
-    apply_damage_rolls(state, target, context.actor, rolls, rng, log)
+    let tags = context
+        .source
+        .as_ref()
+        .map(|source| source.tags.clone())
+        .unwrap_or_default();
+    apply_damage_rolls(state, target, context.actor, rolls, &tags, rng, log)
 }
 
 fn run_mastery_triggers(
@@ -2509,11 +2530,15 @@ fn apply_effect(
                 .save_ends
                 .as_ref()
                 .map(|save_ends| {
+                    let attack_mod = context
+                        .attack
+                        .as_ref()
+                        .map(|attack| attack.attack_modifier(&state.combatants[context.actor]));
                     let expr_context = source_context(
                         state,
                         context.actor,
                         context.source.as_ref(),
-                        None,
+                        attack_mod,
                         context.source.as_ref().and_then(|source| source.slot_level),
                     );
                     let (_, dc) = evaluate_value(&expr_context, &save_ends.dc)?;
@@ -2706,11 +2731,15 @@ fn apply_save_effect(
     let Some(target) = context.target else {
         bail!("save effect needs a target");
     };
+    let attack_mod = context
+        .attack
+        .as_ref()
+        .map(|attack| attack.attack_modifier(&state.combatants[context.actor]));
     let expr_context = source_context(
         state,
         context.actor,
         context.source.as_ref(),
-        None,
+        attack_mod,
         context.source.as_ref().and_then(|source| source.slot_level),
     );
     let (_, dc) = evaluate_value(&expr_context, &effect.dc)?;
@@ -2753,7 +2782,11 @@ fn apply_save_effect(
         if effect.half {
             let mut half_context = context.clone();
             half_context.damage_scale = 0.5;
-            apply_effects(state, &half_context, &effect.on_fail, rng, log)?;
+            for effect in &effect.on_fail {
+                if matches!(effect, Effect::Damage(_)) {
+                    apply_effect(state, &half_context, effect, rng, log)?;
+                }
+            }
         }
         apply_effects(state, context, &effect.on_success, rng, log)?;
     } else {
@@ -2887,7 +2920,12 @@ fn apply_damage_effect(
             record.text.push_str(&format!(" +{}", bonus.record.total));
         }
     }
-    let dealt = apply_damage_rolls(state, target, context.actor, rolls, rng, log)?;
+    let tags = context
+        .source
+        .as_ref()
+        .map(|source| source.tags.clone())
+        .unwrap_or_default();
+    let dealt = apply_damage_rolls(state, target, context.actor, rolls, &tags, rng, log)?;
     if dealt > 0 {
         fire_ends_on(state, target, EndsOn::DamageTaken, log);
         fire_ends_on(state, context.actor, EndsOn::DealsDamage, log);
@@ -2982,7 +3020,7 @@ fn apply_heal_effect(
         record.text,
         terms.join(" ")
     ));
-    if before == 0 && state.combatants[target].hp > 0 {
+    if before == 0 && state.combatants[target].hp > 0 && !state.combatants[target].is_dead() {
         revive_from_zero(state, target, log);
     }
     Ok(())
@@ -3350,10 +3388,12 @@ fn remove_condition_from(
         .retain(|condition| !condition.condition.eq_ignore_ascii_case(condition_id));
     if state.combatants[target].conditions.len() != before {
         log.push(format!("{name} is no longer {condition_id}"));
-        if let Some(concentration_condition) = &state.content.rules.concentration_condition {
-            if concentration_condition.eq_ignore_ascii_case(condition_id) {
-                state.concentration.remove(&name);
-            }
+        let concentration_condition = state.content.rules.concentration_condition.clone();
+        if concentration_condition
+            .as_deref()
+            .is_some_and(|condition| condition.eq_ignore_ascii_case(condition_id))
+        {
+            break_concentration(state, target, log);
         }
     }
 }
@@ -3522,11 +3562,8 @@ fn use_resolved_ability(
             }
         }
     }
-    if !auto {
-        spend_action(state, actor, ability.activation, log)?;
-    }
     if let Some(cost) = &ability.cost {
-        if !spend_cost(state, actor, cost, log)? {
+        if !can_afford(state, actor, cost) {
             bail!(
                 "`{}` cannot afford {} {}",
                 state.combatants[actor].name,
@@ -3534,6 +3571,12 @@ fn use_resolved_ability(
                 cost.resource
             );
         }
+    }
+    if !auto {
+        spend_action(state, actor, ability.activation, log)?;
+    }
+    if let Some(cost) = &ability.cost {
+        let _ = spend_cost(state, actor, cost, log)?;
     }
     if ability.concentration {
         begin_concentration(state, actor, ability, log);
@@ -3546,6 +3589,10 @@ fn use_resolved_ability(
     if let Some(slot_level) = slot_level {
         effect_source.slot_level = Some(slot_level);
     }
+    let source_is_spell = effect_source
+        .tags
+        .iter()
+        .any(|tag| tag.eq_ignore_ascii_case("spell"));
     let context_base = EffectContext {
         actor,
         target: None,
@@ -3582,7 +3629,9 @@ fn use_resolved_ability(
         }
         TargetType::Zone => unreachable!("zone targeting was rejected above"),
     }
-    fire_ends_on(state, actor, EndsOn::OwnSpell, log);
+    if source_is_spell {
+        fire_ends_on(state, actor, EndsOn::OwnSpell, log);
+    }
     let _ = options;
     Ok(())
 }
@@ -3768,14 +3817,37 @@ fn concentration_damage_check(
         return Ok(());
     }
     let dc = 10.max(damage / 2);
+    let (mode, bonuses, advantages, disadvantages, auto_fail) = save_modifiers(
+        state,
+        target,
+        AbilityName::Con,
+        &score_context(&state.combatants[target]),
+        rng,
+    )?;
+    if auto_fail {
+        log.push(format!(
+            "{name} automatically fails the concentration save (DC {dc})"
+        ));
+        break_concentration(state, target, log);
+        return Ok(());
+    }
     let bonus = state.combatants[target].save_bonus(AbilityName::Con);
-    let roll = D20Roll::roll(bonus, RollMode::Normal, rng);
+    let result = roll_d20(
+        state,
+        target,
+        bonus,
+        mode,
+        bonuses,
+        advantages,
+        disadvantages,
+        rng,
+    );
     log.push(format!(
         "{name} concentration save: {} vs DC {dc} {}",
-        roll.text(),
-        if roll.total >= dc { "PASS" } else { "FAIL" }
+        result.text(),
+        if result.total >= dc { "PASS" } else { "FAIL" }
     ));
-    if roll.total < dc {
+    if result.total < dc {
         break_concentration(state, target, log);
     }
     Ok(())
@@ -3790,6 +3862,7 @@ fn apply_damage_rolls(
     target: usize,
     source: usize,
     rolls: Vec<(RollRecord, String)>,
+    source_tags: &[String],
     rng: &mut dyn DiceRng,
     log: &mut Vec<String>,
 ) -> Result<i32> {
@@ -3799,7 +3872,14 @@ fn apply_damage_rolls(
     let name = state.combatants[target].name.clone();
     let mut grouped: BTreeMap<String, (i32, Vec<String>)> = BTreeMap::new();
     for (record, damage_type) in &rolls {
-        let mitigated = mitigate(state, target, source, record.total, damage_type)?;
+        let mitigated = mitigate(
+            state,
+            target,
+            source,
+            record.total,
+            damage_type,
+            source_tags,
+        )?;
         let entry = grouped
             .entry(damage_type.clone())
             .or_insert_with(|| (0, Vec::new()));
@@ -3887,6 +3967,7 @@ fn mitigate(
     source: usize,
     amount: i32,
     damage_type: &str,
+    source_tags: &[String],
 ) -> Result<i32> {
     let combatant = &state.combatants[target];
     let mut multiplier = 1.0f64;
@@ -3935,7 +4016,7 @@ fn mitigate(
         current_ac: None,
         ability: None,
         damage_type: Some(damage_type.to_string()),
-        source_tags: Vec::new(),
+        source_tags: source_tags.to_vec(),
     };
     for collected in collect_modifiers(state, target, ModifierApplies::DamageTaken, &context, None)
     {
@@ -4033,6 +4114,15 @@ fn run_damage_taken_triggers(
                     continue;
                 }
             }
+            if let Some(cost) = trigger
+                .cost
+                .clone()
+                .or_else(|| resolved.ability.cost.clone())
+            {
+                if !spend_cost(state, target, &cost, log).unwrap_or(false) {
+                    continue;
+                }
+            }
             mark_trigger_used(state, target, trigger, &key);
             let effect_context = EffectContext {
                 actor: target,
@@ -4084,6 +4174,7 @@ pub fn damage(
         target,
         target,
         vec![(record, damage_type.to_string())],
+        &[],
         rng,
         log,
     )?;
@@ -4159,7 +4250,7 @@ pub fn heal(
         record.text,
         terms.join(" ")
     ));
-    if before == 0 && state.combatants[target].hp > 0 {
+    if before == 0 && state.combatants[target].hp > 0 && !state.combatants[target].is_dead() {
         revive_from_zero(state, target, log);
     }
     Ok(())
@@ -4561,6 +4652,7 @@ pub fn rest(
             }
         }
     }
+    log_outcome(state, log);
     Ok(())
 }
 

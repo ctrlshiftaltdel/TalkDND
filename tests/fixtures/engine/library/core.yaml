@@ -48,6 +48,15 @@ masteries:
         when: {damage_dealt: true}
         effects:
           - apply_condition: {condition: slowed-test, to: target, duration: {until: start_of_source_next_turn}}
+  - id: toppling
+    triggers:
+      - on: on_hit
+        effects:
+          - save:
+              ability: con
+              dc: "8+{attack_mod}+{prof}"
+              on_fail:
+                - apply_condition: {condition: dazed, to: target, duration: {permanent: true}}
   - id: dazing
     triggers:
       - on: on_hit
@@ -119,6 +128,7 @@ creatures:
     attacks:
       - {id: test-sword, name: Test Sword, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5, properties: [finesse, light]}
       - {id: slow-blade, name: Slow Blade, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5, mastery: slowing}
+      - {id: topple-blade, name: Topple Blade, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5, mastery: toppling}
       - {id: test-bow, name: Test Bow, kind: ranged, ability: dex, to_hit: 5, damage: [{dice: "1d6+2", type: piercing}], range: [80, 320], properties: [ranged, two-handed]}
     features:
       - {ref: sneaky, params: {dice: 1d6}}

@@ -597,6 +597,9 @@ impl EncounterState {
 
         let mut combatants = Vec::new();
         for member in &encounter.members {
+            if member.count() == 0 {
+                bail!("encounter member `{}` has count 0", member.creature);
+            }
             let creature = content
                 .resolve_creature(&member.creature)
                 .with_context(|| format!("encounter member `{}`", member.creature))?;
@@ -973,16 +976,37 @@ fn uniquify_names(combatants: &mut [CombatantState]) {
     let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, combatant) in combatants.iter().enumerate() {
         groups
-            .entry(combatant.name.to_ascii_lowercase())
+            .entry(name_stem(&combatant.name))
             .or_default()
             .push(index);
     }
     for indices in groups.into_values().filter(|indices| indices.len() > 1) {
-        let base = combatants[indices[0]].name.clone();
+        let base = name_stem(&combatants[indices[0]].name);
+        let display = base
+            .split_whitespace()
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         for (offset, index) in indices.into_iter().enumerate() {
-            combatants[index].name = format!("{base} {}", offset + 1);
+            combatants[index].name = format!("{display} {}", offset + 1);
         }
     }
+}
+
+fn name_stem(name: &str) -> String {
+    let lower = name.trim().to_ascii_lowercase();
+    if let Some((prefix, suffix)) = lower.rsplit_once(' ') {
+        if !prefix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return prefix.to_string();
+        }
+    }
+    lower
 }
 
 fn unique_name(base: &str, existing: &BTreeSet<String>) -> String {
