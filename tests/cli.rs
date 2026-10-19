@@ -306,11 +306,88 @@ fn interact_and_move_flags_work_from_the_cli() {
 }
 
 #[test]
-fn simulate_is_a_step_four_stub() {
-    let temp = TempState::new("simulate");
-    let output = run(temp.path(), &["simulate"]);
-    assert_success(&output, "simulate");
-    assert_eq!(stdout(&output).trim(), "not yet (v2 step 4)");
+fn simulate_runs_once_with_play_by_play_and_summary() {
+    let manifest = fixture("manifest.yaml");
+    let output = run_raw(&[
+        "simulate",
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--encounter",
+        "test-fight",
+        "--party",
+        "striker-a",
+        "--runs",
+        "1",
+        "--seed",
+        "7",
+    ]);
+    assert_success(&output, "simulate --runs 1");
+    let text = stdout(&output);
+    assert!(text.contains("Round 1"), "{text}");
+    assert!(text.contains("Rounds:"), "{text}");
+    assert!(text.contains("Outcome:"), "{text}");
+    assert!(text.contains("HP left:"), "{text}");
+}
+
+#[test]
+fn simulate_monte_carlo_json_is_sane() {
+    let manifest = fixture("manifest.yaml");
+    let output = run_raw(&[
+        "simulate",
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--encounter",
+        "test-fight",
+        "--party",
+        "striker-a",
+        "--runs",
+        "40",
+        "--threads",
+        "2",
+        "--seed",
+        "11",
+        "--json",
+    ]);
+    assert_success(&output, "simulate --json");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("simulation JSON");
+    assert_eq!(value["runs"], 40);
+    assert_eq!(value["threads"], 2);
+    assert!(value["runs_per_sec"].as_f64().unwrap() > 0.0);
+    assert!(value["wins"].is_object());
+    assert!(value["creatures"].is_array());
+    assert_eq!(
+        value["wins"]["party"].as_u64().unwrap()
+            + value["wins"]["enemy"].as_u64().unwrap()
+            + value["draws"].as_u64().unwrap()
+            + value["timeouts"].as_u64().unwrap()
+            + value["errors"].as_u64().unwrap(),
+        40
+    );
+}
+
+#[test]
+fn simulate_from_state_and_missing_source_errors() {
+    let temp = TempState::new("simulate-from");
+    create(&temp, &[]);
+    let output = run_raw(&[
+        "simulate",
+        "--from-state",
+        temp.path().to_str().unwrap(),
+        "--runs",
+        "1",
+        "--seed",
+        "3",
+    ]);
+    assert_success(&output, "simulate --from-state");
+    assert!(stdout(&output).contains("Outcome:"), "{}", stdout(&output));
+
+    let output = run_raw(&["simulate"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("simulate needs --encounter"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

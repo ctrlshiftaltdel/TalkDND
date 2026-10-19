@@ -217,7 +217,7 @@ impl Ai {
         }
         {
             let combatant = &state.combatants[actor];
-            if combatant.dormant || combatant.is_dead() {
+            if combatant.dormant || combatant.is_dead() || combatant.hp <= 0 {
                 return Ok(());
             }
             // `start_turn` already rolled the automatic death save; a still
@@ -523,7 +523,7 @@ impl Ai {
                 continue;
             }
             let score = self.score_action(state, actor, action, target);
-            if score > best.map(|(value, _)| value).unwrap_or(NEGATIVE) {
+            if score > 0.0 && score > best.map(|(value, _)| value).unwrap_or(NEGATIVE) {
                 best = Some((score, TargetChoice::Action(index)));
             }
         }
@@ -538,7 +538,7 @@ impl Ai {
                 .iter()
                 .map(|action| self.score_action(state, actor, action, target))
                 .sum();
-            if score > best.map(|(value, _)| value).unwrap_or(NEGATIVE) {
+            if score > 0.0 && score > best.map(|(value, _)| value).unwrap_or(NEGATIVE) {
                 best = Some((score, TargetChoice::Multiattack));
             }
         }
@@ -602,7 +602,12 @@ impl Ai {
                 }
             }
             PlannedKind::Ability(_) => {
-                self.score_effects(state, actor, target, &action.effects)
+                let effect_target = if matches!(action.role, AiRole::Buff | AiRole::Defense) {
+                    actor
+                } else {
+                    target
+                };
+                self.score_effects(state, actor, effect_target, &action.effects)
             }
         };
         if action.target_type == TargetType::Zone {
@@ -630,14 +635,14 @@ impl Ai {
                     score.control * target_value + score.damage * 0.35
                 }
             }
-            AiRole::Buff => score.buff.max(0.0),
+            AiRole::Buff => (score.buff + score.control).max(0.0),
             AiRole::Defense => {
                 let threatened = hp_percent(&state.combatants[actor]) < 60
                     || nearest_hostile_distance(state, actor) <= 5;
                 if threatened {
-                    1.0 + score.defense
+                    1.0 + score.defense + score.control
                 } else {
-                    score.defense * 0.25
+                    (score.defense + score.control) * 0.25
                 }
             }
             AiRole::Heal | AiRole::SelfHeal | AiRole::None => 0.0,
@@ -926,7 +931,7 @@ impl Ai {
                 // Disengage was unavailable; dash is still better than nothing.
             }
         }
-        self.advance(state, actor, plan, None, true, rng, log)
+        self.advance(state, actor, plan, None, 5, true, rng, log)
     }
 
     fn move_for_action(
@@ -939,8 +944,9 @@ impl Ai {
         log: &mut dyn LogSink,
     ) -> Result<()> {
         let Some(action) = self.best_action_for_position(state, actor, plan, target) else {
-            return self.advance(state, actor, plan, Some(target), false, rng, log);
+            return self.advance(state, actor, plan, Some(target), 5, false, rng, log);
         };
+        let desired = action_distance(action);
         let wants_ranged = plan.params.range_pref == Some(RangePreference::Ranged)
             || (plan.params.range_pref != Some(RangePreference::Melee)
                 && action.attack_range.is_some()
@@ -959,10 +965,10 @@ impl Ai {
                     log,
                 )?;
             }
-            return self.advance(state, actor, plan, Some(target), false, rng, log);
+            return self.advance(state, actor, plan, Some(target), desired, false, rng, log);
         }
         if !action_in_range(state, actor, action, target) {
-            return self.advance(state, actor, plan, Some(target), false, rng, log);
+            return self.advance(state, actor, plan, Some(target), desired, false, rng, log);
         }
         Ok(())
     }
@@ -1015,7 +1021,7 @@ impl Ai {
         Ok(false)
     }
 
-    /// Moves according to guard/leash, keep-distance, approach or flee rules.
+    /// Moves according to posted-zone/leash, keep-distance, approach or flee rules.
     #[allow(clippy::too_many_arguments)]
     fn advance(
         &self,
@@ -1023,6 +1029,7 @@ impl Ai {
         actor: usize,
         plan: &CombatantPlan,
         target: Option<usize>,
+        desired_distance: i32,
         fleeing: bool,
         rng: &mut dyn DiceRng,
         log: &mut dyn LogSink,
@@ -1112,11 +1119,11 @@ impl Ai {
         for (cost, position) in candidates {
             let zone = space.zone_of(&position);
             if !fleeing {
-                if let Some(guard) = guard_zone.as_deref() {
+                if let Some(post) = guard_zone.as_deref() {
                     if nearest <= leash && !in_guard {
                         // Chasing is allowed, but do not wander away from the
-                        // guard zone beyond the leash.
-                    } else if zone.as_deref() != Some(guard) {
+                        // posted zone beyond the leash.
+                    } else if zone.as_deref() != Some(post) {
                         continue;
                     }
                 }
@@ -1146,12 +1153,12 @@ impl Ai {
                         .unwrap_or(9999);
                     -f64::from(zone_distance) * 10.0 - f64::from(cost) * 0.01
                 } else if target_position.is_some() {
-                approach_score(keep, range_pref, min_enemy, distance_target)
+                approach_score(keep, range_pref, min_enemy, distance_target, desired_distance)
                 } else {
                     0.0
                 }
             } else if target_position.is_some() {
-                approach_score(keep, range_pref, min_enemy, distance_target)
+                approach_score(keep, range_pref, min_enemy, distance_target, desired_distance)
             } else {
                 -f64::from(cost) * 0.01
             };
@@ -1229,6 +1236,7 @@ fn approach_score(
     range_pref: Option<RangePreference>,
     min_enemy: i32,
     distance_target: i32,
+    desired_distance: i32,
 ) -> f64 {
     if keep > 0
         && matches!(range_pref, Some(RangePreference::Ranged))
@@ -1237,10 +1245,38 @@ fn approach_score(
         return f64::from(min_enemy.min(keep + 10)) * 10.0
             - f64::from(distance_target) * 0.05;
     }
-    if distance_target <= 5 {
+    if desired_distance > 5 {
+        if distance_target > desired_distance {
+            -f64::from(distance_target - desired_distance) * 10.0
+                - f64::from(min_enemy) * 0.05
+        } else if distance_target < keep.max(5) && keep > 0 {
+            f64::from(min_enemy.min(keep + 10)) * 10.0
+                - f64::from(distance_target) * 0.05
+        } else {
+            1000.0 - (f64::from(distance_target - desired_distance)).abs()
+                - f64::from(min_enemy) * 0.01
+        }
+    } else if distance_target <= 5 {
         1000.0 - f64::from(min_enemy)
     } else {
         -f64::from(distance_target) * 10.0 - f64::from(min_enemy) * 0.05
+    }
+}
+
+fn action_distance(action: &PlannedAction) -> i32 {
+    match action.attack_kind {
+        Some(AttackKind::Melee) => action.reach.max(5),
+        Some(AttackKind::Ranged) => action
+            .attack_range
+            .map(|[normal, _]| normal)
+            .unwrap_or(30)
+            .max(5),
+        Some(AttackKind::MeleeOrRanged) => action
+            .attack_range
+            .map(|[normal, _]| normal)
+            .unwrap_or(action.reach)
+            .max(5),
+        None => action.range.unwrap_or(5).max(5),
     }
 }
 
@@ -1669,6 +1705,7 @@ fn condition_def_value(definition: &ConditionDef) -> f64 {
         match (modifier.applies, modifier.effect) {
             (ModifierApplies::AttackRoll, ModifierEffect::Disadvantage) => value += 0.35,
             (ModifierApplies::IncomingAttack, ModifierEffect::Advantage) => value += 0.3,
+            (ModifierApplies::IncomingAttack, ModifierEffect::Disadvantage) => value += 0.3,
             (ModifierApplies::IncomingAttack, ModifierEffect::AutoCrit) => value += 0.3,
             (ModifierApplies::Save, ModifierEffect::AutoFail) => value += 0.45,
             (ModifierApplies::Save, ModifierEffect::Disadvantage) => value += 0.2,

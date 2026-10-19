@@ -35,11 +35,11 @@ use crate::state::{
 /// step-by-step command output unchanged.
 pub trait LogSink {
     fn enabled(&self) -> bool;
-    fn push(&mut self, line: &str);
+    fn emit(&mut self, line: &str);
 
     fn log(&mut self, args: std::fmt::Arguments<'_>) {
         if self.enabled() {
-            self.push(&format!("{args}"));
+            self.emit(&format!("{args}"));
         }
     }
 }
@@ -49,7 +49,7 @@ impl LogSink for Vec<String> {
         true
     }
 
-    fn push(&mut self, line: &str) {
+    fn emit(&mut self, line: &str) {
         self.push(line.to_string());
     }
 }
@@ -63,7 +63,7 @@ impl LogSink for NullSink {
         false
     }
 
-    fn push(&mut self, _line: &str) {}
+    fn emit(&mut self, _line: &str) {}
 }
 
 /// Attack command options.
@@ -5283,7 +5283,7 @@ pub fn roll_expression(
             Some(dc) => roll.vs_dc(dc),
             None => roll.text(),
         };
-        log.push(&text);
+        log.emit(&text);
     } else {
         let record = parsed.roll(rng);
         let text = match dc {
@@ -5294,7 +5294,7 @@ pub fn roll_expression(
             ),
             None => record.text,
         };
-        log.push(&text);
+        log.emit(&text);
     }
     Ok(())
 }

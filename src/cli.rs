@@ -6,14 +6,17 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
+use crate::ai::Ai;
 use crate::content::{self, ContentSources, ItemKind, ShownItem};
 use crate::dice::{self, DiceRng, RollMode};
 use crate::engine::{self, AddConditionOptions, AttackOptions, RestKind, UseOptions};
+use crate::sim::{self, SimulationConfig};
 use crate::state::{
     resolve_state_path, AddSpec, CombatantState, EncounterState, LookupError, NewEncounter,
 };
@@ -252,11 +255,26 @@ pub enum Command {
         command: ContentCommand,
     },
 
-    /// Batch simulation (arrives in v2 step 4).
+    /// Play an encounter once or run a Monte Carlo batch.
     Simulate {
-        /// Ignored in step 2; kept so old invocations still parse.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Build this encounter, like `new`.
+        #[arg(long, value_name = "ID", conflicts_with_all = ["from_state", "state"])]
+        encounter: Option<String>,
+        /// Comma-separated party creature ids (used with --encounter).
+        #[arg(long, value_name = "A,B,C")]
+        party: Option<String>,
+        /// Continue from a saved state name or path.
+        #[arg(long = "from-state", value_name = "NAME", conflicts_with = "state")]
+        from_state: Option<PathBuf>,
+        /// Number of runs (1 = play-by-play).
+        #[arg(long, default_value_t = 1)]
+        runs: u32,
+        /// Round limit; a run that reaches it is a timeout.
+        #[arg(long = "max-rounds", default_value_t = 100)]
+        max_rounds: u32,
+        /// Worker threads for a Monte Carlo run (default: all cores).
+        #[arg(long)]
+        threads: Option<usize>,
     },
 }
 
@@ -685,10 +703,25 @@ pub fn run() -> Result<()> {
             })
         }
         Command::Content { command } => run_content(&sources, command),
-        Command::Simulate { .. } => {
-            println!("not yet (v2 step 4)");
-            Ok(())
-        }
+        Command::Simulate {
+            encounter,
+            party,
+            from_state,
+            runs,
+            max_rounds,
+            threads,
+        } => run_simulate(
+            &sources,
+            state.as_deref(),
+            seed,
+            json,
+            encounter,
+            party,
+            from_state,
+            runs,
+            max_rounds,
+            threads,
+        ),
     }
 }
 
@@ -856,6 +889,232 @@ fn new_state(
         .with_context(|| format!("failed to save state {}", path.display()))?;
     for line in &state.log {
         println!("{line}");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct SimRunOutput {
+    log: Vec<String>,
+    summary: SimSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct SimSummary {
+    outcome: String,
+    winner: Option<String>,
+    timed_out: bool,
+    rounds: u32,
+    hp_per_side: BTreeMap<String, i32>,
+    combatants: Vec<SimCombatantSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct SimCombatantSummary {
+    name: String,
+    side: String,
+    hp: i32,
+    max_hp: i32,
+    down: bool,
+    dead: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_simulate(
+    sources: &ContentSources,
+    state_name: Option<&Path>,
+    seed: Option<u64>,
+    json: bool,
+    encounter: Option<String>,
+    party: Option<String>,
+    from_state: Option<PathBuf>,
+    runs: u32,
+    max_rounds: u32,
+    threads: Option<usize>,
+) -> Result<()> {
+    if runs == 0 {
+        return Err(anyhow!("--runs must be at least 1"));
+    }
+    if max_rounds == 0 {
+        return Err(anyhow!("--max-rounds must be at least 1"));
+    }
+    let state = if let Some(encounter) = encounter {
+        let content = load_content(sources)?;
+        let party = party
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(ToString::to_string)
+            .collect();
+        let options = NewEncounter {
+            encounter,
+            party,
+            party_zone: None,
+            adds: Vec::new(),
+        };
+        EncounterState::from_encounter_shared(Arc::new(content), &options)?
+    } else if let Some(name) = from_state {
+        let state_dir = manifest_state_dir(sources);
+        let path = resolve_state_path(Some(&name), state_dir.as_deref());
+        EncounterState::load(&path)
+            .with_context(|| format!("failed to load state {}", path.display()))?
+    } else {
+        let Some(name) = state_name else {
+            return Err(anyhow!(
+                "simulate needs --encounter ID, --from-state NAME, or --state NAME"
+            ));
+        };
+        let path = state_path(sources, Some(name));
+        EncounterState::load(&path)
+            .with_context(|| format!("failed to load state {}", path.display()))?
+    };
+
+    let ai = Ai::prepare(&state);
+    let mut rng = make_rng(seed);
+    if runs == 1 {
+        let meta: Vec<(String, String, i32)> = state
+            .combatants
+            .iter()
+            .map(|combatant| {
+                (
+                    combatant.name.clone(),
+                    combatant.side.as_str().to_string(),
+                    combatant.max_hp,
+                )
+            })
+            .collect();
+        let mut log = state.log.clone();
+        let outcome = sim::play(state, &ai, rng.as_mut(), max_rounds, &mut log)?;
+        let mut hp_per_side: BTreeMap<String, i32> = BTreeMap::new();
+        let combatants: Vec<SimCombatantSummary> = meta
+            .iter()
+            .enumerate()
+            .map(|(index, (name, side, max_hp))| {
+                let hp = outcome.hp.get(index).copied().unwrap_or(0);
+                *hp_per_side.entry(side.clone()).or_default() += hp.max(0);
+                SimCombatantSummary {
+                    name: name.clone(),
+                    side: side.clone(),
+                    hp,
+                    max_hp: *max_hp,
+                    down: outcome.down.get(index).copied().unwrap_or(false),
+                    dead: outcome.dead.get(index).copied().unwrap_or(false),
+                }
+            })
+            .collect();
+        let winner = match &outcome.outcome {
+            Some(crate::state::CombatOutcome::Winner(side)) => Some(side.clone()),
+            _ => None,
+        };
+        let summary = SimSummary {
+            outcome: if outcome.timed_out && outcome.outcome.is_none() {
+                "timeout".to_string()
+            } else {
+                outcome
+                    .outcome
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "draw".to_string())
+            },
+            winner,
+            timed_out: outcome.timed_out,
+            rounds: outcome.rounds,
+            hp_per_side: hp_per_side.clone(),
+            combatants,
+        };
+        if json {
+            let output = SimRunOutput { log, summary };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&output).context("failed to serialize simulation")?
+            );
+        } else {
+            print_lines(&log);
+            println!("Outcome: {}", summary.outcome);
+            println!("Rounds: {}", summary.rounds);
+            let hp_text = summary
+                .hp_per_side
+                .iter()
+                .map(|(side, hp)| format!("{side} {hp}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("HP left: {hp_text}");
+            for combatant in &summary.combatants {
+                let status = if combatant.dead {
+                    "dead".to_string()
+                } else if combatant.down {
+                    "down".to_string()
+                } else {
+                    format!("{}/{}", combatant.hp, combatant.max_hp)
+                };
+                println!(
+                    "  {} ({}): {}",
+                    combatant.name, combatant.side, status
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    let threads = threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|value| value.get())
+            .unwrap_or(1)
+    });
+    let config = SimulationConfig {
+        runs,
+        max_rounds,
+        threads,
+        seed,
+    };
+    let report = sim::monte_carlo(&state, &ai, &config)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .context("failed to serialize simulation report")?
+        );
+    } else {
+        println!(
+            "runs: {}  threads: {}  elapsed: {:.3}s  {:.0} runs/s",
+            report.runs, report.threads, report.elapsed_secs, report.runs_per_sec
+        );
+        let wins = report
+            .wins
+            .iter()
+            .map(|(side, count)| format!("{side} {count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "wins: {wins}  draws: {}  timeouts: {}  errors: {}",
+            report.draws, report.timeouts, report.errors
+        );
+        println!(
+            "rounds: avg {:.1}  median {:.0}",
+            report.avg_rounds, report.median_rounds
+        );
+        let hp = report
+            .avg_hp_per_side
+            .iter()
+            .map(|(side, hp)| format!("{side} {hp:.1}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("avg HP left: {hp}");
+        for creature in &report.creatures {
+            println!(
+                "  {} ({}): avg HP {:.1}/{}  down {:.1}%  dead {:.1}%",
+                creature.name,
+                creature.side,
+                creature.avg_hp,
+                creature.max_hp,
+                creature.down_pct,
+                creature.dead_pct
+            );
+        }
+        for example in &report.error_examples {
+            println!("  error: {example}");
+        }
     }
     Ok(())
 }
