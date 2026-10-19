@@ -28,8 +28,13 @@ conditions:
     modifiers:
       - {applies: damage_taken, effect: resistance, filter: {damage_type: [fire]}}
   - id: downed-test
+  - id: disabled-test
+    flags: [incapacitated, speed_zero]
   - id: focus-test
   - id: marked-test
+  - id: brittle-test
+    ends_on: [damage_taken]
+  - id: lingering-test
   - id: vexed-test
     modifiers:
       - {applies: incoming_attack, effect: advantage, when: {linked_is_attacker: true}, consume: true}

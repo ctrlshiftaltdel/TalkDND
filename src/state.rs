@@ -724,6 +724,9 @@ impl EncounterState {
         for combatant in &mut self.combatants {
             let ids = combatant.creature.conditions.clone().unwrap_or_default();
             for id in ids {
+                if combatant.is_immune_to_condition(&id) {
+                    continue;
+                }
                 let duration = self
                     .content
                     .conditions
@@ -817,11 +820,17 @@ impl EncounterState {
             .enumerate()
             .filter(|(_, combatant)| {
                 combatant.name.eq_ignore_ascii_case(&needle)
+                    || combatant.name.to_ascii_lowercase().starts_with(&needle)
                     || combatant.creature.id.eq_ignore_ascii_case(&needle)
                     || combatant
-                        .tags()
-                        .iter()
-                        .any(|tag| tag.eq_ignore_ascii_case(&needle))
+                        .creature
+                        .id
+                        .to_ascii_lowercase()
+                        .starts_with(&needle)
+                    || combatant.tags().iter().any(|tag| {
+                        tag.eq_ignore_ascii_case(&needle)
+                            || tag.to_ascii_lowercase().starts_with(&needle)
+                    })
             })
             .map(|(index, _)| index)
             .collect()

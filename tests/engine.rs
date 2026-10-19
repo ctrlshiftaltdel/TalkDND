@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use combat_sim::content::schema::Duration;
+use combat_sim::content::schema::{AbilityName, Duration, DurationUntil};
 use combat_sim::content::{ContentRegistry, ContentSources};
 use combat_sim::dice::DiceRng;
 use combat_sim::engine::{self, AddConditionOptions, AttackOptions, RestKind, UseOptions};
-use combat_sim::state::{AddSpec, CombatOutcome, EncounterState, NewEncounter};
+use combat_sim::state::{ActiveDuration, AddSpec, CombatOutcome, EncounterState, NewEncounter};
 
 fn fixture(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -427,6 +427,62 @@ fn duplicate_party_names_get_numbered() {
 }
 
 #[test]
+fn ends_on_and_save_ends_expire_conditions() {
+    let mut state = state("test-fight", &["striker-a"], &[]);
+    let options = AddConditionOptions::default();
+    engine::add_condition(
+        &mut state,
+        "Brute A",
+        "brittle-test",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    engine::damage(
+        &mut state,
+        "Brute A",
+        "1",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        !state.combatants[index(&state, "Brute A")].has_condition(&state.content, "brittle-test")
+    );
+
+    let striker = index(&state, "Striker A");
+    let brute = index(&state, "Brute A");
+    engine::init(
+        &mut state,
+        &[(striker, 30), (brute, 1)],
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let options = AddConditionOptions {
+        rounds: Some(3),
+        save_ends: Some((AbilityName::Con, 10)),
+        ..AddConditionOptions::default()
+    };
+    engine::add_condition(
+        &mut state,
+        "Brute A",
+        "lingering-test",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let mut log = Vec::new();
+    engine::next_turn(&mut state, &mut ScriptedRng::new(&[]), &mut log).unwrap();
+    engine::next_turn(&mut state, &mut ScriptedRng::new(&[15]), &mut log).unwrap();
+    assert!(!state.combatants[brute].has_condition(&state.content, "lingering-test"));
+}
+
+#[test]
 fn static_and_condition_resistance_apply() {
     let mut state = state("test-fight", &["striker-a"], &[]);
     engine::damage(
@@ -544,6 +600,207 @@ fn death_saves_use_rules_dying_conditions() {
 }
 
 #[test]
+fn damage_at_zero_hp_adds_one_death_save_failure() {
+    let mut state = state("test-fight", &["striker-a"], &[]);
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "20",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(hp(&state, "Striker A"), 0);
+    assert_eq!(
+        state.combatants[index(&state, "Striker A")]
+            .death_saves
+            .failures,
+        0
+    );
+
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "5",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let striker = &state.combatants[index(&state, "Striker A")];
+    assert_eq!(striker.death_saves.failures, 1);
+    assert!(!striker.is_dead());
+}
+
+#[test]
+fn critical_damage_at_zero_hp_adds_two_death_save_failures() {
+    let mut state = state("test-fight", &["striker-a"], &[]);
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "20",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "5",
+        Some("slashing"),
+        true,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        state.combatants[index(&state, "Striker A")]
+            .death_saves
+            .failures,
+        2
+    );
+}
+
+#[test]
+fn temporary_hp_absorbing_damage_prevents_death_save_failure() {
+    let mut state = state("test-fight", &["striker-a"], &[]);
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "20",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let striker = index(&state, "Striker A");
+    state.combatants[striker].temp_hp = 10;
+
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "5",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let striker = &state.combatants[index(&state, "Striker A")];
+    assert_eq!(striker.temp_hp, 5);
+    assert_eq!(striker.death_saves.failures, 0);
+}
+
+#[test]
+fn dropping_to_zero_hp_starts_dying_without_a_failure() {
+    let mut state = state("test-fight", &["striker-a"], &[]);
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "20",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let striker = &state.combatants[index(&state, "Striker A")];
+    assert_eq!(striker.hp, 0);
+    assert_eq!(striker.death_saves.failures, 0);
+    assert!(striker.is_dying());
+    assert!(
+        striker.has_condition(&state.content, "downed-test"),
+        "dying conditions still apply on the drop to 0"
+    );
+}
+
+#[test]
+fn massive_damage_at_zero_hp_kills_without_failures() {
+    let mut state = state("test-fight", &["striker-a"], &[]);
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "20",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "20",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let striker = &state.combatants[index(&state, "Striker A")];
+    assert!(striker.is_dead());
+    assert!(striker.death_saves.dead);
+    assert_eq!(striker.death_saves.failures, 0);
+}
+
+#[test]
+fn next_turn_skips_pc_killed_by_start_of_turn_death_save() {
+    let mut state = state("test-fight", &["striker-a", "caster-c"], &[]);
+    let striker = index(&state, "Striker A");
+    let caster = index(&state, "Caster C");
+    let brute = index(&state, "Brute A");
+    engine::init(
+        &mut state,
+        &[(brute, 30), (striker, 20), (caster, 10)],
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "20",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    state.combatants[striker].death_saves.failures = 2;
+
+    let mut log = Vec::new();
+    // The d20 shows 2: a failed death save, which is the third failure.
+    engine::next_turn(&mut state, &mut ScriptedRng::new(&[2]), &mut log).unwrap();
+
+    assert!(state.combatants[striker].is_dead());
+    assert_eq!(
+        state.combatants[state.initiative[state.turn]].name,
+        "Caster C"
+    );
+    assert_eq!(state.round, 1);
+    assert!(
+        log.iter().any(|line| line.contains("Striker A dies")),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter().any(|line| line.contains("Striker A's turn")),
+        "{log:?}"
+    );
+    assert!(
+        log.iter().any(|line| line.contains("Caster C's turn")),
+        "{log:?}"
+    );
+}
+
+#[test]
 fn concentration_breaks_on_damage_and_removes_created_conditions() {
     let mut state = state("test-fight", &["caster-c"], &[]);
     let options = UseOptions {
@@ -579,6 +836,39 @@ fn concentration_breaks_on_damage_and_removes_created_conditions() {
     );
     assert!(
         !state.combatants[index(&state, "Brute A")].has_condition(&state.content, "marked-test")
+    );
+}
+
+#[test]
+fn incapacitating_a_concentrator_ends_concentration() {
+    let mut state = state("test-fight", &["caster-c"], &[]);
+    let options = UseOptions {
+        targets: vec!["Brute A".to_string()],
+        ..UseOptions::default()
+    };
+    engine::use_ability(
+        &mut state,
+        "Caster C",
+        "focus-spell",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(state.concentration.contains_key("Caster C"));
+
+    engine::add_condition(
+        &mut state,
+        "Caster C",
+        "disabled-test",
+        &AddConditionOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(!state.concentration.contains_key("Caster C"));
+    assert!(
+        !state.combatants[index(&state, "Caster C")].has_condition(&state.content, "focus-test")
     );
 }
 
@@ -803,6 +1093,68 @@ fn duration_and_state_helpers_are_data_driven() {
         permanent: None,
         ends_on: Vec::new(),
     };
+}
+
+#[test]
+fn until_subject_ends_condition_at_the_subjects_next_turn() {
+    let mut state = state("test-fight", &["striker-a", "caster-c"], &[]);
+    let striker = index(&state, "Striker A");
+    let caster = index(&state, "Caster C");
+    let brute = index(&state, "Brute A");
+    engine::init(
+        &mut state,
+        &[(striker, 30), (caster, 20), (brute, 10)],
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let options = AddConditionOptions {
+        until: Some(DurationUntil::EndOfTargetNextTurn),
+        until_subject: Some("Caster C".to_string()),
+        ..AddConditionOptions::default()
+    };
+    engine::add_condition(
+        &mut state,
+        "Striker A",
+        "hindered",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    match &state.combatants[striker].conditions[0].duration {
+        Some(ActiveDuration::Until {
+            subject, end_round, ..
+        }) => {
+            assert_eq!(subject, "Caster C");
+            assert_eq!(*end_round, 1);
+        }
+        other => panic!("expected an until duration, got {other:?}"),
+    }
+
+    let mut log = Vec::new();
+    // Striker A ends its own turn first: the condition survives because the
+    // subject is Caster C.
+    engine::next_turn(&mut state, &mut ScriptedRng::new(&[]), &mut log).unwrap();
+    assert_eq!(
+        state.combatants[state.initiative[state.turn]].name,
+        "Caster C"
+    );
+    assert!(state.combatants[striker].has_condition(&state.content, "hindered"));
+
+    // Caster C ends its next turn: the condition expires now, before Striker A
+    // gets another turn in this round.
+    engine::next_turn(&mut state, &mut ScriptedRng::new(&[]), &mut log).unwrap();
+    assert_eq!(
+        state.combatants[state.initiative[state.turn]].name,
+        "Brute A"
+    );
+    assert!(!state.combatants[striker].has_condition(&state.content, "hindered"));
+    assert!(
+        log.iter()
+            .any(|line| line.contains("Striker A is no longer hindered")),
+        "{log:?}"
+    );
 }
 
 fn unique_temp_dir(label: &str) -> PathBuf {

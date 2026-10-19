@@ -491,6 +491,24 @@ fn modifier_filter_matches(filter: &ModifierFilter, context: &PredicateContext) 
     true
 }
 
+fn modifier_once_available(
+    state: &EncounterState,
+    owner: usize,
+    key: &str,
+    once_per: Option<OncePer>,
+) -> bool {
+    match once_per {
+        Some(OncePer::Turn) => !state.combatants[owner]
+            .once_used
+            .contains_key(&turn_key(key)),
+        Some(OncePer::Round) => state.combatants[owner]
+            .once_used
+            .get(&round_key(key))
+            .is_none_or(|round| *round != state.round),
+        None => true,
+    }
+}
+
 fn collect_modifiers(
     state: &EncounterState,
     owner: usize,
@@ -525,13 +543,17 @@ fn collect_modifiers(
                         continue;
                     }
                 }
+                let key = format!(
+                    "condition:{}:{}:mod:{modifier_index}",
+                    instance.condition, instance_index
+                );
+                if !modifier_once_available(state, owner, &key, modifier.once_per) {
+                    continue;
+                }
                 out.push(CollectedModifier {
                     modifier: modifier.clone(),
                     label: def.display_name().to_string(),
-                    key: format!(
-                        "condition:{}:{}:mod:{modifier_index}",
-                        instance.condition, instance_index
-                    ),
+                    key,
                     origin_condition: Some(instance.condition.clone()),
                 });
             }
@@ -555,10 +577,14 @@ fn collect_modifiers(
                         continue;
                     }
                 }
+                let key = format!("ability:{}:mod:{modifier_index}", resolved.ability.id);
+                if !modifier_once_available(state, owner, &key, modifier.once_per) {
+                    continue;
+                }
                 out.push(CollectedModifier {
                     modifier: modifier.clone(),
                     label: resolved.ability.display_name().to_string(),
-                    key: format!("ability:{}:mod:{modifier_index}", resolved.ability.id),
+                    key,
                     origin_condition: None,
                 });
             }
@@ -577,10 +603,14 @@ fn collect_modifiers(
                     continue;
                 }
             }
+            let key = format!("source:{}:mod:{modifier_index}", source.id);
+            if !modifier_once_available(state, owner, &key, modifier.once_per) {
+                continue;
+            }
             out.push(CollectedModifier {
                 modifier: modifier.clone(),
                 label: source.name.clone(),
-                key: format!("source:{}:mod:{modifier_index}", source.id),
+                key,
                 origin_condition: None,
             });
         }
@@ -845,7 +875,7 @@ pub fn init(
     }
 
     let first = state.initiative[0];
-    start_turn(state, first, rng, log);
+    let _ = start_turn(state, first, rng, log);
     if let Some(combatant) = state.combatants.get(first) {
         log.push(format!("Round {} - {}'s turn", state.round, combatant.name));
     }
@@ -875,35 +905,41 @@ pub fn next_turn(
     let len = state.initiative.len();
     let mut position = state.turn;
     let mut wrapped = false;
-    let mut next = None;
-    for _ in 0..len {
-        position += 1;
-        if position >= len {
-            position = 0;
-            if !wrapped {
-                wrapped = true;
-                state.round = state.round.saturating_add(1);
-                reset_round_state(state, rng, log);
+    loop {
+        let mut found = None;
+        for _ in 0..len {
+            position += 1;
+            if position >= len {
+                position = 0;
+                if !wrapped {
+                    wrapped = true;
+                    state.round = state.round.saturating_add(1);
+                    reset_round_state(state, rng, log);
+                }
+            }
+            let candidate = state.initiative[position];
+            if eligible_for_turn(&state.combatants[candidate]) {
+                found = Some(candidate);
+                break;
             }
         }
-        let candidate = state.initiative[position];
-        if eligible_for_turn(&state.combatants[candidate]) {
-            next = Some((position, candidate));
-            break;
+        let Some(next_index) = found else {
+            bail!("no eligible combatant remains in the initiative order");
+        };
+        state.turn = position;
+        if !wrapped && state.round == 0 {
+            state.round = 1;
         }
+        if !start_turn(state, next_index, rng, log) {
+            // The automatic death save at the start of the turn killed this
+            // combatant; keep advancing without running their turn.
+            continue;
+        }
+        let name = state.combatants[next_index].name.clone();
+        log.push(format!("Round {} - {name}'s turn", state.round));
+        log_outcome(state, log);
+        return Ok(());
     }
-    let Some((position, next_index)) = next else {
-        bail!("no eligible combatant remains in the initiative order");
-    };
-    state.turn = position;
-    if !wrapped && state.round == 0 {
-        state.round = 1;
-    }
-    start_turn(state, next_index, rng, log);
-    let name = state.combatants[next_index].name.clone();
-    log.push(format!("Round {} - {name}'s turn", state.round));
-    log_outcome(state, log);
-    Ok(())
 }
 
 fn reset_round_state(state: &mut EncounterState, rng: &mut dyn DiceRng, log: &mut Vec<String>) {
@@ -922,7 +958,7 @@ fn start_turn(
     index: usize,
     rng: &mut dyn DiceRng,
     log: &mut Vec<String>,
-) {
+) -> bool {
     let speed = effective_speed(state, index);
     {
         let combatant = &mut state.combatants[index];
@@ -934,9 +970,10 @@ fn start_turn(
             .retain(|key, _| !key.starts_with("turn:"));
     }
     if state.combatants[index].is_dead() || state.combatants[index].dormant {
-        return;
+        return false;
     }
     expire_start_phases(state, index, log);
+    expire_subject_conditions(state, index, UntilPhase::Start, log);
     recharge_resources(state, index, RechargePhase::Turn, rng, log);
     if state.combatants[index].is_dying() {
         let name = state.combatants[index].name.clone();
@@ -944,8 +981,12 @@ fn start_turn(
             "{name} is dying and must make a death saving throw"
         ));
         let _ = death_save_at(state, index, rng, log);
+        if state.combatants[index].is_dead() {
+            return false;
+        }
     }
     run_owned_triggers(state, index, TriggerWhen::StartOfTurn, None, rng, log);
+    true
 }
 
 fn end_turn(
@@ -956,6 +997,7 @@ fn end_turn(
 ) -> Result<()> {
     run_owned_triggers(state, index, TriggerWhen::EndOfTurn, None, rng, log);
     expire_conditions(state, index, rng, log)?;
+    expire_subject_conditions(state, index, UntilPhase::End, log);
     Ok(())
 }
 
@@ -968,6 +1010,7 @@ fn expire_conditions(
     let name = state.combatants[index].name.clone();
     let mut remove = Vec::new();
     let mut still_active = Vec::new();
+    let mut concentration_broken = false;
     let conditions = state.combatants[index].conditions.clone();
     for (position, mut instance) in conditions.into_iter().enumerate() {
         let mut expired = false;
@@ -1025,7 +1068,7 @@ fn expire_conditions(
             remove.push(position);
             log.push(format!("{name} is no longer {}", instance.condition));
             if instance.concentration {
-                break_concentration(state, index, log);
+                concentration_broken = true;
             }
         } else {
             instance.applied_round = instance.applied_round.min(state.round);
@@ -1033,7 +1076,13 @@ fn expire_conditions(
         }
     }
     let _ = remove;
+    if concentration_broken {
+        still_active.retain(|condition| !condition.concentration);
+    }
     state.combatants[index].conditions = still_active;
+    if concentration_broken {
+        break_concentration(state, index, log);
+    }
     Ok(())
 }
 
@@ -1056,6 +1105,65 @@ fn expire_start_phases(state: &mut EncounterState, index: usize, log: &mut Vec<S
         }
     }
     state.combatants[index].conditions = keep;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UntilPhase {
+    Start,
+    End,
+}
+
+/// Ends `Until` conditions held by another combatant when the named subject
+/// reaches the matching phase. Conditions held by the subject itself are
+/// handled by `expire_start_phases`/`expire_conditions`.
+fn expire_subject_conditions(
+    state: &mut EncounterState,
+    subject_index: usize,
+    phase: UntilPhase,
+    log: &mut Vec<String>,
+) {
+    let subject = state.combatants[subject_index].name.clone();
+    for holder in 0..state.combatants.len() {
+        if holder == subject_index {
+            continue;
+        }
+        let holder_name = state.combatants[holder].name.clone();
+        let mut concentration_broken = false;
+        let mut keep = Vec::new();
+        for instance in state.combatants[holder].conditions.clone() {
+            let expired = match &instance.duration {
+                Some(ActiveDuration::Until {
+                    until,
+                    subject: named,
+                    end_round,
+                }) => {
+                    let matches_phase = match phase {
+                        UntilPhase::Start => *until == DurationUntil::StartOfSourceNextTurn,
+                        UntilPhase::End => matches!(
+                            until,
+                            DurationUntil::EndOfSourceNextTurn | DurationUntil::EndOfTargetNextTurn
+                        ),
+                    };
+                    matches_phase
+                        && named.eq_ignore_ascii_case(&subject)
+                        && state.round >= *end_round
+                }
+                _ => false,
+            };
+            if expired {
+                log.push(format!("{holder_name} is no longer {}", instance.condition));
+                if instance.concentration {
+                    concentration_broken = true;
+                }
+            } else {
+                keep.push(instance);
+            }
+        }
+        state.combatants[holder].conditions = keep;
+        if concentration_broken {
+            break_concentration(state, holder, log);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1922,7 +2030,6 @@ fn resolve_attack(
     fire_ends_on(state, attacker, EndsOn::OwnAttack, log);
     if hit {
         fire_ends_on(state, attacker, EndsOn::DealsDamage, log);
-        fire_ends_on(state, target, EndsOn::DamageTaken, log);
     }
     finish_collected_modifiers(
         state,
@@ -2196,7 +2303,16 @@ fn apply_attack_damage_parts(
         .as_ref()
         .map(|source| source.tags.clone())
         .unwrap_or_default();
-    apply_damage_rolls(state, target, context.actor, rolls, &tags, rng, log)
+    apply_damage_rolls(
+        state,
+        target,
+        context.actor,
+        rolls,
+        &tags,
+        context.crit,
+        rng,
+        log,
+    )
 }
 
 fn run_mastery_triggers(
@@ -2419,6 +2535,7 @@ fn run_owned_triggers(
 fn fire_ends_on(state: &mut EncounterState, owner: usize, event: EndsOn, log: &mut Vec<String>) {
     let name = state.combatants[owner].name.clone();
     let mut kept = Vec::new();
+    let mut concentration_broken = false;
     for instance in state.combatants[owner].conditions.drain(..) {
         let ends = instance.ends_on.contains(&event)
             || state
@@ -2429,13 +2546,16 @@ fn fire_ends_on(state: &mut EncounterState, owner: usize, event: EndsOn, log: &m
         if ends {
             log.push(format!("{name} is no longer {}", instance.condition));
             if instance.concentration {
-                // The caller may also clear concentration; this is best effort.
+                concentration_broken = true;
             }
         } else {
             kept.push(instance);
         }
     }
     state.combatants[owner].conditions = kept;
+    if concentration_broken {
+        break_concentration(state, owner, log);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2562,6 +2682,7 @@ fn apply_effect(
                 Some(context.actor),
                 linked,
                 duration,
+                None,
                 save_ends,
                 ends_on,
                 context.source.as_ref().map(|source| source.id.clone()),
@@ -2796,7 +2917,7 @@ fn apply_save_effect(
 }
 
 fn save_modifiers(
-    state: &EncounterState,
+    state: &mut EncounterState,
     target: usize,
     ability: AbilityName,
     _expr_context: &ExprContext,
@@ -2825,7 +2946,9 @@ fn save_modifiers(
     let mut disadvantages = Vec::new();
     let mut bonuses = Vec::new();
     let mut auto_fail = false;
-    for collected in collect_modifiers(state, target, ModifierApplies::Save, &context, None) {
+    let collected_modifiers =
+        collect_modifiers(state, target, ModifierApplies::Save, &context, None);
+    for collected in &collected_modifiers {
         match collected.modifier.effect {
             ModifierEffect::Advantage => {
                 advantages.push(collected.label.clone());
@@ -2845,13 +2968,21 @@ fn save_modifiers(
                     .ok_or_else(|| anyhow!("save bonus has no value"))?;
                 let (_, expression) = evaluate_value(&expr_context, value)?;
                 bonuses.push(BonusTerm {
-                    label: collected.label,
+                    label: collected.label.clone(),
                     record: expression.roll(rng),
                 });
             }
             _ => {}
         }
     }
+    finish_collected_modifiers(
+        state,
+        target,
+        ModifierApplies::Save,
+        &context,
+        None,
+        &mut Vec::new(),
+    );
     Ok((mode, bonuses, advantages, disadvantages, auto_fail))
 }
 
@@ -2875,7 +3006,7 @@ fn apply_damage_effect(
             .map(|attack| attack.attack_modifier(&state.combatants[context.actor])),
         context.source.as_ref().and_then(|source| source.slot_level),
     );
-    let crit = context.crit && effect.crit == CritMode::Inherit;
+    let crit = context.crit && effect.crit != CritMode::Never;
     let mut damage_type = effect.damage_type.as_str().to_string();
     if damage_type.eq_ignore_ascii_case("weapon") {
         damage_type = context
@@ -2925,9 +3056,8 @@ fn apply_damage_effect(
         .as_ref()
         .map(|source| source.tags.clone())
         .unwrap_or_default();
-    let dealt = apply_damage_rolls(state, target, context.actor, rolls, &tags, rng, log)?;
+    let dealt = apply_damage_rolls(state, target, context.actor, rolls, &tags, crit, rng, log)?;
     if dealt > 0 {
-        fire_ends_on(state, target, EndsOn::DamageTaken, log);
         fire_ends_on(state, context.actor, EndsOn::DealsDamage, log);
     }
     Ok(())
@@ -3138,7 +3268,7 @@ fn apply_check_effect(
 }
 
 fn check_modifiers(
-    state: &EncounterState,
+    state: &mut EncounterState,
     who: usize,
     ability: Option<AbilityName>,
     skill: &str,
@@ -3176,6 +3306,14 @@ fn check_modifiers(
             _ => {}
         }
     }
+    finish_collected_modifiers(
+        state,
+        who,
+        ModifierApplies::Check,
+        &context,
+        None,
+        &mut Vec::new(),
+    );
     (mode, advantages, disadvantages)
 }
 
@@ -3235,6 +3373,7 @@ fn apply_basic_action(
             None,
             duration,
             None,
+            None,
             Vec::new(),
             None,
             false,
@@ -3288,6 +3427,7 @@ fn apply_condition_internal(
     source: Option<usize>,
     linked: Option<String>,
     duration: Option<Duration>,
+    until_subject: Option<String>,
     save_ends: Option<(AbilityName, i32, SaveEndsAt)>,
     ends_on: Vec<EndsOn>,
     created_by: Option<String>,
@@ -3308,12 +3448,12 @@ fn apply_condition_internal(
     let duration = duration.or_else(|| def.duration_default.clone());
     let active_duration = duration.as_ref().map(|duration| {
         if let Some(until) = duration.until {
-            let subject = match until {
+            let subject = until_subject.clone().unwrap_or_else(|| match until {
                 DurationUntil::EndOfTargetNextTurn => target_name.clone(),
                 DurationUntil::EndOfSourceNextTurn | DurationUntil::StartOfSourceNextTurn => {
                     source_name.clone().unwrap_or_else(|| target_name.clone())
                 }
-            };
+            });
             let end_round = next_named_turn_round(state, &subject);
             ActiveDuration::Until {
                 until,
@@ -3350,6 +3490,18 @@ fn apply_condition_internal(
     } else {
         state.combatants[target].conditions.push(active);
         log.push(format!("{target_name} is now {condition_id}"));
+    }
+    let incapacitated = active_condition_ids(&state.content, &state.combatants[target])
+        .iter()
+        .any(|id| {
+            state
+                .content
+                .conditions
+                .get(id)
+                .is_some_and(|def| def.flags.contains(&ConditionFlag::Incapacitated))
+        });
+    if incapacitated && state.concentration.contains_key(&target_name) {
+        break_concentration(state, target, log);
     }
     Ok(())
 }
@@ -3418,6 +3570,20 @@ pub fn add_condition(
     {
         bail!("unknown condition `{condition_id}`");
     }
+    let until_subject = if options.until.is_some() {
+        options
+            .until_subject
+            .as_deref()
+            .map(|name| {
+                state
+                    .find_index(name)
+                    .map(|index| state.combatants[index].name.clone())
+                    .map_err(|error| anyhow!(error.to_string()))
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let duration = if let Some(rounds) = options.rounds {
         Some(Duration {
             rounds: Some(rounds),
@@ -3435,12 +3601,6 @@ pub fn add_condition(
             ends_on: Vec::new(),
         })
     } else if let Some(until) = options.until {
-        let subject = options
-            .until_subject
-            .clone()
-            .unwrap_or_else(|| state.combatants[target].name.clone());
-        let end_round = next_named_turn_round(state, &subject);
-        let _ = end_round;
         Some(Duration {
             rounds: None,
             until: Some(until),
@@ -3488,6 +3648,7 @@ pub fn add_condition(
         source,
         linked,
         duration,
+        until_subject,
         save_ends,
         Vec::new(),
         None,
@@ -3557,6 +3718,23 @@ fn use_resolved_ability(
                         ability.display_name(),
                         state.combatants[*target].name
                     );
+                }
+                if *target != actor {
+                    if let (Some(range), Some(space)) = (ability.range, state.space()) {
+                        let distance = space
+                            .distance(
+                                &state.combatants[actor].zone,
+                                &state.combatants[*target].zone,
+                            )
+                            .unwrap_or(i32::MAX);
+                        if distance > range {
+                            bail!(
+                                "`{}` is out of range for {} ({distance} ft; range {range})",
+                                state.combatants[*target].name,
+                                ability.display_name()
+                            );
+                        }
+                    }
                 }
                 ensure_targetable(state, *target)?;
             }
@@ -3765,6 +3943,7 @@ fn begin_concentration(
             None,
             None,
             None,
+            None,
             Vec::new(),
             Some(ability.id.clone()),
             true,
@@ -3863,6 +4042,7 @@ fn apply_damage_rolls(
     source: usize,
     rolls: Vec<(RollRecord, String)>,
     source_tags: &[String],
+    critical: bool,
     rng: &mut dyn DiceRng,
     log: &mut Vec<String>,
 ) -> Result<i32> {
@@ -3904,6 +4084,7 @@ fn apply_damage_rolls(
     }
     let hp_damage = total - absorbed;
     let before = state.combatants[target].hp;
+    let was_at_zero = before <= 0;
     state.combatants[target].hp = (before - hp_damage).max(0);
     log.push(format!(
         "{name} takes {total} damage ({}){}",
@@ -3921,11 +4102,23 @@ fn apply_damage_rolls(
     if state.combatants[target].hp == 0 && overflow >= max_hp {
         log.push(format!("{name} dies from massive damage"));
         state.combatants[target].dead = true;
+        if state.combatants[target].is_pc() {
+            state.combatants[target].death_saves.dead = true;
+        }
     }
 
     if state.combatants[target].hp == 0 && !state.combatants[target].is_dead() {
         if state.combatants[target].is_pc() {
-            apply_dying(state, target, log);
+            if was_at_zero {
+                // Damage taken while already at 0 HP is a death-save failure;
+                // it never re-applies the dying state or repeats the drop log.
+                if hp_damage > 0 {
+                    let failures = if critical { 2 } else { 1 };
+                    add_death_save_failures(state, target, failures, log);
+                }
+            } else {
+                apply_dying(state, target, log);
+            }
         } else {
             state.combatants[target].dead = true;
             if let Some(condition_id) = state.content.rules.dead_monster_condition.clone() {
@@ -3944,6 +4137,7 @@ fn apply_damage_rolls(
                         ends_on: Vec::new(),
                     }),
                     None,
+                    None,
                     Vec::new(),
                     None,
                     false,
@@ -3958,6 +4152,7 @@ fn apply_damage_rolls(
     // Damage-taken triggers and concentration.
     concentration_damage_check(state, target, total, rng, log)?;
     run_damage_taken_triggers(state, target, source, total, rng, log);
+    fire_ends_on(state, target, EndsOn::DamageTaken, log);
     Ok(total)
 }
 
@@ -4060,12 +4255,38 @@ fn apply_dying(state: &mut EncounterState, target: usize, log: &mut Vec<String>)
                 ends_on: Vec::new(),
             }),
             None,
+            None,
             Vec::new(),
             None,
             false,
             &mut rng,
             log,
         );
+    }
+}
+
+/// Damage taken while a PC is already at 0 HP adds death-save failures.
+fn add_death_save_failures(
+    state: &mut EncounterState,
+    target: usize,
+    failures: u8,
+    log: &mut Vec<String>,
+) {
+    let name = state.combatants[target].name.clone();
+    state.combatants[target].death_saves.stable = false;
+    state.combatants[target].death_saves.failures = state.combatants[target]
+        .death_saves
+        .failures
+        .saturating_add(failures);
+    let total = state.combatants[target].death_saves.failures;
+    log.push(format!(
+        "{name} fails {failures} death saving throw{} from damage ({total}/3)",
+        if failures == 1 { "" } else { "s" }
+    ));
+    if total >= 3 {
+        state.combatants[target].death_saves.dead = true;
+        state.combatants[target].dead = true;
+        log.push(format!("{name} dies"));
     }
 }
 
@@ -4175,6 +4396,7 @@ pub fn damage(
         target,
         vec![(record, damage_type.to_string())],
         &[],
+        crit,
         rng,
         log,
     )?;
@@ -4231,8 +4453,8 @@ pub fn heal(
         {
             if collected.modifier.effect == ModifierEffect::Bonus {
                 if let Some(value) = &collected.modifier.value {
-                    let (_, expression) =
-                        evaluate_value(&score_context(&state.combatants[source]), value)?;
+                    let context = score_context(&state.combatants[source]).with_slot_level(1);
+                    let (_, expression) = evaluate_value(&context, value)?;
                     let extra = expression.roll(rng).total;
                     amount += extra;
                     terms.push(format!("+{extra}[{}]", collected.label));
