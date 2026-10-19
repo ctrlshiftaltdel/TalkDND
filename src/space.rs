@@ -356,11 +356,7 @@ impl<'a> ZoneGraph<'a> {
                 let Some(next_id) = next_id else {
                     continue;
                 };
-                let Some(next) = self
-                    .scene
-                    .zones
-                    .iter()
-                    .position(|zone| zone.id == *next_id)
+                let Some(next) = self.scene.zones.iter().position(|zone| zone.id == *next_id)
                 else {
                     continue;
                 };

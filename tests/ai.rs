@@ -96,9 +96,13 @@ fn ai_damage_role_attacks() {
     let mut state = encounter_state("ai-fight", &["ai-striker"], &[]);
     begin(&mut state, "Striker X");
     let log = take_turn(&mut state, &[15, 5]);
-    assert!(log.iter().any(|line| line.contains("Blade Test")), "{log:?}");
     assert!(
-        log.iter().any(|line| line.contains("Blade Test") && line.contains("HIT")),
+        log.iter().any(|line| line.contains("Blade Test")),
+        "{log:?}"
+    );
+    assert!(
+        log.iter()
+            .any(|line| line.contains("Blade Test") && line.contains("HIT")),
         "{log:?}"
     );
     assert_eq!(state.combatants[index(&state, "Dummy X")].hp, 40 - 7);
@@ -135,24 +139,21 @@ fn ai_uses_buff_and_control_roles() {
     begin(&mut state, "Buffer X");
     let log = take_turn(&mut state, &[]);
     assert!(log.iter().any(|line| line.contains("Buff Test")), "{log:?}");
-    assert!(state.combatants[index(&state, "Buffer X")]
-        .has_condition(&state.content, "ai-buffed"));
+    assert!(state.combatants[index(&state, "Buffer X")].has_condition(&state.content, "ai-buffed"));
 
     let mut state = encounter_state("ai-fight", &["ai-controller"], &[]);
     begin(&mut state, "Controller X");
     let log = take_turn(&mut state, &[1]);
-    assert!(log.iter().any(|line| line.contains("Control Test")), "{log:?}");
-    assert!(state.combatants[index(&state, "Dummy X")]
-        .has_condition(&state.content, "ai-dazed"));
+    assert!(
+        log.iter().any(|line| line.contains("Control Test")),
+        "{log:?}"
+    );
+    assert!(state.combatants[index(&state, "Dummy X")].has_condition(&state.content, "ai-dazed"));
 }
 
 #[test]
 fn ai_avoids_warded_targets_and_attacks_downed_when_allowed() {
-    let mut state = encounter_state(
-        "ai-fight",
-        &["ai-striker"],
-        &[("ai-warded-dummy", "alpha")],
-    );
+    let mut state = encounter_state("ai-fight", &["ai-striker"], &[("ai-warded-dummy", "alpha")]);
     let actor = index(&state, "Striker X");
     state.combatants[actor].ai = Some(AiAssignment {
         template: "ai-avoid".to_string(),
@@ -161,8 +162,7 @@ fn ai_avoids_warded_targets_and_attacks_downed_when_allowed() {
     begin(&mut state, "Striker X");
     let log = take_turn(&mut state, &[10, 3]);
     assert!(
-        log.iter()
-            .any(|line| line.contains("attacks Dummy X")),
+        log.iter().any(|line| line.contains("attacks Dummy X")),
         "{log:?}"
     );
     assert!(
@@ -170,7 +170,11 @@ fn ai_avoids_warded_targets_and_attacks_downed_when_allowed() {
         "{log:?}"
     );
 
-    let mut state = encounter_state("ai-fight", &["ai-striker", "ai-healer"], &[("ai-brute", "alpha")]);
+    let mut state = encounter_state(
+        "ai-fight",
+        &["ai-striker", "ai-healer"],
+        &[("ai-brute", "alpha")],
+    );
     let brute = index(&state, "Brute X");
     state.combatants[brute].ai = Some(AiAssignment {
         template: "ai-downed".to_string(),
@@ -194,12 +198,18 @@ fn ai_resource_threshold_gates_costed_damage() {
     let mut state = encounter_state("ai-fight", &["ai-costed"], &[]);
     begin(&mut state, "Costed X");
     let log = take_turn(&mut state, &[10, 3]);
-    assert!(log.iter().any(|line| line.contains("Costly Test")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("Costly Test")),
+        "{log:?}"
+    );
 
     let mut state = encounter_state("ai-fight", &["ai-avaricious"], &[]);
     begin(&mut state, "Avaricious X");
     let log = take_turn(&mut state, &[10, 3]);
-    assert!(log.iter().any(|line| line.contains("Cantrip Test")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("Cantrip Test")),
+        "{log:?}"
+    );
     assert!(
         !log.iter().any(|line| line.contains("Costly Test")),
         "{log:?}"
@@ -218,10 +228,7 @@ fn ai_flees_toward_flee_zone() {
     begin(&mut state, "Striker X");
     let log = take_turn(&mut state, &[]);
     assert_eq!(state.combatants[actor].zone, "gamma", "{log:?}");
-    assert!(
-        !log.iter().any(|line| line.contains("attacks")),
-        "{log:?}"
-    );
+    assert!(!log.iter().any(|line| line.contains("attacks")), "{log:?}");
 }
 
 #[test]
@@ -311,11 +318,7 @@ fn ai_opening_ability_is_used_once() {
 
 #[test]
 fn ai_targeting_lowest_hp_and_dormant_skip() {
-    let mut state = encounter_state(
-        "ai-fight",
-        &["ai-ranger"],
-        &[("ai-sentry", "alpha")],
-    );
+    let mut state = encounter_state("ai-fight", &["ai-ranger"], &[("ai-sentry", "alpha")]);
     let sentry = index(&state, "Sentry X");
     state.combatants[sentry].hp = 5;
     begin(&mut state, "Ranger X");
@@ -338,7 +341,10 @@ fn ai_multiple_sides_are_all_hostile() {
     state.combatants[dummy].side = combat_sim::content::schema::Side::new("third");
     begin(&mut state, "Striker X");
     let log = take_turn(&mut state, &[10, 3]);
-    assert!(log.iter().any(|line| line.contains("attacks Dummy X")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("attacks Dummy X")),
+        "{log:?}"
+    );
 }
 
 #[test]

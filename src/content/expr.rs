@@ -118,8 +118,9 @@ impl ExprContext {
         }
         let substituted = substitute(template, |name| self.variable(name))?;
         let formula = normalize_signs(&substituted);
-        parse_cached(&formula)
-            .with_context(|| format!("invalid expression `{template}` (substituted to `{formula}`)"))
+        parse_cached(&formula).with_context(|| {
+            format!("invalid expression `{template}` (substituted to `{formula}`)")
+        })
     }
 
     fn variable(&self, name: &str) -> Result<String> {
@@ -265,7 +266,9 @@ fn parse_cached(text: &str) -> Result<DiceExpr> {
             return Ok(expression.clone());
         }
         let expression = text.parse::<DiceExpr>()?;
-        cache.borrow_mut().insert(text.to_string(), expression.clone());
+        cache
+            .borrow_mut()
+            .insert(text.to_string(), expression.clone());
         Ok(expression)
     })
 }

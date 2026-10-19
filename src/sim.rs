@@ -69,8 +69,16 @@ pub fn play(
     Ok(RunOutcome {
         outcome,
         timed_out,
-        rounds: state.round.max(1),
-        hp: state.combatants.iter().map(|combatant| combatant.hp).collect(),
+        rounds: if timed_out {
+            max_rounds
+        } else {
+            state.round.max(1)
+        },
+        hp: state
+            .combatants
+            .iter()
+            .map(|combatant| combatant.hp)
+            .collect(),
         down: state
             .combatants
             .iter()
@@ -285,10 +293,13 @@ pub fn monte_carlo(
                     stats
                 },
             )
-            .reduce(|| Stats::new(sides.len(), template.combatants.len()), |mut a, b| {
-                a.merge(b);
-                a
-            })
+            .reduce(
+                || Stats::new(sides.len(), template.combatants.len()),
+                |mut a, b| {
+                    a.merge(b);
+                    a
+                },
+            )
     });
     let elapsed = start.elapsed().as_secs_f64();
     let wins: BTreeMap<String, u64> = sides
@@ -312,12 +323,7 @@ pub fn monte_carlo(
     let avg_hp_per_side = sides
         .iter()
         .enumerate()
-        .map(|(index, side)| {
-            (
-                side.clone(),
-                stats.side_hp[index] as f64 / completed,
-            )
-        })
+        .map(|(index, side)| (side.clone(), stats.side_hp[index] as f64 / completed))
         .collect();
     let creatures = template
         .combatants

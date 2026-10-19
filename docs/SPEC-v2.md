@@ -152,7 +152,8 @@ PREDICATE (combine with `all: [...]`, `any: [...]`, `not: P`):
 `has_advantage`, `has_disadvantage`, `ally_within_5_of_target` (non-incapacitated ally of the actor),
 `target_has_condition: id`, `self_has_condition: id`, `attacker_within: ft`, `attacker_beyond: ft`,
 `linked_is_attacker` / `linked_is_target` (condition instance's linked creature),
-`attack_has_property: [finesse, ranged]` (a ranged-kind attack counts as `ranged`), `attack_kind: melee|ranged`,
+`attack_has_property: [finesse, ranged]` (any listed property matches; a ranged-kind attack
+counts as `ranged`), `attack_kind: melee|ranged`,
 `self_hp_below_pct: N`, `target_hp_below_pct: N`, `is_spell`, `slot_level_min: N`,
 `damage_dealt` (>0 in this hit), `would_miss_with_ac_bonus: N` (for reactions like Shield),
 `target_size_max: large`.
@@ -235,7 +236,9 @@ scenes:
       rows: ["#######", "#..S..#", "#.~~h.#", "#######"]
       zones: {statue: "S"}   # optional: legend chars that map to zone ids for triggers
 ```
-Positions `[x, y]`. Distance: 5 ft per step incl. diagonals (2024). Movement: BFS/Dijkstra with
+Positions `[x, y]`. Distance: 5 ft per step incl. diagonals (2024), plus
+|elevation(from) - elevation(to)| for attack range/reach (movement stays
+cell-based). Movement: BFS/Dijkstra with
 difficult = 2x, walls impassable. Line of sight: Bresenham through cell centers; wall blocks;
 max cover among intervening cover cells (and target cell's own cover property if attacker not
 adjacent). Adjacent (≤5 ft) for melee/OA. Area radius = cells within radius. Keep it modest.
@@ -267,7 +270,7 @@ Param meaning (fixed set, all optional): `targeting` nearest|lowest_hp|highest_d
 `range_pref` melee|ranged|any; `keep_distance` ft (ranged/casters back off if enemy adjacent,
 using disengage-like abilities if available as bonus); `self_heal_below_pct`; `heal_ally_below_pct`;
 `heal_downed`; `resource_threshold` (use costed damage abilities only if expected damage >= X ×
-best at-will); `flee_below_pct` (move away from enemies / toward `flee_zone`, dash);
+best at-will); `flee_below_pct` (move away from enemies / toward optional `flee_zone`, dash);
 `guard_zone`+`leash` (don't leave guard_zone unless enemy within leash ft); `attack_downed`;
 `opening` (ability ids to use on first turn if available & sensible, e.g. a buff);
 `avoid_targets_with` (condition ids — prefer other targets). Creature `ai.params` override.
@@ -286,7 +289,13 @@ ai.role matching need).
   `interact <who> <object> [--option N]`, `activate <name>`, `content list|show|check`,
   `scene` (print zones/edges/objects/positions compactly as text, no map drawing).
 - `--state NAME` without a slash resolves to `<manifest.state_dir>/NAME.state.json`.
-- Monte Carlo must stay fast (report runs/sec).
+- Simulate: `simulate --encounter ID [--party a,b,c] [--from-state NAME] [--runs N]
+  [--max-rounds 100] [--threads T] [--json]`. `--encounter`, `--from-state` and a bare
+  `--state` source are mutually exclusive. `runs=1` prints the play-by-play and a summary;
+  `runs>1` uses rayon with one prepared template/AI plan set, per-worker seeded RNG and a
+  `NullSink`, and reports runs/sec, wins/draws/timeouts, rounds and HP statistics. Reaching
+  `--max-rounds` without an outcome is a timeout; no living side is a draw.
+- Engine logs use a `LogSink`; a disabled sink (Monte Carlo) performs no formatting.
 
 ## 10. Tests
 Synthetic fixtures only under tests/fixtures/ (generic names like "brute-a", "test-sword").

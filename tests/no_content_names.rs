@@ -71,11 +71,7 @@ fn source_has_no_campaign_content_names() {
                     continue;
                 }
                 if contains_denied_word(&code, word) {
-                    hits.push(format!(
-                        "{}:{}: `{word}`",
-                        path.display(),
-                        number + 1
-                    ));
+                    hits.push(format!("{}:{}: `{word}`", path.display(), number + 1));
                 }
             }
         }
@@ -126,9 +122,7 @@ fn strip_comments(line: &str) -> String {
                 if character == '"' || character == '\'' {
                     quote = Some(character);
                     output.push(character);
-                } else if character == '/'
-                    && characters.peek().is_some_and(|next| *next == '/')
-                {
+                } else if character == '/' && characters.peek().is_some_and(|next| *next == '/') {
                     break;
                 } else {
                     output.push(character);

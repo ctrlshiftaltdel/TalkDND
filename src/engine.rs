@@ -904,7 +904,11 @@ pub fn init(
         }
         let roll = D20Roll::roll(combatant.creature.init_bonus(), RollMode::Normal, rng);
         combatant.initiative_total = Some(roll.total);
-        log.log(format_args!("Initiative {}: {}", combatant.name, roll.text()));
+        log.log(format_args!(
+            "Initiative {}: {}",
+            combatant.name,
+            roll.text()
+        ));
         rows.push((index, roll.total, false));
     }
 
@@ -944,7 +948,10 @@ pub fn init(
     let first = state.initiative[0];
     let _ = start_turn(state, first, rng, log);
     if let Some(combatant) = state.combatants.get(first) {
-        log.log(format_args!("Round {} - {}'s turn", state.round, combatant.name));
+        log.log(format_args!(
+            "Round {} - {}'s turn",
+            state.round, combatant.name
+        ));
     }
     Ok(())
 }
@@ -1218,7 +1225,10 @@ fn expire_subject_conditions(
                 _ => false,
             };
             if expired {
-                log.log(format_args!("{holder_name} is no longer {}", instance.condition));
+                log.log(format_args!(
+                    "{holder_name} is no longer {}",
+                    instance.condition
+                ));
                 if instance.concentration {
                     concentration_broken = true;
                 }
@@ -1802,14 +1812,12 @@ fn forecast_profile(
                 AttackKind::Melee => {
                     space.can_reach(&attacker_position, &target_position, profile.reach)
                 }
-                AttackKind::Ranged | AttackKind::MeleeOrRanged => profile
-                    .range
-                    .is_some_and(|[_, long]| distance <= long),
+                AttackKind::Ranged | AttackKind::MeleeOrRanged => {
+                    profile.range.is_some_and(|[_, long]| distance <= long)
+                }
             };
             if kind != AttackKind::Melee
-                && profile
-                    .range
-                    .is_some_and(|[normal, _]| distance > normal)
+                && profile.range.is_some_and(|[normal, _]| distance > normal)
             {
                 mode = add_disadvantage(mode);
             }
@@ -1893,7 +1901,10 @@ pub fn simple_attack_forecast(
         Some(state.combatants[target].position()),
     ) {
         if attacker != target {
-            match cover_bonus(space.cover(&attacker_position, &target_position), &state.content.rules) {
+            match cover_bonus(
+                space.cover(&attacker_position, &target_position),
+                &state.content.rules,
+            ) {
                 Some(bonus) => ac += bonus,
                 None => total_cover = true,
             }
@@ -2061,7 +2072,9 @@ pub fn save_fail_chance(
             ModifierEffect::AutoFail => auto_fail = true,
             ModifierEffect::Bonus => {
                 if let Some(value) = &collected.modifier.value {
-                    if let Ok(average) = average_expression(state, target, value, &BTreeMap::new(), None, None) {
+                    if let Ok(average) =
+                        average_expression(state, target, value, &BTreeMap::new(), None, None)
+                    {
                         bonus += average;
                     }
                 }
@@ -2075,7 +2088,9 @@ pub fn save_fail_chance(
     if ability == AbilityName::Dex && !ignore_cover {
         if let Some(attacker) = attacker {
             if attacker != target {
-                if let Some(cover_bonus) = cover_bonus(cover_between(state, attacker, target), &state.content.rules) {
+                if let Some(cover_bonus) =
+                    cover_bonus(cover_between(state, attacker, target), &state.content.rules)
+                {
                     bonus += f64::from(cover_bonus);
                 }
             }
@@ -5081,13 +5096,23 @@ fn apply_damage_rolls(
     } else {
         let mut total = 0;
         for (record, damage_type) in &rolls {
-            total += mitigate(state, target, source, record.total, damage_type, source_tags)?;
+            total += mitigate(
+                state,
+                target,
+                source,
+                record.total,
+                damage_type,
+                source_tags,
+            )?;
         }
         (total, Vec::new())
     };
     if total <= 0 {
         if log.enabled() {
-            log.log(format_args!("{name} takes no damage ({})", parts.join("; ")));
+            log.log(format_args!(
+                "{name} takes no damage ({})",
+                parts.join("; ")
+            ));
         }
         return Ok(0);
     }
@@ -6486,7 +6511,9 @@ fn death_save_at(
             .death_saves
             .failures
             .saturating_add(2);
-        log.log(format_args!("{name} critical failure (2 death save failures)"));
+        log.log(format_args!(
+            "{name} critical failure (2 death save failures)"
+        ));
     } else if roll.total >= 10 {
         state.combatants[index].death_saves.successes = state.combatants[index]
             .death_saves

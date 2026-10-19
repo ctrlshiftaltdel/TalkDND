@@ -1048,10 +1048,7 @@ fn run_simulate(
                 } else {
                     format!("{}/{}", combatant.hp, combatant.max_hp)
                 };
-                println!(
-                    "  {} ({}): {}",
-                    combatant.name, combatant.side, status
-                );
+                println!("  {} ({}): {}", combatant.name, combatant.side, status);
             }
         }
         return Ok(());

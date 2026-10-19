@@ -11,8 +11,6 @@
 //! rebuild static data.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
 use anyhow::Result;
 
@@ -26,29 +24,6 @@ use crate::dice::DiceRng;
 use crate::engine::{self, AttackOptions, LogSink};
 use crate::space::{Position, Space};
 use crate::state::EncounterState;
-
-/// Temporary phase counters used by the local profiling probe.
-#[doc(hidden)]
-pub mod profile {
-    use super::*;
-    pub static TARGET: AtomicU64 = AtomicU64::new(0);
-    pub static SELF_HEAL: AtomicU64 = AtomicU64::new(0);
-    pub static HEAL_ALLY: AtomicU64 = AtomicU64::new(0);
-    pub static OPENING: AtomicU64 = AtomicU64::new(0);
-    pub static MOVE: AtomicU64 = AtomicU64::new(0);
-    pub static ACTION: AtomicU64 = AtomicU64::new(0);
-    pub static CHOOSE: AtomicU64 = AtomicU64::new(0);
-    pub static EXECUTE: AtomicU64 = AtomicU64::new(0);
-    pub static OUTCOME: AtomicU64 = AtomicU64::new(0);
-    pub fn reset() {
-        for counter in [&TARGET, &SELF_HEAL, &HEAL_ALLY, &OPENING, &MOVE, &ACTION, &OUTCOME, &CHOOSE, &EXECUTE] {
-            counter.store(0, Ordering::Relaxed);
-        }
-    }
-    pub fn dump() -> [u64; 9] {
-        [TARGET.load(Ordering::Relaxed), SELF_HEAL.load(Ordering::Relaxed), HEAL_ALLY.load(Ordering::Relaxed), OPENING.load(Ordering::Relaxed), MOVE.load(Ordering::Relaxed), ACTION.load(Ordering::Relaxed), OUTCOME.load(Ordering::Relaxed), CHOOSE.load(Ordering::Relaxed), EXECUTE.load(Ordering::Relaxed)]
-    }
-}
 
 /// Default ratio for costed damage abilities when a template omits it.
 const DEFAULT_RESOURCE_THRESHOLD: f64 = 1.2;
@@ -105,14 +80,14 @@ struct PlannedAction {
 
 #[derive(Clone)]
 enum PlannedKind {
-    Attack(Attack),
-    Ability(ResolvedAbility),
+    Attack(Box<Attack>),
+    Ability(Box<ResolvedAbility>),
 }
 
 #[derive(Clone)]
 enum PlanEffect {
     Attack {
-        effect: AttackEffect,
+        effect: Box<AttackEffect>,
         damages: Vec<PlanDamage>,
         on_hit: Vec<PlanEffect>,
         on_miss: Vec<PlanEffect>,
@@ -233,11 +208,9 @@ impl Ai {
         rng: &mut dyn DiceRng,
         log: &mut dyn LogSink,
     ) -> Result<()> {
-        let started = Instant::now();
         if engine::combat_outcome(state).is_some() {
             return Ok(());
         }
-        profile::OUTCOME.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
         let Some(actor) = state.current_index() else {
             return Ok(());
         };
@@ -254,8 +227,11 @@ impl Ai {
             if combatant.is_dying() {
                 return Ok(());
             }
-            if engine::has_condition_flag(state, actor, crate::content::schema::ConditionFlag::Incapacitated)
-            {
+            if engine::has_condition_flag(
+                state,
+                actor,
+                crate::content::schema::ConditionFlag::Incapacitated,
+            ) {
                 return Ok(());
             }
         }
@@ -268,27 +244,14 @@ impl Ai {
             return Ok(());
         }
 
-        let started = Instant::now();
         self.maybe_self_heal(state, actor, plan, rng, log)?;
-        profile::SELF_HEAL.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        let started = Instant::now();
         self.maybe_heal_ally(state, actor, plan, rng, log)?;
-        profile::HEAL_ALLY.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        let started = Instant::now();
         self.maybe_opening(state, actor, plan, rng, log)?;
-        profile::OPENING.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
         if !state.combatants[actor].action_used {
-            let started = Instant::now();
-            let target = self.choose_target(state, actor, plan, rng);
-            profile::TARGET.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            if let Some(target) = target {
-                let started = Instant::now();
+            if let Some(target) = self.choose_target(state, actor, plan, rng) {
                 self.move_for_action(state, actor, plan, target, rng, log)?;
-                profile::MOVE.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                let started = Instant::now();
                 self.take_action(state, actor, plan, target, rng, log)?;
-                profile::ACTION.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
             }
         }
         state.combatants[actor].opening_used = true;
@@ -374,8 +337,7 @@ impl Ai {
         for ally in wounded {
             for &action_index in &heal_actions {
                 let action = &plan.actions[action_index];
-                if !affordable(state, actor, action)
-                    || !action_in_range(state, actor, action, ally)
+                if !affordable(state, actor, action) || !action_in_range(state, actor, action, ally)
                 {
                     continue;
                 }
@@ -410,9 +372,9 @@ impl Ai {
             if !affordable(state, actor, action) {
                 continue;
             }
-            let target = if action.target_type == TargetType::SelfTarget {
-                actor
-            } else if action.target_side == Some(TargetSide::Ally) {
+            let target = if action.target_type == TargetType::SelfTarget
+                || action.target_side == Some(TargetSide::Ally)
+            {
                 actor
             } else {
                 let Some(target) = self.choose_target(state, actor, plan, rng) else {
@@ -454,8 +416,7 @@ impl Ai {
                         && (state.combatants[index].hp > 0 || attack_downed)
                         && (include_avoided
                             || !avoid.iter().any(|condition| {
-                                state.combatants[index]
-                                    .has_condition(&state.content, condition)
+                                state.combatants[index].has_condition(&state.content, condition)
                             }))
                 })
                 .collect()
@@ -486,8 +447,12 @@ impl Ai {
                 ta.partial_cmp(&tb)
                     .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| {
-                        distance(space.as_ref(), state, b, actor)
-                            .cmp(&distance(space.as_ref(), state, a, actor))
+                        distance(space.as_ref(), state, b, actor).cmp(&distance(
+                            space.as_ref(),
+                            state,
+                            a,
+                            actor,
+                        ))
                     })
             }),
             AiTargeting::Nearest => candidates.into_iter().min_by_key(|&index| {
@@ -512,11 +477,8 @@ impl Ai {
         if state.combatants[actor].action_used {
             return Ok(());
         }
-        let started = Instant::now();
         let choice = self.choose_action(state, actor, plan, target);
-        profile::CHOOSE.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        let started = Instant::now();
-        let result = match choice {
+        match choice {
             Some(TargetChoice::Action(index)) => {
                 let action = &plan.actions[index];
                 self.execute(state, actor, action, target, None, rng, log)
@@ -538,9 +500,7 @@ impl Ai {
                 )
             }
             None => Ok(()),
-        };
-        profile::EXECUTE.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        result
+        }
     }
 
     fn choose_action(
@@ -586,7 +546,12 @@ impl Ai {
         best.map(|(_, choice)| choice)
     }
 
-    fn resource_allows(&self, state: &EncounterState, plan: &CombatantPlan, action: &PlannedAction) -> bool {
+    fn resource_allows(
+        &self,
+        state: &EncounterState,
+        plan: &CombatantPlan,
+        action: &PlannedAction,
+    ) -> bool {
         if action.cost.is_none() || action.role != AiRole::Damage {
             return true;
         }
@@ -643,8 +608,8 @@ impl Ai {
                         part.dtype.as_str(),
                         &action.tags,
                     );
-                    damage += (part.average + part.dice_average * forecast.crit_chance)
-                        * multiplier;
+                    damage +=
+                        (part.average + part.dice_average * forecast.crit_chance) * multiplier;
                 }
                 let on_hit = self.score_effects(state, actor, target, &action.on_hit);
                 let on_miss = self.score_effects(state, actor, target, &action.on_miss);
@@ -769,8 +734,13 @@ impl Ai {
                 );
                 let mut damage = 0.0;
                 for part in damages {
-                    let multiplier =
-                        engine::damage_multiplier(state, target, Some(actor), part.dtype.as_str(), tags);
+                    let multiplier = engine::damage_multiplier(
+                        state,
+                        target,
+                        Some(actor),
+                        part.dtype.as_str(),
+                        tags,
+                    );
                     damage += part.average * multiplier
                         + part.dice_average * multiplier * forecast.crit_chance;
                 }
@@ -805,7 +775,9 @@ impl Ai {
                 if *half {
                     success_score.damage += fail_score.damage * 0.5;
                 }
-                fail_score.scaled(fail).add(success_score.scaled(1.0 - fail))
+                fail_score
+                    .scaled(fail)
+                    .add(success_score.scaled(1.0 - fail))
             }
             PlanEffect::Damage(part) => {
                 let multiplier =
@@ -879,6 +851,7 @@ impl Ai {
             .max(1)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute(
         &self,
         state: &mut EncounterState,
@@ -997,7 +970,9 @@ impl Ai {
             };
             if self.use_bonus_basic(state, actor, plan, wanted, rng, log)? && !adjacent {
                 // Dash increased the movement budget; movement below sees it.
-            } else if adjacent && self.use_bonus_basic(state, actor, plan, BasicAction::Dash, rng, log)? {
+            } else if adjacent
+                && self.use_bonus_basic(state, actor, plan, BasicAction::Dash, rng, log)?
+            {
                 // Disengage was unavailable; dash is still better than nothing.
             }
         }
@@ -1026,14 +1001,8 @@ impl Ai {
         let nearest = nearest_hostile_distance(state, actor);
         if keep > 0 && wants_ranged && nearest < keep {
             if nearest <= 5 && !state.combatants[actor].bonus_action_used {
-                let _ = self.use_bonus_basic(
-                    state,
-                    actor,
-                    plan,
-                    BasicAction::Disengage,
-                    rng,
-                    log,
-                )?;
+                let _ =
+                    self.use_bonus_basic(state, actor, plan, BasicAction::Disengage, rng, log)?;
             }
             return self.advance(state, actor, plan, Some(target), desired, false, rng, log);
         }
@@ -1234,12 +1203,24 @@ impl Ai {
                         .unwrap_or(9999);
                     -f64::from(zone_distance) * 10.0 - f64::from(cost) * 0.01
                 } else if target_position.is_some() {
-                approach_score(keep, range_pref, min_enemy, distance_target, desired_distance)
+                    approach_score(
+                        keep,
+                        range_pref,
+                        min_enemy,
+                        distance_target,
+                        desired_distance,
+                    )
                 } else {
                     0.0
                 }
             } else if target_position.is_some() {
-                approach_score(keep, range_pref, min_enemy, distance_target, desired_distance)
+                approach_score(
+                    keep,
+                    range_pref,
+                    min_enemy,
+                    distance_target,
+                    desired_distance,
+                )
             } else {
                 -f64::from(cost) * 0.01
             };
@@ -1319,22 +1300,17 @@ fn approach_score(
     distance_target: i32,
     desired_distance: i32,
 ) -> f64 {
-    if keep > 0
-        && matches!(range_pref, Some(RangePreference::Ranged))
-        && min_enemy < keep
-    {
-        return f64::from(min_enemy.min(keep + 10)) * 10.0
-            - f64::from(distance_target) * 0.05;
+    if keep > 0 && matches!(range_pref, Some(RangePreference::Ranged)) && min_enemy < keep {
+        return f64::from(min_enemy.min(keep + 10)) * 10.0 - f64::from(distance_target) * 0.05;
     }
     if desired_distance > 5 {
         if distance_target > desired_distance {
-            -f64::from(distance_target - desired_distance) * 10.0
-                - f64::from(min_enemy) * 0.05
+            -f64::from(distance_target - desired_distance) * 10.0 - f64::from(min_enemy) * 0.05
         } else if distance_target < keep.max(5) && keep > 0 {
-            f64::from(min_enemy.min(keep + 10)) * 10.0
-                - f64::from(distance_target) * 0.05
+            f64::from(min_enemy.min(keep + 10)) * 10.0 - f64::from(distance_target) * 0.05
         } else {
-            1000.0 - (f64::from(distance_target - desired_distance)).abs()
+            1000.0
+                - (f64::from(distance_target - desired_distance)).abs()
                 - f64::from(min_enemy) * 0.01
         }
     } else if distance_target <= 5 {
@@ -1383,10 +1359,17 @@ fn build_plan(state: &EncounterState, actor: usize) -> CombatantPlan {
             continue;
         };
         let ability = &resolved.ability;
-        if matches!(ability.activation, Activation::Passive | Activation::Reaction) {
+        if matches!(
+            ability.activation,
+            Activation::Passive | Activation::Reaction
+        ) {
             continue;
         }
-        let role = ability.ai.as_ref().map(|ai| ai.role).unwrap_or(AiRole::None);
+        let role = ability
+            .ai
+            .as_ref()
+            .map(|ai| ai.role)
+            .unwrap_or(AiRole::None);
         let slot_level = ability.slot_level;
         let attack_mod = None;
         let effects = build_effects(
@@ -1401,7 +1384,7 @@ fn build_plan(state: &EncounterState, actor: usize) -> CombatantPlan {
         let raw_damage = raw_effect_damage(&effects);
         actions.push(PlannedAction {
             id: ability.id.clone(),
-            kind: PlannedKind::Ability(resolved.clone()),
+            kind: PlannedKind::Ability(Box::new(resolved.clone())),
             role,
             activation: ability.activation,
             cost: ability.cost.clone(),
@@ -1488,21 +1471,41 @@ fn planned_attack(state: &EncounterState, actor: usize, attack: &Attack) -> Plan
     let damage_parts = attack
         .damage
         .iter()
-        .map(|part| plan_damage(state, actor, &part.dice, &part.damage_type, 1, &params, attack_mod, None))
+        .map(|part| {
+            plan_damage(
+                state,
+                actor,
+                &part.dice,
+                &part.damage_type,
+                1,
+                &params,
+                attack_mod,
+                None,
+            )
+        })
         .collect();
     let on_hit = build_effects(state, actor, &attack.on_hit, &params, None, attack_mod, &[]);
     let raw_damage = attack
         .damage
         .iter()
         .map(|part| {
-            plan_damage(state, actor, &part.dice, &part.damage_type, 1, &params, attack_mod, None)
-                .average
+            plan_damage(
+                state,
+                actor,
+                &part.dice,
+                &part.damage_type,
+                1,
+                &params,
+                attack_mod,
+                None,
+            )
+            .average
         })
         .sum::<f64>()
         + raw_effect_damage(&on_hit);
     PlannedAction {
         id: attack.id.clone(),
-        kind: PlannedKind::Attack(attack.clone()),
+        kind: PlannedKind::Attack(Box::new(attack.clone())),
         role: AiRole::Damage,
         activation: Activation::Action,
         cost: attack.cost.clone(),
@@ -1534,6 +1537,7 @@ fn planned_attack(state: &EncounterState, actor: usize, attack: &Attack) -> Plan
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plan_damage(
     state: &EncounterState,
     actor: usize,
@@ -1544,8 +1548,8 @@ fn plan_damage(
     attack_mod: Option<i32>,
     slot_level: Option<i32>,
 ) -> PlanDamage {
-    let expression = engine::evaluate_for_actor(state, actor, value, params, attack_mod, slot_level)
-        .ok();
+    let expression =
+        engine::evaluate_for_actor(state, actor, value, params, attack_mod, slot_level).ok();
     let (average, dice_average) = expression
         .as_ref()
         .map(|expression| {
@@ -1576,17 +1580,7 @@ fn build_effects(
 ) -> Vec<PlanEffect> {
     effects
         .iter()
-        .map(|effect| {
-            build_effect(
-                state,
-                actor,
-                effect,
-                params,
-                slot_level,
-                attack_mod,
-                tags,
-            )
-        })
+        .map(|effect| build_effect(state, actor, effect, params, slot_level, attack_mod, tags))
         .collect()
 }
 
@@ -1601,7 +1595,7 @@ fn build_effect(
 ) -> PlanEffect {
     match effect {
         Effect::Attack(effect) => PlanEffect::Attack {
-            effect: effect.clone(),
+            effect: Box::new(effect.clone()),
             damages: effect
                 .damage
                 .iter()
@@ -1652,8 +1646,10 @@ fn build_effect(
             .unwrap_or(0),
         },
         Effect::Save(effect) => {
-            let dc = engine::average_expression(state, actor, &effect.dc, params, attack_mod, slot_level)
-                .unwrap_or(10.0) as i32;
+            let dc = engine::average_expression(
+                state, actor, &effect.dc, params, attack_mod, slot_level,
+            )
+            .unwrap_or(10.0) as i32;
             PlanEffect::Save {
                 ability: effect.ability,
                 dc,
@@ -1730,9 +1726,7 @@ fn raw_effect_damage(effects: &[PlanEffect]) -> f64 {
                 on_success,
                 ..
             } => raw_effect_damage(on_fail) * 0.7 + raw_effect_damage(on_success) * 0.3,
-            PlanEffect::Damage(part) => {
-                part.average * f64::from(part.repeat.max(1))
-            }
+            PlanEffect::Damage(part) => part.average * f64::from(part.repeat.max(1)),
             PlanEffect::Choice(options) => options
                 .iter()
                 .map(|option| raw_effect_damage(option))
@@ -1761,17 +1755,19 @@ fn merge_params(base: &AiParams, overrides: &AiParams) -> AiParams {
         targeting: overrides.targeting.or(base.targeting),
         range_pref: overrides.range_pref.or(base.range_pref),
         keep_distance: overrides.keep_distance.or(base.keep_distance),
-        self_heal_below_pct: overrides
-            .self_heal_below_pct
-            .or(base.self_heal_below_pct),
-        heal_ally_below_pct: overrides
-            .heal_ally_below_pct
-            .or(base.heal_ally_below_pct),
+        self_heal_below_pct: overrides.self_heal_below_pct.or(base.self_heal_below_pct),
+        heal_ally_below_pct: overrides.heal_ally_below_pct.or(base.heal_ally_below_pct),
         heal_downed: overrides.heal_downed.or(base.heal_downed),
         resource_threshold: overrides.resource_threshold.or(base.resource_threshold),
         flee_below_pct: overrides.flee_below_pct.or(base.flee_below_pct),
-        flee_zone: overrides.flee_zone.clone().or_else(|| base.flee_zone.clone()),
-        guard_zone: overrides.guard_zone.clone().or_else(|| base.guard_zone.clone()),
+        flee_zone: overrides
+            .flee_zone
+            .clone()
+            .or_else(|| base.flee_zone.clone()),
+        guard_zone: overrides
+            .guard_zone
+            .clone()
+            .or_else(|| base.guard_zone.clone()),
         leash: overrides.leash.or(base.leash),
         attack_downed: overrides.attack_downed.or(base.attack_downed),
         opening: overrides.opening.clone().or_else(|| base.opening.clone()),
@@ -1831,7 +1827,12 @@ fn affordable(state: &EncounterState, actor: usize, action: &PlannedAction) -> b
         .is_some_and(|resource| resource.current >= cost.amount as i32)
 }
 
-fn action_in_range(state: &EncounterState, actor: usize, action: &PlannedAction, target: usize) -> bool {
+fn action_in_range(
+    state: &EncounterState,
+    actor: usize,
+    action: &PlannedAction,
+    target: usize,
+) -> bool {
     if action.target_type == TargetType::SelfTarget || target == actor {
         return true;
     }
@@ -1854,7 +1855,9 @@ fn action_in_range(state: &EncounterState, actor: usize, action: &PlannedAction,
                     .attack_range
                     .is_some_and(|[_, long]| distance <= long)
         }
-        None => action.range.is_none_or(|range| range <= 0 || distance <= range),
+        None => action
+            .range
+            .is_none_or(|range| range <= 0 || distance <= range),
     }
 }
 
