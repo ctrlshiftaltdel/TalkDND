@@ -317,7 +317,6 @@ impl ZoneCache {
 
         let mut adjacency: Vec<Vec<(usize, usize)>> = vec![Vec::new(); count];
         let mut direct = vec![vec![None; count]; count];
-        let mut neighbours = vec![Vec::new(); count];
         let mut max_area_radius = 0;
         for (edge_index, edge) in scene.edges.iter().enumerate() {
             let (Some(&a), Some(&b)) = (index.get(&edge.a), index.get(&edge.b)) else {
@@ -334,9 +333,19 @@ impl ZoneCache {
                 direct[b][a] = Some(edge.distance);
             }
             max_area_radius = max_area_radius.max(edge.distance.max(0));
-            let to = if edge.a == scene.zones[a].id { b } else { a };
-            neighbours[a].push(zone_step(scene, &heights, a, to, edge));
         }
+        let neighbours: Vec<Vec<MoveStep>> = adjacency
+            .iter()
+            .enumerate()
+            .map(|(from, edges)| {
+                edges
+                    .iter()
+                    .map(|&(to, edge_index)| {
+                        zone_step(scene, &heights, from, to, &scene.edges[edge_index])
+                    })
+                    .collect()
+            })
+            .collect();
 
         let mut range = vec![vec![None; count]; count];
         let mut travel = vec![vec![None; count]; count];

@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -2266,6 +2266,13 @@ pub fn attack(
         spend_action(state, attacker_index, Activation::Action, log)?;
         log.log(format_args!("{attacker} uses multiattack"));
         for entry in entries {
+            if state.combatants[target_index].is_dead() {
+                log.log(format_args!(
+                    "{} is already down; remaining multiattack attacks are skipped",
+                    state.combatants[target_index].name
+                ));
+                break;
+            }
             resolve_named_entry(
                 state,
                 attacker_index,
