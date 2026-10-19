@@ -176,3 +176,7 @@ combat-sim simulate --from-state --runs 500 --max-rounds 50 --threads 4
   选项期望伤害的 1.5 倍；不会做复杂的团队协同。
 - `simulate` 的单场模式默认打印完整日志；加 `--json` 时只输出一个 JSON 对象（含 `runs`、`outcome`、`rounds`、`log` 和每个战斗单位的结束状态）。
 - 多场蒙特卡洛默认输出文本摘要；`--json` 时输出完整统计报告；为了性能不保留逐行日志。
+
+## 快捷入口
+
+`/workspace/projects/talkdnd/tools/bin/combat-sim` 是指向 `target/release/combat-sim` 的软链接；重新 `cargo build --release` 后自动生效。
