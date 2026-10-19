@@ -40,6 +40,7 @@ fn probe() {
     let ai = Ai::prepare(&state);
     let runs = 2000;
     let (mut t_clone, mut t_init, mut t_ai, mut t_next) = (0u128, 0u128, 0u128, 0u128);
+    let (mut n_ai, mut n_next) = (0u64, 0u64);
     let mut sink = NullSink;
     let mut rng = dice::seeded_rng(1);
     for _ in 0..runs {
@@ -55,24 +56,30 @@ fn probe() {
             if engine::combat_outcome(&run).is_some() {
                 break;
             }
+            let now = Instant::now();
             ai.take_turn(&mut run, &mut rng, &mut sink).unwrap();
+            t_ai += now.elapsed().as_nanos();
+            n_ai += 1;
             if engine::combat_outcome(&run).is_some() {
                 break;
             }
-            if engine::next_turn(&mut run, &mut rng, &mut sink).is_err() {
+            let now = Instant::now();
+            let next_ok = engine::next_turn(&mut run, &mut rng, &mut sink).is_ok();
+            t_next += now.elapsed().as_nanos();
+            n_next += 1;
+            if !next_ok {
                 break;
             }
         }
-        t_ai += now.elapsed().as_nanos();
-        let now = Instant::now();
         std::hint::black_box(&run);
-        t_next += now.elapsed().as_nanos();
     }
     println!(
-        "clone {:.1}us init {:.1}us turnloop {:.1}us other {:.1}us",
+        "clone {:.1}us init {:.1}us ai {:.1}us next {:.1}us turns {}/{}",
         t_clone as f64 / runs as f64 / 1000.0,
         t_init as f64 / runs as f64 / 1000.0,
         t_ai as f64 / runs as f64 / 1000.0,
-        t_next as f64 / runs as f64 / 1000.0
+        t_next as f64 / runs as f64 / 1000.0,
+        n_ai as f64 / runs as f64,
+        n_next as f64 / runs as f64
     );
 }
