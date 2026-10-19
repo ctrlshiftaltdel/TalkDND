@@ -19,7 +19,7 @@ use crate::content::schema::{
     EndsOn, ResourceDef, Rules, SaveEndsAt, Scene, SceneMode, SceneTrigger, Side, Speed,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
-use crate::space::ZoneSpace;
+use crate::space::{GridMap, GridSpace, Position, SpaceView, ZoneGraph};
 
 /// State file used when no `--state` is supplied.
 pub const DEFAULT_STATE_FILE: &str = "combat-state.json";
@@ -112,6 +112,9 @@ pub struct CombatantState {
     #[serde(default)]
     pub temp_hp: i32,
     pub zone: String,
+    /// Exact position. `None` in older state files means the display zone alone.
+    #[serde(default)]
+    pub pos: Option<Position>,
     #[serde(default)]
     pub conditions: Vec<ActiveCondition>,
     #[serde(default)]
@@ -144,6 +147,33 @@ pub struct CombatantState {
 impl CombatantState {
     pub fn display_name(&self) -> &str {
         &self.name
+    }
+
+    /// Exact position, falling back to the display zone for older state files.
+    pub fn position(&self) -> Position {
+        self.pos
+            .clone()
+            .unwrap_or_else(|| Position::Zone {
+                zone: self.zone.clone(),
+            })
+    }
+
+    pub fn cell(&self) -> Option<[i32; 2]> {
+        match &self.pos {
+            Some(Position::Cell { x, y }) => Some([*x, *y]),
+            _ => None,
+        }
+    }
+
+    pub fn set_cell(&mut self, x: i32, y: i32, zone: impl Into<String>) {
+        self.pos = Some(Position::Cell { x, y });
+        self.zone = zone.into();
+    }
+
+    pub fn set_zone(&mut self, zone: impl Into<String>) {
+        let zone = zone.into();
+        self.pos = Some(Position::Zone { zone: zone.clone() });
+        self.zone = zone;
     }
 
     pub fn creature_id(&self) -> &str {
@@ -576,25 +606,39 @@ impl EncounterState {
                     encounter.scene
                 )
             })?;
-        if scene.mode == SceneMode::Grid {
-            bail!("grid scenes arrive in v2 step 3");
-        }
-        if scene.zones.is_empty() {
-            bail!("scene `{}` has no zones", scene.id);
-        }
+        let grid = if scene.mode == SceneMode::Grid {
+            Some(
+                GridMap::parse(&scene)
+                    .ok_or_else(|| anyhow!("scene `{}` has no usable grid", scene.id))?,
+            )
+        } else {
+            None
+        };
+        let mut placement = Placement {
+            mode: scene.mode,
+            grid,
+            occupied: BTreeSet::new(),
+        };
         let party_zone = options
             .party_zone
             .clone()
             .or_else(|| encounter.party_zone.clone())
             .or_else(|| scene.zones.first().map(|zone| zone.id.clone()))
+            .or_else(|| {
+                placement
+                    .grid
+                    .as_ref()
+                    .and_then(|grid| grid.zone_ids().into_iter().next())
+            })
             .unwrap_or_default();
-        if !scene.zones.iter().any(|zone| zone.id == party_zone) {
+        if !placement.known_zone(&scene, &party_zone) {
             bail!(
                 "unknown party zone `{party_zone}` (known zones: {})",
-                zone_list(&scene)
+                zone_list(&scene, placement.grid.as_ref())
             );
         }
 
+        let mut placement_log = Vec::new();
         let mut combatants = Vec::new();
         for member in &encounter.members {
             if member.count() == 0 {
@@ -603,16 +647,13 @@ impl EncounterState {
             let creature = content
                 .resolve_creature(&member.creature)
                 .with_context(|| format!("encounter member `{}`", member.creature))?;
-            let zone = member
-                .zone
-                .clone()
-                .or_else(|| member.pos.map(|_| party_zone.clone()))
-                .unwrap_or_else(|| party_zone.clone());
-            if !scene.zones.iter().any(|known| known.id == zone) {
+            let request = member_request(scene.mode, member.pos, member.zone.clone(), &party_zone);
+            if !placement.request_known(&scene, &request) {
                 bail!(
-                    "encounter member `{}` uses unknown zone `{zone}` (known zones: {})",
+                    "encounter member `{}` uses unknown zone `{}` (known zones: {})",
                     creature.display_name(),
-                    zone_list(&scene)
+                    request.describe(),
+                    zone_list(&scene, placement.grid.as_ref())
                 );
             }
             let side = member.side.clone().unwrap_or_else(|| creature.side());
@@ -626,14 +667,18 @@ impl EncounterState {
                 .unwrap_or_else(|| creature.display_name().to_string());
             append_instances(
                 &mut combatants,
+                &mut placement,
+                &scene,
                 creature,
                 &base_name,
                 member.count(),
-                &zone,
+                &request,
                 side,
                 dormant,
                 ai,
-            );
+                &mut placement_log,
+                "encounter member",
+            )?;
         }
 
         let mut party_creatures = Vec::new();
@@ -643,19 +688,24 @@ impl EncounterState {
                 .with_context(|| format!("party member `{id}`"))?;
             party_creatures.push(creature);
         }
+        let party_request = PlaceRequest::Zone(party_zone.clone());
         for creature in party_creatures {
             let base_name = creature.display_name().to_string();
             let ai = creature.ai.clone();
             append_instances(
                 &mut combatants,
+                &mut placement,
+                &scene,
                 creature,
                 &base_name,
                 1,
-                &party_zone,
+                &party_request,
                 Side::new("party"),
                 false,
                 ai,
-            );
+                &mut placement_log,
+                "party member",
+            )?;
         }
 
         for add in &options.adds {
@@ -663,11 +713,13 @@ impl EncounterState {
                 .resolve_creature(&add.creature)
                 .with_context(|| format!("--add `{}`", add.creature))?;
             let zone = add.zone.clone().unwrap_or_else(|| party_zone.clone());
-            if !scene.zones.iter().any(|known| known.id == zone) {
+            let request = PlaceRequest::Zone(zone);
+            if !placement.request_known(&scene, &request) {
                 bail!(
-                    "--add `{}` uses unknown zone `{zone}` (known zones: {})",
+                    "--add `{}` uses unknown zone `{}` (known zones: {})",
                     add.creature,
-                    zone_list(&scene)
+                    request.describe(),
+                    zone_list(&scene, placement.grid.as_ref())
                 );
             }
             let base_name = creature.display_name().to_string();
@@ -676,14 +728,18 @@ impl EncounterState {
             let ai = creature.ai.clone();
             append_instances(
                 &mut combatants,
+                &mut placement,
+                &scene,
                 creature,
                 &base_name,
                 add.count,
-                &zone,
+                &request,
                 side,
                 dormant,
                 ai,
-            );
+                &mut placement_log,
+                "--add",
+            )?;
         }
 
         if combatants.is_empty() {
@@ -705,7 +761,7 @@ impl EncounterState {
             initiative: Vec::new(),
             turn: 0,
             round: 0,
-            log: Vec::new(),
+            log: placement_log,
             concentration: BTreeMap::new(),
             triggers: scene_trigger_runtime(&scene),
             outcome: None,
@@ -750,8 +806,12 @@ impl EncounterState {
         Ok(())
     }
 
-    pub fn space(&self) -> Option<ZoneSpace<'_>> {
-        self.scene.as_ref().map(ZoneSpace::new)
+    pub fn space(&self) -> Option<SpaceView<'_>> {
+        let scene = self.scene.as_ref()?;
+        match scene.mode {
+            SceneMode::Zones => Some(SpaceView::Zones(ZoneGraph::new(scene))),
+            SceneMode::Grid => GridSpace::new(scene).map(SpaceView::Grid),
+        }
     }
 
     pub fn rules(&self) -> &Rules {
@@ -954,16 +1014,183 @@ fn next_named_turn_round_for_duration(round: u32, _until: DurationUntil) -> u32 
     round.saturating_add(1)
 }
 
+/// Where an encounter member should be placed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PlaceRequest {
+    Zone(String),
+    Cell(i32, i32),
+}
+
+impl PlaceRequest {
+    fn describe(&self) -> String {
+        match self {
+            Self::Zone(zone) => zone.clone(),
+            Self::Cell(x, y) => format!("({x},{y})"),
+        }
+    }
+}
+
+fn member_request(
+    mode: SceneMode,
+    pos: Option<[i32; 2]>,
+    zone: Option<String>,
+    party_zone: &str,
+) -> PlaceRequest {
+    match (mode, pos) {
+        (SceneMode::Grid, Some([x, y])) => PlaceRequest::Cell(x, y),
+        _ => PlaceRequest::Zone(zone.unwrap_or_else(|| party_zone.to_string())),
+    }
+}
+
+struct Placement {
+    mode: SceneMode,
+    grid: Option<GridMap>,
+    occupied: BTreeSet<(i32, i32)>,
+}
+
+impl Placement {
+    fn known_zone(&self, scene: &Scene, zone: &str) -> bool {
+        scene.zones.iter().any(|known| known.id == zone)
+            || self
+                .grid
+                .as_ref()
+                .is_some_and(|grid| grid.zone_ids().iter().any(|known| known == zone))
+    }
+
+    fn request_known(&self, scene: &Scene, request: &PlaceRequest) -> bool {
+        match request {
+            PlaceRequest::Zone(zone) => self.known_zone(scene, zone),
+            PlaceRequest::Cell(x, y) => self
+                .grid
+                .as_ref()
+                .is_some_and(|grid| grid.in_bounds(*x, *y) && !grid.is_wall(*x, *y)),
+        }
+    }
+
+    fn place(
+        &mut self,
+        scene: &Scene,
+        request: &PlaceRequest,
+        log: &mut Vec<String>,
+        label: &str,
+    ) -> Result<(String, Position)> {
+        match self.mode {
+            SceneMode::Zones => {
+                let PlaceRequest::Zone(zone) = request else {
+                    bail!("scene `{}` uses zones, so grid positions are not valid", scene.id);
+                };
+                Ok((zone.clone(), Position::Zone { zone: zone.clone() }))
+            }
+            SceneMode::Grid => {
+                let grid = self
+                    .grid
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("scene `{}` has no grid", scene.id))?;
+                let requested = match request {
+                    PlaceRequest::Cell(x, y) => {
+                        if grid.is_wall(*x, *y) {
+                            bail!("cell ({x},{y}) is a wall or outside the grid");
+                        }
+                        Some((*x, *y))
+                    }
+                    PlaceRequest::Zone(_) => None,
+                };
+                let anchor = match request {
+                    PlaceRequest::Zone(zone) => grid.cells_in_zone(zone).first().copied(),
+                    PlaceRequest::Cell(x, y) => Some((*x, *y)),
+                };
+                let cell = match requested {
+                    Some(cell) if !self.occupied.contains(&cell) => cell,
+                    Some(cell) => {
+                        let fallback = self.nearest_free(grid, cell)?;
+                        log.push(format!(
+                            "{label} requested ({},{}) but the cell is occupied; placed at ({},{})",
+                            cell.0, cell.1, fallback.0, fallback.1
+                        ));
+                        fallback
+                    }
+                    None => match anchor {
+                        Some(anchor) => {
+                            let in_zone: Vec<(i32, i32)> = match request {
+                                PlaceRequest::Zone(zone) => grid.cells_in_zone(zone),
+                                PlaceRequest::Cell(..) => Vec::new(),
+                            };
+                            match in_zone
+                                .into_iter()
+                                .find(|cell| !self.occupied.contains(cell))
+                            {
+                                Some(cell) => cell,
+                                None => {
+                                    let fallback = self.nearest_free(grid, anchor)?;
+                                    log.push(format!(
+                                        "{label} zone `{}` has no free cell; placed at ({},{})",
+                                        request.describe(),
+                                        fallback.0,
+                                        fallback.1
+                                    ));
+                                    fallback
+                                }
+                            }
+                        }
+                        None => {
+                            let fallback =
+                                self.nearest_free(grid, (grid.width / 2, grid.height / 2))?;
+                            log.push(format!(
+                                "{label} zone `{}` has no cell; placed at ({},{})",
+                                request.describe(),
+                                fallback.0,
+                                fallback.1
+                            ));
+                            fallback
+                        }
+                    },
+                };
+                self.occupied.insert(cell);
+                Ok((
+                    grid.display_zone(cell.0, cell.1),
+                    Position::Cell {
+                        x: cell.0,
+                        y: cell.1,
+                    },
+                ))
+            }
+        }
+    }
+
+    fn nearest_free(&self, grid: &GridMap, anchor: (i32, i32)) -> Result<(i32, i32)> {
+        let mut free: Vec<(i32, (i32, i32))> = grid
+            .open_cells()
+            .into_iter()
+            .filter(|cell| !self.occupied.contains(cell))
+            .map(|cell| {
+                (
+                    (cell.0 - anchor.0).abs().max((cell.1 - anchor.1).abs()),
+                    cell,
+                )
+            })
+            .collect();
+        free.sort_unstable();
+        free.first()
+            .map(|(_, cell)| *cell)
+            .ok_or_else(|| anyhow!("the grid has no free cell"))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn append_instances(
     combatants: &mut Vec<CombatantState>,
+    placement: &mut Placement,
+    scene: &Scene,
     creature: Creature,
     base_name: &str,
     count: u32,
-    zone: &str,
+    request: &PlaceRequest,
     side: Side,
     dormant: bool,
     ai: Option<AiAssignment>,
-) {
+    log: &mut Vec<String>,
+    label: &str,
+) -> Result<()> {
     let count = count.max(1);
     let existing: BTreeSet<String> = combatants
         .iter()
@@ -975,10 +1202,12 @@ fn append_instances(
         } else {
             unique_name(base_name, &existing)
         };
-        let mut runtime = combatant_from_creature(&creature, name, side.clone(), zone, dormant);
+        let (zone, pos) = placement.place(scene, request, log, label)?;
+        let mut runtime = combatant_from_creature(&creature, name, side.clone(), &zone, pos, dormant);
         runtime.ai = ai.clone();
         combatants.push(runtime);
     }
+    Ok(())
 }
 
 fn uniquify_names(combatants: &mut [CombatantState]) {
@@ -1037,6 +1266,7 @@ fn combatant_from_creature(
     name: String,
     side: Side,
     zone: &str,
+    pos: Position,
     dormant: bool,
 ) -> CombatantState {
     let max_hp = creature.max_hp().max(1);
@@ -1059,6 +1289,7 @@ fn combatant_from_creature(
         hp,
         temp_hp: 0,
         zone: zone.to_string(),
+        pos: Some(pos),
         conditions: Vec::new(),
         resources,
         death_saves: DeathSaves::default(),
@@ -1091,13 +1322,16 @@ fn scene_trigger_runtime(scene: &Scene) -> BTreeMap<String, SceneTriggerRuntime>
         .collect()
 }
 
-fn zone_list(scene: &Scene) -> String {
-    scene
-        .zones
-        .iter()
-        .map(|zone| zone.id.clone())
-        .collect::<Vec<_>>()
-        .join(", ")
+fn zone_list(scene: &Scene, grid: Option<&GridMap>) -> String {
+    let mut zones: Vec<String> = scene.zones.iter().map(|zone| zone.id.clone()).collect();
+    if let Some(grid) = grid {
+        for zone in grid.zone_ids() {
+            if !zones.contains(&zone) {
+                zones.push(zone);
+            }
+        }
+    }
+    zones.join(", ")
 }
 
 /// Condition ids active on a creature, including recursively implied ones.

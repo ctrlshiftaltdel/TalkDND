@@ -14,15 +14,15 @@ use anyhow::{anyhow, bail, Context, Result};
 use crate::content::expr::ExprContext;
 use crate::content::schema::{
     Ability, AbilityCost, AbilityName, Activation, Attack, AttackEffect, AttackKind,
-    AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag, CritMode, DamageEffect,
-    DamagePart, Direction, Duration, DurationUntil, Effect, EndsOn, ExprValue, ForcedMoveEffect,
-    Modifier, ModifierApplies, ModifierEffect, ModifierFilter, OncePer, Predicate, Recharge,
-    SaveEffect, SaveEndsAt, Size, TargetRef, TargetSide, TargetType, ToggleTriggerEffect, Trigger,
-    TriggerWhen,
+    AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag, Cover, CritMode,
+    DamageEffect, DamagePart, Direction, Duration, DurationUntil, Effect, EndsOn, ExprValue,
+    ForcedMoveEffect, Light, Modifier, ModifierApplies, ModifierEffect, ModifierFilter, OncePer,
+    Predicate, Recharge, SaveEffect, SaveEndsAt, SceneMode, Size, TargetRef, TargetSide, TargetType,
+    ToggleTriggerEffect, Trigger, TriggerWhen,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
-use crate::space::Space;
+use crate::space::{MoveStep, Position, Space};
 use crate::state::{
     ability_from_text, active_condition_ids, active_duration, ActiveCondition, ActiveDuration,
     ActiveSaveEnds, CombatOutcome, CombatantState, DeathSaves, EncounterState,
@@ -414,7 +414,7 @@ fn hp_below_pct(combatant: &CombatantState, percent: i32) -> bool {
 fn distance_between(state: &EncounterState, a: Option<usize>, b: Option<usize>) -> Option<i32> {
     let (a, b) = (a?, b?);
     let space = state.space()?;
-    space.distance(&state.combatants[a].zone, &state.combatants[b].zone)
+    space.distance(&state.combatants[a].position(), &state.combatants[b].position())
 }
 
 fn ally_within_5(state: &EncounterState, actor: usize, target: Option<usize>) -> bool {
@@ -424,7 +424,7 @@ fn ally_within_5(state: &EncounterState, actor: usize, target: Option<usize>) ->
     let Some(space) = state.space() else {
         return false;
     };
-    let target_zone = &state.combatants[target].zone;
+    let target_pos = state.combatants[target].position();
     state
         .combatants
         .iter()
@@ -436,7 +436,7 @@ fn ally_within_5(state: &EncounterState, actor: usize, target: Option<usize>) ->
                 && combatant.is_active()
                 && !is_incapacitated(state, index)
                 && space
-                    .distance(&combatant.zone, target_zone)
+                    .distance(&combatant.position(), &target_pos)
                     .is_some_and(|distance| distance <= 5)
         })
 }
@@ -1464,6 +1464,61 @@ fn roll_d20(
     }
 }
 
+fn cover_label(cover: Cover) -> &'static str {
+    match cover {
+        Cover::None => "no cover",
+        Cover::Half => "half cover",
+        Cover::ThreeQuarters => "three-quarters cover",
+        Cover::Total => "total cover",
+    }
+}
+
+fn cover_bonus(cover: Cover, rules: &crate::content::schema::Rules) -> Option<i32> {
+    match cover {
+        Cover::None => Some(0),
+        Cover::Half => Some(
+            rules
+                .cover
+                .as_ref()
+                .and_then(|cover| cover.half)
+                .unwrap_or(2),
+        ),
+        Cover::ThreeQuarters => Some(
+            rules
+                .cover
+                .as_ref()
+                .and_then(|cover| cover.three_quarters)
+                .unwrap_or(5),
+        ),
+        Cover::Total => None,
+    }
+}
+
+fn cover_between(state: &EncounterState, attacker: usize, target: usize) -> Cover {
+    let Some(space) = state.space() else {
+        return Cover::None;
+    };
+    space.cover(
+        &state.combatants[attacker].position(),
+        &state.combatants[target].position(),
+    )
+}
+
+/// Rejects a single-creature target behind total cover.
+fn ensure_cover_allows(state: &EncounterState, attacker: usize, target: usize) -> Result<()> {
+    if attacker == target {
+        return Ok(());
+    }
+    if cover_between(state, attacker, target) == Cover::Total {
+        bail!(
+            "`{}` has total cover from `{}`",
+            state.combatants[target].name,
+            state.combatants[attacker].name
+        );
+    }
+    Ok(())
+}
+
 fn effective_ac(
     state: &EncounterState,
     target: usize,
@@ -1502,22 +1557,20 @@ fn effective_ac(
         }
     }
     if let Some(attacker) = attacker {
-        if let Some(space) = state.space() {
-            if let Some(cover) = space.cover_bonus(
-                &state.combatants[attacker].zone,
-                &state.combatants[target].zone,
-                &state.content.rules,
-            ) {
-                if cover != 0 {
-                    ac += cover;
-                    terms.push((cover, "cover".to_string()));
+        if attacker != target {
+            let cover = cover_between(state, attacker, target);
+            if cover != Cover::None {
+                match cover_bonus(cover, &state.content.rules) {
+                    Some(bonus) => {
+                        ac += bonus;
+                        terms.push((bonus, cover_label(cover).to_string()));
+                    }
+                    None => bail!(
+                        "`{}` has total cover from `{}`",
+                        combatant.name,
+                        state.combatants[attacker].name
+                    ),
                 }
-            } else {
-                bail!(
-                    "`{}` has total cover from `{}`",
-                    combatant.name,
-                    state.combatants[attacker].name
-                );
             }
         }
     }
@@ -1529,7 +1582,11 @@ fn ac_text(total: i32, terms: &[(i32, String)]) -> String {
     let base = total - bonus;
     let mut text = format!("AC {base}");
     for (value, label) in terms {
-        text.push_str(&format!("{}[{label}]", signed(*value)));
+        if label.ends_with("cover") {
+            text.push_str(&format!("{}({label})", signed(*value)));
+        } else {
+            text.push_str(&format!("{}[{label}]", signed(*value)));
+        }
     }
     if !terms.is_empty() {
         text.push_str(&format!("={total}"));
