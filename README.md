@@ -105,12 +105,12 @@ control/defense/none）和实际效果决策，不按名字。
 ```yaml
 name: My Campaign
 library: [../../Rules/combat]
-adventures: [./combat]
+adventures: [.]
 characters: [./characters]
 state_dir: .
 ```
 
-`my-campaign/combat/combat/creatures.yaml`（一个生物）：
+`my-campaign/combat/creatures.yaml`（一个生物）：
 
 ```yaml
 creatures:
@@ -127,7 +127,7 @@ creatures:
     ai: {template: brute}
 ```
 
-`my-campaign/combat/combat/scenes.yaml`（一个区域场景）：
+`my-campaign/combat/scenes.yaml`（一个区域场景）：
 
 ```yaml
 scenes:
@@ -141,7 +141,7 @@ scenes:
       - {a: entrance, b: mat, distance: 10}
 ```
 
-`my-campaign/combat/combat/encounters.yaml`：
+`my-campaign/combat/encounters.yaml`：
 
 ```yaml
 encounters:
