@@ -838,7 +838,14 @@ impl Ai {
             return 1;
         };
         let center = state.combatants[target].position();
-        let positions = space.area_positions(&center, action.area_radius);
+        let owned;
+        let positions: &[Position] = match space.area_slice(&center, action.area_radius) {
+            Some(positions) => positions,
+            None => {
+                owned = space.area_positions(&center, action.area_radius);
+                &owned
+            }
+        };
         state
             .combatants
             .iter()
@@ -1148,21 +1155,28 @@ impl Ai {
             .and_then(|zone| zone_position(&space, zone));
         let keep = plan.params.keep_distance.unwrap_or(0);
         let range_pref = plan.params.range_pref;
+        let owned_positions;
+        let positions: &[Position] = match space.positions_slice() {
+            Some(positions) => positions,
+            None => {
+                owned_positions = space.all_positions();
+                &owned_positions
+            }
+        };
         let mut candidates: Vec<(i32, Position)> = Vec::new();
-        for position in space.all_positions() {
-            if position == start {
-                candidates.push((0, position));
+        for position in positions {
+            if *position == start {
+                candidates.push((0, position.clone()));
                 continue;
             }
-            if blocked.contains(&position) {
+            if blocked.contains(position) {
                 continue;
             }
-            let Some(route) = space.move_route(&start, &position, &blocked) else {
+            let Some(cost) = space.route_cost(&start, position, &blocked) else {
                 continue;
             };
-            let cost: i32 = route.iter().map(|step| step.cost).sum();
             if cost <= budget {
-                candidates.push((cost, position));
+                candidates.push((cost, position.clone()));
             }
         }
         if candidates.is_empty() {
@@ -1170,13 +1184,12 @@ impl Ai {
         }
         let mut best: Option<(f64, i32, Position)> = None;
         for (cost, position) in candidates {
-            let zone = space.zone_of(&position);
             if !fleeing {
                 if let Some(post) = guard_zone.as_deref() {
                     if nearest <= leash && !in_guard {
                         // Chasing is allowed, but do not wander away from the
                         // posted zone beyond the leash.
-                    } else if zone.as_deref() != Some(post) {
+                    } else if space.zone_tag(&position) != Some(post) {
                         continue;
                     }
                 }
@@ -1273,10 +1286,9 @@ impl Ai {
             if position == start || blocked.contains(&position) {
                 continue;
             }
-            let Some(route) = space.move_route(&start, &position, &blocked) else {
+            let Some(cost) = space.route_cost(&start, &position, &blocked) else {
                 continue;
             };
-            let cost: i32 = route.iter().map(|step| step.cost).sum();
             if cost > budget {
                 continue;
             }

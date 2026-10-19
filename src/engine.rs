@@ -1301,18 +1301,17 @@ fn restore_resource(state: &mut EncounterState, index: usize, id: &str, _log: &m
 // ---------------------------------------------------------------------------
 
 pub fn combat_outcome(state: &EncounterState) -> Option<CombatOutcome> {
-    let active_sides: BTreeSet<&str> = state
-        .combatants
-        .iter()
-        .filter(|combatant| combatant.is_active())
-        .map(|combatant| combatant.side.as_str())
-        .collect();
-    match active_sides.len() {
-        0 => Some(CombatOutcome::Draw),
-        1 => Some(CombatOutcome::Winner(
-            active_sides.iter().next().expect("one side").to_string(),
-        )),
-        _ => None,
+    let mut side: Option<&str> = None;
+    for combatant in state.combatants.iter().filter(|combatant| combatant.is_active()) {
+        match side {
+            None => side = Some(combatant.side.as_str()),
+            Some(known) if known == combatant.side.as_str() => {}
+            Some(_) => return None,
+        }
+    }
+    match side {
+        None => Some(CombatOutcome::Draw),
+        Some(side) => Some(CombatOutcome::Winner(side.to_string())),
     }
 }
 
@@ -4794,7 +4793,14 @@ fn area_targets(state: &EncounterState, center: &Position, radius: i32) -> Vec<u
     let Some(space) = state.space() else {
         return Vec::new();
     };
-    let positions = space.area_positions(center, radius);
+    let owned;
+    let positions: &[Position] = match space.area_slice(center, radius) {
+        Some(positions) => positions,
+        None => {
+            owned = space.area_positions(center, radius);
+            &owned
+        }
+    };
     state
         .combatants
         .iter()
@@ -5702,8 +5708,7 @@ pub fn move_to(
                 if cell == start || occupied.contains(&cell) {
                     continue;
                 }
-                if let Some(route) = space.move_route(&start, &cell, &occupied) {
-                    let cost: i32 = route.iter().map(|step| step.cost).sum();
+                if let Some(cost) = space.route_cost(&start, &cell, &occupied) {
                     candidates.push((cost, cell));
                 }
             }
@@ -6437,6 +6442,9 @@ pub fn activate(
         ));
         insert_into_initiative(state, index);
     }
+    // Activation can reorder initiative but never adds combatants today; keep
+    // the name lookup in sync if that changes.
+    state.refresh_name_index();
     log_outcome(state, log);
     Ok(())
 }

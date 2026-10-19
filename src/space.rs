@@ -267,134 +267,276 @@ impl Space for SpaceView<'_> {
     }
 }
 
+/// Precomputed zone-graph data shared by every clone of an encounter state.
+///
+/// Building this once per state makes every distance, cover, reach, route and
+/// area lookup an array index instead of a fresh Dijkstra pass.
+#[derive(Debug, Default)]
+pub struct ZoneCache {
+    index: HashMap<String, usize>,
+    heights: Vec<i32>,
+    covers: Vec<Cover>,
+    lights: Vec<Option<Light>>,
+    scene_light: Option<Light>,
+    /// Shortest edge distance, before the elevation difference is added.
+    range: Vec<Vec<Option<i32>>>,
+    /// Shortest movement cost (difficult terrain doubled).
+    travel: Vec<Vec<Option<i32>>>,
+    /// Distance of a direct edge between a pair, when one exists.
+    direct: Vec<Vec<Option<i32>>>,
+    /// Movement steps for every ordered pair (`Some(empty)` for the same zone).
+    routes: Vec<Vec<Option<Vec<MoveStep>>>>,
+    neighbours: Vec<Vec<MoveStep>>,
+    positions: Vec<Position>,
+    /// Area positions indexed by zone, then radius `0..=max_area_radius`.
+    areas: Vec<Vec<Vec<Position>>>,
+    max_area_radius: i32,
+}
+
+impl ZoneCache {
+    pub fn build(scene: &Scene) -> Self {
+        let count = scene.zones.len();
+        let mut index = HashMap::with_capacity(count);
+        for (zone_index, zone) in scene.zones.iter().enumerate() {
+            index.insert(zone.id.clone(), zone_index);
+        }
+        let heights: Vec<i32> = scene
+            .zones
+            .iter()
+            .map(|zone| zone.elevation.unwrap_or(0))
+            .collect();
+        let covers: Vec<Cover> = scene.zones.iter().map(|zone| zone.cover).collect();
+        let lights: Vec<Option<Light>> = scene.zones.iter().map(|zone| zone.light).collect();
+        let positions: Vec<Position> = scene
+            .zones
+            .iter()
+            .map(|zone| Position::Zone {
+                zone: zone.id.clone(),
+            })
+            .collect();
+
+        let mut adjacency: Vec<Vec<(usize, usize)>> = vec![Vec::new(); count];
+        let mut direct = vec![vec![None; count]; count];
+        let mut neighbours = vec![Vec::new(); count];
+        let mut max_area_radius = 0;
+        for (edge_index, edge) in scene.edges.iter().enumerate() {
+            let (Some(&a), Some(&b)) = (index.get(&edge.a), index.get(&edge.b)) else {
+                continue;
+            };
+            adjacency[a].push((b, edge_index));
+            if a != b && !edge.one_way {
+                adjacency[b].push((a, edge_index));
+            }
+            if direct[a][b].is_none() {
+                direct[a][b] = Some(edge.distance);
+            }
+            if a != b && !edge.one_way && direct[b][a].is_none() {
+                direct[b][a] = Some(edge.distance);
+            }
+            max_area_radius = max_area_radius.max(edge.distance.max(0));
+            let to = if edge.a == scene.zones[a].id { b } else { a };
+            neighbours[a].push(zone_step(scene, &heights, a, to, edge));
+        }
+
+        let mut range = vec![vec![None; count]; count];
+        let mut travel = vec![vec![None; count]; count];
+        let mut routes = vec![vec![None; count]; count];
+        let mut route_edges = vec![vec![None; count]; count];
+        for source in 0..count {
+            let (range_best, _) = zone_dijkstra(source, &adjacency, scene, false);
+            let (travel_best, travel_parents) =
+                zone_dijkstra(source, &adjacency, scene, true);
+            for target in 0..count {
+                if source == target {
+                    range[source][target] = Some(SAME_ZONE_DISTANCE);
+                    travel[source][target] = Some(SAME_ZONE_DISTANCE);
+                    routes[source][target] = Some(Vec::new());
+                    continue;
+                }
+                let distance = range_best[target];
+                if distance != i32::MAX {
+                    range[source][target] = Some(distance.saturating_add(
+                        (heights[source] - heights[target]).abs(),
+                    ));
+                }
+                let cost = travel_best[target];
+                if cost != i32::MAX {
+                    travel[source][target] = Some(cost);
+                    route_edges[source][target] =
+                        zone_path(source, target, &travel_parents);
+                }
+            }
+        }
+        for source in 0..count {
+            for target in 0..count {
+                let Some(edges) = route_edges[source][target].take() else {
+                    continue;
+                };
+                routes[source][target] = Some(zone_steps(scene, &heights, &edges));
+            }
+        }
+
+        let mut areas = vec![Vec::new(); count];
+        for (zone_index, zone_areas) in areas.iter_mut().enumerate() {
+            zone_areas.reserve(max_area_radius as usize + 1);
+            for radius in 0..=max_area_radius {
+                let mut area = vec![positions[zone_index].clone()];
+                for (neighbour, edge_index) in &adjacency[zone_index] {
+                    if scene.edges[*edge_index].distance <= radius
+                        && !area
+                            .iter()
+                            .any(|known| known.zone_id() == Some(scene.zones[*neighbour].id.as_str()))
+                    {
+                        area.push(positions[*neighbour].clone());
+                    }
+                }
+                zone_areas.push(area);
+            }
+        }
+
+        Self {
+            index,
+            heights,
+            covers,
+            lights,
+            scene_light: scene.light,
+            range,
+            travel,
+            direct,
+            routes,
+            neighbours,
+            positions,
+            areas,
+            max_area_radius,
+        }
+    }
+
+    fn position_index(&self, position: &Position) -> Option<usize> {
+        position.zone_id().and_then(|zone| self.index.get(zone)).copied()
+    }
+
+    fn area(&self, center: &Position, radius: i32) -> Option<&[Position]> {
+        let zone = self.position_index(center)?;
+        let radius = radius.max(0).min(self.max_area_radius) as usize;
+        self.areas.get(zone)?.get(radius).map(Vec::as_slice)
+    }
+
+    pub fn positions(&self) -> &[Position] {
+        &self.positions
+    }
+}
+
+fn zone_edge_cost(edge: &crate::content::schema::Edge, movement: bool) -> i32 {
+    if movement && edge.difficult {
+        edge.distance.saturating_mul(2)
+    } else {
+        edge.distance
+    }
+}
+
+fn zone_dijkstra(
+    source: usize,
+    adjacency: &[Vec<(usize, usize)>],
+    scene: &Scene,
+    movement: bool,
+) -> (Vec<i32>, Vec<Option<(usize, usize)>>) {
+    let count = adjacency.len();
+    let mut best = vec![i32::MAX; count];
+    let mut parents: Vec<Option<(usize, usize)>> = vec![None; count];
+    let mut done = vec![false; count];
+    let mut queue = BinaryHeap::new();
+    best[source] = 0;
+    queue.push(Reverse((0i32, source)));
+    while let Some(Reverse((cost, current))) = queue.pop() {
+        if done[current] || cost > best[current] {
+            continue;
+        }
+        done[current] = true;
+        for (next, edge_index) in &adjacency[current] {
+            let candidate = cost.saturating_add(zone_edge_cost(&scene.edges[*edge_index], movement));
+            if candidate < best[*next] {
+                best[*next] = candidate;
+                parents[*next] = Some((current, *edge_index));
+                queue.push(Reverse((candidate, *next)));
+            }
+        }
+    }
+    (best, parents)
+}
+
+fn zone_path(
+    source: usize,
+    target: usize,
+    parents: &[Option<(usize, usize)>],
+) -> Option<Vec<(usize, usize, usize)>> {
+    let mut steps = Vec::new();
+    let mut node = target;
+    while node != source {
+        let (previous, edge_index) = parents[node]?;
+        steps.push((previous, node, edge_index));
+        node = previous;
+    }
+    steps.reverse();
+    Some(steps)
+}
+
+fn zone_steps(scene: &Scene, heights: &[i32], path: &[(usize, usize, usize)]) -> Vec<MoveStep> {
+    path.iter()
+        .map(|&(from, to, edge_index)| {
+            zone_step(scene, heights, from, to, &scene.edges[edge_index])
+        })
+        .collect()
+}
+
+fn zone_step(
+    scene: &Scene,
+    heights: &[i32],
+    from: usize,
+    to: usize,
+    edge: &crate::content::schema::Edge,
+) -> MoveStep {
+    MoveStep {
+        position: Position::Zone {
+            zone: scene.zones[to].id.clone(),
+        },
+        cost: zone_edge_cost(edge, true),
+        edge_distance: edge.distance,
+        climb: edge.climb.clone(),
+        locked: edge.door.as_ref().is_some_and(|door| door.locked),
+        elevation_change: heights[to] - heights[from],
+    }
+}
+
 /// Zone-graph implementation of [`Space`].
-#[derive(Debug, Clone, Copy)]
 pub struct ZoneGraph<'a> {
     scene: &'a Scene,
+    cache: ZoneCacheRef<'a>,
+}
+
+enum ZoneCacheRef<'a> {
+    Borrowed(&'a ZoneCache),
+    Owned(Box<ZoneCache>),
 }
 
 impl<'a> ZoneGraph<'a> {
     pub fn new(scene: &'a Scene) -> Self {
-        Self { scene }
-    }
-
-    fn zone(&self, id: &str) -> Option<&crate::content::schema::Zone> {
-        self.scene.zones.iter().find(|zone| zone.id == id)
-    }
-
-    fn height(&self, id: &str) -> i32 {
-        self.zone(id).and_then(|zone| zone.elevation).unwrap_or(0)
-    }
-
-    fn edge_between(&self, a: &str, b: &str) -> Option<&crate::content::schema::Edge> {
-        self.scene.edges.iter().find(|edge| {
-            (edge.a == a && edge.b == b) || (!edge.one_way && edge.a == b && edge.b == a)
-        })
-    }
-
-    fn movement_cost(edge: &crate::content::schema::Edge) -> i32 {
-        if edge.difficult {
-            edge.distance.saturating_mul(2)
-        } else {
-            edge.distance
+        Self {
+            scene,
+            cache: ZoneCacheRef::Owned(Box::new(ZoneCache::build(scene))),
         }
     }
 
-    fn directed_neighbours(&self, zone: &str) -> Vec<(String, &crate::content::schema::Edge)> {
-        let mut neighbours = Vec::new();
-        for edge in &self.scene.edges {
-            if edge.a == zone {
-                neighbours.push((edge.b.clone(), edge));
-            } else if edge.b == zone && !edge.one_way {
-                neighbours.push((edge.a.clone(), edge));
-            }
+    pub fn cached(scene: &'a Scene, cache: &'a ZoneCache) -> Self {
+        Self {
+            scene,
+            cache: ZoneCacheRef::Borrowed(cache),
         }
-        neighbours
     }
 
-    fn shortest_path(
-        &self,
-        from: &str,
-        to: &str,
-        movement: bool,
-    ) -> Option<(i32, Vec<&crate::content::schema::Edge>)> {
-        let from_index = self.scene.zones.iter().position(|zone| zone.id == from)?;
-        let to_index = self.scene.zones.iter().position(|zone| zone.id == to)?;
-        if from_index == to_index {
-            return Some((SAME_ZONE_DISTANCE, Vec::new()));
-        }
-        let count = self.scene.zones.len();
-        let mut best = vec![i32::MAX; count];
-        let mut parents: Vec<Option<(usize, usize)>> = vec![None; count];
-        let mut done = vec![false; count];
-        best[from_index] = 0;
-        for _ in 0..count {
-            let mut current = None;
-            let mut current_cost = i32::MAX;
-            for index in 0..count {
-                if !done[index] && best[index] < current_cost {
-                    current = Some(index);
-                    current_cost = best[index];
-                }
-            }
-            let Some(current) = current else {
-                break;
-            };
-            done[current] = true;
-            if current == to_index {
-                break;
-            }
-            let current_id = &self.scene.zones[current].id;
-            for (edge_index, edge) in self.scene.edges.iter().enumerate() {
-                let next_id = if edge.a == *current_id {
-                    Some(&edge.b)
-                } else if edge.b == *current_id && !edge.one_way {
-                    Some(&edge.a)
-                } else {
-                    None
-                };
-                let Some(next_id) = next_id else {
-                    continue;
-                };
-                let Some(next) = self.scene.zones.iter().position(|zone| zone.id == *next_id)
-                else {
-                    continue;
-                };
-                let weight = if movement {
-                    Self::movement_cost(edge)
-                } else {
-                    edge.distance
-                };
-                let candidate = current_cost.saturating_add(weight);
-                if candidate < best[next] {
-                    best[next] = candidate;
-                    parents[next] = Some((current, edge_index));
-                }
-            }
-        }
-        if best[to_index] == i32::MAX {
-            return None;
-        }
-        let mut edges = Vec::new();
-        let mut node = to_index;
-        while node != from_index {
-            let (previous, edge_index) = parents[node]?;
-            edges.push(&self.scene.edges[edge_index]);
-            node = previous;
-        }
-        edges.reverse();
-        Some((best[to_index], edges))
-    }
-
-    fn step(&self, from: &str, edge: &crate::content::schema::Edge) -> MoveStep {
-        let to = if edge.a == from { &edge.b } else { &edge.a };
-        MoveStep {
-            position: Position::Zone { zone: to.clone() },
-            cost: Self::movement_cost(edge),
-            edge_distance: edge.distance,
-            climb: edge.climb.clone(),
-            locked: edge.door.as_ref().is_some_and(|door| door.locked),
-            elevation_change: self.height(to) - self.height(from),
+    fn cache(&self) -> &ZoneCache {
+        match &self.cache {
+            ZoneCacheRef::Borrowed(cache) => cache,
+            ZoneCacheRef::Owned(cache) => cache,
         }
     }
 }
@@ -405,59 +547,51 @@ impl Space for ZoneGraph<'_> {
     }
 
     fn distance(&self, from: &Position, to: &Position) -> Option<i32> {
-        let (Some(from), Some(to)) = (from.zone_id(), to.zone_id()) else {
-            return None;
-        };
-        let (travel, _) = self.shortest_path(from, to, false)?;
-        if from == to {
-            Some(travel)
-        } else {
-            Some(travel.saturating_add((self.height(from) - self.height(to)).abs()))
-        }
+        let cache = self.cache();
+        let from = cache.position_index(from)?;
+        let to = cache.position_index(to)?;
+        cache.range[from][to]
     }
 
     fn travel_distance(&self, from: &Position, to: &Position) -> Option<i32> {
-        let (Some(from), Some(to)) = (from.zone_id(), to.zone_id()) else {
-            return None;
-        };
-        self.shortest_path(from, to, true).map(|(cost, _)| cost)
+        let cache = self.cache();
+        let from = cache.position_index(from)?;
+        let to = cache.position_index(to)?;
+        cache.travel[from][to]
     }
 
     fn can_reach(&self, from: &Position, to: &Position, reach: i32) -> bool {
-        let (Some(from), Some(to)) = (from.zone_id(), to.zone_id()) else {
+        let cache = self.cache();
+        let (Some(from), Some(to)) = (cache.position_index(from), cache.position_index(to)) else {
             return false;
         };
         let reach = reach.max(5);
         if from == to {
-            return self.height(from) == self.height(to);
+            return cache.heights[from] == cache.heights[to];
         }
-        let Some(edge) = self.edge_between(from, to) else {
-            return false;
-        };
-        let distance = edge
-            .distance
-            .saturating_add((self.height(from) - self.height(to)).abs());
-        distance <= reach
+        cache.direct[from][to].is_some_and(|distance| {
+            distance.saturating_add((cache.heights[from] - cache.heights[to]).abs()) <= reach
+        })
     }
 
     fn cover(&self, attacker: &Position, target: &Position) -> Cover {
-        let (Some(attacker), Some(target)) = (attacker.zone_id(), target.zone_id()) else {
+        let cache = self.cache();
+        let (Some(attacker), Some(target)) = (cache.position_index(attacker), cache.position_index(target)) else {
             return Cover::None;
         };
         if attacker == target {
             return Cover::None;
         }
-        self.zone(target)
-            .map(|zone| zone.cover)
-            .unwrap_or(Cover::None)
+        cache.covers[target]
     }
 
     fn light_at(&self, at: &Position) -> Light {
-        let zone = at
-            .zone_id()
-            .and_then(|id| self.zone(id))
-            .and_then(|zone| zone.light);
-        zone.or(self.scene.light).unwrap_or(Light::Bright)
+        let cache = self.cache();
+        cache
+            .position_index(at)
+            .and_then(|index| cache.lights[index])
+            .or(cache.scene_light)
+            .unwrap_or(Light::Bright)
     }
 
     fn move_route(
@@ -466,68 +600,38 @@ impl Space for ZoneGraph<'_> {
         to: &Position,
         _blocked: &[Position],
     ) -> Option<Vec<MoveStep>> {
-        let (Some(from), Some(to)) = (from.zone_id(), to.zone_id()) else {
-            return None;
-        };
-        let (_, edges) = self.shortest_path(from, to, true)?;
-        let mut current = from.to_string();
-        let mut route = Vec::new();
-        for edge in edges {
-            let step = self.step(&current, edge);
-            if let Position::Zone { zone } = &step.position {
-                current = zone.clone();
-            }
-            route.push(step);
-        }
-        Some(route)
+        let cache = self.cache();
+        let from = cache.position_index(from)?;
+        let to = cache.position_index(to)?;
+        cache.routes[from][to].clone()
     }
 
     fn neighbours(&self, at: &Position) -> Vec<MoveStep> {
-        let Some(zone) = at.zone_id() else {
-            return Vec::new();
-        };
-        self.directed_neighbours(zone)
-            .into_iter()
-            .map(|(_, edge)| self.step(zone, edge))
-            .collect()
+        let cache = self.cache();
+        cache
+            .position_index(at)
+            .map(|index| cache.neighbours[index].clone())
+            .unwrap_or_default()
     }
 
     fn area_positions(&self, center: &Position, radius: i32) -> Vec<Position> {
-        let Some(zone) = center.zone_id() else {
-            return Vec::new();
-        };
-        let mut zones = vec![zone.to_string()];
-        if radius > 0 {
-            for (neighbour, edge) in self.directed_neighbours(zone) {
-                if edge.distance <= radius && !zones.contains(&neighbour) {
-                    zones.push(neighbour);
-                }
-            }
-        }
-        zones
-            .into_iter()
-            .map(|zone| Position::Zone { zone })
-            .collect()
+        self.cache()
+            .area(center, radius)
+            .map(<[Position]>::to_vec)
+            .unwrap_or_default()
     }
 
     fn zone_positions(&self, zone: &str) -> Vec<Position> {
-        if self.has_zone(zone) {
-            vec![Position::Zone {
-                zone: zone.to_string(),
-            }]
-        } else {
-            Vec::new()
-        }
+        let cache = self.cache();
+        cache
+            .index
+            .get(zone)
+            .map(|index| vec![cache.positions[*index].clone()])
+            .unwrap_or_default()
     }
 
     fn all_positions(&self) -> Vec<Position> {
-        self.scene
-            .zones
-            .iter()
-            .map(|zone| Position::Zone {
-                zone: zone.id.clone(),
-            })
-            .collect()
+        self.cache().positions.clone()
     }
 
     fn zone_of(&self, at: &Position) -> Option<String> {
@@ -539,15 +643,20 @@ impl Space for ZoneGraph<'_> {
     }
 
     fn has_zone(&self, zone: &str) -> bool {
-        self.zone(zone).is_some()
+        self.cache().index.contains_key(zone)
     }
 
     fn contains(&self, at: &Position) -> bool {
-        at.zone_id().is_some_and(|zone| self.zone(zone).is_some())
+        at.zone_id()
+            .is_some_and(|zone| self.cache().index.contains_key(zone))
     }
 
     fn elevation(&self, at: &Position) -> i32 {
-        at.zone_id().map(|id| self.height(id)).unwrap_or(0)
+        let cache = self.cache();
+        cache
+            .position_index(at)
+            .map(|index| cache.heights[index])
+            .unwrap_or(0)
     }
 
     fn opportunity_threat(&self, observer: &Position, departure: &Position) -> bool {
@@ -558,14 +667,14 @@ impl Space for ZoneGraph<'_> {
     }
 
     fn adjacent(&self, a: &Position, b: &Position) -> bool {
-        let (Some(a), Some(b)) = (a.zone_id(), b.zone_id()) else {
+        let cache = self.cache();
+        let (Some(a), Some(b)) = (cache.position_index(a), cache.position_index(b)) else {
             return false;
         };
         if a == b {
             return true;
         }
-        self.edge_between(a, b)
-            .is_some_and(|edge| edge.distance <= 5)
+        cache.direct[a][b].is_some_and(|distance| distance <= 5)
     }
 }
 
@@ -656,8 +765,12 @@ impl GridMap {
     }
 
     pub fn zone_at(&self, x: i32, y: i32) -> Option<String> {
+        self.zone_at_ref(x, y).map(ToString::to_string)
+    }
+
+    pub fn zone_at_ref(&self, x: i32, y: i32) -> Option<&str> {
         self.index(x, y)
-            .and_then(|index| self.zone_tags[index].clone())
+            .and_then(|index| self.zone_tags[index].as_deref())
     }
 
     pub fn display_zone(&self, x: i32, y: i32) -> String {
@@ -814,12 +927,38 @@ fn max_cover(a: Cover, b: Cover) -> Cover {
 /// Grid implementation of [`Space`].
 pub struct GridSpace<'a> {
     scene: &'a Scene,
-    map: GridMap,
+    map: GridMapRef<'a>,
+}
+
+enum GridMapRef<'a> {
+    Borrowed(&'a GridMap),
+    Owned(Box<GridMap>),
+}
+
+impl std::ops::Deref for GridMapRef<'_> {
+    type Target = GridMap;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(map) => map,
+            Self::Owned(map) => map,
+        }
+    }
 }
 
 impl<'a> GridSpace<'a> {
     pub fn new(scene: &'a Scene) -> Option<Self> {
-        GridMap::parse(scene).map(|map| Self { scene, map })
+        GridMap::parse(scene).map(|map| Self {
+            scene,
+            map: GridMapRef::Owned(Box::new(map)),
+        })
+    }
+
+    pub fn cached(scene: &'a Scene, map: &'a GridMap) -> Self {
+        Self {
+            scene,
+            map: GridMapRef::Borrowed(map),
+        }
     }
 
     pub fn map(&self) -> &GridMap {
@@ -1082,5 +1221,98 @@ impl Space for GridSpace<'_> {
             return false;
         };
         (a.0 - b.0).abs() <= 1 && (a.1 - b.1).abs() <= 1
+    }
+}
+
+impl SpaceView<'_> {
+    /// Zone tag at a position without allocating. Zone scenes return the
+    /// position's own zone id; grid scenes look up the cell's legend zone.
+    pub fn zone_tag<'a>(&'a self, at: &'a Position) -> Option<&'a str> {
+        match self {
+            Self::Zones(_) => at.zone_id(),
+            Self::Grid(space) => match at {
+                Position::Cell { x, y } => space.map().zone_at_ref(*x, *y),
+                Position::Zone { zone } => Some(zone.as_str()),
+            },
+        }
+    }
+
+    /// Cached position list for zone scenes. Grid callers fall back to
+    /// [`Space::all_positions`].
+    pub fn positions_slice(&self) -> Option<&[Position]> {
+        match self {
+            Self::Zones(space) => Some(space.cache().positions()),
+            Self::Grid(_) => None,
+        }
+    }
+
+    /// Cached area for zone scenes. Grid callers fall back to
+    /// [`Space::area_positions`].
+    pub fn area_slice(&self, center: &Position, radius: i32) -> Option<&[Position]> {
+        match self {
+            Self::Zones(space) => space.cache().area(center, radius),
+            Self::Grid(_) => None,
+        }
+    }
+
+    /// Movement cost from `from` to `to` without materialising a route.
+    ///
+    /// Zone graphs ignore `blocked` (as their routes always have); grids
+    /// honour it, matching [`Space::move_route`] exactly.
+    pub fn route_cost(
+        &self,
+        from: &Position,
+        to: &Position,
+        blocked: &[Position],
+    ) -> Option<i32> {
+        match self {
+            Self::Zones(space) => space.travel_distance(from, to),
+            Self::Grid(space) => {
+                let (from, to) = (space.map.point(from)?, space.map.point(to)?);
+                space.dijkstra(from, to, blocked).map(|(cost, _)| cost)
+            }
+        }
+    }
+}
+
+/// Precomputed spatial data derived from a scene.
+///
+/// The state owns one cache behind an `Arc`, so every Monte Carlo clone shares
+/// the same matrices instead of rebuilding them per run.
+#[derive(Debug, Default)]
+pub struct SpaceCache {
+    zones: Option<ZoneCache>,
+    grid: Option<GridMap>,
+}
+
+impl SpaceCache {
+    pub fn build(scene: Option<&Scene>) -> Self {
+        let Some(scene) = scene else {
+            return Self::default();
+        };
+        match scene.mode {
+            SceneMode::Zones => Self {
+                zones: Some(ZoneCache::build(scene)),
+                grid: None,
+            },
+            SceneMode::Grid => Self {
+                zones: None,
+                grid: GridMap::parse(scene),
+            },
+        }
+    }
+
+    /// Cheap, borrow-only view over the cached scene data.
+    pub fn view<'a>(&'a self, scene: &'a Scene) -> Option<SpaceView<'a>> {
+        match scene.mode {
+            SceneMode::Zones => self
+                .zones
+                .as_ref()
+                .map(|cache| SpaceView::Zones(ZoneGraph::cached(scene, cache))),
+            SceneMode::Grid => self
+                .grid
+                .as_ref()
+                .map(|map| SpaceView::Grid(GridSpace::cached(scene, map))),
+        }
     }
 }

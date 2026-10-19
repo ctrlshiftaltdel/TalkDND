@@ -20,7 +20,7 @@ use crate::content::schema::{
     EndsOn, ResourceDef, Rules, SaveEndsAt, Scene, SceneMode, SceneTrigger, Side, Speed,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
-use crate::space::{GridMap, GridSpace, Position, SpaceView, ZoneGraph};
+use crate::space::{GridMap, GridSpace, Position, SpaceCache, SpaceView, ZoneGraph};
 
 /// State file used when no `--state` is supplied.
 pub const DEFAULT_STATE_FILE: &str = "combat-state.json";
@@ -29,7 +29,7 @@ pub const DEFAULT_STATE_FILE: &str = "combat-state.json";
 pub const STATE_SUFFIX: &str = ".state.json";
 
 /// A persisted encounter.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EncounterState {
     /// Self-contained content snapshot used by every later command.
     #[serde(default)]
@@ -63,6 +63,48 @@ pub struct EncounterState {
     /// Once a side has won or the fight is a draw, the recorded outcome.
     #[serde(default)]
     pub outcome: Option<CombatOutcome>,
+    /// Spatial indices derived from `scene`. Shared by every clone of the
+    /// state; rebuilt after loading a state file.
+    #[serde(skip)]
+    space_cache: Arc<SpaceCache>,
+    /// Lowercased combatant names for fast `find_index` lookups. Rebuilt
+    /// whenever the combatant list or its names change.
+    #[serde(skip)]
+    name_index: Arc<NameIndex>,
+}
+
+impl PartialEq for EncounterState {
+    fn eq(&self, other: &Self) -> bool {
+        self.content == other.content
+            && self.scene == other.scene
+            && self.encounter_name == other.encounter_name
+            && self.party_zone == other.party_zone
+            && self.combatants == other.combatants
+            && self.initiative == other.initiative
+            && self.turn == other.turn
+            && self.round == other.round
+            && self.log == other.log
+            && self.concentration == other.concentration
+            && self.triggers == other.triggers
+            && self.outcome == other.outcome
+    }
+}
+
+/// Cached lowercase combatant names, parallel to `combatants`.
+#[derive(Debug, Default)]
+struct NameIndex {
+    names: Vec<String>,
+}
+
+impl NameIndex {
+    fn build(combatants: &[CombatantState]) -> Self {
+        Self {
+            names: combatants
+                .iter()
+                .map(|combatant| combatant.name.to_lowercase())
+                .collect(),
+        }
+    }
 }
 
 /// Concentration bookkeeping for one caster.
@@ -358,6 +400,26 @@ impl CombatantState {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+        }
+    }
+}
+
+fn name_matches(lower_name: &str, needle: &str, prefix: bool) -> bool {
+    if needle.is_ascii() {
+        if prefix {
+            lower_name
+                .as_bytes()
+                .get(..needle.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(needle.as_bytes()))
+        } else {
+            lower_name.len() == needle.len() && lower_name.eq_ignore_ascii_case(needle)
+        }
+    } else {
+        let needle = needle.to_lowercase();
+        if prefix {
+            lower_name.starts_with(&needle)
+        } else {
+            lower_name == needle
         }
     }
 }
@@ -758,6 +820,8 @@ impl EncounterState {
         }
         uniquify_names(&mut combatants);
 
+        let space_cache = Arc::new(SpaceCache::build(Some(&scene)));
+        let name_index = Arc::new(NameIndex::build(&combatants));
         let mut state = Self {
             content,
             scene: Some(scene.clone()),
@@ -776,6 +840,8 @@ impl EncounterState {
             concentration: BTreeMap::new(),
             triggers: scene_trigger_runtime(&scene),
             outcome: None,
+            space_cache,
+            name_index,
         };
         state.refresh_initial_conditions()?;
         state.log.push(format!(
@@ -819,10 +885,26 @@ impl EncounterState {
 
     pub fn space(&self) -> Option<SpaceView<'_>> {
         let scene = self.scene.as_ref()?;
+        if let Some(view) = self.space_cache.view(scene) {
+            return Some(view);
+        }
+        // A state deserialized outside `load` has no cache; build a temporary
+        // one so correctness never depends on the cache being present.
         match scene.mode {
             SceneMode::Zones => Some(SpaceView::Zones(ZoneGraph::new(scene))),
             SceneMode::Grid => GridSpace::new(scene).map(SpaceView::Grid),
         }
+    }
+
+    /// Rebuilds the derived spatial and name indices from the current state.
+    pub fn rebuild_caches(&mut self) {
+        self.space_cache = Arc::new(SpaceCache::build(self.scene.as_ref()));
+        self.name_index = Arc::new(NameIndex::build(&self.combatants));
+    }
+
+    /// Refreshes only the name index (combatants added or renamed).
+    pub fn refresh_name_index(&mut self) {
+        self.name_index = Arc::new(NameIndex::build(&self.combatants));
     }
 
     pub fn rules(&self) -> &Rules {
@@ -834,32 +916,37 @@ impl EncounterState {
     }
 
     pub fn find_index(&self, query: &str) -> Result<usize, LookupError> {
-        let needle = query.trim().to_lowercase();
+        let needle = query.trim();
         if needle.is_empty() {
             return Err(LookupError::NotFound {
                 query: query.to_string(),
             });
         }
-        let exact: Vec<usize> = self
-            .combatants
-            .iter()
-            .enumerate()
-            .filter(|(_, combatant)| combatant.name.to_lowercase() == needle)
-            .map(|(index, _)| index)
-            .collect();
+        let indexed = self.name_index.names.len() == self.combatants.len();
+        let matches = |prefix: bool| -> Vec<usize> {
+            if indexed {
+                (0..self.combatants.len())
+                    .filter(|index| name_matches(&self.name_index.names[*index], needle, prefix))
+                    .collect()
+            } else {
+                self.combatants
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, combatant)| {
+                        name_matches(&combatant.name.to_lowercase(), needle, prefix)
+                    })
+                    .map(|(index, _)| index)
+                    .collect()
+            }
+        };
+        let exact = matches(false);
         match exact.as_slice() {
             [index] => return Ok(*index),
             [] => {}
             _ => return Err(self.ambiguous(query, &exact)),
         }
 
-        let prefix: Vec<usize> = self
-            .combatants
-            .iter()
-            .enumerate()
-            .filter(|(_, combatant)| combatant.name.to_lowercase().starts_with(&needle))
-            .map(|(index, _)| index)
-            .collect();
+        let prefix = matches(true);
         match prefix.as_slice() {
             [index] => Ok(*index),
             [] => Err(LookupError::NotFound {
@@ -982,8 +1069,10 @@ impl EncounterState {
         let path = path.as_ref();
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read state file {}", path.display()))?;
-        serde_json::from_str(&text)
-            .with_context(|| format!("failed to parse state file {}", path.display()))
+        let mut state: Self = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse state file {}", path.display()))?;
+        state.rebuild_caches();
+        Ok(state)
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
