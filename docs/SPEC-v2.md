@@ -297,3 +297,27 @@ vex, topple, graze, nick, cleave, guard, mimic, allosaurus, scarecrow, will, rin
 bless, sanctuary, shield, prone, frightened, paralyzed, unconscious, grappled, poisoned ...) as
 whole identifiers/strings and fails if found (allow generic words via explicit allow-list
 where unavoidable, e.g. `unconscious` only via data-config default string — prefer config).
+
+## 11. Additions found while writing the real content (binding)
+- Every content item (creature, attack, ability, condition, mastery, scene, zone, object, trigger,
+  encounter, template) may carry optional `name`, `notes`, `manual`, `source`, `todo: [..]`, `description`.
+- Creature: `tags: [..]`; `side` may be any string (e.g. `party`, `enemy`, `rampage`); every side
+  is hostile to every other side. Combat ends when ≤1 side has active (non-dormant, conscious)
+  members. Encounter member fields: `creature, count, zone, pos, side, dormant, ai, name`.
+- `features:`/`actions:` entries may be `{ref: id, params, cost, name}` OR a full inline ability.
+- Condition fields: `id, name, flags, implies, modifiers, ends_on, duration_default, manual, todo`.
+  Extra engine flag: `no_opportunity_attacks_against` (movement of this creature provokes no OA).
+- `apply_condition` may carry `ends_on: [damage_taken, own_attack, own_spell, deals_damage]`.
+- New effect `toggle_trigger: {trigger: <scene trigger id>, enabled: false|true}`.
+- `activate: {creature: X}` matches instance name, creature id, or creature tag (all matches).
+- Scene trigger fields: `id, on, zone | zones: [..], side (only creatures of that side fire it),
+  once, enabled (default true), affects: entering | zone_occupants (default entering; with
+  zone_occupants the effects apply to every creature currently in `zones`), effects`.
+- Object `interact`: either `{check, on_success, on_fail}` / `{effects}` directly, or
+  `{options: [{name, check?, on_success?, on_fail?, effects?}]}` (CLI `interact <who> <object> --option N`, 1-based).
+  `check: {skill: arcana | ability: dex, dc: N}` is rolled for the interacting creature.
+- Grid legend cell props: `wall, difficult, cover, elevation, zone` (zone ⇒ that cell belongs to
+  the zone id, so triggers/encounter placement by zone work in grid scenes). `rows` are strings,
+  `rows[0]` is y=0, x = column index.
+- Attack `kind: melee_or_ranged` = usable as melee (reach) or ranged/thrown (range).
+- Ability with `target.type: zone` + `area.radius`: AI picks the enemy-densest reachable zone.
