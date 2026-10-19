@@ -69,12 +69,9 @@ pub struct CombatantState {
     pub bonus_action_used: bool,
     #[serde(default)]
     pub speed_left: i32,
-    /// The creature has Sap applied and has disadvantage on its next attack.
+    /// Weapon-mastery and similar markers (Sap, Vex, Slow) with their expiry.
     #[serde(default)]
-    pub sapped: bool,
-    /// The creature has Vex applied against it.
-    #[serde(default)]
-    pub vexed: bool,
+    pub markers: Vec<EffectMarker>,
 }
 
 impl CombatantState {
@@ -103,8 +100,7 @@ impl CombatantState {
             action_used: false,
             bonus_action_used: false,
             speed_left,
-            sapped: false,
-            vexed: false,
+            markers: Vec::new(),
         }
     }
 
@@ -128,6 +124,40 @@ impl CombatantState {
         self.spec.ac
     }
 
+    /// Ability modifier using the 5e floor formula.
+    pub fn ability_modifier(&self, ability: &str) -> i32 {
+        let score = self
+            .spec
+            .abilities
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(ability))
+            .map(|(_, score)| *score)
+            .unwrap_or(10);
+        (score - 10).div_euclid(2)
+    }
+
+    /// Saving-throw bonus: an explicit save value when present, otherwise the
+    /// plain ability modifier.
+    pub fn save_bonus(&self, ability: &str) -> i32 {
+        self.spec
+            .saves
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(ability))
+            .map(|(_, bonus)| *bonus)
+            .unwrap_or_else(|| self.ability_modifier(ability))
+    }
+
+    /// Skill bonus: an explicit skill value when present, otherwise the plain
+    /// ability modifier for an ability name.
+    pub fn skill_bonus(&self, skill: &str) -> i32 {
+        self.spec
+            .skills
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(skill))
+            .map(|(_, bonus)| *bonus)
+            .unwrap_or_else(|| self.ability_modifier(skill))
+    }
+
     /// Checks active conditions by name, case-insensitively.
     pub fn has_condition(&self, condition: &str) -> bool {
         self.conditions
@@ -135,10 +165,65 @@ impl CombatantState {
             .any(|active| active.condition.eq_ignore_ascii_case(condition))
     }
 
+    /// Checks condition immunities by name, case-insensitively.
+    pub fn is_immune_to_condition(&self, condition: &str) -> bool {
+        self.spec
+            .condition_immunities
+            .iter()
+            .any(|immune| immune.eq_ignore_ascii_case(condition))
+    }
+
+    /// Whether the combatant has a marker of the given kind.
+    pub fn has_marker(&self, kind: MarkerKind) -> bool {
+        self.markers.iter().any(|marker| marker.kind == kind)
+    }
+
+    /// Current speed after Slow markers and the grappled condition.
+    pub fn effective_speed(&self) -> i32 {
+        if self.has_condition("grappled") {
+            return 0;
+        }
+        let speed = self.spec.speed;
+        if self.has_marker(MarkerKind::Slow) {
+            (speed - 10).max(0)
+        } else {
+            speed.max(0)
+        }
+    }
+
     /// Whether the combatant can act: positive HP, not dead, not unconscious.
     pub fn is_conscious(&self) -> bool {
         self.hp > 0 && !self.death_saves.dead && !self.has_condition("unconscious")
     }
+}
+
+/// Kind of transient marker applied by weapon mastery or a similar effect.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkerKind {
+    /// Disadvantage on the marked creature's next attack roll.
+    Sap,
+    /// Advantage for the source on its next attack against `target`.
+    Vex,
+    /// Speed reduced by 10 ft while present.
+    Slow,
+}
+
+/// A Sap, Vex or Slow marker with its source and expiry.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct EffectMarker {
+    pub kind: MarkerKind,
+    /// Creature that applied the marker.
+    pub source: String,
+    /// Vex only: the creature the advantage applies against.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Round at whose end the marker expires.
+    pub expires_round: u32,
+    /// Creature whose turn end removes the marker.
+    pub ends_with_turn_of: String,
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// A condition currently affecting a combatant.
@@ -153,6 +238,14 @@ pub struct ActiveCondition {
     pub escape_dc: Option<i32>,
     #[serde(default)]
     pub duration: Option<DurationSpec>,
+    /// Absolute round at whose end the condition expires, when not driven by
+    /// `duration.rounds`.
+    #[serde(default)]
+    pub expires_round: Option<u32>,
+    /// Creature whose turn end removes the condition (for
+    /// `end_of_source_next_turn` and similar effects).
+    #[serde(default)]
+    pub ends_with_turn_of: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
 }
@@ -164,6 +257,8 @@ impl From<ConditionApplication> for ActiveCondition {
             source: None,
             escape_dc: application.escape_dc,
             duration: application.duration,
+            expires_round: None,
+            ends_with_turn_of: None,
             notes: application.notes,
         }
     }
@@ -337,6 +432,23 @@ impl EncounterState {
     pub fn get_mut(&mut self, query: &str) -> Result<&mut CombatantState, LookupError> {
         let index = self.find_index(query)?;
         Ok(&mut self.combatants[index])
+    }
+
+    /// Index into `combatants` for the creature whose turn it currently is.
+    pub fn current_index(&self) -> Option<usize> {
+        self.initiative.get(self.turn).copied()
+    }
+
+    /// The creature whose turn it currently is.
+    pub fn current(&self) -> Option<&CombatantState> {
+        self.current_index()
+            .and_then(|index| self.combatants.get(index))
+    }
+
+    /// Mutable access to the creature whose turn it currently is.
+    pub fn current_mut(&mut self) -> Option<&mut CombatantState> {
+        let index = self.current_index()?;
+        self.combatants.get_mut(index)
     }
 
     fn ambiguous(&self, query: &str, indices: &[usize]) -> LookupError {
@@ -662,6 +774,8 @@ mod tests {
                 rounds: None,
                 notes: None,
             }),
+            expires_round: Some(2),
+            ends_with_turn_of: Some("Guard 1".to_string()),
             notes: Some("test condition".to_string()),
         });
         will.resources
@@ -676,8 +790,14 @@ mod tests {
         will.action_used = true;
         will.bonus_action_used = true;
         will.speed_left = 15;
-        will.sapped = true;
-        will.vexed = true;
+        will.markers.push(EffectMarker {
+            kind: MarkerKind::Sap,
+            source: "Guard 1".to_string(),
+            target: None,
+            expires_round: 2,
+            ends_with_turn_of: "Guard 1".to_string(),
+            notes: Some("test marker".to_string()),
+        });
 
         let temp_root = unique_temp_dir("roundtrip");
         let path = temp_root.join("nested").join("state.json");

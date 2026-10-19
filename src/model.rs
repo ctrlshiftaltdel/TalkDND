@@ -99,6 +99,9 @@ pub struct CombatantSpec {
     pub init_bonus: i32,
     #[serde(default = "default_speed")]
     pub speed: i32,
+    /// Proficiency bonus used for mastery DCs; all current data is +2.
+    #[serde(default = "default_proficiency_bonus")]
+    pub proficiency_bonus: i32,
     #[serde(default = "default_abilities")]
     pub abilities: BTreeMap<String, i32>,
     #[serde(default)]
@@ -311,6 +314,10 @@ fn default_speed() -> i32 {
     30
 }
 
+fn default_proficiency_bonus() -> i32 {
+    2
+}
+
 fn default_count() -> u32 {
     1
 }
@@ -501,6 +508,7 @@ damage_type = "piercing"
         assert_eq!(spec.temp_hp, 0);
         assert_eq!(spec.init_bonus, 0);
         assert_eq!(spec.speed, 30);
+        assert_eq!(spec.proficiency_bonus, 2);
         assert_eq!(spec.abilities.len(), 6);
         assert_eq!(spec.abilities.get("str"), Some(&10));
         assert_eq!(spec.attacks.len(), 1);
