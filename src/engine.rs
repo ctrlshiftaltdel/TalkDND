@@ -605,14 +605,9 @@ fn collect_modifiers(
     // Scan passive abilities without resolving (and cloning) every owned
     // action. Most creatures have no passive modifiers, so this avoids a large
     // amount of allocation on the attack hot path.
-    let mut owned: Vec<&AbilityEntry> = Vec::new();
-    if let Some(actions) = &combatant.creature.actions {
-        owned.extend(actions.iter());
-    }
-    if let Some(features) = &combatant.creature.features {
-        owned.extend(features.iter());
-    }
-    for entry in owned {
+    let actions = combatant.creature.actions.as_deref().unwrap_or(&[]);
+    let features = combatant.creature.features.as_deref().unwrap_or(&[]);
+    for entry in actions.iter().chain(features.iter()) {
         let ability: &Ability = match entry {
             AbilityEntry::Inline(ability) => ability,
             AbilityEntry::Ref(reference) => {
@@ -1694,6 +1689,9 @@ fn forecast_profile(
     source: Option<&EffectSource>,
 ) -> AttackForecast {
     let facts = profile.facts();
+    let fast_path = source.is_none()
+        && !has_modifier_sources(state, attacker)
+        && !has_modifier_sources(state, target);
     let attack_ability = profile
         .ability
         .or_else(|| ability_name_from_attack_kind(profile.kind, &state.combatants[attacker]));
@@ -1732,33 +1730,34 @@ fn forecast_profile(
         source_tags: profile.tags.clone(),
     };
     let mut mode = RollMode::Normal;
-    for collected in collect_modifiers(
-        state,
-        attacker,
-        ModifierApplies::AttackRoll,
-        &attacker_context,
-        source,
-    ) {
-        match collected.modifier.effect {
-            ModifierEffect::Advantage => mode = add_advantage(mode),
-            ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
-            _ => {}
-        }
-    }
-    let target_modifiers = collect_modifiers(
-        state,
-        target,
-        ModifierApplies::IncomingAttack,
-        &target_context,
-        None,
-    );
     let mut auto_crit = false;
-    for collected in &target_modifiers {
-        match collected.modifier.effect {
-            ModifierEffect::Advantage => mode = add_advantage(mode),
-            ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
-            ModifierEffect::AutoCrit => auto_crit = true,
-            _ => {}
+    if !fast_path {
+        for collected in collect_modifiers(
+            state,
+            attacker,
+            ModifierApplies::AttackRoll,
+            &attacker_context,
+            source,
+        ) {
+            match collected.modifier.effect {
+                ModifierEffect::Advantage => mode = add_advantage(mode),
+                ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
+                _ => {}
+            }
+        }
+        for collected in collect_modifiers(
+            state,
+            target,
+            ModifierApplies::IncomingAttack,
+            &target_context,
+            None,
+        ) {
+            match collected.modifier.effect {
+                ModifierEffect::Advantage => mode = add_advantage(mode),
+                ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
+                ModifierEffect::AutoCrit => auto_crit = true,
+                _ => {}
+            }
         }
     }
     let (ac, ac_ok) = effective_ac(state, target, Some(attacker), &facts)
@@ -2301,6 +2300,9 @@ fn resolve_attack(
     }
 
     let facts = profile.facts();
+    let fast_path = source.is_none()
+        && !has_modifier_sources(state, attacker)
+        && !has_modifier_sources(state, target);
     let attack_ability = profile
         .ability
         .or_else(|| ability_name_from_attack_kind(profile.kind, &state.combatants[attacker]));
@@ -2339,42 +2341,44 @@ fn resolve_attack(
         source_tags: profile.tags.clone(),
     };
 
-    for collected in collect_modifiers(
-        state,
-        attacker,
-        ModifierApplies::AttackRoll,
-        &attacker_context,
-        source,
-    ) {
-        match collected.modifier.effect {
-            ModifierEffect::Advantage => {
-                advantage_sources.push(collected.label.clone());
-                mode = add_advantage(mode);
+    if !fast_path {
+        for collected in collect_modifiers(
+            state,
+            attacker,
+            ModifierApplies::AttackRoll,
+            &attacker_context,
+            source,
+        ) {
+            match collected.modifier.effect {
+                ModifierEffect::Advantage => {
+                    advantage_sources.push(collected.label.clone());
+                    mode = add_advantage(mode);
+                }
+                ModifierEffect::Disadvantage => {
+                    disadvantage_sources.push(collected.label.clone());
+                    mode = add_disadvantage(mode);
+                }
+                _ => {}
             }
-            ModifierEffect::Disadvantage => {
-                disadvantage_sources.push(collected.label.clone());
-                mode = add_disadvantage(mode);
-            }
-            _ => {}
         }
-    }
-    for collected in collect_modifiers(
-        state,
-        target,
-        ModifierApplies::IncomingAttack,
-        &target_context,
-        None,
-    ) {
-        match collected.modifier.effect {
-            ModifierEffect::Advantage => {
-                advantage_sources.push(collected.label.clone());
-                mode = add_advantage(mode);
+        for collected in collect_modifiers(
+            state,
+            target,
+            ModifierApplies::IncomingAttack,
+            &target_context,
+            None,
+        ) {
+            match collected.modifier.effect {
+                ModifierEffect::Advantage => {
+                    advantage_sources.push(collected.label.clone());
+                    mode = add_advantage(mode);
+                }
+                ModifierEffect::Disadvantage => {
+                    disadvantage_sources.push(collected.label.clone());
+                    mode = add_disadvantage(mode);
+                }
+                _ => {}
             }
-            ModifierEffect::Disadvantage => {
-                disadvantage_sources.push(collected.label.clone());
-                mode = add_disadvantage(mode);
-            }
-            _ => {}
         }
     }
 
@@ -2439,44 +2443,46 @@ fn resolve_attack(
 
     // Attack roll bonuses.
     let mut bonuses = Vec::new();
-    for collected in collect_modifiers(
-        state,
-        attacker,
-        ModifierApplies::AttackRoll,
-        &attacker_context,
-        source,
-    ) {
-        if collected.modifier.effect == ModifierEffect::Bonus
-            && modifier_available(state, &state.combatants[attacker], &collected, None)
-        {
-            bonuses.extend(roll_bonus_terms(
-                state,
-                attacker,
-                std::slice::from_ref(&collected),
-                rng,
-            )?);
-            mark_once(
-                &mut state.combatants[attacker],
-                &collected.key,
-                None,
-                state.round,
-            );
+    if !fast_path {
+        for collected in collect_modifiers(
+            state,
+            attacker,
+            ModifierApplies::AttackRoll,
+            &attacker_context,
+            source,
+        ) {
+            if collected.modifier.effect == ModifierEffect::Bonus
+                && modifier_available(state, &state.combatants[attacker], &collected, None)
+            {
+                bonuses.extend(roll_bonus_terms(
+                    state,
+                    attacker,
+                    std::slice::from_ref(&collected),
+                    rng,
+                )?);
+                mark_once(
+                    &mut state.combatants[attacker],
+                    &collected.key,
+                    None,
+                    state.round,
+                );
+            }
         }
-    }
-    for collected in collect_modifiers(
-        state,
-        target,
-        ModifierApplies::IncomingAttack,
-        &target_context,
-        None,
-    ) {
-        if collected.modifier.effect == ModifierEffect::Bonus {
-            bonuses.extend(roll_bonus_terms(
-                state,
-                target,
-                std::slice::from_ref(&collected),
-                rng,
-            )?);
+        for collected in collect_modifiers(
+            state,
+            target,
+            ModifierApplies::IncomingAttack,
+            &target_context,
+            None,
+        ) {
+            if collected.modifier.effect == ModifierEffect::Bonus {
+                bonuses.extend(roll_bonus_terms(
+                    state,
+                    target,
+                    std::slice::from_ref(&collected),
+                    rng,
+                )?);
+            }
         }
     }
 
@@ -2640,22 +2646,24 @@ fn resolve_attack(
     if hit {
         fire_ends_on(state, attacker, EndsOn::DealsDamage, log);
     }
-    finish_collected_modifiers(
-        state,
-        attacker,
-        ModifierApplies::AttackRoll,
-        &attacker_context,
-        source,
-        log,
-    );
-    finish_collected_modifiers(
-        state,
-        target,
-        ModifierApplies::IncomingAttack,
-        &target_context,
-        None,
-        log,
-    );
+    if !fast_path {
+        finish_collected_modifiers(
+            state,
+            attacker,
+            ModifierApplies::AttackRoll,
+            &attacker_context,
+            source,
+            log,
+        );
+        finish_collected_modifiers(
+            state,
+            target,
+            ModifierApplies::IncomingAttack,
+            &target_context,
+            None,
+            log,
+        );
+    }
     Ok(())
 }
 
@@ -2695,6 +2703,30 @@ fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn has_modifier_sources(state: &EncounterState, owner: usize) -> bool {
+    let combatant = &state.combatants[owner];
+    if !combatant.conditions.is_empty() {
+        return true;
+    }
+    let actions = combatant.creature.actions.as_deref().unwrap_or(&[]);
+    let features = combatant.creature.features.as_deref().unwrap_or(&[]);
+    for entry in actions.iter().chain(features.iter()) {
+        let ability: &Ability = match entry {
+            AbilityEntry::Inline(ability) => ability,
+            AbilityEntry::Ref(reference) => {
+                let Some(ability) = state.content.abilities.get(&reference.reference) else {
+                    continue;
+                };
+                ability
+            }
+        };
+        if ability.activation == Activation::Passive && !ability.modifiers.is_empty() {
+            return true;
+        }
+    }
+    false
+}
+
 fn has_owned_trigger(state: &EncounterState, owner: usize, when: TriggerWhen) -> bool {
     let combatant = &state.combatants[owner];
     let actions = combatant.creature.actions.as_deref().unwrap_or(&[]);
