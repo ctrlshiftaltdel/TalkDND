@@ -4,6 +4,8 @@
 //! scene it uses and every combatant's resolved creature. Step commands only
 //! need `--state`, never a campaign manifest.
 
+#![allow(clippy::too_many_arguments)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
@@ -410,9 +412,13 @@ pub struct ActiveCondition {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActiveDuration {
     /// Ends after `remaining` end-of-turn events of the affected creature.
-    Rounds { remaining: u32 },
+    Rounds {
+        remaining: u32,
+    },
     /// Same as rounds, but measured in 10-round minutes.
-    Minutes { remaining: u32 },
+    Minutes {
+        remaining: u32,
+    },
     Permanent,
     /// Ends at the named phase of `subject`'s next turn.
     Until {
@@ -607,9 +613,9 @@ impl EncounterState {
                 );
             }
             let side = member.side.clone().unwrap_or_else(|| creature.side());
-            let dormant = member.dormant.unwrap_or_else(|| {
-                creature.dormant.unwrap_or(false)
-            });
+            let dormant = member
+                .dormant
+                .unwrap_or_else(|| creature.dormant.unwrap_or(false));
             let ai = member.ai.clone().or_else(|| creature.ai.clone());
             let base_name = member
                 .name
@@ -680,6 +686,7 @@ impl EncounterState {
         if combatants.is_empty() {
             bail!("encounter `{}` has no combatants", encounter.id);
         }
+        uniquify_names(&mut combatants);
 
         let mut state = Self {
             content,
@@ -723,7 +730,8 @@ impl EncounterState {
                     condition: id,
                     source: None,
                     linked: None,
-                    duration: duration.map(|duration| active_duration(&duration, &combatant.name, 0)),
+                    duration: duration
+                        .map(|duration| active_duration(&duration, &combatant.name, 0)),
                     save_ends: None,
                     ends_on: Vec::new(),
                     created_by: None,
@@ -851,7 +859,10 @@ impl EncounterState {
     }
 
     pub fn trigger_enabled(&self, key: &str) -> bool {
-        self.triggers.get(key).map(|state| state.enabled).unwrap_or(true)
+        self.triggers
+            .get(key)
+            .map(|state| state.enabled)
+            .unwrap_or(true)
     }
 
     pub fn set_trigger_enabled(&mut self, key: &str, enabled: bool) {
@@ -958,6 +969,22 @@ fn append_instances(
     }
 }
 
+fn uniquify_names(combatants: &mut [CombatantState]) {
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, combatant) in combatants.iter().enumerate() {
+        groups
+            .entry(combatant.name.to_ascii_lowercase())
+            .or_default()
+            .push(index);
+    }
+    for indices in groups.into_values().filter(|indices| indices.len() > 1) {
+        let base = combatants[indices[0]].name.clone();
+        for (offset, index) in indices.into_iter().enumerate() {
+            combatants[index].name = format!("{base} {}", offset + 1);
+        }
+    }
+}
+
 fn unique_name(base: &str, existing: &BTreeSet<String>) -> String {
     if !existing.contains(&base.to_ascii_lowercase()) {
         return base.to_string();
@@ -1049,7 +1076,10 @@ pub fn active_condition_ids(content: &ContentRegistry, combatant: &CombatantStat
         .map(|condition| condition.condition.clone())
         .collect();
     while let Some(id) = stack.pop() {
-        if ids.iter().any(|existing| existing.eq_ignore_ascii_case(&id)) {
+        if ids
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&id))
+        {
             continue;
         }
         if let Some(def) = content.conditions.get(&id) {

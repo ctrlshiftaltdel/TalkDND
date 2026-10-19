@@ -5,6 +5,8 @@
 //! masteries, abilities, creature attacks and the core-rule wiring in
 //! `rules`. No content ids or display names appear in this module.
 
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -12,11 +14,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use crate::content::expr::ExprContext;
 use crate::content::schema::{
     Ability, AbilityCost, AbilityName, Activation, Attack, AttackEffect, AttackKind,
-    AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag, CritMode,
-    DamageEffect, DamagePart, Direction, Duration, DurationUntil, Effect, EndsOn, ExprValue,
-    ForcedMoveEffect, Modifier, ModifierApplies, ModifierEffect, ModifierFilter, OncePer, Predicate,
-    Recharge, SaveEndsAt, SaveEffect, Size, TargetRef, TargetSide, TargetType, Trigger, TriggerWhen,
-    ToggleTriggerEffect,
+    AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag, CritMode, DamageEffect,
+    DamagePart, Direction, Duration, DurationUntil, Effect, EndsOn, ExprValue, ForcedMoveEffect,
+    Modifier, ModifierApplies, ModifierEffect, ModifierFilter, OncePer, Predicate, Recharge,
+    SaveEffect, SaveEndsAt, Size, TargetRef, TargetSide, TargetType, ToggleTriggerEffect, Trigger,
+    TriggerWhen,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
@@ -70,11 +72,7 @@ pub enum RestKind {
 // ---------------------------------------------------------------------------
 
 fn score_context(combatant: &CombatantState) -> ExprContext {
-    let scores = combatant
-        .creature
-        .abilities
-        .clone()
-        .unwrap_or_default();
+    let scores = combatant.creature.abilities.clone().unwrap_or_default();
     let mut context = ExprContext::new()
         .with_ability_scores(&scores)
         .with_prof(combatant.creature.proficiency_bonus())
@@ -133,7 +131,10 @@ fn roll_value(
     Ok((formula, record))
 }
 
-fn ability_name_from_attack_kind(kind: AttackKind, creature: &CombatantState) -> Option<AbilityName> {
+fn ability_name_from_attack_kind(
+    kind: AttackKind,
+    creature: &CombatantState,
+) -> Option<AbilityName> {
     match kind {
         AttackKind::Melee => Some(AbilityName::Str),
         AttackKind::Ranged => Some(AbilityName::Dex),
@@ -169,7 +170,10 @@ fn is_incapacitated(state: &EncounterState, index: usize) -> bool {
 fn ensure_can_act(state: &EncounterState, index: usize) -> Result<()> {
     let combatant = &state.combatants[index];
     if combatant.dormant {
-        bail!("`{}` is dormant and cannot act until activated", combatant.name);
+        bail!(
+            "`{}` is dormant and cannot act until activated",
+            combatant.name
+        );
     }
     if combatant.is_dead() {
         bail!("`{}` is dead", combatant.name);
@@ -315,7 +319,11 @@ impl PredicateContext {
     }
 }
 
-fn eval_predicate(state: &EncounterState, predicate: &Predicate, context: &PredicateContext) -> bool {
+fn eval_predicate(
+    state: &EncounterState,
+    predicate: &Predicate,
+    context: &PredicateContext,
+) -> bool {
     match predicate {
         Predicate::All(items) => items
             .iter()
@@ -330,16 +338,20 @@ fn eval_predicate(state: &EncounterState, predicate: &Predicate, context: &Predi
             let value = ally_within_5(state, context.actor, context.target);
             value == flag.get()
         }
-        Predicate::TargetHasCondition(condition) => context
-            .target
-            .is_some_and(|target| state.combatants[target].has_condition(&state.content, condition)),
+        Predicate::TargetHasCondition(condition) => context.target.is_some_and(|target| {
+            state.combatants[target].has_condition(&state.content, condition)
+        }),
         Predicate::SelfHasCondition(condition) => {
             state.combatants[context.self_idx].has_condition(&state.content, condition)
         }
-        Predicate::AttackerWithin(feet) => distance_between(state, context.attacker, context.target)
-            .is_some_and(|distance| distance <= *feet),
-        Predicate::AttackerBeyond(feet) => distance_between(state, context.attacker, context.target)
-            .is_some_and(|distance| distance > *feet),
+        Predicate::AttackerWithin(feet) => {
+            distance_between(state, context.attacker, context.target)
+                .is_some_and(|distance| distance <= *feet)
+        }
+        Predicate::AttackerBeyond(feet) => {
+            distance_between(state, context.attacker, context.target)
+                .is_some_and(|distance| distance > *feet)
+        }
         Predicate::LinkedIsAttacker(flag) => {
             let value = match (&context.linked, context.attacker) {
                 (Some(linked), Some(attacker)) => {
@@ -377,16 +389,15 @@ fn eval_predicate(state: &EncounterState, predicate: &Predicate, context: &Predi
         }
         Predicate::SlotLevelMin(minimum) => context.slot_level.unwrap_or(0) >= *minimum,
         Predicate::DamageDealt(flag) => (context.damage_dealt > 0) == flag.get(),
-        Predicate::WouldMissWithAcBonus(bonus) => match (
-            context.current_attack_total,
-            context.current_ac,
-        ) {
-            (Some(total), Some(ac)) => total < ac.saturating_add(*bonus),
-            _ => false,
-        },
-        Predicate::TargetSizeMax(maximum) => context
-            .target
-            .is_some_and(|target| check_size_limit(state.combatants[target].creature.size(), Some(*maximum))),
+        Predicate::WouldMissWithAcBonus(bonus) => {
+            match (context.current_attack_total, context.current_ac) {
+                (Some(total), Some(ac)) => total < ac.saturating_add(*bonus),
+                _ => false,
+            }
+        }
+        Predicate::TargetSizeMax(maximum) => context.target.is_some_and(|target| {
+            check_size_limit(state.combatants[target].creature.size(), Some(*maximum))
+        }),
     }
 }
 
@@ -411,16 +422,20 @@ fn ally_within_5(state: &EncounterState, actor: usize, target: Option<usize>) ->
         return false;
     };
     let target_zone = &state.combatants[target].zone;
-    state.combatants.iter().enumerate().any(|(index, combatant)| {
-        index != actor
-            && index != target
-            && combatant.side == state.combatants[actor].side
-            && combatant.is_active()
-            && !is_incapacitated(state, index)
-            && space
-                .distance(&combatant.zone, target_zone)
-                .is_some_and(|distance| distance <= 5)
-    })
+    state
+        .combatants
+        .iter()
+        .enumerate()
+        .any(|(index, combatant)| {
+            index != actor
+                && index != target
+                && combatant.side == state.combatants[actor].side
+                && combatant.is_active()
+                && !is_incapacitated(state, index)
+                && space
+                    .distance(&combatant.zone, target_zone)
+                    .is_some_and(|distance| distance <= 5)
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -484,6 +499,8 @@ fn collect_modifiers(
     let mut out = Vec::new();
     let active = combatant.conditions.clone();
     for (instance_index, instance) in active.iter().enumerate() {
+        let mut scoped = context.clone();
+        scoped.linked = instance.linked.clone();
         let mut condition_ids = Vec::new();
         collect_condition_chain(&state.content, &instance.condition, &mut condition_ids);
         for condition_id in condition_ids {
@@ -494,11 +511,11 @@ fn collect_modifiers(
                 if modifier.applies != applies {
                     continue;
                 }
-                if !modifier_filter_matches_opt(&modifier.filter, context) {
+                if !modifier_filter_matches_opt(&modifier.filter, &scoped) {
                     continue;
                 }
                 if let Some(when) = &modifier.when {
-                    if !eval_predicate(state, when, context) {
+                    if !eval_predicate(state, when, &scoped) {
                         continue;
                     }
                 }
@@ -594,22 +611,15 @@ fn modifier_available(
 ) -> bool {
     match once_per {
         Some(OncePer::Turn) => !combatant.once_used.contains_key(&turn_key(&collected.key)),
-        Some(OncePer::Round) => {
-            combatant
-                .once_used
-                .get(&round_key(&collected.key))
-                .is_none_or(|round| *round != state.round)
-        }
+        Some(OncePer::Round) => combatant
+            .once_used
+            .get(&round_key(&collected.key))
+            .is_none_or(|round| *round != state.round),
         None => true,
     }
 }
 
-fn mark_once(
-    combatant: &mut CombatantState,
-    key: &str,
-    once_per: Option<OncePer>,
-    round: u32,
-) {
+fn mark_once(combatant: &mut CombatantState, key: &str, once_per: Option<OncePer>, round: u32) {
     match once_per {
         Some(OncePer::Turn) => {
             combatant.once_used.insert(turn_key(key), round);
@@ -645,7 +655,12 @@ fn consume_modifier_source(
             log.push(format!("{name} is no longer {condition}"));
         }
     }
-    mark_once(&mut state.combatants[owner], &collected.key, None, state.round);
+    mark_once(
+        &mut state.combatants[owner],
+        &collected.key,
+        None,
+        state.round,
+    );
 }
 
 fn finish_collected_modifiers(
@@ -724,9 +739,7 @@ fn damage_roll_bonus(
         current_ac: None,
         ability: None,
         damage_type: damage_type.map(ToString::to_string),
-        source_tags: source
-            .map(|source| source.tags.clone())
-            .unwrap_or_default(),
+        source_tags: source.map(|source| source.tags.clone()).unwrap_or_default(),
     };
     let modifiers = collect_modifiers(state, owner, ModifierApplies::DamageRoll, &context, source);
     let context_expr = score_context(&state.combatants[owner]);
@@ -788,11 +801,7 @@ pub fn init(
         }
         let roll = D20Roll::roll(combatant.creature.init_bonus(), RollMode::Normal, rng);
         combatant.initiative_total = Some(roll.total);
-        log.push(format!(
-            "Initiative {}: {}",
-            combatant.name,
-            roll.text()
-        ));
+        log.push(format!("Initiative {}: {}", combatant.name, roll.text()));
         rows.push((index, roll.total, false));
     }
 
@@ -808,7 +817,11 @@ pub fn init(
                 state.combatants[b.0]
                     .creature
                     .ability_modifier(AbilityName::Dex)
-                    .cmp(&state.combatants[a.0].creature.ability_modifier(AbilityName::Dex))
+                    .cmp(
+                        &state.combatants[a.0]
+                            .creature
+                            .ability_modifier(AbilityName::Dex),
+                    )
             })
             .then_with(|| a.0.cmp(&b.0))
     });
@@ -828,10 +841,7 @@ pub fn init(
     let first = state.initiative[0];
     start_turn(state, first, rng, log);
     if let Some(combatant) = state.combatants.get(first) {
-        log.push(format!(
-            "Round {} - {}'s turn",
-            state.round, combatant.name
-        ));
+        log.push(format!("Round {} - {}'s turn", state.round, combatant.name));
     }
     Ok(())
 }
@@ -841,7 +851,11 @@ fn eligible_for_turn(combatant: &CombatantState) -> bool {
 }
 
 /// Ends the current turn and starts the next eligible one.
-pub fn next_turn(state: &mut EncounterState, rng: &mut dyn DiceRng, log: &mut Vec<String>) -> Result<()> {
+pub fn next_turn(
+    state: &mut EncounterState,
+    rng: &mut dyn DiceRng,
+    log: &mut Vec<String>,
+) -> Result<()> {
     if state.initiative.is_empty() {
         bail!("initiative has not been rolled; run `init` first");
     }
@@ -920,7 +934,9 @@ fn start_turn(
     recharge_resources(state, index, RechargePhase::Turn, rng, log);
     if state.combatants[index].is_dying() {
         let name = state.combatants[index].name.clone();
-        log.push(format!("{name} is dying and must make a death saving throw"));
+        log.push(format!(
+            "{name} is dying and must make a death saving throw"
+        ));
         let _ = death_save_at(state, index, rng, log);
     }
     run_owned_triggers(state, index, TriggerWhen::StartOfTurn, None, rng, log);
@@ -989,7 +1005,9 @@ fn expire_conditions(
                         until,
                         DurationUntil::EndOfSourceNextTurn | DurationUntil::EndOfTargetNextTurn
                     );
-                    if is_end_phase && subject.eq_ignore_ascii_case(&name) && state.round >= *end_round
+                    if is_end_phase
+                        && subject.eq_ignore_ascii_case(&name)
+                        && state.round >= *end_round
                     {
                         expired = true;
                     }
@@ -1058,19 +1076,16 @@ fn recharge_resources(
             continue;
         }
         let recharge = resource.recharge.clone();
-        let applies = match (phase, &recharge) {
-            (RechargePhase::Turn, Recharge::Turn) => true,
-            (RechargePhase::Round, Recharge::Round) => true,
-            _ => false,
-        };
+        let applies = matches!(
+            (phase, &recharge),
+            (RechargePhase::Turn, Recharge::Turn) | (RechargePhase::Round, Recharge::Round)
+        );
         if applies {
             restore_resource(state, index, &id, log);
             continue;
         }
         let in_range = match (&recharge, phase) {
-            (Recharge::Single(minimum), RechargePhase::Turn) => {
-                rng.roll_die(6) >= *minimum
-            }
+            (Recharge::Single(minimum), RechargePhase::Turn) => rng.roll_die(6) >= *minimum,
             (Recharge::Range { min, max }, RechargePhase::Turn) => {
                 let roll = rng.roll_die(6);
                 roll >= *min && roll <= *max
@@ -1084,12 +1099,7 @@ fn recharge_resources(
     }
 }
 
-fn restore_resource(
-    state: &mut EncounterState,
-    index: usize,
-    id: &str,
-    _log: &mut Vec<String>,
-) {
+fn restore_resource(state: &mut EncounterState, index: usize, id: &str, _log: &mut Vec<String>) {
     if let Some(resource) = state.combatants[index].resources.get_mut(id) {
         resource.current = resource.max;
     }
@@ -1153,10 +1163,7 @@ impl AttackProfile {
             name: attack.display_name().to_string(),
             kind: attack.kind,
             ability: attack.ability,
-            to_hit: attack
-                .to_hit
-                .clone()
-                .unwrap_or_else(|| ExprValue::Number(0)),
+            to_hit: attack.to_hit.clone().unwrap_or(ExprValue::Number(0)),
             damage: attack.damage.clone(),
             reach: attack.reach.unwrap_or(5),
             range: attack.range,
@@ -1359,13 +1366,7 @@ fn effective_ac(
         damage_type: None,
         source_tags: attack.tags.clone(),
     };
-    for collected in collect_modifiers(
-        state,
-        target,
-        ModifierApplies::Ac,
-        &context,
-        None,
-    ) {
+    for collected in collect_modifiers(state, target, ModifierApplies::Ac, &context, None) {
         if collected.modifier.effect == ModifierEffect::Bonus {
             if let Some(value) = &collected.modifier.value {
                 let expr_context = score_context(combatant);
@@ -1488,7 +1489,9 @@ fn resolve_named_entry(
     let combatant = &state.combatants[attacker];
     if let Ok(attack) = combatant.find_attack(name) {
         let profile = AttackProfile::from_attack(attack);
-        return resolve_attack(state, attacker, target, &profile, None, options, rng, log, false);
+        return resolve_attack(
+            state, attacker, target, &profile, None, options, rng, log, false,
+        );
     }
     let resolved = combatant
         .find_owned_ability(&state.content, name)
@@ -1518,7 +1521,10 @@ fn spend_action(
     match activation {
         Activation::Action => {
             if state.combatants[index].action_used {
-                bail!("`{}` has already used an action this turn", state.combatants[index].name);
+                bail!(
+                    "`{}` has already used an action this turn",
+                    state.combatants[index].name
+                );
             }
             state.combatants[index].action_used = true;
         }
@@ -1539,11 +1545,7 @@ fn spend_action(
     Ok(())
 }
 
-fn spend_reaction(
-    state: &mut EncounterState,
-    index: usize,
-    _log: &mut Vec<String>,
-) -> Result<()> {
+fn spend_reaction(state: &mut EncounterState, index: usize, _log: &mut Vec<String>) -> Result<()> {
     if state.combatants[index].reaction_round == Some(state.round) {
         bail!(
             "`{}` has already used a reaction this round",
@@ -1587,9 +1589,9 @@ fn resolve_attack(
     }
 
     let facts = profile.facts();
-    let attack_ability = profile.ability.or_else(|| {
-        ability_name_from_attack_kind(profile.kind, &state.combatants[attacker])
-    });
+    let attack_ability = profile
+        .ability
+        .or_else(|| ability_name_from_attack_kind(profile.kind, &state.combatants[attacker]));
     let attacker_context = PredicateContext {
         self_idx: attacker,
         actor: attacker,
@@ -1669,7 +1671,10 @@ fn resolve_attack(
         .space()
         .ok_or_else(|| anyhow!("this state has no scene"))?;
     let distance = space
-        .distance(&state.combatants[attacker].zone, &state.combatants[target].zone)
+        .distance(
+            &state.combatants[attacker].zone,
+            &state.combatants[target].zone,
+        )
         .ok_or_else(|| anyhow!("no path between the combatants' zones"))?;
     let mut kind = profile.kind;
     if kind == AttackKind::MeleeOrRanged {
@@ -1726,7 +1731,12 @@ fn resolve_attack(
         if collected.modifier.effect == ModifierEffect::Bonus
             && modifier_available(state, &state.combatants[attacker], &collected, None)
         {
-            bonuses.extend(roll_bonus_terms(state, attacker, &[collected.clone()], rng)?);
+            bonuses.extend(roll_bonus_terms(
+                state,
+                attacker,
+                std::slice::from_ref(&collected),
+                rng,
+            )?);
             mark_once(
                 &mut state.combatants[attacker],
                 &collected.key,
@@ -1743,18 +1753,20 @@ fn resolve_attack(
         None,
     ) {
         if collected.modifier.effect == ModifierEffect::Bonus {
-            bonuses.extend(roll_bonus_terms(state, target, &[collected.clone()], rng)?);
+            bonuses.extend(roll_bonus_terms(
+                state,
+                target,
+                std::slice::from_ref(&collected),
+                rng,
+            )?);
         }
     }
 
     let (base_ac, ac_terms) = effective_ac(state, target, Some(attacker), &facts)?;
     let attack_mod = profile.attack_modifier(&state.combatants[attacker]);
     let context = source_context(state, attacker, source, Some(attack_mod), None);
-    let (to_hit_formula, to_hit_expr) = evaluate_value(
-        &context,
-        &profile.to_hit,
-    )
-    .with_context(|| format!("attack `{}` to_hit", profile.name))?;
+    let (to_hit_formula, to_hit_expr) = evaluate_value(&context, &profile.to_hit)
+        .with_context(|| format!("attack `{}` to_hit", profile.name))?;
     let base = to_hit_expr.modifier;
     let result = roll_d20(
         state,
@@ -1819,7 +1831,7 @@ fn resolve_attack(
                 crit = true;
             }
         }
-        let attack_context = EffectContext {
+        let mut attack_context = EffectContext {
             actor: attacker,
             target: Some(target),
             source: source.cloned(),
@@ -1831,7 +1843,8 @@ fn resolve_attack(
             has_advantage: result.mode == RollMode::Advantage,
             has_disadvantage: result.mode == RollMode::Disadvantage,
         };
-        apply_attack_damage_parts(state, &attack_context, &profile.damage, rng, log)?;
+        attack_context.damage_dealt =
+            apply_attack_damage_parts(state, &attack_context, &profile.damage, rng, log)?;
         run_mastery_triggers(
             state,
             attacker,
@@ -1842,13 +1855,7 @@ fn resolve_attack(
             rng,
             log,
         )?;
-        apply_effects(
-            state,
-            &attack_context,
-            &profile.on_hit,
-            rng,
-            log,
-        )?;
+        apply_effects(state, &attack_context, &profile.on_hit, rng, log)?;
         run_owned_triggers_for(
             state,
             attacker,
@@ -1941,14 +1948,18 @@ fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
         return false;
     };
     let zone = &state.combatants[index].zone;
-    state.combatants.iter().enumerate().any(|(other, combatant)| {
-        other != index
-            && combatant.is_active()
-            && combatant.side != state.combatants[index].side
-            && space
-                .distance(zone, &combatant.zone)
-                .is_some_and(|distance| distance <= 5)
-    })
+    state
+        .combatants
+        .iter()
+        .enumerate()
+        .any(|(other, combatant)| {
+            other != index
+                && combatant.is_active()
+                && combatant.side != state.combatants[index].side
+                && space
+                    .distance(zone, &combatant.zone)
+                    .is_some_and(|distance| distance <= 5)
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1983,7 +1994,10 @@ fn try_hit_reactions(
             {
                 continue;
             }
-            let key = format!("trigger:{}:{}:{}", target, resolved.ability.id, trigger_index);
+            let key = format!(
+                "trigger:{}:{}:{}",
+                target, resolved.ability.id, trigger_index
+            );
             if !trigger_available(state, target, trigger, &key) {
                 continue;
             }
@@ -2012,7 +2026,11 @@ fn try_hit_reactions(
                     continue;
                 }
             }
-            if let Some(cost) = trigger.cost.clone().or_else(|| resolved.ability.cost.clone()) {
+            if let Some(cost) = trigger
+                .cost
+                .clone()
+                .or_else(|| resolved.ability.cost.clone())
+            {
                 if !spend_cost(state, target, &cost, log)? {
                     continue;
                 }
@@ -2066,12 +2084,7 @@ fn trigger_available(state: &EncounterState, owner: usize, trigger: &Trigger, ke
     }
 }
 
-fn mark_trigger_used(
-    state: &mut EncounterState,
-    owner: usize,
-    trigger: &Trigger,
-    key: &str,
-) {
+fn mark_trigger_used(state: &mut EncounterState, owner: usize, trigger: &Trigger, key: &str) {
     let round = state.round;
     mark_once(&mut state.combatants[owner], key, trigger.once_per, round);
 }
@@ -2124,12 +2137,12 @@ fn apply_attack_damage_parts(
     parts: &[DamagePart],
     rng: &mut dyn DiceRng,
     log: &mut Vec<String>,
-) -> Result<()> {
+) -> Result<i32> {
     let Some(target) = context.target else {
-        return Ok(());
+        return Ok(0);
     };
     if parts.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let attack_mod = context
         .attack
@@ -2162,8 +2175,7 @@ fn apply_attack_damage_parts(
             }
         }
     }
-    apply_damage_rolls(state, target, context.actor, rolls, rng, log)?;
-    Ok(())
+    apply_damage_rolls(state, target, context.actor, rolls, rng, log)
 }
 
 fn run_mastery_triggers(
@@ -2274,15 +2286,11 @@ fn run_owned_triggers_for(
             if !trigger_affordable(state, owner, trigger) {
                 continue;
             }
-            let key = format!(
-                "trigger:{}:{}:{}",
-                owner, resolved.ability.id, index
-            );
+            let key = format!("trigger:{}:{}:{}", owner, resolved.ability.id, index);
             if !trigger_available(state, owner, trigger, &key) {
                 continue;
             }
-            let mut predicate_context =
-                predicate_from_effect(state, base_context, profile.facts());
+            let mut predicate_context = predicate_from_effect(state, base_context, profile.facts());
             predicate_context.target = target;
             predicate_context.self_idx = owner;
             predicate_context.actor = owner;
@@ -2291,7 +2299,11 @@ fn run_owned_triggers_for(
                     continue;
                 }
             }
-            if let Some(cost) = trigger.cost.clone().or_else(|| resolved.ability.cost.clone()) {
+            if let Some(cost) = trigger
+                .cost
+                .clone()
+                .or_else(|| resolved.ability.cost.clone())
+            {
                 if !spend_cost(state, owner, &cost, log).unwrap_or(false) {
                     continue;
                 }
@@ -2355,7 +2367,10 @@ fn run_owned_triggers(
                     continue;
                 }
             }
-            let cost = trigger.cost.clone().or_else(|| resolved.ability.cost.clone());
+            let cost = trigger
+                .cost
+                .clone()
+                .or_else(|| resolved.ability.cost.clone());
             if let Some(cost) = cost {
                 if !spend_cost(state, owner, &cost, log).unwrap_or(false) {
                     continue;
@@ -2463,7 +2478,17 @@ fn apply_effect(
                 multi: false,
                 no_reactions: false,
             };
-            resolve_attack(state, context.actor, target, &profile, Some(&source), &options, rng, log, true)
+            resolve_attack(
+                state,
+                context.actor,
+                target,
+                &profile,
+                Some(&source),
+                &options,
+                rng,
+                log,
+                true,
+            )
         }
         Effect::Save(effect) => apply_save_effect(state, context, effect, rng, log),
         Effect::Damage(effect) => apply_damage_effect(state, context, effect, rng, log),
@@ -2495,20 +2520,25 @@ fn apply_effect(
                     Ok::<_, anyhow::Error>((save_ends.ability, dc.modifier, save_ends.at))
                 })
                 .transpose()?;
+            let duration = effect.duration.clone().or_else(|| {
+                context
+                    .source
+                    .as_ref()
+                    .and_then(|source| source.duration.clone())
+            });
+            let mut ends_on = effect.ends_on.clone();
+            if let Some(duration) = &duration {
+                ends_on.extend(duration.ends_on.iter().copied());
+            }
             apply_condition_internal(
                 state,
                 target,
                 &effect.condition,
                 Some(context.actor),
                 linked,
-                effect.duration.clone().or_else(|| {
-                    context
-                        .source
-                        .as_ref()
-                        .and_then(|source| source.duration.clone())
-                }),
+                duration,
                 save_ends,
-                effect.ends_on.clone(),
+                ends_on,
                 context.source.as_ref().map(|source| source.id.clone()),
                 context
                     .source
@@ -2541,7 +2571,10 @@ fn apply_effect(
                         })
                 })?;
             if let Some(target) = context.target {
-                if state.combatants[context.actor].find_attack(reference).is_ok() {
+                if state.combatants[context.actor]
+                    .find_attack(reference)
+                    .is_ok()
+                {
                     let attack = state.combatants[context.actor].find_attack(reference)?;
                     let profile = AttackProfile::from_attack(attack);
                     return resolve_attack(
@@ -2601,11 +2634,18 @@ fn apply_effect(
                                 Effect::Note(text) => Some(text.clone()),
                                 _ => None,
                             });
-                            format!("{}: {}", index + 1, first_note.unwrap_or_else(|| "effect".to_string()))
+                            format!(
+                                "{}: {}",
+                                index + 1,
+                                first_note.unwrap_or_else(|| "effect".to_string())
+                            )
                         })
                         .collect::<Vec<_>>()
                         .join("; ");
-                    bail!("this ability requires --option N (1-{}): {listing}", options.len())
+                    bail!(
+                        "this ability requires --option N (1-{}): {listing}",
+                        options.len()
+                    )
                 }
             };
             apply_effects(state, context, &options[index], rng, log)
@@ -2691,7 +2731,16 @@ fn apply_save_effect(
         return Ok(());
     }
     let base = state.combatants[target].save_bonus(effect.ability);
-    let result = roll_d20(state, target, base, mode, bonuses, adv_sources, dis_sources, rng);
+    let result = roll_d20(
+        state,
+        target,
+        base,
+        mode,
+        bonuses,
+        adv_sources,
+        dis_sources,
+        rng,
+    );
     let success = result.total >= dc;
     let name = state.combatants[target].name.clone();
     log.push(format!(
@@ -2812,6 +2861,10 @@ fn apply_damage_effect(
         } else {
             record.text.clone()
         };
+        let mut text = text;
+        if let Some(source) = &context.source {
+            text.push_str(&format!(" [{}]", source.name));
+        }
         rolls.push((
             RollRecord {
                 total: damage,
@@ -3177,7 +3230,11 @@ fn toggle_scene_trigger(
     log.push(format!(
         "Scene trigger {} is now {}",
         effect.trigger,
-        if effect.enabled { "enabled" } else { "disabled" }
+        if effect.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
     ));
 }
 
@@ -3215,9 +3272,9 @@ fn apply_condition_internal(
         if let Some(until) = duration.until {
             let subject = match until {
                 DurationUntil::EndOfTargetNextTurn => target_name.clone(),
-                DurationUntil::EndOfSourceNextTurn | DurationUntil::StartOfSourceNextTurn => source_name
-                    .clone()
-                    .unwrap_or_else(|| target_name.clone()),
+                DurationUntil::EndOfSourceNextTurn | DurationUntil::StartOfSourceNextTurn => {
+                    source_name.clone().unwrap_or_else(|| target_name.clone())
+                }
             };
             let end_round = next_named_turn_round(state, &subject);
             ActiveDuration::Until {
@@ -3238,11 +3295,7 @@ fn apply_condition_internal(
         source: source_name,
         linked,
         duration: active_duration,
-        save_ends: save_ends.map(|(ability, dc, at)| ActiveSaveEnds {
-            ability,
-            dc,
-            at,
-        }),
+        save_ends: save_ends.map(|(ability, dc, at)| ActiveSaveEnds { ability, dc, at }),
         ends_on: ends,
         created_by,
         concentration,
@@ -3321,10 +3374,9 @@ pub fn add_condition(
         && options.minutes.is_none()
         && options.until.is_none()
         && !options.permanent
+        && state.content.conditions.get(condition_id).is_none()
     {
-        if state.content.conditions.get(condition_id).is_none() {
-            bail!("unknown condition `{condition_id}`");
-        }
+        bail!("unknown condition `{condition_id}`");
     }
     let duration = if let Some(rounds) = options.rounds {
         Some(Duration {
@@ -3386,7 +3438,9 @@ pub fn add_condition(
                 .map_err(|error| anyhow!(error.to_string()))
         })
         .transpose()?;
-    let save_ends = options.save_ends.map(|(ability, dc)| (ability, dc, SaveEndsAt::EndOfTurn));
+    let save_ends = options
+        .save_ends
+        .map(|(ability, dc)| (ability, dc, SaveEndsAt::EndOfTurn));
     apply_condition_internal(
         state,
         target,
@@ -3622,7 +3676,9 @@ pub fn use_entry(
             multi: false,
             no_reactions: options.no_reactions,
         };
-        resolve_attack(state, actor, target, &profile, None, &options, rng, log, false)?;
+        resolve_attack(
+            state, actor, target, &profile, None, &options, rng, log, false,
+        )?;
         log_outcome(state, log);
         return Ok(());
     }
@@ -3667,7 +3723,10 @@ fn begin_concentration(
             log,
         );
     }
-    log.push(format!("{name} is concentrating on {}", ability.display_name()));
+    log.push(format!(
+        "{name} is concentrating on {}",
+        ability.display_name()
+    ));
 }
 
 fn break_concentration(state: &mut EncounterState, actor: usize, log: &mut Vec<String>) {
@@ -3680,7 +3739,10 @@ fn break_concentration(state: &mut EncounterState, actor: usize, log: &mut Vec<S
         let mut kept = Vec::new();
         for condition in combatant.conditions.drain(..) {
             if condition.concentration && condition.source.as_deref() == Some(name.as_str()) {
-                log.push(format!("{} is no longer {}", combatant.name, condition.condition));
+                log.push(format!(
+                    "{} is no longer {}",
+                    combatant.name, condition.condition
+                ));
             } else {
                 kept.push(condition);
             }
@@ -3748,10 +3810,7 @@ fn apply_damage_rolls(
     let mut parts = Vec::new();
     for (damage_type, (amount, formulas)) in grouped {
         total += amount;
-        parts.push(format!(
-            "{amount} {damage_type} ({})",
-            formulas.join(", ")
-        ));
+        parts.push(format!("{amount} {damage_type} ({})", formulas.join(", ")));
     }
     if total <= 0 {
         log.push(format!("{name} takes no damage ({})", parts.join("; ")));
@@ -3878,13 +3937,8 @@ fn mitigate(
         damage_type: Some(damage_type.to_string()),
         source_tags: Vec::new(),
     };
-    for collected in collect_modifiers(
-        state,
-        target,
-        ModifierApplies::DamageTaken,
-        &context,
-        None,
-    ) {
+    for collected in collect_modifiers(state, target, ModifierApplies::DamageTaken, &context, None)
+    {
         match collected.modifier.effect {
             ModifierEffect::Immunity => return Ok(0),
             ModifierEffect::Resistance => multiplier *= 0.5,
@@ -3900,7 +3954,8 @@ fn apply_dying(state: &mut EncounterState, target: usize, log: &mut Vec<String>)
     state.combatants[target].death_saves.stable = false;
     log.push(format!(
         "{name} drops to 0 HP ({}/{} death saves)",
-        state.combatants[target].death_saves.successes, state.combatants[target].death_saves.failures
+        state.combatants[target].death_saves.successes,
+        state.combatants[target].death_saves.failures
     ));
     let conditions = state
         .content
@@ -4080,16 +4135,13 @@ pub fn heal(
             damage_type: None,
             source_tags: Vec::new(),
         };
-        for collected in collect_modifiers(
-            state,
-            source,
-            ModifierApplies::HealingDone,
-            &context,
-            None,
-        ) {
+        for collected in
+            collect_modifiers(state, source, ModifierApplies::HealingDone, &context, None)
+        {
             if collected.modifier.effect == ModifierEffect::Bonus {
                 if let Some(value) = &collected.modifier.value {
-                    let (_, expression) = evaluate_value(&score_context(&state.combatants[source]), value)?;
+                    let (_, expression) =
+                        evaluate_value(&score_context(&state.combatants[source]), value)?;
                     let extra = expression.roll(rng).total;
                     amount += extra;
                     terms.push(format!("+{extra}[{}]", collected.label));
@@ -4130,10 +4182,16 @@ pub fn save(
     let index = state
         .find_index(who)
         .map_err(|error| anyhow!(error.to_string()))?;
-    let ability = ability_from_text(ability)
-        .ok_or_else(|| anyhow!("unknown ability `{ability}`; use str, dex, con, int, wis or cha"))?;
-    let (modifier_mode, bonuses, advantages, disadvantages, auto_fail) =
-        save_modifiers(state, index, ability, &score_context(&state.combatants[index]), rng)?;
+    let ability = ability_from_text(ability).ok_or_else(|| {
+        anyhow!("unknown ability `{ability}`; use str, dex, con, int, wis or cha")
+    })?;
+    let (modifier_mode, bonuses, advantages, disadvantages, auto_fail) = save_modifiers(
+        state,
+        index,
+        ability,
+        &score_context(&state.combatants[index]),
+        rng,
+    )?;
     let mode = combine_modes(mode, modifier_mode);
     if auto_fail {
         log.push(format!(
@@ -4189,8 +4247,7 @@ pub fn check(
         .map_err(|error| anyhow!(error.to_string()))?;
     let ability = ability_from_text(skill_or_ability);
     let base = if ability.is_some()
-        && state
-            .combatants[index]
+        && state.combatants[index]
             .creature
             .skills
             .as_ref()
@@ -4198,8 +4255,7 @@ pub fn check(
                 !skills
                     .keys()
                     .any(|skill| skill.eq_ignore_ascii_case(skill_or_ability))
-            })
-    {
+            }) {
         ability
             .map(|ability| state.combatants[index].creature.ability_modifier(ability))
             .unwrap_or(0)
@@ -4277,7 +4333,10 @@ pub fn move_to(
         .find_index(who)
         .map_err(|error| anyhow!(error.to_string()))?;
     if state.combatants[index].dormant {
-        bail!("`{}` is dormant and cannot move", state.combatants[index].name);
+        bail!(
+            "`{}` is dormant and cannot move",
+            state.combatants[index].name
+        );
     }
     let Some(space) = state.space() else {
         bail!("this state has no scene");
@@ -4287,7 +4346,10 @@ pub fn move_to(
     }
     let from = state.combatants[index].zone.clone();
     if from == zone {
-        log.push(format!("{} is already in {zone}", state.combatants[index].name));
+        log.push(format!(
+            "{} is already in {zone}",
+            state.combatants[index].name
+        ));
         return Ok(());
     }
     let distance = space
@@ -4322,7 +4384,10 @@ pub fn activate(
     }
     for index in matches {
         if !state.combatants[index].dormant {
-            log.push(format!("{} is already active", state.combatants[index].name));
+            log.push(format!(
+                "{} is already active",
+                state.combatants[index].name
+            ));
             continue;
         }
         let roll = D20Roll::roll(
@@ -4353,9 +4418,7 @@ fn insert_into_initiative(state: &mut EncounterState, index: usize) {
         .initiative
         .iter()
         .position(|candidate| {
-            let other = state.combatants[*candidate]
-                .initiative_total
-                .unwrap_or(0);
+            let other = state.combatants[*candidate].initiative_total.unwrap_or(0);
             total > other
         })
         .unwrap_or(state.initiative.len());
@@ -4411,16 +4474,22 @@ fn death_save_at(
         return Ok(());
     }
     if roll.nat1 {
-        state.combatants[index].death_saves.failures =
-            state.combatants[index].death_saves.failures.saturating_add(2);
+        state.combatants[index].death_saves.failures = state.combatants[index]
+            .death_saves
+            .failures
+            .saturating_add(2);
         log.push(format!("{name} critical failure (2 death save failures)"));
     } else if roll.total >= 10 {
-        state.combatants[index].death_saves.successes =
-            state.combatants[index].death_saves.successes.saturating_add(1);
+        state.combatants[index].death_saves.successes = state.combatants[index]
+            .death_saves
+            .successes
+            .saturating_add(1);
         log.push(format!("{name} succeeds on the death save"));
     } else {
-        state.combatants[index].death_saves.failures =
-            state.combatants[index].death_saves.failures.saturating_add(1);
+        state.combatants[index].death_saves.failures = state.combatants[index]
+            .death_saves
+            .failures
+            .saturating_add(1);
         log.push(format!("{name} fails the death save"));
     }
     if state.combatants[index].death_saves.failures >= 3 {
@@ -4468,7 +4537,9 @@ pub fn rest(
                     resource.current = resource.max;
                 }
                 if state.combatants[index].death_saves.dead {
-                    log.push(format!("{name} is dead and cannot benefit from a long rest"));
+                    log.push(format!(
+                        "{name} is dead and cannot benefit from a long rest"
+                    ));
                     continue;
                 }
                 state.combatants[index].hp = state.combatants[index].max_hp;
@@ -4481,13 +4552,11 @@ pub fn rest(
                     .dying_conditions
                     .clone()
                     .unwrap_or_default();
-                state.combatants[index]
-                    .conditions
-                    .retain(|condition| {
-                        !dying
-                            .iter()
-                            .any(|id| id.eq_ignore_ascii_case(&condition.condition))
-                    });
+                state.combatants[index].conditions.retain(|condition| {
+                    !dying
+                        .iter()
+                        .any(|id| id.eq_ignore_ascii_case(&condition.condition))
+                });
                 log.push(format!("{name} takes a long rest"));
             }
         }
@@ -4509,14 +4578,15 @@ pub fn armor_class(state: &EncounterState, index: usize) -> i32 {
 pub fn status_lines(state: &EncounterState) -> Vec<String> {
     let mut lines = Vec::new();
     match state.current() {
-        Some(combatant) => lines.push(format!(
-            "Round {} - {}'s turn",
-            state.round, combatant.name
-        )),
+        Some(combatant) => lines.push(format!("Round {} - {}'s turn", state.round, combatant.name)),
         None => lines.push(format!("Round {} - initiative not rolled", state.round)),
     }
     for index in status_order(state) {
-        lines.push(combatant_status_line(state, index, state.current_index() == Some(index)));
+        lines.push(combatant_status_line(
+            state,
+            index,
+            state.current_index() == Some(index),
+        ));
     }
     lines
 }
@@ -4543,7 +4613,10 @@ fn combatant_status_line(state: &EncounterState, index: usize, current: bool) ->
         .initiative_total
         .map_or_else(|| "-".to_string(), |total| total.to_string());
     let hp = if combatant.temp_hp > 0 {
-        format!("{}/{} (+{})", combatant.hp, combatant.max_hp, combatant.temp_hp)
+        format!(
+            "{}/{} (+{})",
+            combatant.hp, combatant.max_hp, combatant.temp_hp
+        )
     } else {
         format!("{}/{}", combatant.hp, combatant.max_hp)
     };

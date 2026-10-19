@@ -13,9 +13,7 @@ use serde::Serialize;
 
 use crate::content::{self, ContentSources, ItemKind, ShownItem};
 use crate::dice::{self, DiceRng, RollMode};
-use crate::engine::{
-    self, AddConditionOptions, AttackOptions, RestKind, UseOptions,
-};
+use crate::engine::{self, AddConditionOptions, AttackOptions, RestKind, UseOptions};
 use crate::state::{
     resolve_state_path, AddSpec, CombatantState, EncounterState, LookupError, NewEncounter,
 };
@@ -335,7 +333,14 @@ pub fn run() -> Result<()> {
             party,
             party_zone,
             add,
-        } => new_state(&sources, state.as_deref(), encounter, party, party_zone, add),
+        } => new_state(
+            &sources,
+            state.as_deref(),
+            encounter,
+            party,
+            party_zone,
+            add,
+        ),
         Command::Init { set } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
@@ -422,7 +427,15 @@ pub fn run() -> Result<()> {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
-                engine::save(state, &who, &ability, dc, RollMode::from_flags(adv, dis), rng, lines)
+                engine::save(
+                    state,
+                    &who,
+                    &ability,
+                    dc,
+                    RollMode::from_flags(adv, dis),
+                    rng,
+                    lines,
+                )
             })
         }
         Command::Check {
@@ -577,7 +590,9 @@ pub fn run() -> Result<()> {
         }
         Command::Next => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| engine::next_turn(state, rng, lines))
+            run_state_command(&path, seed, |state, rng, lines| {
+                engine::next_turn(state, rng, lines)
+            })
         }
         Command::Log { tail } => print_log(&state_path(&sources, state.as_deref()), tail),
         Command::Rest { kind, who } => {
@@ -622,15 +637,18 @@ fn manifest_state_dir(sources: &ContentSources) -> Option<PathBuf> {
         let value: serde_norway::Value = serde_norway::from_str(&text).ok()?;
         serde_json::to_value(value).ok()?
     };
-    let manifest: crate::content::schema::CampaignManifest =
-        serde_json::from_value(value).ok()?;
+    let manifest: crate::content::schema::CampaignManifest = serde_json::from_value(value).ok()?;
     let base = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    manifest
-        .state_dir
-        .map(|dir| if dir.is_absolute() { dir } else { base.join(dir) })
+    manifest.state_dir.map(|dir| {
+        if dir.is_absolute() {
+            dir
+        } else {
+            base.join(dir)
+        }
+    })
 }
 
 fn state_path(sources: &ContentSources, requested: Option<&Path>) -> PathBuf {
@@ -926,16 +944,9 @@ impl StatusOutput {
                                 .duration
                                 .as_ref()
                                 .map(crate::state::ActiveDuration::describe),
-                            save_ends: condition
-                                .save_ends
-                                .as_ref()
-                                .map(|save_ends| {
-                                    format!(
-                                        "{}:{}",
-                                        save_ends.ability.as_str(),
-                                        save_ends.dc
-                                    )
-                                }),
+                            save_ends: condition.save_ends.as_ref().map(|save_ends| {
+                                format!("{}:{}", save_ends.ability.as_str(), save_ends.dc)
+                            }),
                             concentration: condition.concentration,
                         })
                         .collect(),

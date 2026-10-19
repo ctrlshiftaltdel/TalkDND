@@ -30,6 +30,9 @@ conditions:
   - id: downed-test
   - id: focus-test
   - id: marked-test
+  - id: vexed-test
+    modifiers:
+      - {applies: incoming_attack, effect: advantage, when: {linked_is_attacker: true}, consume: true}
   - id: dodging-test
   - id: disengaged-test
   - id: hidden-test
@@ -39,6 +42,12 @@ conditions:
       - {applies: speed, effect: bonus, value: -10}
 
 masteries:
+  - id: slowing
+    triggers:
+      - on: on_hit
+        when: {damage_dealt: true}
+        effects:
+          - apply_condition: {condition: slowed-test, to: target, duration: {until: start_of_source_next_turn}}
   - id: dazing
     triggers:
       - on: on_hit
@@ -109,6 +118,7 @@ creatures:
     abilities: {str: 10, dex: 16, con: 12, int: 10, wis: 10, cha: 10}
     attacks:
       - {id: test-sword, name: Test Sword, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5, properties: [finesse, light]}
+      - {id: slow-blade, name: Slow Blade, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5, mastery: slowing}
       - {id: test-bow, name: Test Bow, kind: ranged, ability: dex, to_hit: 5, damage: [{dice: "1d6+2", type: piercing}], range: [80, 320], properties: [ranged, two-handed]}
     features:
       - {ref: sneaky, params: {dice: 1d6}}

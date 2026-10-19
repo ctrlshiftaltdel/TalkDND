@@ -123,8 +123,24 @@ fn natural_one_always_misses() {
 fn advantage_and_disadvantage_cancel() {
     let mut state = state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
-    engine::add_condition(&mut state, "Striker A", "hindered", &options, &mut ScriptedRng::new(&[]), &mut Vec::new()).unwrap();
-    engine::add_condition(&mut state, "Striker A", "empowered", &options, &mut ScriptedRng::new(&[]), &mut Vec::new()).unwrap();
+    engine::add_condition(
+        &mut state,
+        "Striker A",
+        "hindered",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    engine::add_condition(
+        &mut state,
+        "Striker A",
+        "empowered",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
 
     let mut rng = ScriptedRng::new(&[15, 4]);
     let mut log = Vec::new();
@@ -155,7 +171,15 @@ fn advantage_and_disadvantage_cancel() {
 fn data_defined_on_hit_trigger_runs_once_per_turn() {
     let mut state = state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
-    engine::add_condition(&mut state, "Striker A", "empowered", &options, &mut ScriptedRng::new(&[]), &mut Vec::new()).unwrap();
+    engine::add_condition(
+        &mut state,
+        "Striker A",
+        "empowered",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
 
     let mut rng = ScriptedRng::new(&[10, 15, 4, 5]);
     let mut log = Vec::new();
@@ -171,14 +195,23 @@ fn data_defined_on_hit_trigger_runs_once_per_turn() {
     .unwrap();
     assert_eq!(hp(&state, "Brute A"), 40 - 6 - 5);
     assert!(log.iter().any(|line| line.contains("1d6(5)")), "{log:?}");
-    assert!(log
-        .iter()
-        .any(|line| line.contains("5 slashing")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("5 slashing")),
+        "{log:?}"
+    );
 
     // Same turn: the once-per-turn trigger is spent, even if the action is reset.
     let striker = index(&state, "Striker A");
     state.combatants[striker].action_used = false;
-    engine::add_condition(&mut state, "Striker A", "empowered", &options, &mut ScriptedRng::new(&[]), &mut Vec::new()).unwrap();
+    engine::add_condition(
+        &mut state,
+        "Striker A",
+        "empowered",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
     let mut rng = ScriptedRng::new(&[10, 15, 4]);
     engine::attack(
         &mut state,
@@ -213,7 +246,10 @@ fn reaction_condition_turns_hit_into_miss_and_spends_resource() {
     assert_eq!(warden.hp, 20, "the hit must be converted to a miss");
     assert_eq!(warden.resources["ward"].current, 0);
     assert!(warden.has_condition(&state.content, "guarded"));
-    assert!(log.iter().any(|line| line.contains("+5[guarded]")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("+5[guarded]")),
+        "{log:?}"
+    );
     assert!(log.iter().any(|line| line.contains("MISS")), "{log:?}");
 }
 
@@ -221,7 +257,15 @@ fn reaction_condition_turns_hit_into_miss_and_spends_resource() {
 fn incoming_attack_condition_grants_advantage_and_auto_crit() {
     let mut state = state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
-    engine::add_condition(&mut state, "Brute A", "exposed", &options, &mut ScriptedRng::new(&[]), &mut Vec::new()).unwrap();
+    engine::add_condition(
+        &mut state,
+        "Brute A",
+        "exposed",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
 
     let mut rng = ScriptedRng::new(&[3, 17, 1, 2, 3, 4]);
     let mut log = Vec::new();
@@ -236,7 +280,10 @@ fn incoming_attack_condition_grants_advantage_and_auto_crit() {
     )
     .unwrap();
 
-    assert!(log.iter().any(|line| line.contains("adv: exposed")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("adv: exposed")),
+        "{log:?}"
+    );
     assert!(log.iter().any(|line| line.contains("2d8")), "{log:?}");
     assert!(log.iter().any(|line| line.contains("2d6")), "{log:?}");
     assert_eq!(hp(&state, "Brute A"), 40 - (1 + 2 + 2 + 3 + 4));
@@ -246,7 +293,15 @@ fn incoming_attack_condition_grants_advantage_and_auto_crit() {
 fn consuming_modifier_removes_its_condition() {
     let mut state = state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
-    engine::add_condition(&mut state, "Striker A", "empowered", &options, &mut ScriptedRng::new(&[]), &mut Vec::new()).unwrap();
+    engine::add_condition(
+        &mut state,
+        "Striker A",
+        "empowered",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
 
     let mut rng = ScriptedRng::new(&[10, 15, 4, 5]);
     let mut log = Vec::new();
@@ -261,8 +316,9 @@ fn consuming_modifier_removes_its_condition() {
     )
     .unwrap();
 
-    assert!(!state.combatants[index(&state, "Striker A")]
-        .has_condition(&state.content, "empowered"));
+    assert!(
+        !state.combatants[index(&state, "Striker A")].has_condition(&state.content, "empowered")
+    );
 }
 
 #[test]
@@ -283,6 +339,60 @@ fn mastery_trigger_can_force_a_save_and_condition() {
 
     assert!(state.combatants[index(&state, "Striker A")].has_condition(&state.content, "dazed"));
     assert!(log.iter().any(|line| line.contains("CON save")), "{log:?}");
+}
+
+#[test]
+fn linked_condition_modifier_uses_the_linked_creature() {
+    let mut state = state("test-fight", &["striker-a"], &[]);
+    let options = AddConditionOptions {
+        linked: Some("Striker A".to_string()),
+        ..AddConditionOptions::default()
+    };
+    engine::add_condition(
+        &mut state,
+        "Brute A",
+        "vexed-test",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    let mut rng = ScriptedRng::new(&[3, 17, 4, 5]);
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Striker A",
+        "Brute A",
+        "test-sword",
+        &AttackOptions::default(),
+        &mut rng,
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("adv: vexed-test")),
+        "{log:?}"
+    );
+    assert!(!state.combatants[index(&state, "Brute A")].has_condition(&state.content, "vexed-test"));
+}
+
+#[test]
+fn mastery_predicate_damage_dealt_gates_its_condition() {
+    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut rng = ScriptedRng::new(&[15, 3]);
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Striker A",
+        "Brute A",
+        "slow-blade",
+        &AttackOptions::default(),
+        &mut rng,
+        &mut log,
+    )
+    .unwrap();
+    assert!(state.combatants[index(&state, "Brute A")].has_condition(&state.content, "slowed-test"));
 }
 
 #[test]
@@ -313,7 +423,15 @@ fn static_and_condition_resistance_apply() {
     assert_eq!(hp(&state, "Brute A"), 15, "vulnerability doubles damage");
 
     let options = AddConditionOptions::default();
-    engine::add_condition(&mut state, "Striker A", "insulated", &options, &mut ScriptedRng::new(&[]), &mut Vec::new()).unwrap();
+    engine::add_condition(
+        &mut state,
+        "Striker A",
+        "insulated",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
     engine::damage(
         &mut state,
         "Striker A",
@@ -324,7 +442,11 @@ fn static_and_condition_resistance_apply() {
         &mut Vec::new(),
     )
     .unwrap();
-    assert_eq!(hp(&state, "Striker A"), 15, "condition resistance halves damage");
+    assert_eq!(
+        hp(&state, "Striker A"),
+        15,
+        "condition resistance halves damage"
+    );
 }
 
 #[test]
@@ -341,8 +463,9 @@ fn death_saves_use_rules_dying_conditions() {
     )
     .unwrap();
     assert_eq!(hp(&state, "Striker A"), 0);
-    assert!(state.combatants[index(&state, "Striker A")]
-        .has_condition(&state.content, "downed-test"));
+    assert!(
+        state.combatants[index(&state, "Striker A")].has_condition(&state.content, "downed-test")
+    );
 
     engine::death_save(
         &mut state,
@@ -352,8 +475,9 @@ fn death_saves_use_rules_dying_conditions() {
     )
     .unwrap();
     assert_eq!(hp(&state, "Striker A"), 1);
-    assert!(!state.combatants[index(&state, "Striker A")]
-        .has_condition(&state.content, "downed-test"));
+    assert!(
+        !state.combatants[index(&state, "Striker A")].has_condition(&state.content, "downed-test")
+    );
 
     engine::damage(
         &mut state,
@@ -405,10 +529,8 @@ fn concentration_breaks_on_damage_and_removes_created_conditions() {
     )
     .unwrap();
     assert!(state.concentration.contains_key("Caster C"));
-    assert!(state.combatants[index(&state, "Caster C")]
-        .has_condition(&state.content, "focus-test"));
-    assert!(state.combatants[index(&state, "Brute A")]
-        .has_condition(&state.content, "marked-test"));
+    assert!(state.combatants[index(&state, "Caster C")].has_condition(&state.content, "focus-test"));
+    assert!(state.combatants[index(&state, "Brute A")].has_condition(&state.content, "marked-test"));
 
     engine::damage(
         &mut state,
@@ -421,10 +543,12 @@ fn concentration_breaks_on_damage_and_removes_created_conditions() {
     )
     .unwrap();
     assert!(!state.concentration.contains_key("Caster C"));
-    assert!(!state.combatants[index(&state, "Caster C")]
-        .has_condition(&state.content, "focus-test"));
-    assert!(!state.combatants[index(&state, "Brute A")]
-        .has_condition(&state.content, "marked-test"));
+    assert!(
+        !state.combatants[index(&state, "Caster C")].has_condition(&state.content, "focus-test")
+    );
+    assert!(
+        !state.combatants[index(&state, "Brute A")].has_condition(&state.content, "marked-test")
+    );
 }
 
 #[test]
@@ -438,7 +562,10 @@ fn dormant_creatures_are_excluded_until_activated() {
     )
     .unwrap();
     assert_eq!(state.initiative.len(), 1);
-    assert_eq!(combat_outcome(&state), Some(CombatOutcome::Winner("party".to_string())));
+    assert_eq!(
+        combat_outcome(&state),
+        Some(CombatOutcome::Winner("party".to_string()))
+    );
     assert!(engine::attack(
         &mut state,
         "Striker A",
@@ -508,9 +635,24 @@ fn resources_recharge_per_turn_round_short_long_and_rolled() {
     assert_eq!(resources["short-res"].current, 0);
     assert_eq!(resources["long-res"].current, 0);
 
-    engine::rest(&mut state, RestKind::Short, Some("Recharger R"), &mut Vec::new()).unwrap();
-    assert_eq!(state.combatants[recharger].resources["short-res"].current, 1);
-    engine::rest(&mut state, RestKind::Long, Some("Recharger R"), &mut Vec::new()).unwrap();
+    engine::rest(
+        &mut state,
+        RestKind::Short,
+        Some("Recharger R"),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        state.combatants[recharger].resources["short-res"].current,
+        1
+    );
+    engine::rest(
+        &mut state,
+        RestKind::Long,
+        Some("Recharger R"),
+        &mut Vec::new(),
+    )
+    .unwrap();
     assert_eq!(state.combatants[recharger].resources["long-res"].current, 1);
 }
 

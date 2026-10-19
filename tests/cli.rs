@@ -105,7 +105,11 @@ fn full_cli_flow() {
 
     let output = run(temp.path(), &["init", "--seed", "42"]);
     assert_success(&output, "init");
-    assert!(stdout(&output).contains("Initiative"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("Initiative"),
+        "{}",
+        stdout(&output)
+    );
 
     let status = status_json(temp.path());
     assert_eq!(status["round"], 1);
@@ -122,7 +126,10 @@ fn full_cli_flow() {
     assert!(stdout(&output).contains("| conditions:"));
     assert!(stdout(&output).contains("| resources:"));
 
-    let output = run(temp.path(), &["attack", "Striker", "Brute", "test-sword", "--seed", "1"]);
+    let output = run(
+        temp.path(),
+        &["attack", "Striker", "Brute", "test-sword", "--seed", "1"],
+    );
     assert_success(&output, "attack");
     assert!(stdout(&output).contains("attacks Brute A with Test Sword"));
     assert!(stdout(&output).contains("vs AC"));
@@ -176,7 +183,10 @@ fn init_set_uses_a_fixed_total() {
     let temp = TempState::new("init-set");
     create(&temp, &["--party", "striker-a,warden-b"]);
 
-    let output = run(temp.path(), &["init", "--set", "Striker A=30", "--seed", "42"]);
+    let output = run(
+        temp.path(),
+        &["init", "--set", "Striker A=30", "--seed", "42"],
+    );
     assert_success(&output, "init --set");
     assert!(stdout(&output).contains("(set)"));
 
@@ -270,12 +280,7 @@ fn content_commands_keep_working() {
 
     let output = run(
         temp.path(),
-        &[
-            "content",
-            "check",
-            "--campaign",
-            manifest.to_str().unwrap(),
-        ],
+        &["content", "check", "--campaign", manifest.to_str().unwrap()],
     );
     assert_success(&output, "content check");
     assert!(stdout(&output).contains("content check: 0 error(s)"));
