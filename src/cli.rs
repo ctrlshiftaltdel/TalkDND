@@ -1031,7 +1031,7 @@ fn run_simulate(
             );
         } else {
             print_lines(&log);
-            println!("Outcome: {}", summary.outcome);
+            println!("Result: {}", summary.outcome);
             println!("Rounds: {}", summary.rounds);
             let hp_text = summary
                 .hp_per_side

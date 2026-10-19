@@ -325,7 +325,7 @@ fn simulate_runs_once_with_play_by_play_and_summary() {
     let text = stdout(&output);
     assert!(text.contains("Round 1"), "{text}");
     assert!(text.contains("Rounds:"), "{text}");
-    assert!(text.contains("Outcome:"), "{text}");
+    assert!(text.contains("Result:"), "{text}");
     assert!(text.contains("HP left:"), "{text}");
 }
 
@@ -379,7 +379,7 @@ fn simulate_from_state_and_missing_source_errors() {
         "3",
     ]);
     assert_success(&output, "simulate --from-state");
-    assert!(stdout(&output).contains("Outcome:"), "{}", stdout(&output));
+    assert!(stdout(&output).contains("Result:"), "{}", stdout(&output));
 
     let output = run_raw(&["simulate"]);
     assert!(!output.status.success());
