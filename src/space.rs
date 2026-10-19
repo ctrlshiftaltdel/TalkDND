@@ -318,48 +318,76 @@ impl<'a> ZoneGraph<'a> {
         to: &str,
         movement: bool,
     ) -> Option<(i32, Vec<&crate::content::schema::Edge>)> {
-        if self.zone(from).is_none() || self.zone(to).is_none() {
-            return None;
-        }
-        if from == to {
+        let from_index = self.scene.zones.iter().position(|zone| zone.id == from)?;
+        let to_index = self.scene.zones.iter().position(|zone| zone.id == to)?;
+        if from_index == to_index {
             return Some((SAME_ZONE_DISTANCE, Vec::new()));
         }
-        let mut best: HashMap<String, i32> = HashMap::new();
-        let mut parents: HashMap<String, (String, &crate::content::schema::Edge)> = HashMap::new();
-        let mut queue = BinaryHeap::new();
-        best.insert(from.to_string(), 0);
-        queue.push(Reverse((0i32, from.to_string())));
-
-        while let Some(Reverse((cost, current))) = queue.pop() {
-            if current == to {
-                let mut edges = Vec::new();
-                let mut node = to.to_string();
-                while let Some((previous, edge)) = parents.get(&node) {
-                    edges.push(*edge);
-                    node = previous.clone();
+        let count = self.scene.zones.len();
+        let mut best = vec![i32::MAX; count];
+        let mut parents: Vec<Option<(usize, usize)>> = vec![None; count];
+        let mut done = vec![false; count];
+        best[from_index] = 0;
+        for _ in 0..count {
+            let mut current = None;
+            let mut current_cost = i32::MAX;
+            for index in 0..count {
+                if !done[index] && best[index] < current_cost {
+                    current = Some(index);
+                    current_cost = best[index];
                 }
-                edges.reverse();
-                return Some((cost, edges));
             }
-            if cost > best.get(&current).copied().unwrap_or(i32::MAX) {
-                continue;
+            let Some(current) = current else {
+                break;
+            };
+            done[current] = true;
+            if current == to_index {
+                break;
             }
-            for (next, edge) in self.directed_neighbours(&current) {
+            let current_id = &self.scene.zones[current].id;
+            for (edge_index, edge) in self.scene.edges.iter().enumerate() {
+                let next_id = if edge.a == *current_id {
+                    Some(&edge.b)
+                } else if edge.b == *current_id && !edge.one_way {
+                    Some(&edge.a)
+                } else {
+                    None
+                };
+                let Some(next_id) = next_id else {
+                    continue;
+                };
+                let Some(next) = self
+                    .scene
+                    .zones
+                    .iter()
+                    .position(|zone| zone.id == *next_id)
+                else {
+                    continue;
+                };
                 let weight = if movement {
                     Self::movement_cost(edge)
                 } else {
                     edge.distance
                 };
-                let candidate = cost.saturating_add(weight);
-                let known = best.get(&next).copied().unwrap_or(i32::MAX);
-                if candidate < known {
-                    best.insert(next.clone(), candidate);
-                    parents.insert(next.clone(), (current.clone(), edge));
-                    queue.push(Reverse((candidate, next)));
+                let candidate = current_cost.saturating_add(weight);
+                if candidate < best[next] {
+                    best[next] = candidate;
+                    parents[next] = Some((current, edge_index));
                 }
             }
         }
-        None
+        if best[to_index] == i32::MAX {
+            return None;
+        }
+        let mut edges = Vec::new();
+        let mut node = to_index;
+        while node != from_index {
+            let (previous, edge_index) = parents[node]?;
+            edges.push(&self.scene.edges[edge_index]);
+            node = previous;
+        }
+        edges.reverse();
+        Some((best[to_index], edges))
     }
 
     fn step(&self, from: &str, edge: &crate::content::schema::Edge) -> MoveStep {

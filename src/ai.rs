@@ -978,8 +978,11 @@ impl Ai {
         state: &EncounterState,
         actor: usize,
         plan: &'a CombatantPlan,
-        target: usize,
+        _target: usize,
     ) -> Option<&'a PlannedAction> {
+        // Position selection only needs an action's range and rough value.
+        // Avoid a full accuracy forecast here; the chosen action is scored
+        // once more after movement.
         plan.actions
             .iter()
             .filter(|action| {
@@ -989,8 +992,16 @@ impl Ai {
                     && self.resource_allows(state, plan, action)
             })
             .max_by(|a, b| {
-                self.score_action(state, actor, a, target)
-                    .partial_cmp(&self.score_action(state, actor, b, target))
+                let value = |action: &PlannedAction| {
+                    action.raw_damage
+                        + if action.role == AiRole::Control {
+                            0.5
+                        } else {
+                            0.0
+                        }
+                };
+                value(a)
+                    .partial_cmp(&value(b))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
     }

@@ -13,7 +13,7 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::content::expr::ExprContext;
 use crate::content::schema::{
-    Ability, AbilityCost, AbilityName, Activation, Attack, AttackEffect, AttackKind,
+    Ability, AbilityCost, AbilityEntry, AbilityName, Activation, Attack, AttackEffect, AttackKind,
     AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag, Cover, CritMode,
     DamageEffect, DamagePart, Direction, Duration, DurationUntil, Effect, EndsOn, ExprValue,
     ForcedMoveEffect, Light, Modifier, ModifierApplies, ModifierEffect, ModifierFilter, OncePer,
@@ -110,9 +110,10 @@ pub enum RestKind {
 // ---------------------------------------------------------------------------
 
 fn score_context(combatant: &CombatantState) -> ExprContext {
-    let scores = combatant.creature.abilities.clone().unwrap_or_default();
+    let empty = BTreeMap::new();
+    let scores = combatant.creature.abilities.as_ref().unwrap_or(&empty);
     let mut context = ExprContext::new()
-        .with_ability_scores(&scores)
+        .with_ability_scores(scores)
         .with_prof(combatant.creature.proficiency_bonus())
         .with_level(combatant.creature.level());
     if let Some(spellcasting) = &combatant.creature.spellcasting {
@@ -601,34 +602,51 @@ fn collect_modifiers(
         }
     }
 
-    if let Ok(abilities) = combatant.owned_abilities(&state.content) {
-        for resolved in abilities {
-            if resolved.ability.activation != Activation::Passive {
+    // Scan passive abilities without resolving (and cloning) every owned
+    // action. Most creatures have no passive modifiers, so this avoids a large
+    // amount of allocation on the attack hot path.
+    let mut owned: Vec<&AbilityEntry> = Vec::new();
+    if let Some(actions) = &combatant.creature.actions {
+        owned.extend(actions.iter());
+    }
+    if let Some(features) = &combatant.creature.features {
+        owned.extend(features.iter());
+    }
+    for entry in owned {
+        let ability: &Ability = match entry {
+            AbilityEntry::Inline(ability) => ability,
+            AbilityEntry::Ref(reference) => {
+                let Some(ability) = state.content.abilities.get(&reference.reference) else {
+                    continue;
+                };
+                ability
+            }
+        };
+        if ability.activation != Activation::Passive || ability.modifiers.is_empty() {
+            continue;
+        }
+        for (modifier_index, modifier) in ability.modifiers.iter().enumerate() {
+            if modifier.applies != applies {
                 continue;
             }
-            for (modifier_index, modifier) in resolved.ability.modifiers.iter().enumerate() {
-                if modifier.applies != applies {
-                    continue;
-                }
-                if !modifier_filter_matches_opt(&modifier.filter, context) {
-                    continue;
-                }
-                if let Some(when) = &modifier.when {
-                    if !eval_predicate(state, when, context) {
-                        continue;
-                    }
-                }
-                let key = format!("ability:{}:mod:{modifier_index}", resolved.ability.id);
-                if !modifier_once_available(state, owner, &key, modifier.once_per) {
-                    continue;
-                }
-                out.push(CollectedModifier {
-                    modifier: modifier.clone(),
-                    label: resolved.ability.display_name().to_string(),
-                    key,
-                    origin_condition: None,
-                });
+            if !modifier_filter_matches_opt(&modifier.filter, context) {
+                continue;
             }
+            if let Some(when) = &modifier.when {
+                if !eval_predicate(state, when, context) {
+                    continue;
+                }
+            }
+            let key = format!("ability:{}:mod:{modifier_index}", ability.id);
+            if !modifier_once_available(state, owner, &key, modifier.once_per) {
+                continue;
+            }
+            out.push(CollectedModifier {
+                modifier: modifier.clone(),
+                label: ability.display_name().to_string(),
+                key,
+                origin_condition: None,
+            });
         }
     }
     if let Some(source) = source {
