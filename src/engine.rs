@@ -5,6 +5,8 @@
 //! structured form so the CLI and the AI can inspect results without parsing
 //! log strings.
 
+use std::collections::BTreeMap;
+
 use anyhow::{anyhow, bail, Result};
 
 use crate::dice::{D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
@@ -318,11 +320,54 @@ fn find_reaction<'a>(spec: &'a CombatantSpec, name: &str) -> Option<&'a Reaction
         .find(|reaction| reaction.name.eq_ignore_ascii_case(name))
 }
 
+fn attack_candidates(spec: &CombatantSpec) -> String {
+    if spec.attacks.is_empty() {
+        "(none)".to_string()
+    } else {
+        spec.attacks
+            .iter()
+            .map(|attack| attack.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+fn heal_candidates(spec: &CombatantSpec) -> String {
+    if spec.heals.is_empty() {
+        "(none)".to_string()
+    } else {
+        spec.heals
+            .iter()
+            .map(|heal| heal.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+fn resource_candidates(combatant: &CombatantState) -> String {
+    if combatant.resources.is_empty() {
+        "(none)".to_string()
+    } else {
+        combatant
+            .resources
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 fn find_attack<'a>(spec: &'a CombatantSpec, name: &str) -> Result<&'a Attack> {
     spec.attacks
         .iter()
         .find(|attack| attack.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| anyhow!("{} has no attack named `{name}`", spec.name))
+        .ok_or_else(|| {
+            anyhow!(
+                "{} has no attack named `{name}` (known attacks: {})",
+                spec.name,
+                attack_candidates(spec)
+            )
+        })
 }
 
 fn find_heal<'a>(spec: &'a CombatantSpec, name: &str) -> Option<&'a Heal> {
@@ -338,10 +383,14 @@ fn cost_amount(cost: &Cost) -> Result<i32> {
 fn check_cost(state: &EncounterState, index: usize, cost: &Cost) -> Result<()> {
     let amount = cost_amount(cost)?;
     let combatant = &state.combatants[index];
-    let resource = combatant
-        .resources
-        .get(&cost.resource)
-        .ok_or_else(|| anyhow!("{} has no resource `{}`", combatant.name(), cost.resource))?;
+    let resource = combatant.resources.get(&cost.resource).ok_or_else(|| {
+        anyhow!(
+            "{} has no resource `{}` (known resources: {})",
+            combatant.name(),
+            cost.resource,
+            resource_candidates(combatant)
+        )
+    })?;
     if resource.current < amount {
         bail!(
             "{} has only {} of `{}` ({} required)",
@@ -452,22 +501,54 @@ pub fn init<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
     rng: &mut R,
     sink: &mut L,
 ) -> Result<()> {
+    init_with_overrides(state, &[], rng, sink)
+}
+
+/// Rolls initiative, honouring fixed totals supplied by `init --set`.
+///
+/// Overridden combatants do not consume RNG. The same tie-breaks apply:
+/// total, initiative bonus, Dexterity modifier, then creation order.
+pub fn init_with_overrides<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
+    state: &mut EncounterState,
+    overrides: &[(usize, i32)],
+    rng: &mut R,
+    sink: &mut L,
+) -> Result<()> {
     if state.combatants.is_empty() {
         bail!("there are no combatants to roll initiative for");
+    }
+
+    let mut fixed = BTreeMap::new();
+    for &(index, total) in overrides {
+        if index >= state.combatants.len() {
+            bail!("initiative override refers to unknown combatant index {index}");
+        }
+        fixed.insert(index, total);
     }
 
     let mut rolls: Vec<(usize, i32, i32, i32)> = Vec::with_capacity(state.combatants.len());
     for (index, combatant) in state.combatants.iter().enumerate() {
         let bonus = combatant.spec.init_bonus;
-        let roll = D20Roll::roll(bonus, RollMode::Normal, rng);
-        if sink.enabled() {
-            sink.log(format_args!(
-                "Initiative {0}: {1}",
-                combatant.name(),
-                roll.text()
-            ));
-        }
-        rolls.push((index, roll.total, bonus, combatant.ability_modifier("dex")));
+        let total = if let Some(&total) = fixed.get(&index) {
+            if sink.enabled() {
+                sink.log(format_args!(
+                    "Initiative {0}: {total} (set)",
+                    combatant.name()
+                ));
+            }
+            total
+        } else {
+            let roll = D20Roll::roll(bonus, RollMode::Normal, rng);
+            if sink.enabled() {
+                sink.log(format_args!(
+                    "Initiative {0}: {1}",
+                    combatant.name(),
+                    roll.text()
+                ));
+            }
+            roll.total
+        };
+        rolls.push((index, total, bonus, combatant.ability_modifier("dex")));
     }
 
     rolls.sort_by(|left, right| {
@@ -479,6 +560,9 @@ pub fn init<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
             .then_with(|| left.0.cmp(&right.0))
     });
 
+    for &(index, total, ..) in &rolls {
+        state.combatants[index].initiative_total = Some(total);
+    }
     state.initiative = rolls.into_iter().map(|(index, ..)| index).collect();
     state.round = 1;
     state.turn = 0;
@@ -2233,7 +2317,14 @@ pub fn cast<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
 
     let heal_entry = find_heal(&state.combatants[caster_index].spec, name)
         .cloned()
-        .ok_or_else(|| anyhow!("{caster_name} has no attack or heal named `{name}`"))?;
+        .ok_or_else(|| {
+            let spec = &state.combatants[caster_index].spec;
+            anyhow!(
+                "{caster_name} has no attack or heal named `{name}` (known attacks: {}; known heals: {})",
+                attack_candidates(spec),
+                heal_candidates(spec)
+            )
+        })?;
 
     let target_indices: Vec<usize> = if targets.is_empty() {
         vec![caster_index]
@@ -2354,7 +2445,14 @@ pub fn use_entry<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
         .keys()
         .find(|key| key.eq_ignore_ascii_case(name))
         .cloned()
-        .ok_or_else(|| anyhow!("{who_name} has no resource or heal named `{name}`"))?;
+        .ok_or_else(|| {
+            let combatant = &state.combatants[index];
+            anyhow!(
+                "{who_name} has no resource or heal named `{name}` (known resources: {}; known heals: {})",
+                resource_candidates(combatant),
+                heal_candidates(&combatant.spec)
+            )
+        })?;
     {
         let resource = state.combatants[index]
             .resources
@@ -3398,8 +3496,26 @@ mod tests {
         let mut log = Vec::new();
         init(&mut state, &mut rng, &mut log).unwrap();
         assert_eq!(state.initiative, vec![0, 1, 2]);
+        assert_eq!(state.combatants[0].initiative_total, Some(12));
+        assert_eq!(state.combatants[1].initiative_total, Some(12));
+        assert_eq!(state.combatants[2].initiative_total, Some(10));
         assert_eq!(state.round, 1);
         assert_eq!(state.turn, 0);
+    }
+
+    #[test]
+    fn initiative_overrides_skip_rng_and_set_totals() {
+        let mut state = state_with(vec![
+            spec("A", Side::Party, Kind::Pc, 10, 10, 2, 14),
+            spec("B", Side::Party, Kind::Pc, 10, 10, 0, 10),
+        ]);
+        let mut rng = ScriptRng::new(&[10]);
+        let mut log = Vec::new();
+        init_with_overrides(&mut state, &[(0, 30)], &mut rng, &mut log).unwrap();
+        assert_eq!(state.initiative, vec![0, 1]);
+        assert_eq!(state.combatants[0].initiative_total, Some(30));
+        assert_eq!(state.combatants[1].initiative_total, Some(10));
+        assert!(log.iter().any(|line| line.contains("(set)")));
     }
 
     #[test]

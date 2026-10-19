@@ -69,6 +69,9 @@ pub struct CombatantState {
     pub bonus_action_used: bool,
     #[serde(default)]
     pub speed_left: i32,
+    /// Initiative total rolled (or supplied with `init --set`), when known.
+    #[serde(default)]
+    pub initiative_total: Option<i32>,
     /// Weapon-mastery and similar markers (Sap, Vex, Slow) with their expiry.
     #[serde(default)]
     pub markers: Vec<EffectMarker>,
@@ -100,6 +103,7 @@ impl CombatantState {
             action_used: false,
             bonus_action_used: false,
             speed_left,
+            initiative_total: None,
             markers: Vec::new(),
         }
     }
@@ -790,6 +794,7 @@ mod tests {
         will.action_used = true;
         will.bonus_action_used = true;
         will.speed_left = 15;
+        will.initiative_total = Some(16);
         will.markers.push(EffectMarker {
             kind: MarkerKind::Sap,
             source: "Guard 1".to_string(),
