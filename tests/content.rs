@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use combat_sim::content::schema::{Effect, ExprValue, Predicate};
+use combat_sim::content::schema::{AbilityName, Effect, ExprValue, Predicate, SaveEndsAt};
 use combat_sim::content::{check, ContentRegistry, ContentSources, ItemKind};
 
 fn fixture(relative: &str) -> PathBuf {
@@ -46,7 +46,7 @@ fn messages(registry: &ContentRegistry) -> String {
 fn loads_all_sources_with_counts_and_origins() {
     let registry = load_campaign();
 
-    assert_eq!(registry.conditions.len(), 3);
+    assert_eq!(registry.conditions.len(), 4);
     assert_eq!(registry.masteries.len(), 1);
     assert_eq!(registry.abilities.len(), 3);
     assert_eq!(registry.creatures.len(), 6);
@@ -72,6 +72,10 @@ fn loads_all_sources_with_counts_and_origins() {
     assert_eq!(
         registry.conditions.source("exposed").unwrap().path,
         fixture("library/more.json")
+    );
+    assert_eq!(
+        registry.conditions.source("steady").unwrap().path,
+        fixture("chars/container.md")
     );
 
     let hero = registry.creatures.source("hero-a").unwrap();
@@ -325,6 +329,50 @@ fn check_reports_expression_errors() {
 }
 
 #[test]
+fn apply_condition_save_ends_deserializes_and_validates() {
+    let registry = library_sources("save-ends.yaml").load().unwrap();
+    let ability = registry.abilities.get("linger").expect("linger is loaded");
+    let [Effect::ApplyCondition(apply)] = ability.effects.as_slice() else {
+        panic!("expected one apply_condition effect: {:?}", ability.effects);
+    };
+    let save_ends = apply
+        .save_ends
+        .as_ref()
+        .expect("save_ends should deserialize");
+    assert_eq!(save_ends.ability, AbilityName::Wis);
+    assert_eq!(save_ends.dc, ExprValue::Text("10+{level}".to_string()));
+    assert_eq!(save_ends.at, SaveEndsAt::EndOfTurn);
+
+    let report = check(&registry);
+    assert_eq!(
+        report.error_count(),
+        0,
+        "unexpected errors:\n{}",
+        messages(&registry)
+    );
+}
+
+#[test]
+fn check_reports_invalid_save_ends_dc() {
+    let registry = library_sources("bad/save-ends.yaml").load().unwrap();
+    let text = messages(&registry);
+    assert!(
+        text.contains("save_ends dc: unknown expression variable `nope`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn save_ends_rejects_unknown_fields() {
+    let error = serde_norway::from_str::<Effect>(
+        "apply_condition: {condition: wavering, save_ends: {ability: wis, dc: 10, at: end_of_turn, later: true}}",
+    )
+    .unwrap_err();
+    let text = format!("{error:#}");
+    assert!(text.contains("unknown field `later`"), "{text}");
+}
+
+#[test]
 fn markdown_errors_include_the_block_line() {
     let error = library_sources("bad/markdown.md").load().unwrap_err();
     let text = format!("{error:#}");
@@ -364,6 +412,23 @@ fn plain_map_effects_and_predicates_deserialize() {
         serialized[0].get("damage").is_some(),
         "serialization keeps the same map shape: {serialized}"
     );
+}
+
+#[test]
+fn recharge_forms_parse_and_serialize() {
+    use combat_sim::content::schema::{Recharge, ResourceDef};
+
+    let resource: ResourceDef = serde_norway::from_str("max: 1\nrecharge: recharge 5-6").unwrap();
+    assert_eq!(resource.recharge, Recharge::Range { min: 5, max: 6 });
+    assert_eq!(resource.recharge.to_string(), "recharge 5-6");
+
+    let exact: Recharge = serde_norway::from_str("recharge 5").unwrap();
+    assert_eq!(exact, Recharge::Single(5));
+    assert_eq!(serde_json::to_value(&exact).unwrap(), "recharge 5");
+
+    let keyword: Recharge = serde_norway::from_str("short").unwrap();
+    assert_eq!(keyword, Recharge::Short);
+    assert_eq!(serde_json::to_value(&keyword).unwrap(), "short");
 }
 
 #[test]

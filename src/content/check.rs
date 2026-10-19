@@ -1082,6 +1082,9 @@ impl<'a> Walker<'a> {
             Effect::ApplyCondition(apply) => {
                 self.condition_ref(&apply.condition);
                 self.duration(apply.duration.as_ref());
+                if let Some(save_ends) = &apply.save_ends {
+                    self.expression(&save_ends.dc, "save_ends dc");
+                }
             }
             Effect::RemoveCondition(remove) => self.condition_ref(&remove.condition),
             Effect::ForcedMove(_) => {}

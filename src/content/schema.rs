@@ -149,7 +149,7 @@ pub enum Activation {
 }
 
 /// Whether a limited-use resource resets.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Recharge {
     Turn,
     Round,
@@ -177,6 +177,15 @@ impl fmt::Display for Recharge {
             Self::Single(value) => write!(f, "recharge {value}"),
             Self::Range { min, max } => write!(f, "recharge {min}-{max}"),
         }
+    }
+}
+
+impl Serialize for Recharge {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
     }
 }
 
@@ -1201,6 +1210,23 @@ pub struct ApplyConditionEffect {
     pub link: bool,
     #[serde(default)]
     pub ends_on: Vec<EndsOn>,
+    #[serde(default)]
+    pub save_ends: Option<SaveEnds>,
+}
+
+/// A repeated save that can end an applied condition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaveEnds {
+    pub ability: AbilityName,
+    pub dc: ExprValue,
+    pub at: SaveEndsAt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SaveEndsAt {
+    EndOfTurn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
