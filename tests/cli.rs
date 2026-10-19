@@ -215,7 +215,7 @@ fn init_set_uses_a_fixed_total() {
 }
 
 #[test]
-fn roll_is_logged_and_simulate_is_a_stub() {
+fn roll_is_logged() {
     let temp = TempState::new("roll");
     let output = run(
         temp.path(),
@@ -237,8 +237,135 @@ fn roll_is_logged_and_simulate_is_a_stub() {
         stdout(&output).contains("1d20"),
         "roll should be appended to the log"
     );
+}
 
-    let output = run(temp.path(), &["simulate"]);
-    assert_success(&output, "simulate");
-    assert!(stdout(&output).contains("not yet"));
+#[test]
+fn simulate_play_by_play_prints_log_and_summary() {
+    let temp = TempState::new("sim-one");
+    let output = run(
+        temp.path(),
+        &[
+            "simulate",
+            "--encounter",
+            "data/encounters/party-vs-2-guards.json",
+            "--seed",
+            "42",
+        ],
+    );
+    assert_success(&output, "simulate --runs 1");
+    let text = stdout(&output);
+    assert!(
+        text.contains("Round 1 —"),
+        "play-by-play log missing: {text}"
+    );
+    assert!(text.contains("Outcome:"), "summary missing: {text}");
+    assert!(text.contains("HP ("), "side summary missing: {text}");
+    assert!(
+        !temp.path().exists(),
+        "simulate --encounter must not touch the state file"
+    );
+}
+
+#[test]
+fn simulate_single_run_json_is_machine_readable() {
+    let temp = TempState::new("sim-one-json");
+    let output = run(
+        temp.path(),
+        &[
+            "simulate",
+            "--encounter",
+            "data/encounters/party-vs-2-guards.json",
+            "--runs",
+            "1",
+            "--json",
+            "--seed",
+            "42",
+        ],
+    );
+    assert_success(&output, "simulate --runs 1 --json");
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("single-run JSON should parse");
+
+    assert_eq!(report["runs"], 1);
+    assert!(report["rounds"].as_u64().unwrap() > 0);
+    assert!(
+        !report["log"].as_array().expect("log array").is_empty(),
+        "log should contain the captured engine lines"
+    );
+    let outcome = report["outcome"].as_str().expect("outcome string");
+    assert!(
+        matches!(outcome, "party_wins" | "enemy_wins" | "draw" | "timeout"),
+        "unexpected outcome {outcome}"
+    );
+    let combatants = report["combatants"].as_array().expect("combatants");
+    assert_eq!(combatants.len(), 6);
+    for combatant in combatants {
+        assert!(combatant["name"].as_str().is_some());
+        assert!(combatant["side"].as_str().is_some());
+        assert!(combatant["hp"].as_i64().is_some());
+        assert!(combatant["max_hp"].as_i64().is_some());
+        assert!(combatant["dead"].as_bool().is_some());
+        assert!(combatant["down"].as_bool().is_some());
+    }
+}
+
+#[test]
+fn simulate_monte_carlo_json_is_sane() {
+    let temp = TempState::new("sim-many");
+    let output = run(
+        temp.path(),
+        &[
+            "simulate",
+            "--encounter",
+            "data/encounters/party-vs-2-guards.json",
+            "--runs",
+            "100",
+            "--json",
+            "--seed",
+            "9",
+        ],
+    );
+    assert_success(&output, "simulate --runs 100 --json");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("simulation JSON");
+
+    assert_eq!(report["runs"], 100);
+    assert_eq!(
+        report["combatants"].as_array().expect("combatants").len(),
+        6
+    );
+    assert!(report["avg_rounds"].as_f64().unwrap() > 0.0);
+    assert!(report["runs_per_second"].as_f64().unwrap() > 0.0);
+    let rates = report["party_win_rate"].as_f64().unwrap()
+        + report["enemy_win_rate"].as_f64().unwrap()
+        + report["draw_rate"].as_f64().unwrap()
+        + report["timeout_rate"].as_f64().unwrap();
+    assert!((rates - 1.0).abs() < 1e-9, "rates sum to {rates}");
+}
+
+#[test]
+fn simulate_from_state_continues_without_rerolling_initiative() {
+    let temp = TempState::new("sim-state");
+    let output = run(
+        temp.path(),
+        &[
+            "new",
+            "--encounter",
+            "data/encounters/party-vs-2-guards.json",
+        ],
+    );
+    assert_success(&output, "new");
+    let output = run(temp.path(), &["init", "--seed", "42"]);
+    assert_success(&output, "init");
+    let before = std::fs::read_to_string(temp.path()).unwrap();
+
+    let output = run(temp.path(), &["simulate", "--from-state", "--seed", "42"]);
+    assert_success(&output, "simulate --from-state");
+    let text = stdout(&output);
+    assert!(text.contains("Outcome:"), "summary missing: {text}");
+    assert!(
+        !text.contains("Initiative"),
+        "from-state simulation should continue the existing initiative: {text}"
+    );
+    let after = std::fs::read_to_string(temp.path()).unwrap();
+    assert_eq!(before, after, "simulate must not modify the state file");
 }

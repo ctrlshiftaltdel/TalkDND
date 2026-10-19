@@ -43,6 +43,55 @@ impl DiceExpr {
         self.roll_terms(&doubled, rng)
     }
 
+    /// Expected value of the expression, used by the simulation AI.
+    pub fn average(&self) -> f64 {
+        let dice: f64 = self
+            .terms
+            .iter()
+            .map(|&(count, sides)| f64::from(count) * (f64::from(sides) + 1.0) / 2.0)
+            .sum();
+        dice + f64::from(self.modifier)
+    }
+
+    /// Expected value with every dice term doubled (critical hit).
+    pub fn average_doubled(&self) -> f64 {
+        let dice: f64 = self
+            .terms
+            .iter()
+            .map(|&(count, sides)| 2.0 * f64::from(count) * (f64::from(sides) + 1.0) / 2.0)
+            .sum();
+        dice + f64::from(self.modifier)
+    }
+
+    /// Rolls the expression without building a record, formula or dice list.
+    pub fn roll_total<R: DiceRng + ?Sized>(&self, rng: &mut R) -> i32 {
+        self.roll_total_terms(&self.terms, rng)
+    }
+
+    /// Rolls the critical-hit form without allocating.
+    pub fn roll_doubled_total<R: DiceRng + ?Sized>(&self, rng: &mut R) -> i32 {
+        let mut sum = i64::from(self.modifier);
+        for &(count, sides) in &self.terms {
+            let count = count
+                .checked_mul(2)
+                .expect("dice count overflow while doubling");
+            for _ in 0..count {
+                sum += i64::from(rng.roll_die(sides));
+            }
+        }
+        i32::try_from(sum).expect("dice total overflowed i32")
+    }
+
+    fn roll_total_terms<R: DiceRng + ?Sized>(&self, terms: &[(u32, u32)], rng: &mut R) -> i32 {
+        let mut sum = i64::from(self.modifier);
+        for &(count, sides) in terms {
+            for _ in 0..count {
+                sum += i64::from(rng.roll_die(sides));
+            }
+        }
+        i32::try_from(sum).expect("dice total overflowed i32")
+    }
+
     fn roll_terms<R: DiceRng + ?Sized>(&self, terms: &[(u32, u32)], rng: &mut R) -> RollRecord {
         let mut dice = Vec::new();
         let mut sum = i64::from(self.modifier);
@@ -383,7 +432,37 @@ pub struct D20Roll {
     pub nat1: bool,
 }
 
+/// Result of a d20 check without the raw-dice record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct D20Total {
+    /// The die that was kept.
+    pub kept: i32,
+    /// Kept die plus modifier.
+    pub total: i32,
+    /// The kept die was a natural 1.
+    pub nat1: bool,
+    /// The kept die was a natural 20.
+    pub nat20: bool,
+}
+
 impl D20Roll {
+    /// Rolls a d20 check without allocating a [`D20Roll`] record.
+    pub fn roll_total<R: DiceRng + ?Sized>(modifier: i32, mode: RollMode, rng: &mut R) -> D20Total {
+        let first = roll_d20_die(rng);
+        let kept = match mode {
+            RollMode::Normal => first,
+            RollMode::Advantage => first.max(roll_d20_die(rng)),
+            RollMode::Disadvantage => first.min(roll_d20_die(rng)),
+        };
+        let total = kept + modifier;
+        D20Total {
+            kept,
+            total,
+            nat1: kept == 1,
+            nat20: kept == 20,
+        }
+    }
+
     /// Rolls a d20 check with the requested mode.
     pub fn roll<R: DiceRng + ?Sized>(modifier: i32, mode: RollMode, rng: &mut R) -> Self {
         let first = roll_d20_die(rng);
@@ -637,6 +716,37 @@ mod tests {
         assert_eq!(roll.total, 13);
         assert_eq!(roll.text, "4d8(1,2,3,4)+3=13");
         assert_eq!(rng.sides_seen, vec![8, 8, 8, 8]);
+    }
+
+    #[test]
+    fn quiet_rolls_match_recorded_totals() {
+        let expr: DiceExpr = "2d8+1d6+3".parse().unwrap();
+        let record = expr.roll(&mut SequenceRng::new(&[2, 5, 4]));
+        let total = expr.roll_total(&mut SequenceRng::new(&[2, 5, 4]));
+        assert_eq!(record.total, total);
+
+        let doubled = expr.roll_doubled(&mut SequenceRng::new(&[1, 2, 3, 4, 5, 6]));
+        let doubled_total = expr.roll_doubled_total(&mut SequenceRng::new(&[1, 2, 3, 4, 5, 6]));
+        assert_eq!(doubled.total, doubled_total);
+
+        assert_eq!(expr.average(), 2.0 * 4.5 + 3.5 + 3.0);
+        assert_eq!(expr.average_doubled(), 4.0 * 4.5 + 2.0 * 3.5 + 3.0);
+    }
+
+    #[test]
+    fn quiet_d20_total_matches_roll() {
+        for mode in [
+            RollMode::Normal,
+            RollMode::Advantage,
+            RollMode::Disadvantage,
+        ] {
+            let record = D20Roll::roll(5, mode, &mut SequenceRng::new(&[3, 17]));
+            let total = D20Roll::roll_total(5, mode, &mut SequenceRng::new(&[3, 17]));
+            assert_eq!(record.total, total.total);
+            assert_eq!(record.kept, total.kept);
+            assert_eq!(record.nat1, total.nat1);
+            assert_eq!(record.nat20, total.nat20);
+        }
     }
 
     #[test]

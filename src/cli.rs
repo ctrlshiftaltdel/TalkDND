@@ -11,9 +11,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
+use crate::ai::Ai;
 use crate::dice::{self, DiceRng, RollMode};
 use crate::engine::{self, AttackOptions, CheckOptions, ConditionOptions};
 use crate::model::{Kind, Resource, Side};
+use crate::sim::{self, MonteCarloReport, RunOutcome, SimOptions, SingleRun};
 use crate::state::{ActiveCondition, CombatantState, DeathSaves, EncounterState, LookupError};
 
 /// Global options shared by every command.
@@ -189,8 +191,32 @@ pub enum Command {
         who: String,
     },
 
-    /// Batch simulation (not implemented yet).
-    Simulate,
+    /// Batch simulation: play-by-play with one run, Monte Carlo with more.
+    Simulate {
+        /// Combatant specs: `file.json[:count][@zone]`.
+        #[arg(value_name = "SPEC")]
+        specs: Vec<String>,
+
+        /// Encounter JSON file.
+        #[arg(long, value_name = "FILE", conflicts_with = "specs")]
+        encounter: Option<PathBuf>,
+
+        /// Continue from the persisted state file.
+        #[arg(long, conflicts_with_all = ["specs", "encounter"])]
+        from_state: bool,
+
+        /// Number of simulated runs.
+        #[arg(long, default_value_t = 1)]
+        runs: u64,
+
+        /// Abort a run after this many rounds.
+        #[arg(long, default_value_t = 100)]
+        max_rounds: u32,
+
+        /// Worker threads for the Monte Carlo path.
+        #[arg(long)]
+        threads: Option<usize>,
+    },
 }
 
 /// Condition subcommands.
@@ -418,10 +444,25 @@ pub fn run() -> Result<()> {
             engine::rest(state, kind.into(), Some(&who), lines)?;
             Ok(())
         }),
-        Command::Simulate => {
-            println!("not yet");
-            Ok(())
-        }
+        Command::Simulate {
+            specs,
+            encounter,
+            runs,
+            max_rounds,
+            threads,
+            ..
+        } => simulate(
+            &state,
+            json,
+            &specs,
+            encounter.as_deref(),
+            SimOptions {
+                runs,
+                max_rounds,
+                seed,
+                threads,
+            },
+        ),
     }
 }
 
@@ -733,6 +774,190 @@ fn saves_label(combatant: &CombatantState) -> String {
             "{}S/{}F",
             combatant.death_saves.successes, combatant.death_saves.failures
         )
+    }
+}
+
+fn simulate(
+    state_path: &Path,
+    json: bool,
+    specs: &[String],
+    encounter: Option<&Path>,
+    options: SimOptions,
+) -> Result<()> {
+    if options.runs == 0 {
+        bail!("--runs must be at least 1");
+    }
+    if options.max_rounds == 0 {
+        bail!("--max-rounds must be at least 1");
+    }
+    if options.threads == Some(0) {
+        bail!("--threads must be at least 1");
+    }
+
+    let mut template = if !specs.is_empty() {
+        EncounterState::from_specs(specs)?
+    } else if let Some(path) = encounter {
+        EncounterState::from_encounter_file(path)
+            .with_context(|| format!("failed to load encounter {}", path.display()))?
+    } else {
+        EncounterState::load(state_path)
+            .with_context(|| format!("failed to load state {}", state_path.display()))?
+    };
+    template.log.clear();
+
+    if options.runs == 1 {
+        let ai = Ai::new(&template)?;
+        let mut rng = make_rng(options.seed);
+        let mut lines = Vec::new();
+        let run = sim::play_run(
+            &mut template,
+            &ai,
+            options.max_rounds,
+            rng.as_mut(),
+            &mut lines,
+        )?;
+        if json {
+            let output = SingleRunOutput::from_state(&template, &run, lines);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&output)
+                    .context("failed to serialize simulation report")?
+            );
+        } else {
+            print_lines(&lines);
+            print_single_run_summary(&template, &run);
+        }
+        return Ok(());
+    }
+
+    let report = sim::monte_carlo(template, options)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .context("failed to serialize simulation report")?
+        );
+    } else {
+        print_monte_carlo_summary(&report);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct SingleRunOutput {
+    runs: u64,
+    outcome: RunOutcome,
+    rounds: u32,
+    log: Vec<String>,
+    combatants: Vec<SingleRunCombatant>,
+}
+
+#[derive(Debug, Serialize)]
+struct SingleRunCombatant {
+    name: String,
+    side: Side,
+    hp: i32,
+    max_hp: i32,
+    dead: bool,
+    down: bool,
+}
+
+impl SingleRunOutput {
+    fn from_state(state: &EncounterState, run: &SingleRun, log: Vec<String>) -> Self {
+        let combatants = state
+            .combatants
+            .iter()
+            .map(|combatant| SingleRunCombatant {
+                name: combatant.name().to_string(),
+                side: combatant.side(),
+                hp: combatant.hp,
+                max_hp: combatant.spec.max_hp,
+                dead: combatant.death_saves.dead,
+                down: combatant.hp <= 0 && !combatant.death_saves.dead,
+            })
+            .collect();
+        Self {
+            runs: 1,
+            outcome: run.outcome,
+            rounds: run.rounds,
+            log,
+            combatants,
+        }
+    }
+}
+
+fn print_single_run_summary(state: &EncounterState, run: &SingleRun) {
+    let outcome = match run.outcome {
+        RunOutcome::PartyWins => "party wins",
+        RunOutcome::EnemyWins => "enemies win",
+        RunOutcome::Draw => "draw",
+        RunOutcome::Timeout => "timeout",
+    };
+    println!("Outcome: {outcome} after {} round(s)", run.rounds);
+    for side in [Side::Party, Side::Enemy] {
+        let label = side_label(side);
+        let members: Vec<&CombatantState> = state
+            .combatants
+            .iter()
+            .filter(|combatant| combatant.side() == side)
+            .collect();
+        let hp: i32 = members.iter().map(|combatant| combatant.hp.max(0)).sum();
+        let details = members
+            .iter()
+            .map(|combatant| {
+                let status = if combatant.death_saves.dead {
+                    " dead"
+                } else if combatant.hp <= 0 {
+                    " down"
+                } else {
+                    ""
+                };
+                format!(
+                    "{} {}/{}{status}",
+                    combatant.name(),
+                    combatant.hp.max(0),
+                    combatant.spec.max_hp
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("{label}: {hp} HP ({details})");
+    }
+}
+
+fn print_monte_carlo_summary(report: &MonteCarloReport) {
+    println!(
+        "runs: {}  threads: {}  elapsed: {:.3}s  ({:.0} runs/sec)",
+        report.runs, report.threads, report.elapsed_seconds, report.runs_per_second
+    );
+    println!(
+        "party wins: {} ({:.2}%)  enemy wins: {} ({:.2}%)  draws: {} ({:.2}%)  timeouts: {} ({:.2}%)",
+        report.party_wins,
+        report.party_win_rate * 100.0,
+        report.enemy_wins,
+        report.enemy_win_rate * 100.0,
+        report.draws,
+        report.draw_rate * 100.0,
+        report.timeouts,
+        report.timeout_rate * 100.0
+    );
+    println!(
+        "rounds: avg {:.2}  median {:.1}",
+        report.avg_rounds, report.median_rounds
+    );
+    println!(
+        "avg HP left: party {:.2}  enemies {:.2}",
+        report.avg_party_hp, report.avg_enemy_hp
+    );
+    for combatant in &report.combatants {
+        println!(
+            "{} ({}): avg HP {:.2}  down {:.2}%  dead {:.2}%",
+            combatant.name,
+            side_label(combatant.side),
+            combatant.avg_hp,
+            combatant.down_rate * 100.0,
+            combatant.dead_rate * 100.0
+        );
     }
 }
 

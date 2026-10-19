@@ -277,7 +277,7 @@ fn zone_position(state: &EncounterState, zone: &str) -> i32 {
     state.zones.get(zone).copied().unwrap_or(0)
 }
 
-fn distance(state: &EncounterState, first: usize, second: usize) -> i32 {
+pub(crate) fn distance(state: &EncounterState, first: usize, second: usize) -> i32 {
     let first_zone = &state.combatants[first].zone;
     let second_zone = &state.combatants[second].zone;
     (zone_position(state, first_zone) - zone_position(state, second_zone)).abs()
@@ -413,6 +413,17 @@ fn can_afford(state: &EncounterState, index: usize, cost: &Cost) -> bool {
         .is_some_and(|resource| resource.current >= amount)
 }
 
+fn spend_cost_quiet(state: &mut EncounterState, index: usize, cost: &Cost) -> Result<()> {
+    check_cost(state, index, cost)?;
+    let amount = cost_amount(cost)?;
+    let resource = state.combatants[index]
+        .resources
+        .get_mut(&cost.resource)
+        .expect("cost was checked immediately before spending");
+    resource.current -= amount;
+    Ok(())
+}
+
 fn spend_cost<L: LogSink + ?Sized>(
     state: &mut EncounterState,
     index: usize,
@@ -421,20 +432,49 @@ fn spend_cost<L: LogSink + ?Sized>(
 ) -> Result<()> {
     check_cost(state, index, cost)?;
     let amount = cost_amount(cost)?;
-    let combatant = &mut state.combatants[index];
-    let resource = combatant
-        .resources
-        .get_mut(&cost.resource)
-        .expect("cost was checked immediately before spending");
-    let before = resource.current;
-    resource.current -= amount;
-    let after = resource.current;
-    let name = combatant.name().to_string();
+    let before = state.combatants[index].resources[&cost.resource].current;
+    spend_cost_quiet(state, index, cost)?;
+    let after = state.combatants[index].resources[&cost.resource].current;
+    let name = state.combatants[index].name().to_string();
     sink.log(format_args!(
         "{name} spends {amount} {} ({before} -> {after})",
         cost.resource
     ));
     Ok(())
+}
+
+/// Tries the target's Shield reaction against an incoming hit.
+///
+/// Returns the AC bonus when the reaction turns the hit into a miss.
+fn try_shield(
+    state: &mut EncounterState,
+    target: usize,
+    attack_total: i32,
+    nat20: bool,
+    no_reactions: bool,
+) -> Result<Option<i32>> {
+    if nat20 || no_reactions || !can_act(&state.combatants[target]) {
+        return Ok(None);
+    }
+    if state.combatants[target].reaction_used {
+        return Ok(None);
+    }
+    let Some(shield) = find_reaction(&state.combatants[target].spec, "shield").cloned() else {
+        return Ok(None);
+    };
+    let affordable = shield
+        .cost
+        .as_ref()
+        .is_none_or(|cost| can_afford(state, target, cost));
+    let would_miss = attack_total < state.combatants[target].ac() + shield.ac_bonus;
+    if !affordable || !would_miss {
+        return Ok(None);
+    }
+    if let Some(cost) = &shield.cost {
+        spend_cost_quiet(state, target, cost)?;
+    }
+    state.combatants[target].reaction_used = true;
+    Ok(Some(shield.ac_bonus))
 }
 
 /// Round in which a named creature's next turn ends.
@@ -489,6 +529,94 @@ fn sneak_ally_near(state: &EncounterState, attacker: usize, target: usize) -> bo
 
 fn condition_immunity(state: &EncounterState, index: usize, condition: &str) -> bool {
     state.combatants[index].is_immune_to_condition(condition)
+}
+
+/// Range information for one attack, shared by the engine and the AI.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AttackSituation {
+    pub ranged: bool,
+    pub long_range: bool,
+    pub distance: i32,
+}
+
+/// Auto advantage/disadvantage for an attack roll, plus whether a Vex marker
+/// applies (and must be consumed after the roll).
+pub(crate) fn attack_roll_mode(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+    attack: &Attack,
+    options: &AttackOptions,
+    situation: &AttackSituation,
+) -> (RollMode, bool) {
+    let mut has_advantage = options.advantage;
+    let mut has_disadvantage = options.disadvantage || situation.long_range;
+    if situation.ranged && hostile_within_5ft(state, attacker) {
+        has_disadvantage = true;
+    }
+
+    let attacker_state = &state.combatants[attacker];
+    let target_state = &state.combatants[target];
+    for condition in ["blinded", "frightened", "poisoned", "prone", "restrained"] {
+        if attacker_state.has_condition(condition) {
+            has_disadvantage = true;
+        }
+    }
+    if attacker_state.has_marker(MarkerKind::Sap) {
+        has_disadvantage = true;
+    }
+    for condition in ["blinded", "paralyzed", "restrained", "unconscious"] {
+        if target_state.has_condition(condition) {
+            has_advantage = true;
+        }
+    }
+    if target_state.has_condition("prone") {
+        if situation.distance <= 5 {
+            has_advantage = true;
+        } else {
+            has_disadvantage = true;
+        }
+    }
+    if let Some(vs_condition) = &attack.vs_condition {
+        if vs_condition.advantage && target_state.has_condition(&vs_condition.condition) {
+            has_advantage = true;
+        }
+    }
+
+    let target_name = target_state.name();
+    let vex_applies = attacker_state.markers.iter().any(|marker| {
+        marker.kind == MarkerKind::Vex
+            && marker
+                .target
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(target_name))
+    });
+    if vex_applies {
+        has_advantage = true;
+    }
+
+    (
+        RollMode::from_flags(has_advantage, has_disadvantage),
+        vex_applies,
+    )
+}
+
+/// Whether sneak attack can be added to this attack.
+pub(crate) fn sneak_qualifies(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+    attack: &Attack,
+    mode: RollMode,
+    no_sneak: bool,
+) -> bool {
+    let attacker_state = &state.combatants[attacker];
+    attack.sneak_eligible
+        && !no_sneak
+        && mode != RollMode::Disadvantage
+        && !attacker_state.sneak_used_this_turn
+        && attacker_state.spec.features.contains_key("sneak_attack")
+        && (mode == RollMode::Advantage || sneak_ally_near(state, attacker, target))
 }
 
 // ---------------------------------------------------------------------------
@@ -945,7 +1073,7 @@ fn summarize(report: &mut AttackReport, state: &EncounterState, target: usize) {
     report.dead = combatant.death_saves.dead;
 }
 
-fn check_range(
+pub(crate) fn check_range(
     state: &EncounterState,
     attacker: usize,
     target: usize,
@@ -1130,54 +1258,19 @@ fn attack_instance<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
         hp_before,
     );
 
-    let mut has_advantage = request.options.advantage;
-    let mut has_disadvantage = request.options.disadvantage || request.long_range;
-    if request.ranged && hostile_within_5ft(state, request.attacker) {
-        has_disadvantage = true;
-    }
-
-    let mut vex_applies = false;
-    {
-        let attacker = &state.combatants[request.attacker];
-        let target = &state.combatants[request.target];
-        for condition in ["blinded", "frightened", "poisoned", "prone", "restrained"] {
-            if attacker.has_condition(condition) {
-                has_disadvantage = true;
-            }
-        }
-        if attacker.has_marker(MarkerKind::Sap) {
-            has_disadvantage = true;
-        }
-        for condition in ["blinded", "paralyzed", "restrained", "unconscious"] {
-            if target.has_condition(condition) {
-                has_advantage = true;
-            }
-        }
-        if target.has_condition("prone") {
-            if request.distance <= 5 {
-                has_advantage = true;
-            } else {
-                has_disadvantage = true;
-            }
-        }
-        if let Some(vs_condition) = &request.attack.vs_condition {
-            if vs_condition.advantage && target.has_condition(&vs_condition.condition) {
-                has_advantage = true;
-            }
-        }
-        if attacker.markers.iter().any(|marker| {
-            marker.kind == MarkerKind::Vex
-                && marker
-                    .target
-                    .as_deref()
-                    .is_some_and(|name| name.eq_ignore_ascii_case(&target_name))
-        }) {
-            has_advantage = true;
-            vex_applies = true;
-        }
-    }
-
-    let mode = RollMode::from_flags(has_advantage, has_disadvantage);
+    let situation = AttackSituation {
+        ranged: request.ranged,
+        long_range: request.long_range,
+        distance: request.distance,
+    };
+    let (mode, vex_applies) = attack_roll_mode(
+        state,
+        request.attacker,
+        request.target,
+        request.attack,
+        request.options,
+        &situation,
+    );
     let to_hit = request.attack.to_hit.unwrap_or(0);
     let roll = D20Roll::roll(to_hit, mode, rng);
     report.natural_1 = roll.nat1;
@@ -1218,29 +1311,20 @@ fn attack_instance<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
         }
     }
 
-    if hit && !roll.nat20 && !request.options.no_reactions {
-        let shield = find_reaction(&state.combatants[request.target].spec, "shield").cloned();
-        if let Some(shield) = shield {
-            let reaction_used = state.combatants[request.target].reaction_used;
-            let affordable = shield
-                .cost
-                .as_ref()
-                .is_none_or(|cost| can_afford(state, request.target, cost));
-            let would_miss = roll.total < target_ac + shield.ac_bonus;
-            let target_can_react = can_act(&state.combatants[request.target]);
-            if !reaction_used && target_can_react && affordable && would_miss {
-                if let Some(cost) = &shield.cost {
-                    spend_cost(state, request.target, cost, sink)?;
-                }
-                state.combatants[request.target].reaction_used = true;
-                hit = false;
-                critical = false;
-                report.shield = true;
-                sink.log(format_args!(
-                    "Shield! {target_name} raises AC by {}; the attack misses",
-                    shield.ac_bonus
-                ));
-            }
+    if hit {
+        if let Some(ac_bonus) = try_shield(
+            state,
+            request.target,
+            roll.total,
+            roll.nat20,
+            request.options.no_reactions,
+        )? {
+            hit = false;
+            critical = false;
+            report.shield = true;
+            sink.log(format_args!(
+                "Shield! {target_name} raises AC by {ac_bonus}; the attack misses"
+            ));
         }
     }
 
@@ -1279,22 +1363,21 @@ fn attack_instance<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
     }
 
     let mut sneak = None;
-    if request.attack.sneak_eligible
-        && !request.options.no_sneak
-        && mode != RollMode::Disadvantage
-        && !state.combatants[request.attacker].sneak_used_this_turn
-    {
+    if sneak_qualifies(
+        state,
+        request.attacker,
+        request.target,
+        request.attack,
+        mode,
+        request.options.no_sneak,
+    ) {
         if let Some(text) = state.combatants[request.attacker]
             .spec
             .features
             .get("sneak_attack")
         {
             if let Ok(expression) = text.parse::<DiceExpr>() {
-                if mode == RollMode::Advantage
-                    || sneak_ally_near(state, request.attacker, request.target)
-                {
-                    sneak = Some(expression);
-                }
+                sneak = Some(expression);
             }
         }
     }
@@ -1800,19 +1883,28 @@ fn apply_components<L: LogSink + ?Sized>(
     Ok(report)
 }
 
-fn apply_damage<L: LogSink + ?Sized>(
+struct DamageNumbers {
+    temp_absorbed: i32,
+    hp_before: i32,
+    hp_after: i32,
+    temp_hp_before: i32,
+    temp_hp_after: i32,
+    downed: bool,
+    dead: bool,
+    massive: bool,
+    failures: u8,
+}
+
+fn damage_numbers(
     state: &mut EncounterState,
     target: usize,
     amount: i32,
-    damage_type: Option<&str>,
     critical: bool,
-    sink: &mut L,
-) -> Result<DamageReport> {
+) -> Result<DamageNumbers> {
     let combatant = &state.combatants[target];
     if combatant.death_saves.dead {
         bail!("{} is already dead", combatant.name());
     }
-    let name = combatant.name().to_string();
     let kind = combatant.kind();
     let max_hp = combatant.spec.max_hp;
     let hp_before = combatant.hp;
@@ -1882,49 +1974,77 @@ fn apply_damage<L: LogSink + ?Sized>(
             ensure_condition(combatant, "prone");
         }
     }
-    let hp_after = state.combatants[target].hp;
-
-    if amount > 0 {
-        if temp_absorbed > 0 {
-            sink.log(format_args!(
-                "{name} takes {amount} damage (temp {temp_absorbed}, {hp_before} -> {hp_after})"
-            ));
-        } else {
-            sink.log(format_args!(
-                "{name} takes {amount} damage ({hp_before} -> {hp_after})"
-            ));
-        }
-    }
-    if massive {
-        sink.log(format_args!("{name} dies from massive damage"));
-    } else if dead {
-        sink.log(format_args!("{name} dies"));
-    } else if downed {
-        sink.log(format_args!("{name} falls unconscious"));
-    }
-    if !dead && kind == Kind::Pc && hp_before <= 0 && after_temp > 0 {
-        sink.log(format_args!(
-            "{name} fails a death save ({}/3)",
-            state.combatants[target].death_saves.failures
-        ));
-    }
-
     let combatant = &state.combatants[target];
-    Ok(DamageReport {
-        target: name,
-        requested: amount,
-        amount,
+    Ok(DamageNumbers {
         temp_absorbed,
         hp_before,
         hp_after: combatant.hp,
         temp_hp_before: temp_before,
         temp_hp_after: combatant.temp_hp,
-        damage_type: damage_type.map(str::to_string),
-        critical,
         downed,
         dead,
         massive,
-        death_save_failures: combatant.death_saves.failures,
+        failures: combatant.death_saves.failures,
+    })
+}
+
+fn apply_damage<L: LogSink + ?Sized>(
+    state: &mut EncounterState,
+    target: usize,
+    amount: i32,
+    damage_type: Option<&str>,
+    critical: bool,
+    sink: &mut L,
+) -> Result<DamageReport> {
+    let name = state.combatants[target].name().to_string();
+    let numbers = damage_numbers(state, target, amount, critical)?;
+    let amount = amount.max(0);
+    if amount > 0 {
+        if numbers.temp_absorbed > 0 {
+            sink.log(format_args!(
+                "{name} takes {amount} damage (temp {}, {} -> {})",
+                numbers.temp_absorbed, numbers.hp_before, numbers.hp_after
+            ));
+        } else {
+            sink.log(format_args!(
+                "{name} takes {amount} damage ({} -> {})",
+                numbers.hp_before, numbers.hp_after
+            ));
+        }
+    }
+    if numbers.massive {
+        sink.log(format_args!("{name} dies from massive damage"));
+    } else if numbers.dead {
+        sink.log(format_args!("{name} dies"));
+    } else if numbers.downed {
+        sink.log(format_args!("{name} falls unconscious"));
+    }
+    if !numbers.dead
+        && state.combatants[target].kind() == Kind::Pc
+        && numbers.hp_before <= 0
+        && amount > numbers.temp_absorbed
+    {
+        sink.log(format_args!(
+            "{name} fails a death save ({}/3)",
+            numbers.failures
+        ));
+    }
+
+    Ok(DamageReport {
+        target: name,
+        requested: amount,
+        amount,
+        temp_absorbed: numbers.temp_absorbed,
+        hp_before: numbers.hp_before,
+        hp_after: numbers.hp_after,
+        temp_hp_before: numbers.temp_hp_before,
+        temp_hp_after: numbers.temp_hp_after,
+        damage_type: damage_type.map(str::to_string),
+        critical,
+        downed: numbers.downed,
+        dead: numbers.dead,
+        massive: numbers.massive,
+        death_save_failures: numbers.failures,
         components: Vec::new(),
     })
 }
@@ -1975,6 +2095,49 @@ pub fn heal<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
     heal_at(state, target_index, expression, source, rng, sink)
 }
 
+struct HealNumbers {
+    rolled: i32,
+    healed: i32,
+    hp_before: i32,
+    hp_after: i32,
+    revived: bool,
+}
+
+fn apply_heal_numbers(
+    state: &mut EncounterState,
+    target: usize,
+    rolled: i32,
+) -> Result<HealNumbers> {
+    if is_dead(&state.combatants[target]) {
+        bail!(
+            "{} is dead and cannot be healed",
+            state.combatants[target].name()
+        );
+    }
+    if rolled <= 0 {
+        bail!("healing must be positive");
+    }
+    let combatant = &mut state.combatants[target];
+    let hp_before = combatant.hp;
+    let max_hp = combatant.spec.max_hp;
+    let revived = hp_before <= 0;
+    let healed = rolled.min((max_hp - hp_before).max(0));
+    combatant.hp = hp_before + healed;
+    if revived {
+        combatant
+            .conditions
+            .retain(|condition| !condition.condition.eq_ignore_ascii_case("unconscious"));
+        combatant.death_saves = Default::default();
+    }
+    Ok(HealNumbers {
+        rolled,
+        healed,
+        hp_before,
+        hp_after: combatant.hp,
+        revived,
+    })
+}
+
 fn heal_at<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
     state: &mut EncounterState,
     target: usize,
@@ -1983,51 +2146,31 @@ fn heal_at<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
     rng: &mut R,
     sink: &mut L,
 ) -> Result<HealReport> {
-    if is_dead(&state.combatants[target]) {
-        bail!(
-            "{} is dead and cannot be healed",
-            state.combatants[target].name()
-        );
-    }
+    let name = state.combatants[target].name().to_string();
     let expr = parse_expr(expression)?;
     let record = expr.roll(rng);
-    if record.total <= 0 {
-        bail!("healing must be positive");
-    }
-    let name = state.combatants[target].name().to_string();
+    let numbers = apply_heal_numbers(state, target, record.total)?;
     if sink.enabled() {
         sink.log(format_args!("{} healing", record.text));
-    }
-    let combatant = &mut state.combatants[target];
-    let hp_before = combatant.hp;
-    let max_hp = combatant.spec.max_hp;
-    let revived = hp_before <= 0;
-    let healed = record.total.min((max_hp - hp_before).max(0));
-    combatant.hp = hp_before + healed;
-    if revived {
-        combatant
-            .conditions
-            .retain(|condition| !condition.condition.eq_ignore_ascii_case("unconscious"));
-        combatant.death_saves = Default::default();
-    }
-    if let Some(source) = source {
-        sink.log(format_args!(
-            "{source} heals {name} for {healed} HP ({hp_before} -> {})",
-            combatant.hp
-        ));
-    } else {
-        sink.log(format_args!(
-            "{name} heals {healed} HP ({hp_before} -> {})",
-            combatant.hp
-        ));
+        if let Some(source) = source {
+            sink.log(format_args!(
+                "{source} heals {name} for {} HP ({} -> {})",
+                numbers.healed, numbers.hp_before, numbers.hp_after
+            ));
+        } else {
+            sink.log(format_args!(
+                "{name} heals {} HP ({} -> {})",
+                numbers.healed, numbers.hp_before, numbers.hp_after
+            ));
+        }
     }
     Ok(HealReport {
         target: name,
-        rolled: record.total,
-        healed,
-        hp_before,
-        hp_after: combatant.hp,
-        revived,
+        rolled: numbers.rolled,
+        healed: numbers.healed,
+        hp_before: numbers.hp_before,
+        hp_after: numbers.hp_after,
+        revived: numbers.revived,
     })
 }
 
@@ -2047,6 +2190,26 @@ pub fn save<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
 ) -> Result<SaveReport> {
     let index = state.find_index(who)?;
     save_at(state, index, ability, dc, mode, rng, sink)
+}
+
+fn save_numbers<R: DiceRng + ?Sized>(
+    state: &EncounterState,
+    index: usize,
+    ability: &str,
+    dc: i32,
+    mode: RollMode,
+    rng: &mut R,
+) -> bool {
+    let combatant = &state.combatants[index];
+    let auto_fail = matches!(ability.to_ascii_lowercase().as_str(), "str" | "dex")
+        && (combatant.hp <= 0
+            || combatant.has_condition("paralyzed")
+            || combatant.has_condition("unconscious"));
+    if auto_fail {
+        return false;
+    }
+    let bonus = combatant.save_bonus(ability);
+    D20Roll::roll_total(bonus, mode, rng).total >= dc
 }
 
 fn save_at<R: DiceRng + ?Sized, L: LogSink + ?Sized>(
@@ -2818,6 +2981,620 @@ pub fn rest<L: LogSink + ?Sized>(
             }
         }
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Quiet resolution (simulation hot path)
+// ---------------------------------------------------------------------------
+
+/// A pre-parsed attack used by the simulation hot path.
+///
+/// Parsing the damage expressions once per combatant avoids repeated dice
+/// parsing and lets the AI score attacks without allocating.
+#[derive(Debug, Clone)]
+pub struct QuietAttack {
+    attack: Attack,
+    base: Option<DiceExpr>,
+    extras: Vec<(DiceExpr, Option<String>)>,
+    vs_base: Option<DiceExpr>,
+    sneak: Option<DiceExpr>,
+}
+
+impl QuietAttack {
+    /// Parses every dice expression of one attack entry.
+    pub fn new(attack: Attack, features: &BTreeMap<String, String>) -> Result<Self> {
+        let base = attack.damage.as_deref().map(parse_expr).transpose()?;
+        let mut extras = Vec::with_capacity(attack.extra_damage.len());
+        for extra in &attack.extra_damage {
+            let expression = parse_expr(&extra.dice)?;
+            let damage_type = if extra.damage_type.is_empty() {
+                None
+            } else {
+                Some(extra.damage_type.clone())
+            };
+            extras.push((expression, damage_type));
+        }
+        let vs_base = attack
+            .vs_condition
+            .as_ref()
+            .and_then(|vs| vs.damage.as_deref())
+            .map(parse_expr)
+            .transpose()?;
+        let sneak = if attack.sneak_eligible {
+            features
+                .get("sneak_attack")
+                .and_then(|text| text.parse().ok())
+        } else {
+            None
+        };
+        Ok(Self {
+            attack,
+            base,
+            extras,
+            vs_base,
+            sneak,
+        })
+    }
+
+    /// The underlying data entry.
+    pub fn attack(&self) -> &Attack {
+        &self.attack
+    }
+
+    /// Parsed base damage expression.
+    pub fn base(&self) -> Option<&DiceExpr> {
+        self.base.as_ref()
+    }
+
+    /// Parsed replacement base damage for `vs_condition`.
+    pub fn vs_base(&self) -> Option<&DiceExpr> {
+        self.vs_base.as_ref()
+    }
+
+    /// Parsed extra damage expressions.
+    pub fn extras(&self) -> &[(DiceExpr, Option<String>)] {
+        &self.extras
+    }
+
+    /// Parsed sneak-attack expression, when the feature exists.
+    pub fn sneak(&self) -> Option<&DiceExpr> {
+        self.sneak.as_ref()
+    }
+}
+
+/// A pre-parsed heal entry used by the simulation hot path.
+#[derive(Debug, Clone)]
+pub struct QuietHeal {
+    heal: Heal,
+    amount: DiceExpr,
+}
+
+impl QuietHeal {
+    /// Parses the heal amount.
+    pub fn new(heal: Heal) -> Result<Self> {
+        let amount = parse_expr(&heal.amount)?;
+        Ok(Self { heal, amount })
+    }
+
+    /// The underlying data entry.
+    pub fn heal(&self) -> &Heal {
+        &self.heal
+    }
+
+    /// Parsed healing expression.
+    pub fn amount(&self) -> &DiceExpr {
+        &self.amount
+    }
+
+    /// Expected healing amount.
+    pub fn average(&self) -> f64 {
+        self.amount.average()
+    }
+}
+
+struct QuietDamageGroups<'a> {
+    entries: [(Option<&'a str>, i32); 8],
+    len: usize,
+}
+
+impl<'a> QuietDamageGroups<'a> {
+    fn new() -> Self {
+        Self {
+            entries: [(None, 0); 8],
+            len: 0,
+        }
+    }
+
+    fn add(&mut self, damage_type: Option<&'a str>, amount: i32) {
+        if amount == 0 {
+            return;
+        }
+        for index in 0..self.len {
+            let (existing, total) = &mut self.entries[index];
+            let same = match (*existing, damage_type) {
+                (None, None) => true,
+                (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+                _ => false,
+            };
+            if same {
+                *total += amount;
+                return;
+            }
+        }
+        if self.len < self.entries.len() {
+            self.entries[self.len] = (damage_type, amount);
+            self.len += 1;
+        }
+    }
+
+    fn total(&self, state: &EncounterState, target: usize, half: bool) -> i32 {
+        let mut total = 0;
+        for &(damage_type, raw) in &self.entries[..self.len] {
+            let amount = raw.max(0);
+            let amount = if half { amount.div_euclid(2) } else { amount };
+            let (dealt, ..) = mitigate(state, target, amount, damage_type);
+            total += dealt;
+        }
+        total
+    }
+}
+
+fn quiet_attack_groups<'a, R: DiceRng + ?Sized>(
+    state: &EncounterState,
+    target: usize,
+    plan: &'a QuietAttack,
+    critical: bool,
+    sneak: Option<&DiceExpr>,
+    rng: &mut R,
+    groups: &mut QuietDamageGroups<'a>,
+) -> Result<()> {
+    let attack = plan.attack();
+    let vs_active = attack
+        .vs_condition
+        .as_ref()
+        .is_some_and(|vs| state.combatants[target].has_condition(&vs.condition));
+    let base = if vs_active {
+        plan.vs_base().or_else(|| plan.base())
+    } else {
+        plan.base()
+    };
+    let damage_type = attack.damage_type.as_deref();
+    if let Some(base) = base {
+        let total = if critical {
+            base.roll_doubled_total(rng)
+        } else {
+            base.roll_total(rng)
+        };
+        groups.add(damage_type, total);
+    }
+    for (expression, extra_type) in plan.extras() {
+        let total = if critical {
+            expression.roll_doubled_total(rng)
+        } else {
+            expression.roll_total(rng)
+        };
+        groups.add(extra_type.as_deref(), total);
+    }
+    if let Some(sneak) = sneak {
+        let total = if critical {
+            sneak.roll_doubled_total(rng)
+        } else {
+            sneak.roll_total(rng)
+        };
+        groups.add(damage_type, total);
+    }
+    Ok(())
+}
+
+fn quiet_apply_groups(
+    state: &mut EncounterState,
+    target: usize,
+    groups: &QuietDamageGroups<'_>,
+    half: bool,
+    critical: bool,
+) -> Result<()> {
+    let total = groups.total(&*state, target, half);
+    if total > 0 {
+        damage_numbers(state, target, total, critical)?;
+    }
+    Ok(())
+}
+
+struct QuietRequest<'a> {
+    attacker: usize,
+    target: usize,
+    plan: &'a QuietAttack,
+    options: &'a AttackOptions,
+    distance: i32,
+    ranged: bool,
+    long_range: bool,
+}
+
+/// Resolves one attack without building reports or log lines.
+pub fn quiet_attack<R: DiceRng + ?Sized>(
+    state: &mut EncounterState,
+    attacker: usize,
+    target: usize,
+    plan: &QuietAttack,
+    options: &AttackOptions,
+    rng: &mut R,
+) -> Result<()> {
+    ensure_can_act(state, attacker)?;
+    ensure_target(state, target)?;
+    if attacker == target {
+        bail!("a creature cannot attack itself");
+    }
+    let attack = plan.attack();
+    let (ranged, long_range) = check_range(state, attacker, target, attack)?;
+    if attack.kind == AttackKind::Save && attack.save.is_none() {
+        bail!("{} is a save attack but has no save", attack.name);
+    }
+    if let Some(cost) = &attack.cost {
+        spend_cost_quiet(state, attacker, cost)?;
+    }
+    state.combatants[attacker].action_used = true;
+
+    let count = attack.count.max(1);
+    let request = QuietRequest {
+        attacker,
+        target,
+        plan,
+        options,
+        distance: distance(state, attacker, target),
+        ranged,
+        long_range,
+    };
+
+    match attack.kind {
+        AttackKind::Auto => quiet_auto(state, &request, count, rng),
+        AttackKind::Save => {
+            for _ in 0..count {
+                if is_dead(&state.combatants[target]) {
+                    break;
+                }
+                quiet_save_instance(state, &request, rng)?;
+            }
+            Ok(())
+        }
+        _ => {
+            for _ in 0..count {
+                if is_dead(&state.combatants[target]) {
+                    break;
+                }
+                quiet_attack_instance(state, &request, rng)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn quiet_attack_instance<R: DiceRng + ?Sized>(
+    state: &mut EncounterState,
+    request: &QuietRequest<'_>,
+    rng: &mut R,
+) -> Result<()> {
+    let attack = request.plan.attack();
+    let situation = AttackSituation {
+        ranged: request.ranged,
+        long_range: request.long_range,
+        distance: request.distance,
+    };
+    let (mode, vex_applies) = attack_roll_mode(
+        state,
+        request.attacker,
+        request.target,
+        attack,
+        request.options,
+        &situation,
+    );
+    let to_hit = attack.to_hit.unwrap_or(0);
+    let roll = D20Roll::roll_total(to_hit, mode, rng);
+    let target_ac = state.combatants[request.target].ac();
+    let mut hit;
+    let mut critical;
+    if roll.nat1 {
+        hit = false;
+        critical = false;
+    } else if roll.nat20 {
+        hit = true;
+        critical = true;
+    } else {
+        hit = roll.total >= target_ac;
+        critical = false;
+    }
+    if hit
+        && request.distance <= 5
+        && (state.combatants[request.target].has_condition("paralyzed")
+            || state.combatants[request.target].has_condition("unconscious"))
+    {
+        critical = true;
+    }
+
+    state.combatants[request.attacker]
+        .markers
+        .retain(|marker| marker.kind != MarkerKind::Sap);
+    if vex_applies {
+        let target_name = state.combatants[request.target].name();
+        let mut remove = None;
+        for (index, marker) in state.combatants[request.attacker]
+            .markers
+            .iter()
+            .enumerate()
+        {
+            if marker.kind == MarkerKind::Vex
+                && marker
+                    .target
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(target_name))
+            {
+                remove = Some(index);
+                break;
+            }
+        }
+        if let Some(index) = remove {
+            state.combatants[request.attacker]
+                .markers
+                .swap_remove(index);
+        }
+    }
+
+    if hit
+        && try_shield(
+            state,
+            request.target,
+            roll.total,
+            roll.nat20,
+            request.options.no_reactions,
+        )?
+        .is_some()
+    {
+        hit = false;
+        critical = false;
+    }
+
+    if !hit {
+        if attack.mastery == Some(Mastery::Graze) {
+            let graze = (to_hit - state.combatants[request.attacker].spec.proficiency_bonus).max(0);
+            if graze > 0 {
+                let mut groups = QuietDamageGroups::new();
+                groups.add(attack.damage_type.as_deref(), graze);
+                quiet_apply_groups(state, request.target, &groups, false, false)?;
+            }
+        }
+        return Ok(());
+    }
+
+    let mut sneak = None;
+    if sneak_qualifies(
+        state,
+        request.attacker,
+        request.target,
+        attack,
+        mode,
+        request.options.no_sneak,
+    ) {
+        if let Some(expression) = request.plan.sneak() {
+            sneak = Some(expression);
+            state.combatants[request.attacker].sneak_used_this_turn = true;
+        }
+    }
+    let mut groups = QuietDamageGroups::new();
+    quiet_attack_groups(
+        &*state,
+        request.target,
+        request.plan,
+        critical,
+        sneak,
+        rng,
+        &mut groups,
+    )?;
+    quiet_apply_groups(state, request.target, &groups, false, critical)?;
+
+    if !is_dead(&state.combatants[request.target]) {
+        if !attack.on_hit_conditions.is_empty() {
+            let source = state.combatants[request.attacker].name().to_string();
+            for application in &attack.on_hit_conditions {
+                apply_application(
+                    state,
+                    request.target,
+                    application,
+                    Some(&source),
+                    &mut NullSink,
+                )?;
+            }
+        }
+        if attack.mastery.is_some() {
+            apply_mastery(
+                state,
+                request.attacker,
+                request.target,
+                attack,
+                rng,
+                &mut NullSink,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn quiet_save_instance<R: DiceRng + ?Sized>(
+    state: &mut EncounterState,
+    request: &QuietRequest<'_>,
+    rng: &mut R,
+) -> Result<()> {
+    let attack = request.plan.attack();
+    let save = attack
+        .save
+        .as_ref()
+        .ok_or_else(|| anyhow!("{} is a save attack but has no save", attack.name))?;
+    let saved = save_numbers(
+        &*state,
+        request.target,
+        &save.ability,
+        save.dc,
+        RollMode::Normal,
+        rng,
+    );
+    if !saved {
+        let mut groups = QuietDamageGroups::new();
+        quiet_attack_groups(
+            &*state,
+            request.target,
+            request.plan,
+            false,
+            None,
+            rng,
+            &mut groups,
+        )?;
+        quiet_apply_groups(state, request.target, &groups, false, false)?;
+        if !is_dead(&state.combatants[request.target]) && !attack.on_fail_conditions.is_empty() {
+            let source = state.combatants[request.attacker].name().to_string();
+            for application in &attack.on_fail_conditions {
+                apply_application(
+                    state,
+                    request.target,
+                    application,
+                    Some(&source),
+                    &mut NullSink,
+                )?;
+            }
+        }
+    } else if save.half_on_success {
+        let mut groups = QuietDamageGroups::new();
+        quiet_attack_groups(
+            &*state,
+            request.target,
+            request.plan,
+            false,
+            None,
+            rng,
+            &mut groups,
+        )?;
+        quiet_apply_groups(state, request.target, &groups, true, false)?;
+    }
+    Ok(())
+}
+
+fn quiet_auto<R: DiceRng + ?Sized>(
+    state: &mut EncounterState,
+    request: &QuietRequest<'_>,
+    count: u32,
+    rng: &mut R,
+) -> Result<()> {
+    let attack = request.plan.attack();
+    let mut groups = QuietDamageGroups::new();
+    for _ in 0..count {
+        quiet_attack_groups(
+            &*state,
+            request.target,
+            request.plan,
+            false,
+            None,
+            rng,
+            &mut groups,
+        )?;
+    }
+    quiet_apply_groups(state, request.target, &groups, false, false)?;
+    if !is_dead(&state.combatants[request.target]) && !attack.on_hit_conditions.is_empty() {
+        let source = state.combatants[request.attacker].name().to_string();
+        for application in &attack.on_hit_conditions {
+            apply_application(
+                state,
+                request.target,
+                application,
+                Some(&source),
+                &mut NullSink,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Casts a named heal without building reports or log lines.
+pub fn quiet_cast_heal<R: DiceRng + ?Sized>(
+    state: &mut EncounterState,
+    caster: usize,
+    target: usize,
+    plan: &QuietHeal,
+    rng: &mut R,
+) -> Result<()> {
+    ensure_can_act(state, caster)?;
+    if is_dead(&state.combatants[target]) {
+        bail!(
+            "{} is dead and cannot be healed",
+            state.combatants[target].name()
+        );
+    }
+    let heal = plan.heal();
+    if heal.self_only && target != caster {
+        bail!("{} can only target its caster", heal.name);
+    }
+    if target != caster {
+        let distance = distance(state, caster, target);
+        if heal.range <= 0 || distance > heal.range {
+            bail!(
+                "{} is out of range for {} ({distance} ft, range {} ft)",
+                state.combatants[target].name(),
+                heal.name,
+                heal.range
+            );
+        }
+    }
+    if let Some(cost) = &heal.cost {
+        spend_cost_quiet(state, caster, cost)?;
+    }
+    match heal.action {
+        HealAction::Action => state.combatants[caster].action_used = true,
+        HealAction::Bonus => state.combatants[caster].bonus_action_used = true,
+        HealAction::Unknown => {}
+    }
+    let rolled = plan.amount().roll_total(rng);
+    apply_heal_numbers(state, target, rolled)?;
+    Ok(())
+}
+
+/// Runs a self-heal without building reports or log lines.
+pub fn quiet_use_heal<R: DiceRng + ?Sized>(
+    state: &mut EncounterState,
+    who: usize,
+    plan: &QuietHeal,
+    rng: &mut R,
+) -> Result<()> {
+    ensure_can_act(state, who)?;
+    if is_dead(&state.combatants[who]) {
+        bail!("{} is dead", state.combatants[who].name());
+    }
+    let heal = plan.heal();
+    if let Some(cost) = &heal.cost {
+        spend_cost_quiet(state, who, cost)?;
+    }
+    match heal.action {
+        HealAction::Action => state.combatants[who].action_used = true,
+        HealAction::Bonus => state.combatants[who].bonus_action_used = true,
+        HealAction::Unknown => {}
+    }
+    let rolled = plan.amount().roll_total(rng);
+    apply_heal_numbers(state, who, rolled)?;
+    Ok(())
+}
+
+/// Moves a combatant without building reports or log lines.
+pub fn quiet_move_to(state: &mut EncounterState, index: usize, zone: &str) -> Result<()> {
+    if !state.zones.contains_key(zone) {
+        bail!("unknown zone `{zone}`");
+    }
+    let from_position = state
+        .zones
+        .get(&state.combatants[index].zone)
+        .copied()
+        .unwrap_or(0);
+    let to_position = state.zones.get(zone).copied().unwrap_or(0);
+    let distance = (from_position - to_position).abs();
+    let combatant = &mut state.combatants[index];
+    combatant.zone.clear();
+    combatant.zone.push_str(zone);
+    combatant.speed_left = (combatant.speed_left - distance).max(0);
     Ok(())
 }
 
