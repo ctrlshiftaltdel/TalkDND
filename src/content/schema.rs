@@ -1528,6 +1528,7 @@ pub enum ModifierEffect {
     AutoCrit,
     Resistance,
     Immunity,
+    Vulnerability,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -1,8 +1,8 @@
-//! Command-line interface for SPEC §4.
+//! Command-line interface for the v2 engine.
 //!
-//! Commands load the persisted encounter, call the rules engine with a capture
-//! log, then save the resulting state and print the new log lines. `status` and
-//! `log` are read-only; `roll` does not need an encounter at all.
+//! Commands load the self-contained state file, run one engine operation,
+//! append the emitted lines, and save. `new`, `content` and `simulate` are the
+//! only commands that need content sources.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -11,13 +11,14 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
-use crate::ai::Ai;
 use crate::content::{self, ContentSources, ItemKind, ShownItem};
 use crate::dice::{self, DiceRng, RollMode};
-use crate::engine::{self, AttackOptions, CheckOptions, ConditionOptions};
-use crate::model::{Kind, Resource, Side};
-use crate::sim::{self, MonteCarloReport, RunOutcome, SimOptions, SingleRun};
-use crate::state::{ActiveCondition, CombatantState, DeathSaves, EncounterState, LookupError};
+use crate::engine::{
+    self, AddConditionOptions, AttackOptions, RestKind, UseOptions,
+};
+use crate::state::{
+    resolve_state_path, AddSpec, CombatantState, EncounterState, LookupError, NewEncounter,
+};
 
 /// Global options shared by every command.
 #[derive(Debug, Parser)]
@@ -27,14 +28,10 @@ use crate::state::{ActiveCondition, CombatantState, DeathSaves, EncounterState, 
     about = "Headless D&D 5e (2024 rules) combat helper"
 )]
 pub struct Cli {
-    /// Path to the persisted encounter state.
-    #[arg(
-        long,
-        global = true,
-        value_name = "FILE",
-        default_value = "./combat-state.json"
-    )]
-    pub state: PathBuf,
+    /// Persisted encounter state. A bare name resolves to
+    /// `<manifest state_dir>/NAME.state.json`, or `./NAME.state.json`.
+    #[arg(long, global = true, value_name = "NAME")]
+    pub state: Option<PathBuf>,
 
     /// Seed for deterministic rolls (tests and replays only).
     #[arg(long, global = true, value_name = "N")]
@@ -67,15 +64,19 @@ pub struct Cli {
 /// One CLI action.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Create a new encounter state.
+    /// Create a new encounter state from an encounter id.
     New {
-        /// Encounter JSON file (mutually exclusive with positional specs).
-        #[arg(long, value_name = "FILE", conflicts_with = "specs")]
-        encounter: Option<PathBuf>,
-
-        /// Combatant specs: `file.json[:count][@zone]`.
-        #[arg(value_name = "SPEC")]
-        specs: Vec<String>,
+        #[arg(long, value_name = "ID")]
+        encounter: String,
+        /// Comma-separated party creature ids.
+        #[arg(long, value_name = "A,B,C")]
+        party: Option<String>,
+        /// Default party zone.
+        #[arg(long, value_name = "ZONE")]
+        party_zone: Option<String>,
+        /// Extra members: `id[:count][@zone]` (repeatable).
+        #[arg(long = "add", value_name = "ID[:N][@ZONE]")]
+        add: Vec<String>,
     },
 
     /// Roll initiative.
@@ -88,7 +89,7 @@ pub enum Command {
     /// Show the current encounter.
     Status,
 
-    /// Resolve one attack (or the attacker's multiattack sequence).
+    /// Resolve one attack or multiattack.
     Attack {
         attacker: String,
         target: String,
@@ -97,8 +98,6 @@ pub enum Command {
         adv: bool,
         #[arg(long)]
         dis: bool,
-        #[arg(long)]
-        no_sneak: bool,
         #[arg(long)]
         multi: bool,
         #[arg(long)]
@@ -119,7 +118,7 @@ pub enum Command {
     Heal {
         target: String,
         expression: String,
-        /// Creature whose healing is being applied (logging only).
+        /// Creature whose healing is being applied.
         #[arg(long = "from", value_name = "NAME")]
         from: Option<String>,
     },
@@ -159,23 +158,38 @@ pub enum Command {
         dc: Option<i32>,
     },
 
-    /// Cast a named attack, save or heal entry.
+    /// Cast an owned ability.
     Cast {
         who: String,
-        name: String,
+        ability: String,
         targets: Vec<String>,
+        #[arg(long)]
+        option: Option<usize>,
+        #[arg(long)]
+        slot: Option<i32>,
         #[arg(long)]
         adv: bool,
         #[arg(long)]
         dis: bool,
+        #[arg(long)]
+        no_reactions: bool,
     },
 
-    /// Spend a resource, or run a self-heal entry.
+    /// Use an owned ability or a creature attack.
     Use {
         who: String,
-        name: String,
+        ability: String,
+        targets: Vec<String>,
         #[arg(long)]
-        amount: Option<u32>,
+        option: Option<usize>,
+        #[arg(long)]
+        slot: Option<i32>,
+        #[arg(long)]
+        adv: bool,
+        #[arg(long)]
+        dis: bool,
+        #[arg(long)]
+        no_reactions: bool,
     },
 
     /// Add or remove a condition.
@@ -208,70 +222,55 @@ pub enum Command {
         who: String,
     },
 
-    /// Batch simulation: play-by-play with one run, Monte Carlo with more.
-    Simulate {
-        /// Combatant specs: `file.json[:count][@zone]`.
-        #[arg(value_name = "SPEC")]
-        specs: Vec<String>,
-
-        /// Encounter JSON file.
-        #[arg(long, value_name = "FILE", conflicts_with = "specs")]
-        encounter: Option<PathBuf>,
-
-        /// Continue from the persisted state file.
-        #[arg(long, conflicts_with_all = ["specs", "encounter"])]
-        from_state: bool,
-
-        /// Number of simulated runs.
-        #[arg(long, default_value_t = 1)]
-        runs: u64,
-
-        /// Abort a run after this many rounds.
-        #[arg(long, default_value_t = 100)]
-        max_rounds: u32,
-
-        /// Worker threads for the Monte Carlo path.
-        #[arg(long)]
-        threads: Option<usize>,
-    },
+    /// Wake dormant creatures matching a name, creature id or tag.
+    Activate { name: String },
 
     /// Inspect and validate campaign content without loading an encounter.
     Content {
         #[command(subcommand)]
         command: ContentCommand,
     },
+
+    /// Batch simulation (arrives in v2 step 4).
+    Simulate,
 }
 
-/// Content subcommands (SPEC §4).
 #[derive(Debug, Subcommand)]
 pub enum ContentCommand {
     /// List loaded content items and their source files.
     List {
-        /// Restrict to one kind (conditions, masteries, abilities, creatures,
-        /// ai-templates, scenes, encounters).
         #[arg(long, value_name = "KIND")]
         kind: Option<String>,
     },
-
     /// Print one item as JSON, including its kind and source file.
     Show { id: String },
-
     /// Validate references, expressions and TODO notes.
     Check,
 }
 
-/// Condition subcommands.
 #[derive(Debug, Subcommand)]
 pub enum ConditionCommand {
     Add {
         who: String,
         condition: String,
-        #[arg(long, conflicts_with = "until_end_of_turn")]
+        #[arg(long, conflicts_with_all = ["minutes", "permanent", "until"])]
         rounds: Option<u32>,
-        #[arg(long = "until-end-of-turn", value_name = "NAME")]
-        until_end_of_turn: Option<String>,
+        #[arg(long, conflicts_with_all = ["rounds", "permanent", "until"])]
+        minutes: Option<u32>,
+        #[arg(long, conflicts_with_all = ["rounds", "minutes", "until"])]
+        permanent: bool,
+        #[arg(long, value_enum)]
+        until: Option<UntilArg>,
+        /// Creature whose next turn ends the condition (defaults to the target).
+        #[arg(long = "until-subject", value_name = "NAME")]
+        until_subject: Option<String>,
         #[arg(long)]
         source: Option<String>,
+        #[arg(long)]
+        linked: Option<String>,
+        /// Repeated save: `ABILITY:DC`, for example `wis:13`.
+        #[arg(long = "save-ends", value_name = "ABILITY:DC")]
+        save_ends: Option<String>,
     },
     Remove {
         who: String,
@@ -279,23 +278,38 @@ pub enum ConditionCommand {
     },
 }
 
-/// Rest length accepted by clap.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum UntilArg {
+    StartOfSourceNextTurn,
+    EndOfSourceNextTurn,
+    EndOfTargetNextTurn,
+}
+
+impl From<UntilArg> for crate::content::schema::DurationUntil {
+    fn from(value: UntilArg) -> Self {
+        match value {
+            UntilArg::StartOfSourceNextTurn => Self::StartOfSourceNextTurn,
+            UntilArg::EndOfSourceNextTurn => Self::EndOfSourceNextTurn,
+            UntilArg::EndOfTargetNextTurn => Self::EndOfTargetNextTurn,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum RestKindArg {
     Short,
     Long,
 }
 
-impl From<RestKindArg> for engine::RestKind {
+impl From<RestKindArg> for RestKind {
     fn from(kind: RestKindArg) -> Self {
         match kind {
-            RestKindArg::Short => engine::RestKind::Short,
-            RestKindArg::Long => engine::RestKind::Long,
+            RestKindArg::Short => RestKind::Short,
+            RestKindArg::Long => RestKind::Long,
         }
     }
 }
 
-/// Parse the command line and dispatch the requested command.
 pub fn run() -> Result<()> {
     let Cli {
         state,
@@ -316,74 +330,101 @@ pub fn run() -> Result<()> {
     };
 
     match command {
-        Command::New { encounter, specs } => new_state(&state, encounter.as_deref(), &specs),
-        Command::Init { set } => run_init(&state, seed, &set),
-        Command::Status => print_status(&state, json),
+        Command::New {
+            encounter,
+            party,
+            party_zone,
+            add,
+        } => new_state(&sources, state.as_deref(), encounter, party, party_zone, add),
+        Command::Init { set } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                let mut overrides = Vec::new();
+                for token in &set {
+                    let (name, total) = token.split_once('=').ok_or_else(|| {
+                        anyhow!("--set expects NAME=TOTAL, for example --set A=30")
+                    })?;
+                    let total: i32 = total
+                        .trim()
+                        .parse()
+                        .with_context(|| format!("invalid initiative total in `{token}`"))?;
+                    let index = canonical_index(state, name.trim())?;
+                    overrides.push((index, total));
+                }
+                engine::init(state, &overrides, rng, lines)
+            })
+        }
+        Command::Status => print_status(&state_path(&sources, state.as_deref()), json),
         Command::Attack {
             attacker,
             target,
             attack,
             adv,
             dis,
-            no_sneak,
             multi,
             no_reactions,
-        } => run_state_command(&state, seed, |state, rng, lines| {
-            let attacker = canonical_name(state, &attacker)?;
-            let target = canonical_name(state, &target)?;
-            let options = AttackOptions {
-                advantage: adv,
-                disadvantage: dis,
-                no_sneak,
-                no_reactions,
-                multi,
-            };
-            engine::attack(state, &attacker, &target, &attack, &options, rng, lines)?;
-            Ok(())
-        }),
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                let attacker = canonical_name(state, &attacker)?;
+                let target = canonical_name(state, &target)?;
+                let options = AttackOptions {
+                    advantage: adv,
+                    disadvantage: dis,
+                    multi,
+                    no_reactions,
+                };
+                engine::attack(state, &attacker, &target, &attack, &options, rng, lines)
+            })
+        }
         Command::Damage {
             target,
             expression,
             damage_type,
             crit,
-        } => run_state_command(&state, seed, |state, rng, lines| {
-            let target = canonical_name(state, &target)?;
-            engine::damage(
-                state,
-                &target,
-                &expression,
-                damage_type.as_deref(),
-                crit,
-                rng,
-                lines,
-            )?;
-            Ok(())
-        }),
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                let target = canonical_name(state, &target)?;
+                engine::damage(
+                    state,
+                    &target,
+                    &expression,
+                    damage_type.as_deref(),
+                    crit,
+                    rng,
+                    lines,
+                )
+            })
+        }
         Command::Heal {
             target,
             expression,
             from,
-        } => run_state_command(&state, seed, |state, rng, lines| {
-            let target = canonical_name(state, &target)?;
-            let from = from
-                .as_deref()
-                .map(|name| canonical_name(state, name))
-                .transpose()?;
-            engine::heal(state, &target, &expression, from.as_deref(), rng, lines)?;
-            Ok(())
-        }),
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                let target = canonical_name(state, &target)?;
+                let from = from
+                    .as_deref()
+                    .map(|name| canonical_name(state, name))
+                    .transpose()?;
+                engine::heal(state, &target, &expression, from.as_deref(), rng, lines)
+            })
+        }
         Command::Save {
             who,
             ability,
             dc,
             adv,
             dis,
-        } => run_state_command(&state, seed, |state, rng, lines| {
-            let who = canonical_name(state, &who)?;
-            let mode = RollMode::from_flags(adv, dis);
-            engine::save(state, &who, &ability, dc, mode, rng, lines)?;
-            Ok(())
-        }),
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                let who = canonical_name(state, &who)?;
+                engine::save(state, &who, &ability, dc, RollMode::from_flags(adv, dis), rng, lines)
+            })
+        }
         Command::Check {
             who,
             skill_or_ability,
@@ -391,49 +432,81 @@ pub fn run() -> Result<()> {
             adv,
             dis,
             bonus,
-        } => run_state_command(&state, seed, |state, rng, lines| {
-            let who = canonical_name(state, &who)?;
-            let options = CheckOptions {
-                mode: RollMode::from_flags(adv, dis),
-                bonus,
-            };
-            engine::check(state, &who, &skill_or_ability, dc, &options, rng, lines)?;
-            Ok(())
-        }),
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                let who = canonical_name(state, &who)?;
+                engine::check(
+                    state,
+                    &who,
+                    &skill_or_ability,
+                    dc,
+                    RollMode::from_flags(adv, dis),
+                    bonus,
+                    rng,
+                    lines,
+                )
+            })
+        }
         Command::Roll {
             expression,
             adv,
             dis,
             dc,
-        } => run_state_command(&state, seed, |_state, rng, lines| {
-            engine::roll_expression(&expression, RollMode::from_flags(adv, dis), dc, rng, lines)?;
-            Ok(())
-        }),
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |_state, rng, lines| {
+                engine::roll_expression(&expression, RollMode::from_flags(adv, dis), dc, rng, lines)
+            })
+        }
         Command::Cast {
             who,
-            name,
+            ability,
             targets,
+            option,
+            slot,
             adv,
             dis,
-        } => run_state_command(&state, seed, |state, rng, lines| {
-            let who = canonical_name(state, &who)?;
-            let targets = targets
-                .iter()
-                .map(|target| canonical_name(state, target))
-                .collect::<Result<Vec<_>>>()?;
-            let options = AttackOptions {
-                advantage: adv,
-                disadvantage: dis,
-                ..AttackOptions::default()
-            };
-            engine::cast(state, &who, &name, &targets, &options, rng, lines)?;
-            Ok(())
-        }),
-        Command::Use { who, name, amount } => {
-            run_state_command(&state, seed, |state, rng, lines| {
+            no_reactions,
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
-                engine::use_entry(state, &who, &name, amount, rng, lines)?;
-                Ok(())
+                let targets = canonical_names(state, &targets)?;
+                let options = UseOptions {
+                    targets,
+                    option,
+                    slot_level: slot,
+                    advantage: adv,
+                    disadvantage: dis,
+                    no_reactions,
+                };
+                engine::use_ability(state, &who, &ability, &options, rng, lines)
+            })
+        }
+        Command::Use {
+            who,
+            ability,
+            targets,
+            option,
+            slot,
+            adv,
+            dis,
+            no_reactions,
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                let who = canonical_name(state, &who)?;
+                let targets = canonical_names(state, &targets)?;
+                let options = UseOptions {
+                    targets: targets.clone(),
+                    option,
+                    slot_level: slot,
+                    advantage: adv,
+                    disadvantage: dis,
+                    no_reactions,
+                };
+                engine::use_entry(state, &who, &ability, &targets, &options, rng, lines)
             })
         }
         Command::Condition { command } => match command {
@@ -441,82 +514,133 @@ pub fn run() -> Result<()> {
                 who,
                 condition,
                 rounds,
-                until_end_of_turn,
+                minutes,
+                permanent,
+                until,
+                until_subject,
                 source,
-            } => run_state_command(&state, seed, |state, _rng, lines| {
-                let who = canonical_name(state, &who)?;
-                let source = source
-                    .as_deref()
-                    .map(|name| canonical_name(state, name))
-                    .transpose()?;
-                let until_end_of_turn = until_end_of_turn
-                    .as_deref()
-                    .map(|name| canonical_name(state, name))
-                    .transpose()?;
-                let options = ConditionOptions {
-                    rounds,
-                    until_end_of_turn,
-                    source,
-                };
-                engine::add_condition(state, &who, &condition, &options, lines)?;
-                Ok(())
-            }),
-            ConditionCommand::Remove { who, condition } => {
-                run_state_command(&state, seed, |state, _rng, lines| {
+                linked,
+                save_ends,
+            } => {
+                let path = state_path(&sources, state.as_deref());
+                run_state_command(&path, seed, |state, rng, lines| {
                     let who = canonical_name(state, &who)?;
-                    engine::remove_condition(state, &who, &condition, lines)?;
-                    Ok(())
+                    let save_ends = match save_ends {
+                        Some(text) => {
+                            let (ability, dc) = text.split_once(':').ok_or_else(|| {
+                                anyhow!("--save-ends expects ABILITY:DC, for example wis:13")
+                            })?;
+                            let ability = crate::state::ability_from_text(ability)
+                                .ok_or_else(|| anyhow!("unknown save ability `{ability}`"))?;
+                            let dc: i32 = dc
+                                .trim()
+                                .parse()
+                                .with_context(|| format!("invalid save DC in `{text}`"))?;
+                            Some((ability, dc))
+                        }
+                        None => None,
+                    };
+                    let options = AddConditionOptions {
+                        rounds,
+                        minutes,
+                        permanent,
+                        until: until.map(Into::into),
+                        until_subject,
+                        source,
+                        linked,
+                        save_ends,
+                    };
+                    engine::add_condition(state, &who, &condition, &options, rng, lines)
+                })
+            }
+            ConditionCommand::Remove { who, condition } => {
+                let path = state_path(&sources, state.as_deref());
+                run_state_command(&path, seed, |state, _rng, lines| {
+                    let who = canonical_name(state, &who)?;
+                    engine::remove_condition(state, &who, &condition, lines)
                 })
             }
         },
-        Command::Move { who, zone } => run_state_command(&state, seed, |state, _rng, lines| {
-            let who = canonical_name(state, &who)?;
-            engine::move_to(state, &who, &zone, lines)?;
-            Ok(())
-        }),
-        Command::Deathsave { who } => run_state_command(&state, seed, |state, rng, lines| {
-            let who = canonical_name(state, &who)?;
-            engine::death_save(state, &who, rng, lines)?;
-            Ok(())
-        }),
-        Command::Next => run_state_command(&state, seed, |state, rng, lines| {
-            engine::next_turn(state, rng, lines)?;
-            if let Some(index) = state.current_index() {
-                lines.push(combatant_line(state, index, true));
-            }
-            Ok(())
-        }),
-        Command::Log { tail } => print_log(&state, tail),
-        Command::Rest { kind, who } => run_state_command(&state, seed, |state, _rng, lines| {
-            let who = if who.eq_ignore_ascii_case("all") {
-                "all".to_string()
-            } else {
-                canonical_name(state, &who)?
-            };
-            engine::rest(state, kind.into(), Some(&who), lines)?;
-            Ok(())
-        }),
-        Command::Simulate {
-            specs,
-            encounter,
-            runs,
-            max_rounds,
-            threads,
-            ..
-        } => simulate(
-            &state,
-            json,
-            &specs,
-            encounter.as_deref(),
-            SimOptions {
-                runs,
-                max_rounds,
-                seed,
-                threads,
-            },
-        ),
+        Command::Move { who, zone } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, _rng, lines| {
+                let who = canonical_name(state, &who)?;
+                engine::move_to(state, &who, &zone, lines)
+            })
+        }
+        Command::Deathsave { who } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                let who = canonical_name(state, &who)?;
+                engine::death_save(state, &who, rng, lines)
+            })
+        }
+        Command::Next => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| engine::next_turn(state, rng, lines))
+        }
+        Command::Log { tail } => print_log(&state_path(&sources, state.as_deref()), tail),
+        Command::Rest { kind, who } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, _rng, lines| {
+                let who = if who.eq_ignore_ascii_case("all") {
+                    "all".to_string()
+                } else {
+                    canonical_name(state, &who)?
+                };
+                engine::rest(state, kind.into(), Some(&who), lines)
+            })
+        }
+        Command::Activate { name } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, seed, |state, rng, lines| {
+                engine::activate(state, &name, rng, lines)
+            })
+        }
         Command::Content { command } => run_content(&sources, command),
+        Command::Simulate => {
+            println!("not yet (v2 step 4)");
+            Ok(())
+        }
     }
+}
+
+// ---------------------------------------------------------------------------
+// State path and content loading
+// ---------------------------------------------------------------------------
+
+fn manifest_state_dir(sources: &ContentSources) -> Option<PathBuf> {
+    let path = sources.campaign_path()?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let value: serde_json::Value = if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        serde_json::from_str(&text).ok()?
+    } else {
+        let value: serde_norway::Value = serde_norway::from_str(&text).ok()?;
+        serde_json::to_value(value).ok()?
+    };
+    let manifest: crate::content::schema::CampaignManifest =
+        serde_json::from_value(value).ok()?;
+    let base = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    manifest
+        .state_dir
+        .map(|dir| if dir.is_absolute() { dir } else { base.join(dir) })
+}
+
+fn state_path(sources: &ContentSources, requested: Option<&Path>) -> PathBuf {
+    let state_dir = requested
+        .filter(|path| {
+            let text = path.to_string_lossy();
+            !text.contains('/') && !text.contains('\\')
+        })
+        .and_then(|_| manifest_state_dir(sources));
+    resolve_state_path(requested, state_dir.as_deref())
 }
 
 fn load_content(sources: &ContentSources) -> Result<content::ContentRegistry> {
@@ -581,7 +705,7 @@ fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> 
 }
 
 // ---------------------------------------------------------------------------
-// State loading/saving and name resolution
+// Command plumbing
 // ---------------------------------------------------------------------------
 
 fn make_rng(seed: Option<u64>) -> Box<dyn DiceRng> {
@@ -600,7 +724,6 @@ where
     let mut lines = Vec::new();
     let mut rng = make_rng(seed);
     action(&mut state, rng.as_mut(), &mut lines)?;
-
     state.log.extend(lines.iter().cloned());
     state
         .save(state_path)
@@ -609,25 +732,41 @@ where
     Ok(())
 }
 
-fn new_state(state_path: &Path, encounter: Option<&Path>, specs: &[String]) -> Result<()> {
-    let mut state = match encounter {
-        Some(path) => EncounterState::from_encounter_file(path)
-            .with_context(|| format!("failed to load encounter {}", path.display()))?,
-        None => {
-            if specs.is_empty() {
-                bail!("provide at least one combatant spec or --encounter");
-            }
-            EncounterState::from_specs(specs)?
-        }
+fn new_state(
+    sources: &ContentSources,
+    requested: Option<&Path>,
+    encounter: String,
+    party: Option<String>,
+    party_zone: Option<String>,
+    add: Vec<String>,
+) -> Result<()> {
+    let content = load_content(sources)?;
+    let party = party
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    let adds = add
+        .iter()
+        .map(|spec| AddSpec::parse(spec))
+        .collect::<Result<Vec<_>>>()?;
+    let options = NewEncounter {
+        encounter,
+        party,
+        party_zone,
+        adds,
     };
-
-    let name = state.name.as_deref().unwrap_or("encounter");
-    let line = format!("Created {name} with {} combatants", state.combatants.len());
-    state.log.push(line.clone());
+    let state = EncounterState::from_encounter(content, &options)?;
+    let state_dir = manifest_state_dir(sources);
+    let path = resolve_state_path(requested, state_dir.as_deref());
     state
-        .save(state_path)
-        .with_context(|| format!("failed to save state {}", state_path.display()))?;
-    println!("{line}");
+        .save(&path)
+        .with_context(|| format!("failed to save state {}", path.display()))?;
+    for line in &state.log {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -644,9 +783,20 @@ fn resolve_name(state: &EncounterState, query: &str) -> Result<usize> {
     })
 }
 
+fn canonical_index(state: &EncounterState, query: &str) -> Result<usize> {
+    resolve_name(state, query)
+}
+
 fn canonical_name(state: &EncounterState, query: &str) -> Result<String> {
     let index = resolve_name(state, query)?;
-    Ok(state.combatants[index].name().to_string())
+    Ok(state.combatants[index].name.clone())
+}
+
+fn canonical_names(state: &EncounterState, queries: &[String]) -> Result<Vec<String>> {
+    queries
+        .iter()
+        .map(|query| canonical_name(state, query))
+        .collect()
 }
 
 fn known_combatants(state: &EncounterState) -> String {
@@ -656,14 +806,20 @@ fn known_combatants(state: &EncounterState) -> String {
         state
             .combatants
             .iter()
-            .map(|combatant| combatant.name())
+            .map(|combatant| combatant.name.clone())
             .collect::<Vec<_>>()
             .join(", ")
     }
 }
 
+fn print_lines(lines: &[String]) {
+    for line in lines {
+        println!("{line}");
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Commands that do not mutate state
+// Read-only commands and status JSON
 // ---------------------------------------------------------------------------
 
 fn print_status(state_path: &Path, json: bool) -> Result<()> {
@@ -676,7 +832,7 @@ fn print_status(state_path: &Path, json: bool) -> Result<()> {
             serde_json::to_string_pretty(&output).context("failed to serialize status JSON")?
         );
     } else {
-        for line in status_lines(&state) {
+        for line in engine::status_lines(&state) {
             println!("{line}");
         }
     }
@@ -696,29 +852,20 @@ fn print_log(state_path: &Path, tail: Option<usize>) -> Result<()> {
     Ok(())
 }
 
-fn print_lines(lines: &[String]) {
-    for line in lines {
-        println!("{line}");
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Status rendering
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Serialize)]
 struct StatusOutput {
     round: u32,
     turn: usize,
     active: Option<String>,
+    outcome: Option<crate::state::CombatOutcome>,
     combatants: Vec<CombatantStatus>,
 }
 
 #[derive(Debug, Serialize)]
 struct CombatantStatus {
     name: String,
-    side: Side,
-    kind: Kind,
+    side: String,
+    kind: crate::content::schema::CreatureKind,
     initiative: Option<i32>,
     current: bool,
     hp: i32,
@@ -726,369 +873,102 @@ struct CombatantStatus {
     temp_hp: i32,
     ac: i32,
     zone: String,
-    conditions: Vec<String>,
-    resources: BTreeMap<String, Resource>,
-    death_saves: Option<DeathSaves>,
+    conditions: Vec<ConditionStatus>,
+    resources: BTreeMap<String, ResourceStatus>,
+    death_saves: Option<crate::state::DeathSaves>,
+    dormant: bool,
+    concentrating: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ConditionStatus {
+    id: String,
+    source: Option<String>,
+    linked: Option<String>,
+    remaining: Option<String>,
+    save_ends: Option<String>,
+    concentration: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ResourceStatus {
+    current: i32,
+    max: i32,
+    recharge: String,
 }
 
 impl StatusOutput {
     fn from_state(state: &EncounterState) -> Self {
         let current = state.current_index();
-        let combatants = status_order(state)
+        let combatants = engine::status_order(state)
             .into_iter()
             .map(|index| {
-                let combatant = &state.combatants[index];
+                let combatant: &CombatantState = &state.combatants[index];
                 CombatantStatus {
-                    name: combatant.name().to_string(),
-                    side: combatant.side(),
+                    name: combatant.name.clone(),
+                    side: combatant.side.as_str().to_string(),
                     kind: combatant.kind(),
                     initiative: combatant.initiative_total,
                     current: current == Some(index),
                     hp: combatant.hp,
-                    max_hp: combatant.spec.max_hp,
+                    max_hp: combatant.max_hp,
                     temp_hp: combatant.temp_hp,
-                    ac: combatant.ac(),
+                    ac: combatant.creature.ac(),
                     zone: combatant.zone.clone(),
-                    conditions: combatant.conditions.iter().map(condition_display).collect(),
-                    resources: combatant.resources.clone(),
-                    death_saves: if combatant.kind() == Kind::Pc {
+                    conditions: combatant
+                        .conditions
+                        .iter()
+                        .map(|condition| ConditionStatus {
+                            id: condition.condition.clone(),
+                            source: condition.source.clone(),
+                            linked: condition.linked.clone(),
+                            remaining: condition
+                                .duration
+                                .as_ref()
+                                .map(crate::state::ActiveDuration::describe),
+                            save_ends: condition
+                                .save_ends
+                                .as_ref()
+                                .map(|save_ends| {
+                                    format!(
+                                        "{}:{}",
+                                        save_ends.ability.as_str(),
+                                        save_ends.dc
+                                    )
+                                }),
+                            concentration: condition.concentration,
+                        })
+                        .collect(),
+                    resources: combatant
+                        .resources
+                        .iter()
+                        .map(|(id, resource)| {
+                            (
+                                id.clone(),
+                                ResourceStatus {
+                                    current: resource.current,
+                                    max: resource.max,
+                                    recharge: resource.recharge.to_string(),
+                                },
+                            )
+                        })
+                        .collect(),
+                    death_saves: if combatant.is_pc() {
                         Some(combatant.death_saves)
                     } else {
                         None
                     },
+                    dormant: combatant.dormant,
+                    concentrating: state.concentration.contains_key(&combatant.name),
                 }
             })
             .collect();
         Self {
             round: state.round,
             turn: state.turn,
-            active: state
-                .current()
-                .map(|combatant| combatant.name().to_string()),
+            active: state.current().map(|combatant| combatant.name.clone()),
+            outcome: state.outcome.clone(),
             combatants,
         }
     }
-}
-
-fn status_lines(state: &EncounterState) -> Vec<String> {
-    let mut lines = Vec::with_capacity(state.combatants.len() + 1);
-    match state.current() {
-        Some(combatant) => lines.push(format!(
-            "Round {} — {}'s turn",
-            state.round,
-            combatant.name()
-        )),
-        None => lines.push(format!("Round {} — initiative not rolled", state.round)),
-    }
-    let current = state.current_index();
-    for index in status_order(state) {
-        lines.push(combatant_line(state, index, current == Some(index)));
-    }
-    lines
-}
-
-fn status_order(state: &EncounterState) -> Vec<usize> {
-    let mut order = Vec::with_capacity(state.combatants.len());
-    for &index in &state.initiative {
-        if index < state.combatants.len() && !order.contains(&index) {
-            order.push(index);
-        }
-    }
-    for index in 0..state.combatants.len() {
-        if !order.contains(&index) {
-            order.push(index);
-        }
-    }
-    order
-}
-
-fn combatant_line(state: &EncounterState, index: usize, current: bool) -> String {
-    let combatant = &state.combatants[index];
-    let marker = if current { "> " } else { "  " };
-    let initiative = combatant
-        .initiative_total
-        .map_or_else(|| "-".to_string(), |total| total.to_string());
-    let hp = if combatant.temp_hp > 0 {
-        format!(
-            "{}/{} (+{})",
-            combatant.hp, combatant.spec.max_hp, combatant.temp_hp
-        )
-    } else {
-        format!("{}/{}", combatant.hp, combatant.spec.max_hp)
-    };
-    let conditions = condition_list(&combatant.conditions);
-    let resources = resource_list(combatant);
-    let saves = saves_label(combatant);
-    format!(
-        "{marker}{initiative} {} {} HP {hp} AC {} {} | conditions: {conditions} | resources: {resources} | saves: {saves}",
-        combatant.name(),
-        side_label(combatant.side()),
-        combatant.ac(),
-        combatant.zone
-    )
-}
-
-fn side_label(side: Side) -> &'static str {
-    match side {
-        Side::Party => "party",
-        Side::Enemy => "enemy",
-        Side::Unknown => "unknown",
-    }
-}
-
-fn condition_list(conditions: &[ActiveCondition]) -> String {
-    if conditions.is_empty() {
-        "none".to_string()
-    } else {
-        conditions
-            .iter()
-            .map(condition_display)
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-}
-
-fn condition_display(condition: &ActiveCondition) -> String {
-    if let Some(rounds) = condition
-        .duration
-        .as_ref()
-        .and_then(|duration| duration.rounds)
-    {
-        format!("{}({rounds})", condition.condition)
-    } else if let Some(ends) = &condition.ends_with_turn_of {
-        format!("{}(until {ends}'s turn)", condition.condition)
-    } else {
-        condition.condition.clone()
-    }
-}
-
-fn resource_list(combatant: &CombatantState) -> String {
-    if combatant.resources.is_empty() {
-        "none".to_string()
-    } else {
-        combatant
-            .resources
-            .iter()
-            .map(|(name, resource)| format!("{name} {}/{}", resource.current, resource.max))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-}
-
-fn saves_label(combatant: &CombatantState) -> String {
-    if combatant.kind() != Kind::Pc {
-        return "-".to_string();
-    }
-    if combatant.death_saves.dead {
-        "dead".to_string()
-    } else if combatant.death_saves.stable {
-        "stable".to_string()
-    } else {
-        format!(
-            "{}S/{}F",
-            combatant.death_saves.successes, combatant.death_saves.failures
-        )
-    }
-}
-
-fn simulate(
-    state_path: &Path,
-    json: bool,
-    specs: &[String],
-    encounter: Option<&Path>,
-    options: SimOptions,
-) -> Result<()> {
-    if options.runs == 0 {
-        bail!("--runs must be at least 1");
-    }
-    if options.max_rounds == 0 {
-        bail!("--max-rounds must be at least 1");
-    }
-    if options.threads == Some(0) {
-        bail!("--threads must be at least 1");
-    }
-
-    let mut template = if !specs.is_empty() {
-        EncounterState::from_specs(specs)?
-    } else if let Some(path) = encounter {
-        EncounterState::from_encounter_file(path)
-            .with_context(|| format!("failed to load encounter {}", path.display()))?
-    } else {
-        EncounterState::load(state_path)
-            .with_context(|| format!("failed to load state {}", state_path.display()))?
-    };
-    template.log.clear();
-
-    if options.runs == 1 {
-        let ai = Ai::new(&template)?;
-        let mut rng = make_rng(options.seed);
-        let mut lines = Vec::new();
-        let run = sim::play_run(
-            &mut template,
-            &ai,
-            options.max_rounds,
-            rng.as_mut(),
-            &mut lines,
-        )?;
-        if json {
-            let output = SingleRunOutput::from_state(&template, &run, lines);
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&output)
-                    .context("failed to serialize simulation report")?
-            );
-        } else {
-            print_lines(&lines);
-            print_single_run_summary(&template, &run);
-        }
-        return Ok(());
-    }
-
-    let report = sim::monte_carlo(template, options)?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .context("failed to serialize simulation report")?
-        );
-    } else {
-        print_monte_carlo_summary(&report);
-    }
-    Ok(())
-}
-
-#[derive(Debug, Serialize)]
-struct SingleRunOutput {
-    runs: u64,
-    outcome: RunOutcome,
-    rounds: u32,
-    log: Vec<String>,
-    combatants: Vec<SingleRunCombatant>,
-}
-
-#[derive(Debug, Serialize)]
-struct SingleRunCombatant {
-    name: String,
-    side: Side,
-    hp: i32,
-    max_hp: i32,
-    dead: bool,
-    down: bool,
-}
-
-impl SingleRunOutput {
-    fn from_state(state: &EncounterState, run: &SingleRun, log: Vec<String>) -> Self {
-        let combatants = state
-            .combatants
-            .iter()
-            .map(|combatant| SingleRunCombatant {
-                name: combatant.name().to_string(),
-                side: combatant.side(),
-                hp: combatant.hp,
-                max_hp: combatant.spec.max_hp,
-                dead: combatant.death_saves.dead,
-                down: combatant.hp <= 0 && !combatant.death_saves.dead,
-            })
-            .collect();
-        Self {
-            runs: 1,
-            outcome: run.outcome,
-            rounds: run.rounds,
-            log,
-            combatants,
-        }
-    }
-}
-
-fn print_single_run_summary(state: &EncounterState, run: &SingleRun) {
-    let outcome = match run.outcome {
-        RunOutcome::PartyWins => "party wins",
-        RunOutcome::EnemyWins => "enemies win",
-        RunOutcome::Draw => "draw",
-        RunOutcome::Timeout => "timeout",
-    };
-    println!("Outcome: {outcome} after {} round(s)", run.rounds);
-    for side in [Side::Party, Side::Enemy] {
-        let label = side_label(side);
-        let members: Vec<&CombatantState> = state
-            .combatants
-            .iter()
-            .filter(|combatant| combatant.side() == side)
-            .collect();
-        let hp: i32 = members.iter().map(|combatant| combatant.hp.max(0)).sum();
-        let details = members
-            .iter()
-            .map(|combatant| {
-                let status = if combatant.death_saves.dead {
-                    " dead"
-                } else if combatant.hp <= 0 {
-                    " down"
-                } else {
-                    ""
-                };
-                format!(
-                    "{} {}/{}{status}",
-                    combatant.name(),
-                    combatant.hp.max(0),
-                    combatant.spec.max_hp
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("{label}: {hp} HP ({details})");
-    }
-}
-
-fn print_monte_carlo_summary(report: &MonteCarloReport) {
-    println!(
-        "runs: {}  threads: {}  elapsed: {:.3}s  ({:.0} runs/sec)",
-        report.runs, report.threads, report.elapsed_seconds, report.runs_per_second
-    );
-    println!(
-        "party wins: {} ({:.2}%)  enemy wins: {} ({:.2}%)  draws: {} ({:.2}%)  timeouts: {} ({:.2}%)",
-        report.party_wins,
-        report.party_win_rate * 100.0,
-        report.enemy_wins,
-        report.enemy_win_rate * 100.0,
-        report.draws,
-        report.draw_rate * 100.0,
-        report.timeouts,
-        report.timeout_rate * 100.0
-    );
-    println!(
-        "rounds: avg {:.2}  median {:.1}",
-        report.avg_rounds, report.median_rounds
-    );
-    println!(
-        "avg HP left: party {:.2}  enemies {:.2}",
-        report.avg_party_hp, report.avg_enemy_hp
-    );
-    for combatant in &report.combatants {
-        println!(
-            "{} ({}): avg HP {:.2}  down {:.2}%  dead {:.2}%",
-            combatant.name,
-            side_label(combatant.side),
-            combatant.avg_hp,
-            combatant.down_rate * 100.0,
-            combatant.dead_rate * 100.0
-        );
-    }
-}
-
-fn run_init(state_path: &Path, seed: Option<u64>, sets: &[String]) -> Result<()> {
-    run_state_command(state_path, seed, |state, rng, lines| {
-        let mut overrides = Vec::with_capacity(sets.len());
-        for token in sets {
-            let (name, total) = token
-                .split_once('=')
-                .ok_or_else(|| anyhow!("--set expects NAME=TOTAL, for example --set Will=30"))?;
-            let total: i32 = total
-                .trim()
-                .parse()
-                .with_context(|| format!("invalid initiative total in `{token}`"))?;
-            let index = resolve_name(state, name.trim())?;
-            overrides.push((index, total));
-        }
-        engine::init_with_overrides(state, &overrides, rng, lines)
-    })
 }

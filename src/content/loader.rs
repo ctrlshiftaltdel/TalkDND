@@ -8,7 +8,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::schema::{
     Ability, AbilityEntry, AiTemplate, CampaignManifest, ConditionDef, ContentFile, Creature,
@@ -78,7 +78,7 @@ impl ItemKind {
 }
 
 /// Where an item came from. `line` is the opening fence line for `.md` blocks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentSource {
     pub path: PathBuf,
     pub line: Option<usize>,
@@ -103,14 +103,14 @@ impl fmt::Display for ContentSource {
 }
 
 /// An item plus the file it was read from.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sourced<T> {
     pub item: T,
     pub source: ContentSource,
 }
 
 /// A registry keyed by id for one kind of content.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ItemStore<T> {
     entries: BTreeMap<String, Sourced<T>>,
 }
@@ -166,19 +166,31 @@ impl<T> ItemStore<T> {
 }
 
 /// All content loaded for one campaign (or one set of explicit sources).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContentRegistry {
+    #[serde(default)]
     pub conditions: ItemStore<ConditionDef>,
+    #[serde(default)]
     pub masteries: ItemStore<MasteryDef>,
+    #[serde(default)]
     pub abilities: ItemStore<Ability>,
+    #[serde(default)]
     pub creatures: ItemStore<Creature>,
+    #[serde(default)]
     pub ai_templates: ItemStore<AiTemplate>,
+    #[serde(default)]
     pub scenes: ItemStore<Scene>,
+    #[serde(default)]
     pub encounters: ItemStore<Encounter>,
+    #[serde(default)]
     pub rules: Rules,
+    #[serde(default)]
     pub rules_source: Option<ContentSource>,
+    #[serde(default)]
     pub manifest_path: Option<PathBuf>,
+    #[serde(default)]
     pub manifest_name: Option<String>,
+    #[serde(default)]
     pub state_dir: Option<PathBuf>,
 }
 

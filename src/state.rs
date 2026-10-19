@@ -1,31 +1,43 @@
 //! Runtime encounter state and its persisted JSON form.
 //!
-//! Step 2 mutates this state; step 1 provides construction, name lookup and a
-//! lossless JSON round trip.
+//! A state file is self-contained: it embeds the loaded content registry, the
+//! scene it uses and every combatant's resolved creature. Step commands only
+//! need `--state`, never a campaign manifest.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{self, CombatantSpec, ConditionApplication, DurationSpec, Resource};
+use crate::content::schema::{
+    AbilityName, AiAssignment, ConditionDef, Creature, CreatureKind, Duration, DurationUntil,
+    EndsOn, ResourceDef, Rules, SaveEndsAt, Scene, SceneMode, SceneTrigger, Side, Speed,
+};
+use crate::content::{ContentRegistry, ResolvedAbility};
+use crate::space::{Space, ZoneSpace};
 
-/// Zone used when no encounter or data file supplies one.
-pub const DEFAULT_ZONE: &str = "main";
+/// State file used when no `--state` is supplied.
+pub const DEFAULT_STATE_FILE: &str = "combat-state.json";
+
+/// Suffix appended to bare state names.
+pub const STATE_SUFFIX: &str = ".state.json";
 
 /// A persisted encounter.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct EncounterState {
-    /// Encounter name, when the state was built from an encounter file.
+    /// Self-contained content snapshot used by every later command.
     #[serde(default)]
-    pub name: Option<String>,
-    /// Abstract zone positions in feet.
+    pub content: ContentRegistry,
+    /// The chosen scene, including any trigger `enabled` flags toggled at runtime.
     #[serde(default)]
-    pub zones: BTreeMap<String, i32>,
-    /// Combatants in creation order.
+    pub scene: Option<Scene>,
+    #[serde(default)]
+    pub encounter_name: Option<String>,
+    #[serde(default)]
+    pub party_zone: Option<String>,
     #[serde(default)]
     pub combatants: Vec<CombatantState>,
     /// Indices into `combatants`, in initiative order.
@@ -37,238 +49,408 @@ pub struct EncounterState {
     /// Current round number, starting at 0 before initiative is rolled.
     #[serde(default)]
     pub round: u32,
-    /// Human-readable log lines.
     #[serde(default)]
     pub log: Vec<String>,
+    /// Concentration per combatant instance name.
+    #[serde(default)]
+    pub concentration: BTreeMap<String, ConcentrationState>,
+    /// Scene-trigger runtime (`once`, `enabled`), keyed by trigger id.
+    #[serde(default)]
+    pub triggers: BTreeMap<String, SceneTriggerRuntime>,
+    /// Once a side has won or the fight is a draw, the recorded outcome.
+    #[serde(default)]
+    pub outcome: Option<CombatOutcome>,
 }
 
-/// A combatant's full static data plus mutable runtime state.
+/// Concentration bookkeeping for one caster.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConcentrationState {
+    #[serde(default)]
+    pub ability: Option<String>,
+    #[serde(default)]
+    pub round: u32,
+}
+
+/// Runtime state for a scene trigger.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SceneTriggerRuntime {
+    #[serde(default)]
+    pub fired: bool,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// Combat result once at most one side remains active.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CombatOutcome {
+    Winner(String),
+    Draw,
+}
+
+impl fmt::Display for CombatOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Winner(side) => write!(f, "{side} wins"),
+            Self::Draw => f.write_str("draw"),
+        }
+    }
+}
+
+/// A combatant: the resolved creature plus mutable runtime state.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CombatantState {
-    /// Full data-file contents, embedded so a saved state can be reloaded
-    /// without access to the original data files.
-    pub spec: CombatantSpec,
+    /// Resolved creature data, embedded so the state file is self-contained.
+    pub creature: Creature,
+    /// Instance name, unique within the encounter.
+    pub name: String,
+    pub side: Side,
+    pub max_hp: i32,
     pub hp: i32,
     #[serde(default)]
     pub temp_hp: i32,
     pub zone: String,
     #[serde(default)]
     pub conditions: Vec<ActiveCondition>,
-    /// Runtime copy of the spec's resource pools; `current` changes as they are spent.
     #[serde(default)]
-    pub resources: BTreeMap<String, Resource>,
+    pub resources: BTreeMap<String, ResourceState>,
     #[serde(default)]
     pub death_saves: DeathSaves,
-    #[serde(default)]
-    pub reaction_used: bool,
-    #[serde(default)]
-    pub sneak_used_this_turn: bool,
     #[serde(default)]
     pub action_used: bool,
     #[serde(default)]
     pub bonus_action_used: bool,
+    /// Round in which the reaction was spent.
+    #[serde(default)]
+    pub reaction_round: Option<u32>,
     #[serde(default)]
     pub speed_left: i32,
-    /// Initiative total rolled (or supplied with `init --set`), when known.
+    /// Once-per-turn/round keys mapped to the round in which they were used.
+    #[serde(default)]
+    pub once_used: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub ai: Option<AiAssignment>,
     #[serde(default)]
     pub initiative_total: Option<i32>,
-    /// Weapon-mastery and similar markers (Sap, Vex, Slow) with their expiry.
     #[serde(default)]
-    pub markers: Vec<EffectMarker>,
+    pub dormant: bool,
+    /// Dead flag used for creatures without a configured dead condition.
+    #[serde(default)]
+    pub dead: bool,
 }
 
 impl CombatantState {
-    /// Builds runtime state from static data.
-    pub fn from_spec(spec: CombatantSpec, zone: impl Into<String>) -> Self {
-        let hp = spec.hp;
-        let temp_hp = spec.temp_hp;
-        let speed_left = spec.speed;
-        let conditions = spec
-            .conditions
+    pub fn display_name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn creature_id(&self) -> &str {
+        &self.creature.id
+    }
+
+    pub fn tags(&self) -> &[String] {
+        self.creature.tags.as_deref().unwrap_or(&[])
+    }
+
+    pub fn kind(&self) -> CreatureKind {
+        self.creature.kind()
+    }
+
+    pub fn is_pc(&self) -> bool {
+        self.kind() == CreatureKind::Pc
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.dead || self.death_saves.dead
+    }
+
+    /// A member counts as active when it is awake, alive and not dormant.
+    pub fn is_active(&self) -> bool {
+        !self.dormant && self.hp > 0 && !self.is_dead()
+    }
+
+    pub fn is_dying(&self) -> bool {
+        self.is_pc() && self.hp <= 0 && !self.is_dead() && !self.death_saves.stable
+    }
+
+    pub fn has_condition(&self, content: &ContentRegistry, condition: &str) -> bool {
+        active_condition_ids(content, self)
             .iter()
-            .cloned()
-            .map(ActiveCondition::from)
-            .collect();
-        let resources = spec.resources.clone();
-        Self {
-            spec,
-            hp,
-            temp_hp,
-            zone: zone.into(),
-            conditions,
-            resources,
-            death_saves: DeathSaves::default(),
-            reaction_used: false,
-            sneak_used_this_turn: false,
-            action_used: false,
-            bonus_action_used: false,
-            speed_left,
-            initiative_total: None,
-            markers: Vec::new(),
-        }
+            .any(|id| id.eq_ignore_ascii_case(condition))
     }
 
-    /// The combatant's display name, including any duplicate suffix.
-    pub fn name(&self) -> &str {
-        &self.spec.name
-    }
-
-    /// Which side the combatant is on.
-    pub fn side(&self) -> model::Side {
-        self.spec.side
-    }
-
-    /// Whether the combatant is a PC or monster.
-    pub fn kind(&self) -> model::Kind {
-        self.spec.kind
-    }
-
-    /// Base armour class from the data file.
-    pub fn ac(&self) -> i32 {
-        self.spec.ac
-    }
-
-    /// Ability modifier using the 5e floor formula.
-    pub fn ability_modifier(&self, ability: &str) -> i32 {
-        let score = self
-            .spec
-            .abilities
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(ability))
-            .map(|(_, score)| *score)
-            .unwrap_or(10);
-        (score - 10).div_euclid(2)
-    }
-
-    /// Saving-throw bonus: an explicit save value when present, otherwise the
-    /// plain ability modifier.
-    pub fn save_bonus(&self, ability: &str) -> i32 {
-        self.spec
-            .saves
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(ability))
-            .map(|(_, bonus)| *bonus)
-            .unwrap_or_else(|| self.ability_modifier(ability))
-    }
-
-    /// Skill bonus: an explicit skill value when present, otherwise the plain
-    /// ability modifier for an ability name.
-    pub fn skill_bonus(&self, skill: &str) -> i32 {
-        self.spec
-            .skills
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(skill))
-            .map(|(_, bonus)| *bonus)
-            .unwrap_or_else(|| self.ability_modifier(skill))
-    }
-
-    /// Checks active conditions by name, case-insensitively.
-    pub fn has_condition(&self, condition: &str) -> bool {
-        self.conditions
-            .iter()
-            .any(|active| active.condition.eq_ignore_ascii_case(condition))
-    }
-
-    /// Checks condition immunities by name, case-insensitively.
     pub fn is_immune_to_condition(&self, condition: &str) -> bool {
-        self.spec
+        self.creature
             .condition_immunities
+            .as_deref()
+            .unwrap_or(&[])
             .iter()
             .any(|immune| immune.eq_ignore_ascii_case(condition))
     }
 
-    /// Whether the combatant has a marker of the given kind.
-    pub fn has_marker(&self, kind: MarkerKind) -> bool {
-        self.markers.iter().any(|marker| marker.kind == kind)
+    pub fn ability_modifier(&self, ability: AbilityName) -> i32 {
+        self.creature.ability_modifier(ability)
     }
 
-    /// Current speed after Slow markers and the grappled condition.
-    pub fn effective_speed(&self) -> i32 {
-        if self.has_condition("grappled") {
-            return 0;
+    /// Saving throw bonus: explicit save value when present, otherwise the
+    /// ability modifier.
+    pub fn save_bonus(&self, ability: AbilityName) -> i32 {
+        self.creature
+            .saves
+            .as_ref()
+            .and_then(|saves| saves.get(ability.as_str()))
+            .copied()
+            .unwrap_or_else(|| self.creature.ability_modifier(ability))
+    }
+
+    /// Skill bonus: explicit skill value when present, otherwise the plain
+    /// ability modifier for an ability name.
+    pub fn skill_bonus(&self, skill: &str) -> i32 {
+        self.creature
+            .skills
+            .as_ref()
+            .and_then(|skills| {
+                skills
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(skill))
+                    .map(|(_, bonus)| *bonus)
+            })
+            .unwrap_or_else(|| {
+                ability_from_text(skill)
+                    .map(|ability| self.creature.ability_modifier(ability))
+                    .unwrap_or(0)
+            })
+    }
+
+    /// Base walking speed before condition modifiers.
+    pub fn base_speed(&self) -> i32 {
+        let Speed { walk, .. } = self.creature.speed();
+        walk.max(0)
+    }
+
+    pub fn has_reaction(&self, round: u32) -> bool {
+        !self.is_dead() && self.reaction_round != Some(round)
+    }
+
+    pub fn resource(&self, id: &str) -> Option<&ResourceState> {
+        self.resources.get(id)
+    }
+
+    pub fn resource_mut(&mut self, id: &str) -> Option<&mut ResourceState> {
+        self.resources.get_mut(id)
+    }
+
+    /// Resolves an owned ability reference (`actions` then `features`).
+    pub fn find_owned_ability(
+        &self,
+        content: &ContentRegistry,
+        query: &str,
+    ) -> Result<ResolvedAbility> {
+        let mut entries = Vec::new();
+        if let Some(actions) = &self.creature.actions {
+            entries.extend(actions.iter());
         }
-        let speed = self.spec.speed;
-        if self.has_marker(MarkerKind::Slow) {
-            (speed - 10).max(0)
-        } else {
-            speed.max(0)
+        if let Some(features) = &self.creature.features {
+            entries.extend(features.iter());
+        }
+        let mut matches = Vec::new();
+        for entry in entries {
+            let resolved = content.resolve_ability(entry)?;
+            if ability_matches(&resolved, query) {
+                matches.push(resolved);
+            }
+        }
+        match matches.len() {
+            1 => Ok(matches.remove(0)),
+            0 => bail!(
+                "creature `{}` has no ability matching `{query}`",
+                self.creature.display_name()
+            ),
+            _ => bail!(
+                "ability `{query}` is ambiguous on `{}`; matches: {}",
+                self.creature.display_name(),
+                matches
+                    .iter()
+                    .map(|resolved| resolved.ability.id.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 
-    /// Whether the combatant can act: positive HP, not dead, not unconscious.
-    pub fn is_conscious(&self) -> bool {
-        self.hp > 0 && !self.death_saves.dead && !self.has_condition("unconscious")
+    /// All owned abilities, resolved with their entry params.
+    pub fn owned_abilities(&self, content: &ContentRegistry) -> Result<Vec<ResolvedAbility>> {
+        let mut entries = Vec::new();
+        if let Some(actions) = &self.creature.actions {
+            entries.extend(actions.iter());
+        }
+        if let Some(features) = &self.creature.features {
+            entries.extend(features.iter());
+        }
+        entries
+            .into_iter()
+            .map(|entry| content.resolve_ability(entry))
+            .collect()
+    }
+
+    pub fn find_attack(&self, query: &str) -> Result<&crate::content::schema::Attack> {
+        let needle = query.trim().to_ascii_lowercase();
+        let attacks = self.creature.attacks.as_deref().unwrap_or(&[]);
+        if let Some(attack) = attacks.iter().find(|attack| {
+            attack.id.eq_ignore_ascii_case(&needle)
+                || attack.display_name().eq_ignore_ascii_case(&needle)
+        }) {
+            return Ok(attack);
+        }
+        let matches: Vec<&crate::content::schema::Attack> = attacks
+            .iter()
+            .filter(|attack| {
+                attack.id.to_ascii_lowercase().starts_with(&needle)
+                    || attack
+                        .display_name()
+                        .to_ascii_lowercase()
+                        .starts_with(&needle)
+            })
+            .collect();
+        match matches.as_slice() {
+            [attack] => Ok(attack),
+            [] => bail!("creature `{}` has no attack matching `{query}`", self.name),
+            _ => bail!(
+                "attack `{query}` is ambiguous on `{}`; matches: {}",
+                self.name,
+                matches
+                    .iter()
+                    .map(|attack| attack.id.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
     }
 }
 
-/// Kind of transient marker applied by weapon mastery or a similar effect.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MarkerKind {
-    /// Disadvantage on the marked creature's next attack roll.
-    Sap,
-    /// Advantage for the source on its next attack against `target`.
-    Vex,
-    /// Speed reduced by 10 ft while present.
-    Slow,
+fn ability_matches(resolved: &ResolvedAbility, query: &str) -> bool {
+    let needle = query.trim().to_ascii_lowercase();
+    let id = &resolved.ability.id;
+    let name = resolved.ability.display_name();
+    id.eq_ignore_ascii_case(&needle)
+        || name.eq_ignore_ascii_case(&needle)
+        || id.to_ascii_lowercase().starts_with(&needle)
+        || name.to_ascii_lowercase().starts_with(&needle)
 }
 
-/// A Sap, Vex or Slow marker with its source and expiry.
+pub fn ability_from_text(text: &str) -> Option<AbilityName> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "str" | "strength" => Some(AbilityName::Str),
+        "dex" | "dexterity" => Some(AbilityName::Dex),
+        "con" | "constitution" => Some(AbilityName::Con),
+        "int" | "intelligence" => Some(AbilityName::Int),
+        "wis" | "wisdom" => Some(AbilityName::Wis),
+        "cha" | "charisma" => Some(AbilityName::Cha),
+        _ => None,
+    }
+}
+
+/// A named resource pool.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct EffectMarker {
-    pub kind: MarkerKind,
-    /// Creature that applied the marker.
-    pub source: String,
-    /// Vex only: the creature the advantage applies against.
+pub struct ResourceState {
+    pub current: i32,
+    pub max: i32,
+    pub recharge: crate::content::schema::Recharge,
     #[serde(default)]
-    pub target: Option<String>,
-    /// Round at whose end the marker expires.
-    pub expires_round: u32,
-    /// Creature whose turn end removes the marker.
-    pub ends_with_turn_of: String,
-    #[serde(default)]
-    pub notes: Option<String>,
+    pub short_rest_regain: Option<i32>,
 }
 
-/// A condition currently affecting a combatant.
+impl ResourceState {
+    pub fn from_def(def: &ResourceDef) -> Self {
+        Self {
+            current: def.max,
+            max: def.max,
+            recharge: def.recharge.clone(),
+            short_rest_regain: def.short_rest_regain,
+        }
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.current >= self.max
+    }
+
+    pub fn restore(&mut self, amount: i32) {
+        self.current = (self.current + amount.max(0)).min(self.max);
+    }
+}
+
+/// Why a condition is currently active.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ActiveCondition {
     pub condition: String,
-    /// Creature or effect that applied the condition.
     #[serde(default)]
     pub source: Option<String>,
-    /// DC to escape, for grappled/restrained-style conditions.
+    /// Creature this instance is linked to (for `linked_*` predicates).
     #[serde(default)]
-    pub escape_dc: Option<i32>,
+    pub linked: Option<String>,
     #[serde(default)]
-    pub duration: Option<DurationSpec>,
-    /// Absolute round at whose end the condition expires, when not driven by
-    /// `duration.rounds`.
+    pub duration: Option<ActiveDuration>,
     #[serde(default)]
-    pub expires_round: Option<u32>,
-    /// Creature whose turn end removes the condition (for
-    /// `end_of_source_next_turn` and similar effects).
+    pub save_ends: Option<ActiveSaveEnds>,
     #[serde(default)]
-    pub ends_with_turn_of: Option<String>,
+    pub ends_on: Vec<EndsOn>,
+    /// Ability/attack id that created this instance.
+    #[serde(default)]
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub concentration: bool,
+    #[serde(default)]
+    pub applied_round: u32,
     #[serde(default)]
     pub notes: Option<String>,
 }
 
-impl From<ConditionApplication> for ActiveCondition {
-    fn from(application: ConditionApplication) -> Self {
-        Self {
-            condition: application.condition,
-            source: None,
-            escape_dc: application.escape_dc,
-            duration: application.duration,
-            expires_round: None,
-            ends_with_turn_of: None,
-            notes: application.notes,
+/// Runtime form of a content duration.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ActiveDuration {
+    /// Ends after `remaining` end-of-turn events of the affected creature.
+    Rounds { remaining: u32 },
+    /// Same as rounds, but measured in 10-round minutes.
+    Minutes { remaining: u32 },
+    Permanent,
+    /// Ends at the named phase of `subject`'s next turn.
+    Until {
+        until: DurationUntil,
+        subject: String,
+        end_round: u32,
+    },
+}
+
+impl ActiveDuration {
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Rounds { remaining } => format!("{remaining}r"),
+            Self::Minutes { remaining } => format!("{}m", remaining.div_ceil(10)),
+            Self::Permanent => "permanent".to_string(),
+            Self::Until { until, subject, .. } => match until {
+                DurationUntil::StartOfSourceNextTurn => {
+                    format!("until {subject} starts next turn")
+                }
+                DurationUntil::EndOfSourceNextTurn => {
+                    format!("until {subject} ends next turn")
+                }
+                DurationUntil::EndOfTargetNextTurn => {
+                    format!("until {subject} ends next turn")
+                }
+            },
         }
     }
 }
 
-/// Death-saving-throw progress for a player character.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ActiveSaveEnds {
+    pub ability: AbilityName,
+    pub dc: i32,
+    pub at: SaveEndsAt,
+}
+
+/// Death-saving-throw progress.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DeathSaves {
     #[serde(default)]
@@ -279,6 +461,58 @@ pub struct DeathSaves {
     pub stable: bool,
     #[serde(default)]
     pub dead: bool,
+}
+
+/// Description of an `--add` member.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddSpec {
+    pub creature: String,
+    pub count: u32,
+    pub zone: Option<String>,
+}
+
+impl AddSpec {
+    /// Parses `id`, `id:count`, `id@zone` or `id:count@zone`.
+    pub fn parse(text: &str) -> Result<Self> {
+        let text = text.trim();
+        if text.is_empty() {
+            bail!("empty --add value");
+        }
+        let (head, zone) = match text.rsplit_once('@') {
+            Some((head, zone)) => {
+                if head.is_empty() {
+                    bail!("`{text}` has no creature id before `@`");
+                }
+                if zone.trim().is_empty() {
+                    bail!("`{text}` has an empty zone after `@`");
+                }
+                (head, Some(zone.trim().to_string()))
+            }
+            None => (text, None),
+        };
+        let (creature, count) = match head.rsplit_once(':') {
+            Some((creature, suffix))
+                if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                let count: u32 = suffix
+                    .parse()
+                    .with_context(|| format!("invalid count `{suffix}` in `{text}`"))?;
+                if count == 0 {
+                    bail!("count must be at least 1 in `{text}`");
+                }
+                (creature, count)
+            }
+            _ => (head, 1),
+        };
+        if creature.is_empty() {
+            bail!("`{text}` has no creature id");
+        }
+        Ok(Self {
+            creature: creature.to_string(),
+            count,
+            zone,
+        })
+    }
 }
 
 /// Failure to resolve a combatant name.
@@ -308,87 +542,212 @@ impl fmt::Display for LookupError {
 
 impl std::error::Error for LookupError {}
 
+/// Options for `new --encounter`.
+#[derive(Debug, Clone, Default)]
+pub struct NewEncounter {
+    pub encounter: String,
+    pub party: Vec<String>,
+    pub party_zone: Option<String>,
+    pub adds: Vec<AddSpec>,
+}
+
 impl EncounterState {
-    /// Builds state from command-line combatant specs.
-    ///
-    /// Each spec is `file[:count][@zone]`. When no zones exist a `main` zone at
-    /// position 0 is created; any other explicitly requested zone is inserted
-    /// at position 0 as well.
-    pub fn from_specs(specs: &[String]) -> Result<Self> {
-        if specs.is_empty() {
-            bail!("at least one combatant spec is required");
+    /// Builds a state from an encounter id in `content`.
+    pub fn from_encounter(content: ContentRegistry, options: &NewEncounter) -> Result<Self> {
+        let encounter = content
+            .encounters
+            .get(&options.encounter)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown encounter `{}`", options.encounter))?;
+        let mut scene = content
+            .scenes
+            .get(&encounter.scene)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "encounter `{}` references unknown scene `{}`",
+                    encounter.id,
+                    encounter.scene
+                )
+            })?;
+        if scene.mode == SceneMode::Grid {
+            bail!("grid scenes arrive in v2 step 3");
         }
-
-        let mut zones = BTreeMap::new();
-        zones.insert(DEFAULT_ZONE.to_string(), 0);
-        let mut combatants = Vec::new();
-
-        for token in specs {
-            let parsed = parse_spec_token(token)?;
-            let spec = model::load_combatant(&parsed.path)
-                .with_context(|| format!("failed to load combatant `{}`", parsed.path.display()))?;
-            let zone = parsed
-                .zone
-                .or_else(|| spec.zone.clone())
-                .unwrap_or_else(|| DEFAULT_ZONE.to_string());
-            zones.entry(zone.clone()).or_insert(0);
-            push_instances(&mut combatants, spec, parsed.count, &zone);
+        if scene.zones.is_empty() {
+            bail!("scene `{}` has no zones", scene.id);
         }
-
-        Ok(Self {
-            name: None,
-            zones,
-            combatants,
-            initiative: Vec::new(),
-            turn: 0,
-            round: 0,
-            log: Vec::new(),
-        })
-    }
-
-    /// Builds state from an encounter file, resolving members relative to it.
-    pub fn from_encounter_file(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let encounter = model::load_encounter(path)?;
-        let base = match path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent,
-            _ => Path::new("."),
-        };
-        Self::from_encounter_value(encounter, base)
-    }
-
-    fn from_encounter_value(encounter: model::Encounter, base: &Path) -> Result<Self> {
-        let mut zones = encounter.zones;
-        if zones.is_empty() {
-            zones.insert(DEFAULT_ZONE.to_string(), 0);
+        let party_zone = options
+            .party_zone
+            .clone()
+            .or_else(|| encounter.party_zone.clone())
+            .or_else(|| scene.zones.first().map(|zone| zone.id.clone()))
+            .unwrap_or_default();
+        if !scene.zones.iter().any(|zone| zone.id == party_zone) {
+            bail!(
+                "unknown party zone `{party_zone}` (known zones: {})",
+                zone_list(&scene)
+            );
         }
 
         let mut combatants = Vec::new();
         for member in &encounter.members {
-            if member.count == 0 {
-                bail!("encounter member `{}` has count 0", member.file);
+            let creature = content
+                .resolve_creature(&member.creature)
+                .with_context(|| format!("encounter member `{}`", member.creature))?;
+            let zone = member
+                .zone
+                .clone()
+                .or_else(|| member.pos.map(|_| party_zone.clone()))
+                .unwrap_or_else(|| party_zone.clone());
+            if !scene.zones.iter().any(|known| known.id == zone) {
+                bail!(
+                    "encounter member `{}` uses unknown zone `{zone}` (known zones: {})",
+                    creature.display_name(),
+                    zone_list(&scene)
+                );
             }
-            let spec = model::load_combatant(base.join(&member.file))
-                .with_context(|| format!("failed to load encounter member `{}`", member.file))?;
-            let zone = resolve_member_zone(member.zone.as_deref(), &spec, &zones)?;
-            push_instances(&mut combatants, spec, member.count, &zone);
+            let side = member.side.clone().unwrap_or_else(|| creature.side());
+            let dormant = member.dormant.unwrap_or_else(|| {
+                creature.dormant.unwrap_or(false)
+            });
+            let ai = member.ai.clone().or_else(|| creature.ai.clone());
+            let base_name = member
+                .name
+                .clone()
+                .unwrap_or_else(|| creature.display_name().to_string());
+            append_instances(
+                &mut combatants,
+                creature,
+                &base_name,
+                member.count(),
+                &zone,
+                side,
+                dormant,
+                ai,
+            );
         }
 
-        Ok(Self {
-            name: Some(encounter.name),
-            zones,
+        let mut party_creatures = Vec::new();
+        for id in &options.party {
+            let creature = content
+                .resolve_creature(id)
+                .with_context(|| format!("party member `{id}`"))?;
+            party_creatures.push(creature);
+        }
+        for creature in party_creatures {
+            let base_name = creature.display_name().to_string();
+            let ai = creature.ai.clone();
+            append_instances(
+                &mut combatants,
+                creature,
+                &base_name,
+                1,
+                &party_zone,
+                Side::new("party"),
+                false,
+                ai,
+            );
+        }
+
+        for add in &options.adds {
+            let creature = content
+                .resolve_creature(&add.creature)
+                .with_context(|| format!("--add `{}`", add.creature))?;
+            let zone = add.zone.clone().unwrap_or_else(|| party_zone.clone());
+            if !scene.zones.iter().any(|known| known.id == zone) {
+                bail!(
+                    "--add `{}` uses unknown zone `{zone}` (known zones: {})",
+                    add.creature,
+                    zone_list(&scene)
+                );
+            }
+            let base_name = creature.display_name().to_string();
+            let side = creature.side();
+            let dormant = creature.dormant.unwrap_or(false);
+            let ai = creature.ai.clone();
+            append_instances(
+                &mut combatants,
+                creature,
+                &base_name,
+                add.count,
+                &zone,
+                side,
+                dormant,
+                ai,
+            );
+        }
+
+        if combatants.is_empty() {
+            bail!("encounter `{}` has no combatants", encounter.id);
+        }
+
+        let mut state = Self {
+            content,
+            scene: Some(scene.clone()),
+            encounter_name: Some(
+                encounter
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| encounter.id.clone()),
+            ),
+            party_zone: Some(party_zone),
             combatants,
             initiative: Vec::new(),
             turn: 0,
             round: 0,
             log: Vec::new(),
-        })
+            concentration: BTreeMap::new(),
+            triggers: scene_trigger_runtime(&scene),
+            outcome: None,
+        };
+        state.refresh_initial_conditions()?;
+        state.log.push(format!(
+            "Created {} with {} combatants",
+            state.encounter_name.as_deref().unwrap_or("encounter"),
+            state.combatants.len()
+        ));
+        Ok(state)
     }
 
-    /// Resolves a combatant name to its index.
-    ///
-    /// A case-insensitive exact match wins. Otherwise a case-insensitive unique
-    /// prefix is accepted.
+    /// Applies each creature's initial condition ids (after content is known).
+    fn refresh_initial_conditions(&mut self) -> Result<()> {
+        for combatant in &mut self.combatants {
+            let ids = combatant.creature.conditions.clone().unwrap_or_default();
+            for id in ids {
+                let duration = self
+                    .content
+                    .conditions
+                    .get(&id)
+                    .and_then(|condition| condition.duration_default.clone());
+                combatant.conditions.push(ActiveCondition {
+                    condition: id,
+                    source: None,
+                    linked: None,
+                    duration: duration.map(|duration| active_duration(&duration, &combatant.name, 0)),
+                    save_ends: None,
+                    ends_on: Vec::new(),
+                    created_by: None,
+                    concentration: false,
+                    applied_round: 0,
+                    notes: None,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn space(&self) -> Option<ZoneSpace<'_>> {
+        self.scene.as_ref().map(ZoneSpace::new)
+    }
+
+    pub fn rules(&self) -> &Rules {
+        &self.content.rules
+    }
+
+    pub fn condition_def(&self, id: &str) -> Option<&ConditionDef> {
+        self.content.conditions.get(id)
+    }
+
     pub fn find_index(&self, query: &str) -> Result<usize, LookupError> {
         let needle = query.trim().to_lowercase();
         if needle.is_empty() {
@@ -396,12 +755,11 @@ impl EncounterState {
                 query: query.to_string(),
             });
         }
-
         let exact: Vec<usize> = self
             .combatants
             .iter()
             .enumerate()
-            .filter(|(_, combatant)| combatant.name().to_lowercase() == needle)
+            .filter(|(_, combatant)| combatant.name.to_lowercase() == needle)
             .map(|(index, _)| index)
             .collect();
         match exact.as_slice() {
@@ -414,7 +772,7 @@ impl EncounterState {
             .combatants
             .iter()
             .enumerate()
-            .filter(|(_, combatant)| combatant.name().to_lowercase().starts_with(&needle))
+            .filter(|(_, combatant)| combatant.name.to_lowercase().starts_with(&needle))
             .map(|(index, _)| index)
             .collect();
         match prefix.as_slice() {
@@ -426,39 +784,42 @@ impl EncounterState {
         }
     }
 
-    /// Resolves a combatant name to a reference.
     pub fn get(&self, query: &str) -> Result<&CombatantState, LookupError> {
         let index = self.find_index(query)?;
         Ok(&self.combatants[index])
     }
 
-    /// Resolves a combatant name to a mutable reference.
     pub fn get_mut(&mut self, query: &str) -> Result<&mut CombatantState, LookupError> {
         let index = self.find_index(query)?;
         Ok(&mut self.combatants[index])
     }
 
-    /// Index into `combatants` for the creature whose turn it currently is.
-    pub fn current_index(&self) -> Option<usize> {
-        self.initiative.get(self.turn).copied()
-    }
-
-    /// The creature whose turn it currently is.
-    pub fn current(&self) -> Option<&CombatantState> {
-        self.current_index()
-            .and_then(|index| self.combatants.get(index))
-    }
-
-    /// Mutable access to the creature whose turn it currently is.
-    pub fn current_mut(&mut self) -> Option<&mut CombatantState> {
-        let index = self.current_index()?;
-        self.combatants.get_mut(index)
+    /// All instances matching an instance name, creature id, or tag. Used by
+    /// `activate`.
+    pub fn find_activatable(&self, query: &str) -> Vec<usize> {
+        let needle = query.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        self.combatants
+            .iter()
+            .enumerate()
+            .filter(|(_, combatant)| {
+                combatant.name.eq_ignore_ascii_case(&needle)
+                    || combatant.creature.id.eq_ignore_ascii_case(&needle)
+                    || combatant
+                        .tags()
+                        .iter()
+                        .any(|tag| tag.eq_ignore_ascii_case(&needle))
+            })
+            .map(|(index, _)| index)
+            .collect()
     }
 
     fn ambiguous(&self, query: &str, indices: &[usize]) -> LookupError {
         let mut candidates: Vec<String> = indices
             .iter()
-            .map(|&index| self.combatants[index].name().to_string())
+            .map(|&index| self.combatants[index].name.clone())
             .collect();
         candidates.dedup();
         LookupError::Ambiguous {
@@ -467,7 +828,62 @@ impl EncounterState {
         }
     }
 
-    /// Loads state from pretty JSON.
+    pub fn current_index(&self) -> Option<usize> {
+        self.initiative.get(self.turn).copied()
+    }
+
+    pub fn current(&self) -> Option<&CombatantState> {
+        self.current_index()
+            .and_then(|index| self.combatants.get(index))
+    }
+
+    pub fn current_mut(&mut self) -> Option<&mut CombatantState> {
+        let index = self.current_index()?;
+        self.combatants.get_mut(index)
+    }
+
+    /// Resolves the scene trigger key used in [`Self::triggers`].
+    pub fn trigger_key(index: usize, trigger: &SceneTrigger) -> String {
+        trigger
+            .id
+            .clone()
+            .unwrap_or_else(|| format!("trigger-{index}"))
+    }
+
+    pub fn trigger_enabled(&self, key: &str) -> bool {
+        self.triggers.get(key).map(|state| state.enabled).unwrap_or(true)
+    }
+
+    pub fn set_trigger_enabled(&mut self, key: &str, enabled: bool) {
+        if let Some(scene) = &mut self.scene {
+            for (index, trigger) in scene.triggers.iter_mut().enumerate() {
+                if Self::trigger_key(index, trigger) == key {
+                    trigger.enabled = enabled;
+                }
+            }
+        }
+        let entry = self
+            .triggers
+            .entry(key.to_string())
+            .or_insert(SceneTriggerRuntime {
+                fired: false,
+                enabled: true,
+            });
+        entry.enabled = enabled;
+    }
+
+    pub fn set_trigger_fired(&mut self, key: &str) {
+        let entry = self
+            .triggers
+            .entry(key.to_string())
+            .or_insert(SceneTriggerRuntime {
+                fired: false,
+                enabled: true,
+            });
+        entry.fired = true;
+    }
+
+    /// Paths in state files are not implicitly relative to the campaign.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let text = fs::read_to_string(path)
@@ -476,7 +892,6 @@ impl EncounterState {
             .with_context(|| format!("failed to parse state file {}", path.display()))
     }
 
-    /// Saves state as pretty JSON, creating parent directories if needed.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -493,348 +908,181 @@ impl EncounterState {
     }
 }
 
-struct SpecToken {
-    path: PathBuf,
-    count: u32,
-    zone: Option<String>,
+/// Turns a content [`Duration`] into runtime form.
+pub fn active_duration(duration: &Duration, subject: &str, round: u32) -> ActiveDuration {
+    if let Some(rounds) = duration.rounds {
+        ActiveDuration::Rounds { remaining: rounds }
+    } else if let Some(minutes) = duration.minutes {
+        ActiveDuration::Minutes {
+            remaining: minutes.saturating_mul(10),
+        }
+    } else if let Some(until) = duration.until {
+        ActiveDuration::Until {
+            until,
+            subject: subject.to_string(),
+            end_round: next_named_turn_round_for_duration(round, until),
+        }
+    } else {
+        ActiveDuration::Permanent
+    }
 }
 
-fn parse_spec_token(token: &str) -> Result<SpecToken> {
-    let token = token.trim();
-    if token.is_empty() {
-        bail!("empty combatant spec");
-    }
-
-    let (path_part, zone) = match token.rsplit_once('@') {
-        Some((path, zone)) => {
-            if path.is_empty() {
-                bail!("combatant spec `{token}` has no file before `@`");
-            }
-            if zone.is_empty() {
-                bail!("combatant spec `{token}` has an empty zone after `@`");
-            }
-            (path, Some(zone.to_string()))
-        }
-        None => (token, None),
-    };
-
-    let (path, count) = match path_part.rsplit_once(':') {
-        Some((path, suffix))
-            if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) =>
-        {
-            let count = suffix
-                .parse::<u32>()
-                .with_context(|| format!("invalid count `{suffix}` in combatant spec `{token}`"))?;
-            if count == 0 {
-                bail!("combatant count must be at least 1 in `{token}`");
-            }
-            (path, count)
-        }
-        _ => (path_part, 1),
-    };
-
-    if path.is_empty() {
-        bail!("combatant spec `{token}` has no file path");
-    }
-
-    Ok(SpecToken {
-        path: PathBuf::from(path),
-        count,
-        zone,
-    })
+fn next_named_turn_round_for_duration(round: u32, _until: DurationUntil) -> u32 {
+    round.saturating_add(1)
 }
 
-fn push_instances(
+fn append_instances(
     combatants: &mut Vec<CombatantState>,
-    spec: CombatantSpec,
+    creature: Creature,
+    base_name: &str,
     count: u32,
     zone: &str,
+    side: Side,
+    dormant: bool,
+    ai: Option<AiAssignment>,
 ) {
-    debug_assert!(count > 0, "instance count must be positive");
-    let base_name = spec.name.clone();
+    let count = count.max(1);
+    let existing: BTreeSet<String> = combatants
+        .iter()
+        .map(|combatant| combatant.name.to_ascii_lowercase())
+        .collect();
     for index in 1..=count {
-        let mut instance = spec.clone();
-        if count > 1 {
-            instance.name = format!("{base_name} {index}");
-        }
-        combatants.push(CombatantState::from_spec(instance, zone));
-    }
-}
-
-fn resolve_member_zone(
-    requested: Option<&str>,
-    spec: &CombatantSpec,
-    zones: &BTreeMap<String, i32>,
-) -> Result<String> {
-    match requested {
-        Some(zone) if zones.contains_key(zone) => Ok(zone.to_string()),
-        Some(zone) => bail!(
-            "encounter member `{}` uses undefined zone `{zone}` (known zones: {})",
-            spec.name,
-            known_zones(zones)
-        ),
-        None => {
-            if let Some(zone) = spec
-                .zone
-                .as_deref()
-                .filter(|zone| zones.contains_key(*zone))
-            {
-                return Ok(zone.to_string());
-            }
-            if zones.contains_key(DEFAULT_ZONE) {
-                return Ok(DEFAULT_ZONE.to_string());
-            }
-            bail!(
-                "encounter member `{}` has no zone and the encounter has no `main` fallback zone (known zones: {})",
-                spec.name,
-                known_zones(zones)
-            )
-        }
-    }
-}
-
-fn known_zones(zones: &BTreeMap<String, i32>) -> String {
-    if zones.is_empty() {
-        "(none)".to_string()
-    } else {
-        zones.keys().cloned().collect::<Vec<_>>().join(", ")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{Encounter, EncounterMember};
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn repo_path(relative: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
-    }
-
-    fn unique_temp_dir(label: &str) -> PathBuf {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock is before the Unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "combat-sim-state-{label}-{}-{nanos}-{count}",
-            std::process::id()
-        ))
-    }
-
-    #[test]
-    fn builds_from_encounter_file() -> Result<()> {
-        let state = EncounterState::from_encounter_file(repo_path(
-            "data/encounters/party-vs-2-guards.json",
-        ))?;
-
-        assert_eq!(state.name.as_deref(), Some("party vs 2 guards"));
-        assert_eq!(state.zones.get("hall"), Some(&40));
-        assert_eq!(state.combatants.len(), 6);
-        assert_eq!(state.round, 0);
-        assert_eq!(state.turn, 0);
-        assert!(state.initiative.is_empty());
-
-        let guard_one = state.get("guard 1")?;
-        let guard_two = state.get("GUARD 2")?;
-        assert_eq!(guard_one.name(), "Guard 1");
-        assert_eq!(guard_two.name(), "Guard 2");
-        assert_eq!(guard_one.spec.ac, 16);
-        assert_eq!(guard_one.hp, 11);
-        assert_eq!(guard_one.zone, "hall");
-        assert_eq!(guard_one.speed_left, 30);
-
-        let will = state.get("Will")?;
-        assert_eq!(will.zone, "front");
-        assert_eq!(
-            will.resources
-                .get("second_wind")
-                .map(|resource| resource.current),
-            Some(2)
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn builds_from_specs_and_renames_duplicates() -> Result<()> {
-        let guard_path = repo_path("data/monsters/guard.json");
-        let duplicated = format!("{}:2@hall", guard_path.display());
-        let state = EncounterState::from_specs(&[duplicated])?;
-
-        assert_eq!(state.zones.get("main"), Some(&0));
-        assert_eq!(state.zones.get("hall"), Some(&0));
-        assert_eq!(state.zones.len(), 2);
-        assert_eq!(state.combatants.len(), 2);
-        assert_eq!(state.combatants[0].name(), "Guard 1");
-        assert_eq!(state.combatants[1].name(), "Guard 2");
-        assert!(state
-            .combatants
-            .iter()
-            .all(|combatant| combatant.zone == "hall"));
-
-        let single = EncounterState::from_specs(&[guard_path.display().to_string()])?;
-        assert_eq!(single.combatants.len(), 1);
-        assert_eq!(single.combatants[0].name(), "Guard");
-        assert_eq!(single.combatants[0].zone, "main");
-
-        Ok(())
-    }
-
-    #[test]
-    fn lookup_is_case_insensitive_and_accepts_unique_prefixes() -> Result<()> {
-        let state = EncounterState::from_encounter_file(repo_path(
-            "data/encounters/party-vs-2-guards.json",
-        ))?;
-
-        assert_eq!(state.get("mil")?.name(), "Milo");
-        assert_eq!(state.get("GUARD 2")?.name(), "Guard 2");
-        assert_eq!(state.get("Guard 1")?.name(), "Guard 1");
-
-        match state.find_index("guard") {
-            Err(LookupError::Ambiguous { candidates, .. }) => {
-                assert_eq!(candidates, vec!["Guard 1", "Guard 2"]);
-            }
-            other => panic!("expected ambiguity, got {other:?}"),
-        }
-
-        assert!(matches!(
-            state.find_index("nobody"),
-            Err(LookupError::NotFound { .. })
-        ));
-
-        let guard_path = repo_path("data/monsters/guard.json");
-        let state = EncounterState::from_specs(&[
-            guard_path.display().to_string(),
-            format!("{}:2", guard_path.display()),
-        ])?;
-        assert_eq!(state.get("Guard")?.name(), "Guard");
-
-        Ok(())
-    }
-
-    #[test]
-    fn initial_spec_conditions_become_active() -> Result<()> {
-        let spec = model::parse_combatant_json(
-            r#"{
-                "name": "Sleeper",
-                "side": "party",
-                "kind": "pc",
-                "hp": 5,
-                "max_hp": 5,
-                "ac": 10,
-                "conditions": [
-                    {
-                        "condition": "prone",
-                        "escape_dc": 13,
-                        "duration": {"rounds": 2}
-                    }
-                ]
-            }"#,
-        )?;
-        let combatant = CombatantState::from_spec(spec, "main");
-
-        assert_eq!(combatant.conditions.len(), 1);
-        assert_eq!(combatant.conditions[0].condition, "prone");
-        assert_eq!(combatant.conditions[0].escape_dc, Some(13));
-        assert_eq!(
-            combatant.conditions[0]
-                .duration
-                .as_ref()
-                .and_then(|duration| duration.rounds),
-            Some(2)
-        );
-        assert_eq!(combatant.conditions[0].source, None);
-        assert!(combatant.is_conscious());
-
-        Ok(())
-    }
-
-    #[test]
-    fn state_json_round_trip_is_lossless() -> Result<()> {
-        let mut state = EncounterState::from_encounter_file(repo_path(
-            "data/encounters/party-vs-2-guards.json",
-        ))?;
-        state.name = Some("modified party vs 2 guards".to_string());
-        state.round = 3;
-        state.turn = 2;
-        state.initiative = vec![3, 0, 5, 1, 4, 2];
-        state.log.push("Round 1".to_string());
-        state.log.push("Will hits Guard 1".to_string());
-
-        let will = state.get_mut("Will")?;
-        will.hp -= 3;
-        will.temp_hp = 4;
-        will.conditions.push(ActiveCondition {
-            condition: "prone".to_string(),
-            source: Some("shove".to_string()),
-            escape_dc: None,
-            duration: Some(DurationSpec {
-                until: Some("end_of_source_next_turn".to_string()),
-                rounds: None,
-                notes: None,
-            }),
-            expires_round: Some(2),
-            ends_with_turn_of: Some("Guard 1".to_string()),
-            notes: Some("test condition".to_string()),
-        });
-        will.resources
-            .get_mut("second_wind")
-            .expect("Will has second_wind")
-            .current = 1;
-        will.death_saves.successes = 2;
-        will.death_saves.failures = 1;
-        will.death_saves.stable = true;
-        will.reaction_used = true;
-        will.sneak_used_this_turn = true;
-        will.action_used = true;
-        will.bonus_action_used = true;
-        will.speed_left = 15;
-        will.initiative_total = Some(16);
-        will.markers.push(EffectMarker {
-            kind: MarkerKind::Sap,
-            source: "Guard 1".to_string(),
-            target: None,
-            expires_round: 2,
-            ends_with_turn_of: "Guard 1".to_string(),
-            notes: Some("test marker".to_string()),
-        });
-
-        let temp_root = unique_temp_dir("roundtrip");
-        let path = temp_root.join("nested").join("state.json");
-        state.save(&path)?;
-        let loaded = EncounterState::load(&path)?;
-        assert_eq!(loaded, state);
-
-        fs::remove_dir_all(&temp_root)?;
-        Ok(())
-    }
-
-    #[test]
-    fn encounter_member_zone_must_exist() -> Result<()> {
-        let encounter = Encounter {
-            name: "bad zone".to_string(),
-            zones: BTreeMap::from([("front".to_string(), 0)]),
-            members: vec![EncounterMember {
-                file: repo_path("data/monsters/guard.json").display().to_string(),
-                count: 1,
-                zone: Some("nowhere".to_string()),
-                notes: None,
-            }],
-            notes: None,
+        let name = if count > 1 {
+            format!("{base_name} {index}")
+        } else {
+            unique_name(base_name, &existing)
         };
+        let mut runtime = combatant_from_creature(&creature, name, side.clone(), zone, dormant);
+        runtime.ai = ai.clone();
+        combatants.push(runtime);
+    }
+}
 
-        let error = EncounterState::from_encounter_value(encounter, Path::new("."))
-            .expect_err("undefined member zone should be rejected");
-        assert!(
-            error.to_string().contains("nowhere"),
-            "unexpected error: {error}"
-        );
+fn unique_name(base: &str, existing: &BTreeSet<String>) -> String {
+    if !existing.contains(&base.to_ascii_lowercase()) {
+        return base.to_string();
+    }
+    let mut index = 2;
+    loop {
+        let candidate = format!("{base} {index}");
+        if !existing.contains(&candidate.to_ascii_lowercase()) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
 
-        Ok(())
+fn combatant_from_creature(
+    creature: &Creature,
+    name: String,
+    side: Side,
+    zone: &str,
+    dormant: bool,
+) -> CombatantState {
+    let max_hp = creature.max_hp().max(1);
+    let hp = creature.current_hp().clamp(0, max_hp);
+    let resources = creature
+        .resources
+        .as_ref()
+        .map(|resources| {
+            resources
+                .iter()
+                .map(|(id, def)| (id.clone(), ResourceState::from_def(def)))
+                .collect()
+        })
+        .unwrap_or_default();
+    CombatantState {
+        creature: creature.clone(),
+        name,
+        side,
+        max_hp,
+        hp,
+        temp_hp: 0,
+        zone: zone.to_string(),
+        conditions: Vec::new(),
+        resources,
+        death_saves: DeathSaves::default(),
+        action_used: false,
+        bonus_action_used: false,
+        reaction_round: None,
+        speed_left: creature.speed().walk.max(0),
+        once_used: BTreeMap::new(),
+        ai: creature.ai.clone(),
+        initiative_total: None,
+        dormant,
+        dead: false,
+    }
+}
+
+fn scene_trigger_runtime(scene: &Scene) -> BTreeMap<String, SceneTriggerRuntime> {
+    scene
+        .triggers
+        .iter()
+        .enumerate()
+        .map(|(index, trigger)| {
+            (
+                EncounterState::trigger_key(index, trigger),
+                SceneTriggerRuntime {
+                    fired: false,
+                    enabled: trigger.enabled,
+                },
+            )
+        })
+        .collect()
+}
+
+fn zone_list(scene: &Scene) -> String {
+    scene
+        .zones
+        .iter()
+        .map(|zone| zone.id.clone())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Condition ids active on a creature, including recursively implied ones.
+pub fn active_condition_ids(content: &ContentRegistry, combatant: &CombatantState) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut stack: Vec<String> = combatant
+        .conditions
+        .iter()
+        .map(|condition| condition.condition.clone())
+        .collect();
+    while let Some(id) = stack.pop() {
+        if ids.iter().any(|existing| existing.eq_ignore_ascii_case(&id)) {
+            continue;
+        }
+        if let Some(def) = content.conditions.get(&id) {
+            stack.extend(def.implies.iter().cloned());
+        }
+        ids.push(id);
+    }
+    ids
+}
+
+/// Resolves a `--state` argument.
+///
+/// `None` maps to [`DEFAULT_STATE_FILE`]. A value containing a path separator
+/// is literal. A bare name is placed in the manifest `state_dir` when one is
+/// known, otherwise in the current directory; `.state.json` is appended unless
+/// already present.
+pub fn resolve_state_path(requested: Option<&Path>, state_dir: Option<&Path>) -> PathBuf {
+    let Some(requested) = requested else {
+        return PathBuf::from(DEFAULT_STATE_FILE);
+    };
+    let text = requested.to_string_lossy();
+    if text.is_empty() {
+        return PathBuf::from(DEFAULT_STATE_FILE);
+    }
+    if text.contains('/') || text.contains('\\') {
+        return requested.to_path_buf();
+    }
+    let mut file = text.into_owned();
+    if !file.ends_with(STATE_SUFFIX) {
+        file.push_str(STATE_SUFFIX);
+    }
+    match state_dir {
+        Some(dir) => dir.join(file),
+        None => PathBuf::from(format!("./{file}")),
     }
 }
