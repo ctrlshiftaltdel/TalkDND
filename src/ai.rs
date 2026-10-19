@@ -208,7 +208,6 @@ impl Ai {
         rng: &mut dyn DiceRng,
         log: &mut dyn LogSink,
     ) -> Result<()> {
-        let _profile = crate::prof::Prof::scope(&crate::prof::TURN);
         if engine::combat_outcome(state).is_some() {
             return Ok(());
         }
@@ -250,17 +249,12 @@ impl Ai {
         self.maybe_opening(state, actor, plan, rng, log)?;
 
         if !state.combatants[actor].action_used {
-            let target = {
-                let _p = crate::prof::Prof::scope(&crate::prof::TARGET);
-                self.choose_target(state, actor, plan, rng)
-            };
+            let target = { self.choose_target(state, actor, plan, rng) };
             if let Some(target) = target {
                 {
-                    let _p = crate::prof::Prof::scope(&crate::prof::MOVE);
                     self.move_for_action(state, actor, plan, target, rng, log)?;
                 }
                 {
-                    let _p = crate::prof::Prof::scope(&crate::prof::ACTION);
                     self.take_action(state, actor, plan, target, rng, log)?;
                 }
             }
@@ -491,11 +485,7 @@ impl Ai {
         {
             return Ok(());
         }
-        let choice = {
-            let _p = crate::prof::Prof::scope(&crate::prof::SCORE);
-            self.choose_action(state, actor, plan, target)
-        };
-        let _p = crate::prof::Prof::scope(&crate::prof::EXECUTE);
+        let choice = { self.choose_action(state, actor, plan, target) };
         match choice {
             Some(TargetChoice::Action(index)) => {
                 let action = &plan.actions[index];
@@ -1013,10 +1003,7 @@ impl Ai {
         rng: &mut dyn DiceRng,
         log: &mut dyn LogSink,
     ) -> Result<()> {
-        let best = {
-            let _p = crate::prof::Prof::scope(&crate::prof::BEST_ACTION);
-            self.best_action_for_position(state, actor, plan, target)
-        };
+        let best = { self.best_action_for_position(state, actor, plan, target) };
         let Some(action) = best else {
             return self.advance(state, actor, plan, Some(target), 5, false, rng, log);
         };
@@ -1027,10 +1014,7 @@ impl Ai {
                 && action.attack_kind != Some(AttackKind::Melee)
                 && !action_in_range(state, actor, action, target));
         let keep = plan.params.keep_distance.unwrap_or(0);
-        let nearest = {
-            let _p = crate::prof::Prof::scope(&crate::prof::NEAREST);
-            nearest_hostile_distance(state, actor)
-        };
+        let nearest = { nearest_hostile_distance(state, actor) };
         if keep > 0 && wants_ranged && nearest < keep {
             if nearest <= 5 && !state.combatants[actor].bonus_action_used {
                 let _ =
@@ -1116,7 +1100,6 @@ impl Ai {
         rng: &mut dyn DiceRng,
         log: &mut dyn LogSink,
     ) -> Result<()> {
-        let _p = crate::prof::Prof::scope(&crate::prof::ADVANCE);
         let Some(space) = state.space() else {
             return Ok(());
         };
@@ -1279,7 +1262,6 @@ impl Ai {
         };
         let name = state.combatants[actor].name.clone();
         let _ = rng;
-        let _p = crate::prof::Prof::scope(&crate::prof::MOVE_TO);
         engine::move_to(state, &name, &move_target, false, rng, log)
     }
 

@@ -353,8 +353,7 @@ impl ZoneCache {
         let mut route_edges = vec![vec![None; count]; count];
         for source in 0..count {
             let (range_best, _) = zone_dijkstra(source, &adjacency, scene, false);
-            let (travel_best, travel_parents) =
-                zone_dijkstra(source, &adjacency, scene, true);
+            let (travel_best, travel_parents) = zone_dijkstra(source, &adjacency, scene, true);
             for target in 0..count {
                 if source == target {
                     range[source][target] = Some(SAME_ZONE_DISTANCE);
@@ -364,15 +363,13 @@ impl ZoneCache {
                 }
                 let distance = range_best[target];
                 if distance != i32::MAX {
-                    range[source][target] = Some(distance.saturating_add(
-                        (heights[source] - heights[target]).abs(),
-                    ));
+                    range[source][target] =
+                        Some(distance.saturating_add((heights[source] - heights[target]).abs()));
                 }
                 let cost = travel_best[target];
                 if cost != i32::MAX {
                     travel[source][target] = Some(cost);
-                    route_edges[source][target] =
-                        zone_path(source, target, &travel_parents);
+                    route_edges[source][target] = zone_path(source, target, &travel_parents);
                 }
             }
         }
@@ -392,9 +389,9 @@ impl ZoneCache {
                 let mut area = vec![positions[zone_index].clone()];
                 for (neighbour, edge_index) in &adjacency[zone_index] {
                     if scene.edges[*edge_index].distance <= radius
-                        && !area
-                            .iter()
-                            .any(|known| known.zone_id() == Some(scene.zones[*neighbour].id.as_str()))
+                        && !area.iter().any(|known| {
+                            known.zone_id() == Some(scene.zones[*neighbour].id.as_str())
+                        })
                     {
                         area.push(positions[*neighbour].clone());
                     }
@@ -421,7 +418,10 @@ impl ZoneCache {
     }
 
     fn position_index(&self, position: &Position) -> Option<usize> {
-        position.zone_id().and_then(|zone| self.index.get(zone)).copied()
+        position
+            .zone_id()
+            .and_then(|zone| self.index.get(zone))
+            .copied()
     }
 
     fn area(&self, center: &Position, radius: i32) -> Option<&[Position]> {
@@ -462,7 +462,8 @@ fn zone_dijkstra(
         }
         done[current] = true;
         for (next, edge_index) in &adjacency[current] {
-            let candidate = cost.saturating_add(zone_edge_cost(&scene.edges[*edge_index], movement));
+            let candidate =
+                cost.saturating_add(zone_edge_cost(&scene.edges[*edge_index], movement));
             if candidate < best[*next] {
                 best[*next] = candidate;
                 parents[*next] = Some((current, *edge_index));
@@ -585,7 +586,9 @@ impl Space for ZoneGraph<'_> {
 
     fn cover(&self, attacker: &Position, target: &Position) -> Cover {
         let cache = self.cache();
-        let (Some(attacker), Some(target)) = (cache.position_index(attacker), cache.position_index(target)) else {
+        let (Some(attacker), Some(target)) =
+            (cache.position_index(attacker), cache.position_index(target))
+        else {
             return Cover::None;
         };
         if attacker == target {
@@ -1268,12 +1271,7 @@ impl SpaceView<'_> {
     ///
     /// Zone graphs ignore `blocked` (as their routes always have); grids
     /// honour it, matching [`Space::move_route`] exactly.
-    pub fn route_cost(
-        &self,
-        from: &Position,
-        to: &Position,
-        blocked: &[Position],
-    ) -> Option<i32> {
+    pub fn route_cost(&self, from: &Position, to: &Position, blocked: &[Position]) -> Option<i32> {
         match self {
             Self::Zones(space) => space.travel_distance(from, to),
             Self::Grid(space) => {

@@ -892,7 +892,6 @@ pub fn init(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
-    let _profile = crate::prof::Prof::scope(&crate::prof::INIT);
     state.initiative.clear();
     state.round = 1;
     state.turn = 0;
@@ -973,7 +972,6 @@ pub fn next_turn(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
-    let _profile = crate::prof::Prof::scope(&crate::prof::NEXT_TURN);
     if state.initiative.is_empty() {
         bail!("initiative has not been rolled; run `init` first");
     }
@@ -1310,7 +1308,11 @@ fn restore_resource(state: &mut EncounterState, index: usize, id: &str, _log: &m
 
 pub fn combat_outcome(state: &EncounterState) -> Option<CombatOutcome> {
     let mut side: Option<&str> = None;
-    for combatant in state.combatants.iter().filter(|combatant| combatant.is_active()) {
+    for combatant in state
+        .combatants
+        .iter()
+        .filter(|combatant| combatant.is_active())
+    {
         match side {
             None => side = Some(combatant.side.as_str()),
             Some(known) if known == combatant.side.as_str() => {}
@@ -2138,7 +2140,11 @@ pub fn damage_multiplier(
     if static_immune {
         return 0.0;
     }
-    let has_static_lists = combatant.creature.resistances.as_deref().is_some_and(|list| !list.is_empty())
+    let has_static_lists = combatant
+        .creature
+        .resistances
+        .as_deref()
+        .is_some_and(|list| !list.is_empty())
         || combatant
             .creature
             .vulnerabilities
@@ -2262,7 +2268,6 @@ pub fn attack(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
-    let _profile = crate::prof::Prof::scope(&crate::prof::ATTACK);
     let attacker_index = state
         .find_index(attacker)
         .map_err(|error| anyhow!(error.to_string()))?;
@@ -2426,7 +2431,6 @@ fn resolve_attack(
     economy_spent: bool,
     ignore_range: bool,
 ) -> Result<()> {
-    let _p = crate::prof::Prof::scope(&crate::prof::RESOLVE);
     if economy_spent {
         // Caller already spent the action (multiattack / ability effect).
     }
