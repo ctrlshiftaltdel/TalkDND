@@ -25,7 +25,7 @@ abilities:
           dc: 12
           on_fail:
             - damage: {dice: "1d6", type: fire}
-  - id: cover-save-ignore
+  - id: ignore-cover-save
     name: Cover Save Ignore
     activation: action
     range: 60
@@ -76,7 +76,7 @@ creatures:
       - {id: test-bow, name: Test Bow, kind: ranged, ability: dex, to_hit: 5, damage: [{dice: "1d6+2", type: piercing}], range: [80, 320]}
     actions:
       - {ref: cover-save}
-      - {ref: cover-save-ignore}
+      - {ref: ignore-cover-save}
       - {ref: zone-burst}
       - {ref: shove-test}
       - {ref: toggle-trap}

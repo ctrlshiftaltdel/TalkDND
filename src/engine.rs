@@ -17,8 +17,8 @@ use crate::content::schema::{
     AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag, Cover, CritMode,
     DamageEffect, DamagePart, Direction, Duration, DurationUntil, Effect, EndsOn, ExprValue,
     ForcedMoveEffect, Light, Modifier, ModifierApplies, ModifierEffect, ModifierFilter, OncePer,
-    Predicate, Recharge, SaveEffect, SaveEndsAt, SceneMode, Size, TargetRef, TargetSide, TargetType,
-    ToggleTriggerEffect, Trigger, TriggerWhen,
+    Predicate, Recharge, SaveEffect, SaveEndsAt, SceneMode, Size, TargetRef, TargetSide,
+    TargetType, ToggleTriggerEffect, Trigger, TriggerWhen,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
@@ -414,7 +414,10 @@ fn hp_below_pct(combatant: &CombatantState, percent: i32) -> bool {
 fn distance_between(state: &EncounterState, a: Option<usize>, b: Option<usize>) -> Option<i32> {
     let (a, b) = (a?, b?);
     let space = state.space()?;
-    space.distance(&state.combatants[a].position(), &state.combatants[b].position())
+    space.distance(
+        &state.combatants[a].position(),
+        &state.combatants[b].position(),
+    )
 }
 
 fn ally_within_5(state: &EncounterState, actor: usize, target: Option<usize>) -> bool {
@@ -1755,14 +1758,10 @@ fn spend_reaction(state: &mut EncounterState, index: usize, _log: &mut Vec<Strin
 }
 
 fn has_dark_sense(combatant: &CombatantState) -> bool {
-    combatant
-        .creature
-        .senses
-        .as_deref()
-        .is_some_and(|senses| {
-            let senses = senses.to_ascii_lowercase();
-            senses.contains("darkvision") || senses.contains("blindsight")
-        })
+    combatant.creature.senses.as_deref().is_some_and(|senses| {
+        let senses = senses.to_ascii_lowercase();
+        senses.contains("darkvision") || senses.contains("blindsight")
+    })
 }
 
 fn resolve_attack(
@@ -3314,7 +3313,9 @@ fn apply_forced_move(
                 Direction::Away => candidates.into_iter().max_by_key(|(_, distance)| *distance),
                 Direction::Toward => candidates.into_iter().min_by_key(|(_, distance)| *distance),
             };
-            chosen.map(|(position, _)| vec![position]).unwrap_or_default()
+            chosen
+                .map(|(position, _)| vec![position])
+                .unwrap_or_default()
         }
         SceneMode::Grid => {
             let (Some((tx, ty)), Some((sx, sy))) = (start.cell_coords(), source.cell_coords())
@@ -3336,7 +3337,9 @@ fn apply_forced_move(
                 .filter_map(|(_, combatant)| combatant.cell())
                 .map(|cell| (cell[0], cell[1]))
                 .collect();
-            let cell_size = space.distance(&start, &Position::cell(tx + 1, ty)).unwrap_or(5);
+            let cell_size = space
+                .distance(&start, &Position::cell(tx + 1, ty))
+                .unwrap_or(5);
             let max_steps = max_distance / cell_size.max(1);
             let mut positions = Vec::new();
             let (mut x, mut y) = (tx, ty);
@@ -3860,7 +3863,11 @@ fn use_resolved_ability(
         TargetType::Zone => {
             let center = zone_center
                 .cloned()
-                .or_else(|| targets.first().map(|target| state.combatants[*target].position()))
+                .or_else(|| {
+                    targets
+                        .first()
+                        .map(|target| state.combatants[*target].position())
+                })
                 .unwrap_or_else(|| state.combatants[actor].position());
             if let (Some(range), Some(space)) = (ability.range, state.space()) {
                 if range > 0 {
@@ -3919,7 +3926,9 @@ fn use_resolved_ability(
                         }
                     }
                 }
-                ensure_cover_allows(state, actor, *target)?;
+                if !ability_ignores_cover(ability) {
+                    ensure_cover_allows(state, actor, *target)?;
+                }
                 ensure_targetable(state, *target)?;
             }
         }
@@ -4004,6 +4013,15 @@ fn use_resolved_ability(
     }
     let _ = options;
     Ok(())
+}
+
+fn ability_ignores_cover(ability: &Ability) -> bool {
+    ability.effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::Save(save) if save.ignore_cover
+        )
+    })
 }
 
 fn target_matches_side(
@@ -4985,8 +5003,7 @@ pub fn move_to(
     if destination == start {
         log.push(format!(
             "{} is already in {}",
-            state.combatants[index].name,
-            state.combatants[index].zone
+            state.combatants[index].name, state.combatants[index].zone
         ));
         return Ok(());
     }
@@ -5051,9 +5068,7 @@ pub fn move_to(
             (from_label, to_label)
         };
         match &step.position {
-            Position::Cell { x, y } => {
-                state.combatants[index].set_cell(*x, *y, to_label.clone())
-            }
+            Position::Cell { x, y } => state.combatants[index].set_cell(*x, *y, to_label.clone()),
             Position::Zone { zone } => state.combatants[index].set_zone(zone.clone()),
         }
         log.push(format!(
@@ -5121,12 +5136,7 @@ fn first_melee_attack(state: &EncounterState, index: usize) -> Option<Attack> {
         .as_deref()
         .unwrap_or(&[])
         .iter()
-        .find(|attack| {
-            matches!(
-                attack.kind,
-                AttackKind::Melee | AttackKind::MeleeOrRanged
-            )
-        })
+        .find(|attack| matches!(attack.kind, AttackKind::Melee | AttackKind::MeleeOrRanged))
         .cloned()
 }
 
@@ -5225,10 +5235,7 @@ fn fire_enter_triggers(
             zones.push(zone.as_str());
         }
         zones.extend(trigger.zones.iter().map(String::as_str));
-        if !zones
-            .iter()
-            .any(|zone| zone.eq_ignore_ascii_case(&entered))
-        {
+        if !zones.iter().any(|zone| zone.eq_ignore_ascii_case(&entered)) {
             continue;
         }
         if let Some(side) = &trigger.side {
@@ -5263,13 +5270,11 @@ fn fire_enter_triggers(
                     .filter(|(_, combatant)| !combatant.dormant)
                     .filter(|(_, combatant)| {
                         space.as_ref().is_some_and(|space| {
-                            space
-                                .zone_of(&combatant.position())
-                                .is_some_and(|zone| {
-                                    zones
-                                        .iter()
-                                        .any(|candidate| candidate.eq_ignore_ascii_case(&zone))
-                                })
+                            space.zone_of(&combatant.position()).is_some_and(|zone| {
+                                zones
+                                    .iter()
+                                    .any(|candidate| candidate.eq_ignore_ascii_case(&zone))
+                            })
                         })
                     })
                     .map(|(index, _)| index)
@@ -5299,7 +5304,6 @@ fn fire_enter_triggers(
     }
     Ok(())
 }
-
 
 /// `interact <who> <object> [--option N]`.
 pub fn interact(
@@ -5522,7 +5526,11 @@ pub fn scene_text(state: &EncounterState) -> Vec<String> {
         .light
         .map(|light| format!("{light:?}").to_ascii_lowercase())
         .unwrap_or_else(|| "bright".to_string());
-    lines.push(format!("Scene {} ({:?}) light {light}", scene.display_name(), scene.mode));
+    lines.push(format!(
+        "Scene {} ({:?}) light {light}",
+        scene.display_name(),
+        scene.mode
+    ));
     if state.space().is_some() {
         if scene.grid.is_some() {
             let map = crate::space::GridMap::parse(scene);
@@ -5541,15 +5549,15 @@ pub fn scene_text(state: &EncounterState) -> Vec<String> {
                     lines.push(format!("  grid zone {zone}: {cells}"));
                 }
                 if let Some(grid) = scene.grid.as_ref() {
-                  if !grid.zones.is_empty() {
-                    let mapped = grid
-                        .zones
-                        .iter()
-                        .map(|(zone, character)| format!("{zone}={character}"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    lines.push(format!("  grid zone chars: {mapped}"));
-                  }
+                    if !grid.zones.is_empty() {
+                        let mapped = grid
+                            .zones
+                            .iter()
+                            .map(|(zone, character)| format!("{zone}={character}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        lines.push(format!("  grid zone chars: {mapped}"));
+                    }
                 }
             }
         } else {
@@ -5667,7 +5675,6 @@ pub fn scene_text(state: &EncounterState) -> Vec<String> {
     }
     lines
 }
-
 
 pub fn activate(
     state: &mut EncounterState,

@@ -68,18 +68,21 @@ combat-sim --state /tmp/fight.state.json log --tail 20
 ```
 
 其他命令：`damage`、`heal`、`save`、`check`、`roll`、`use`、`move`、
-`deathsave`、`rest short|long <name|all>`、`activate <name>`、
-`condition remove`、`content list|show|check`。`simulate` 在 v2 step 4 前
-只打印 `not yet (v2 step 4)`。
+`interact <who> <object> [--option N]`、`scene`、`deathsave`、
+`rest short|long <name|all>`、`activate <name>`、`condition remove`、
+`content list|show|check`。`simulate` 在 v2 step 4 前只打印
+`not yet (v2 step 4)`。
 
 聚合步进命令不会强制当前回合归属（DM 可以随时裁定），但会检查动作、
 附赠动作、每轮一次的反应和资源消耗。`next` 会重置这些标记。
 
 ## 空间
 
-v2 step 2 支持区域图场景：区域、边距离、高度差、掩体和移动消耗。
-网格场景、借机攻击、区域效果、场景物件与场景触发器在 step 3 实现；
-遇到 `mode: grid` 的场景会明确报错 `grid scenes arrive in v2 step 3`。
+v2 step 3 同时支持区域图与 5 尺网格场景：区域/边距离、高度差、掩体、
+光照、困难地形、攀爬、锁门、借机攻击、区域效果、场景物件和场景触发器
+都走同一个 `Space` 接口。网格使用 `grid.rows`（第一行 y=0）与图例；
+`move <who> <zone>` 在网格场景选择该区域最近的空格，`move <who> --to x,y`
+指定精确格子。`scene` 以文本列出区域、边、物件、触发器与位置（不绘制地图）。
 
 ## 测试夹具
 

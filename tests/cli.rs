@@ -202,26 +202,107 @@ fn init_set_uses_a_fixed_total() {
 }
 
 #[test]
-fn grid_scenes_are_rejected_until_step_three() {
+fn grid_scenes_create_move_and_report_positions() {
     let temp = TempState::new("grid");
     let manifest = fixture("manifest.yaml");
     let output = run_raw(&[
         "--state",
         temp.path().to_str().unwrap(),
+        "--campaign",
+        manifest.to_str().unwrap(),
         "new",
         "--encounter",
         "grid-fight",
         "--party",
-        "striker-a",
+        "adept-a",
+    ]);
+    assert_success(&output, "new grid scene");
+
+    let status = status_json(temp.path());
+    let adept = status["combatants"]
+        .as_array()
+        .expect("combatants")
+        .iter()
+        .find(|combatant| combatant["name"] == "Adept A")
+        .expect("Adept A should be present");
+    assert_eq!(adept["pos"], serde_json::json!([6, 3]));
+    assert_eq!(adept["zone"], "door");
+
+    let output = run(temp.path(), &["scene"]);
+    assert_success(&output, "scene");
+    assert!(stdout(&output).contains("grid zone tables: (5,1) (6,1)"));
+
+    let output = run(temp.path(), &["move", "Adept", "--to", "3,2", "--no-oa"]);
+    assert_success(&output, "move --to");
+    let status = status_json(temp.path());
+    let adept = status["combatants"]
+        .as_array()
+        .expect("combatants")
+        .iter()
+        .find(|combatant| combatant["name"] == "Adept A")
+        .expect("Adept A should be present");
+    assert_eq!(adept["pos"], serde_json::json!([3, 2]));
+
+    let output = run(temp.path(), &["move", "Adept", "statue", "--no-oa"]);
+    assert_success(&output, "move by grid zone");
+    let status = status_json(temp.path());
+    let adept = status["combatants"]
+        .as_array()
+        .expect("combatants")
+        .iter()
+        .find(|combatant| combatant["name"] == "Adept A")
+        .expect("Adept A should be present");
+    assert_eq!(adept["zone"], "statue");
+    assert_eq!(adept["pos"], serde_json::json!([1, 4]));
+    assert!(stdout(&run(temp.path(), &["status"])).contains("(1,4)"));
+}
+
+#[test]
+fn interact_and_move_flags_work_from_the_cli() {
+    let temp = TempState::new("interact");
+    let manifest = fixture("manifest.yaml");
+    let output = run_raw(&[
+        "--state",
+        temp.path().to_str().unwrap(),
         "--campaign",
         manifest.to_str().unwrap(),
+        "new",
+        "--encounter",
+        "zone-empty",
+        "--party",
+        "adept-a",
     ]);
-    assert!(!output.status.success(), "grid scenes must be rejected");
+    assert_success(&output, "new zone scene");
+
+    let output = run(
+        temp.path(),
+        &[
+            "interact", "Adept", "console", "--option", "1", "--seed", "42",
+        ],
+    );
+    assert_success(&output, "interact");
     assert!(
-        stderr(&output).contains("grid scenes arrive in v2 step 3"),
+        stdout(&output).contains("arcana check"),
+        "{}",
+        stdout(&output)
+    );
+
+    let output = run(temp.path(), &["move", "Adept", "beta", "--no-oa"]);
+    assert_success(&output, "move --no-oa");
+    assert!(stdout(&output).contains("moves alpha -> beta"));
+
+    let output = run(temp.path(), &["move", "Adept", "--to", "1,2"]);
+    assert!(!output.status.success(), "zone scenes must reject --to");
+    assert!(
+        stderr(&output).contains("needs a grid scene"),
         "{}",
         stderr(&output)
     );
+
+    let output = run(temp.path(), &["scene"]);
+    assert_success(&output, "scene");
+    assert!(stdout(&output).contains("trigger enter-beta"));
+    assert!(stdout(&output).contains("object console"));
 }
 
 #[test]

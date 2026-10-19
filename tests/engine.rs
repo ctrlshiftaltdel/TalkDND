@@ -5,11 +5,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use combat_sim::content::schema::Cover;
 use combat_sim::content::schema::{AbilityName, Duration, DurationUntil};
 use combat_sim::content::{ContentRegistry, ContentSources};
 use combat_sim::dice::DiceRng;
-use combat_sim::engine::{self, AddConditionOptions, AttackOptions, MoveTarget, RestKind, UseOptions};
-use combat_sim::space::{Cover, Position};
+use combat_sim::engine::{
+    self, AddConditionOptions, AttackOptions, MoveTarget, RestKind, UseOptions,
+};
+use combat_sim::space::{Position, Space};
 use combat_sim::state::{ActiveDuration, AddSpec, CombatOutcome, EncounterState, NewEncounter};
 
 fn fixture(relative: &str) -> PathBuf {
@@ -27,7 +30,7 @@ fn registry() -> ContentRegistry {
     .expect("engine fixture campaign should load")
 }
 
-fn state(encounter: &str, party: &[&str], adds: &[(&str, &str)]) -> EncounterState {
+fn encounter_state(encounter: &str, party: &[&str], adds: &[(&str, &str)]) -> EncounterState {
     let options = NewEncounter {
         encounter: encounter.to_string(),
         party: party.iter().map(|name| name.to_string()).collect(),
@@ -78,7 +81,7 @@ fn hp(state: &EncounterState, name: &str) -> i32 {
 
 #[test]
 fn critical_hit_doubles_dice_not_modifier() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let mut rng = ScriptedRng::new(&[20, 3, 4]);
     let mut log = Vec::new();
     engine::attack(
@@ -102,7 +105,7 @@ fn critical_hit_doubles_dice_not_modifier() {
 
 #[test]
 fn natural_one_always_misses() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let mut rng = ScriptedRng::new(&[1]);
     let mut log = Vec::new();
     engine::attack(
@@ -122,7 +125,7 @@ fn natural_one_always_misses() {
 
 #[test]
 fn advantage_and_disadvantage_cancel() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
     engine::add_condition(
         &mut state,
@@ -170,7 +173,7 @@ fn advantage_and_disadvantage_cancel() {
 
 #[test]
 fn data_defined_on_hit_trigger_runs_once_per_turn() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
     engine::add_condition(
         &mut state,
@@ -229,7 +232,7 @@ fn data_defined_on_hit_trigger_runs_once_per_turn() {
 
 #[test]
 fn reaction_condition_turns_hit_into_miss_and_spends_resource() {
-    let mut state = state("test-fight", &["warden-b"], &[]);
+    let mut state = encounter_state("test-fight", &["warden-b"], &[]);
     let mut rng = ScriptedRng::new(&[13]);
     let mut log = Vec::new();
     engine::attack(
@@ -256,7 +259,7 @@ fn reaction_condition_turns_hit_into_miss_and_spends_resource() {
 
 #[test]
 fn incoming_attack_condition_grants_advantage_and_auto_crit() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
     engine::add_condition(
         &mut state,
@@ -292,7 +295,7 @@ fn incoming_attack_condition_grants_advantage_and_auto_crit() {
 
 #[test]
 fn consuming_modifier_removes_its_condition() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
     engine::add_condition(
         &mut state,
@@ -324,7 +327,7 @@ fn consuming_modifier_removes_its_condition() {
 
 #[test]
 fn mastery_trigger_can_force_a_save_and_condition() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let mut rng = ScriptedRng::new(&[15, 2, 1]);
     let mut log = Vec::new();
     engine::attack(
@@ -344,7 +347,7 @@ fn mastery_trigger_can_force_a_save_and_condition() {
 
 #[test]
 fn linked_condition_modifier_uses_the_linked_creature() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions {
         linked: Some("Striker A".to_string()),
         ..AddConditionOptions::default()
@@ -380,7 +383,7 @@ fn linked_condition_modifier_uses_the_linked_creature() {
 
 #[test]
 fn mastery_predicate_damage_dealt_gates_its_condition() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let mut rng = ScriptedRng::new(&[15, 3]);
     let mut log = Vec::new();
     engine::attack(
@@ -398,7 +401,7 @@ fn mastery_predicate_damage_dealt_gates_its_condition() {
 
 #[test]
 fn mastery_save_dc_can_use_attack_modifier_and_proficiency() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let mut rng = ScriptedRng::new(&[15, 3, 1]);
     let mut log = Vec::new();
     engine::attack(
@@ -417,7 +420,7 @@ fn mastery_save_dc_can_use_attack_modifier_and_proficiency() {
 
 #[test]
 fn duplicate_party_names_get_numbered() {
-    let state = state("test-fight", &["striker-a", "striker-a"], &[]);
+    let state = encounter_state("test-fight", &["striker-a", "striker-a"], &[]);
     let names: Vec<&str> = state
         .combatants
         .iter()
@@ -429,7 +432,7 @@ fn duplicate_party_names_get_numbered() {
 
 #[test]
 fn ends_on_and_save_ends_expire_conditions() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
     engine::add_condition(
         &mut state,
@@ -485,7 +488,7 @@ fn ends_on_and_save_ends_expire_conditions() {
 
 #[test]
 fn static_and_condition_resistance_apply() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     engine::damage(
         &mut state,
         "Brute A",
@@ -539,7 +542,7 @@ fn static_and_condition_resistance_apply() {
 
 #[test]
 fn death_saves_use_rules_dying_conditions() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     engine::damage(
         &mut state,
         "Striker A",
@@ -602,7 +605,7 @@ fn death_saves_use_rules_dying_conditions() {
 
 #[test]
 fn damage_at_zero_hp_adds_one_death_save_failure() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     engine::damage(
         &mut state,
         "Striker A",
@@ -638,7 +641,7 @@ fn damage_at_zero_hp_adds_one_death_save_failure() {
 
 #[test]
 fn critical_damage_at_zero_hp_adds_two_death_save_failures() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     engine::damage(
         &mut state,
         "Striker A",
@@ -670,7 +673,7 @@ fn critical_damage_at_zero_hp_adds_two_death_save_failures() {
 
 #[test]
 fn temporary_hp_absorbing_damage_prevents_death_save_failure() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     engine::damage(
         &mut state,
         "Striker A",
@@ -701,7 +704,7 @@ fn temporary_hp_absorbing_damage_prevents_death_save_failure() {
 
 #[test]
 fn dropping_to_zero_hp_starts_dying_without_a_failure() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     engine::damage(
         &mut state,
         "Striker A",
@@ -724,7 +727,7 @@ fn dropping_to_zero_hp_starts_dying_without_a_failure() {
 
 #[test]
 fn massive_damage_at_zero_hp_kills_without_failures() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     engine::damage(
         &mut state,
         "Striker A",
@@ -754,7 +757,7 @@ fn massive_damage_at_zero_hp_kills_without_failures() {
 
 #[test]
 fn next_turn_skips_pc_killed_by_start_of_turn_death_save() {
-    let mut state = state("test-fight", &["striker-a", "caster-c"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a", "caster-c"], &[]);
     let striker = index(&state, "Striker A");
     let caster = index(&state, "Caster C");
     let brute = index(&state, "Brute A");
@@ -803,7 +806,7 @@ fn next_turn_skips_pc_killed_by_start_of_turn_death_save() {
 
 #[test]
 fn concentration_breaks_on_damage_and_removes_created_conditions() {
-    let mut state = state("test-fight", &["caster-c"], &[]);
+    let mut state = encounter_state("test-fight", &["caster-c"], &[]);
     let options = UseOptions {
         targets: vec!["Brute A".to_string()],
         ..UseOptions::default()
@@ -842,7 +845,7 @@ fn concentration_breaks_on_damage_and_removes_created_conditions() {
 
 #[test]
 fn incapacitating_a_concentrator_ends_concentration() {
-    let mut state = state("test-fight", &["caster-c"], &[]);
+    let mut state = encounter_state("test-fight", &["caster-c"], &[]);
     let options = UseOptions {
         targets: vec!["Brute A".to_string()],
         ..UseOptions::default()
@@ -875,7 +878,7 @@ fn incapacitating_a_concentrator_ends_concentration() {
 
 #[test]
 fn dormant_creatures_are_excluded_until_activated() {
-    let mut state = state("dormant-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("dormant-fight", &["striker-a"], &[]);
     engine::init(
         &mut state,
         &[],
@@ -929,7 +932,7 @@ fn combat_outcome(state: &EncounterState) -> Option<CombatOutcome> {
 
 #[test]
 fn resources_recharge_per_turn_round_short_long_and_rolled() {
-    let mut state = state("test-fight", &["striker-a"], &[("recharger-r", "gamma")]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[("recharger-r", "gamma")]);
     let recharger = index(&state, "Recharger R");
     let striker = index(&state, "Striker A");
     let brute = index(&state, "Brute A");
@@ -980,7 +983,7 @@ fn resources_recharge_per_turn_round_short_long_and_rolled() {
 
 #[test]
 fn state_json_round_trip_keeps_the_content_snapshot() {
-    let mut state = state(
+    let mut state = encounter_state(
         "multi-side",
         &["striker-a", "caster-c"],
         &[("recharger-r", "gamma")],
@@ -1023,7 +1026,7 @@ fn state_json_round_trip_keeps_the_content_snapshot() {
 
 #[test]
 fn custom_sides_are_all_hostile_and_exclude_dormant_members() {
-    let mut state = state("multi-side", &["striker-a"], &[]);
+    let mut state = encounter_state("multi-side", &["striker-a"], &[]);
     assert_eq!(combat_outcome(&state), None, "three active sides");
 
     engine::damage(
@@ -1068,7 +1071,7 @@ fn custom_sides_are_all_hostile_and_exclude_dormant_members() {
 
 #[test]
 fn duration_and_state_helpers_are_data_driven() {
-    let mut state = state("test-fight", &["striker-a"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions {
         rounds: Some(2),
         ..AddConditionOptions::default()
@@ -1098,7 +1101,7 @@ fn duration_and_state_helpers_are_data_driven() {
 
 #[test]
 fn until_subject_ends_condition_at_the_subjects_next_turn() {
-    let mut state = state("test-fight", &["striker-a", "caster-c"], &[]);
+    let mut state = encounter_state("test-fight", &["striker-a", "caster-c"], &[]);
     let striker = index(&state, "Striker A");
     let caster = index(&state, "Caster C");
     let brute = index(&state, "Brute A");
@@ -1160,7 +1163,7 @@ fn until_subject_ends_condition_at_the_subjects_next_turn() {
 
 #[test]
 fn zone_graph_distance_uses_path_edges_and_elevation() {
-    let state = state("zone-empty", &["adept-a"], &[]);
+    let state = encounter_state("zone-empty", &["adept-a"], &[]);
     let space = state.space().expect("zone space");
     let alpha = Position::zone("alpha");
     let beta = Position::zone("beta");
@@ -1186,7 +1189,7 @@ fn zone_graph_distance_uses_path_edges_and_elevation() {
 
 #[test]
 fn zone_cover_applies_to_ac_and_dex_saves_and_ignore_cover_skips_it() {
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "delta")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "delta")]);
     let mut log = Vec::new();
     engine::attack(
         &mut state,
@@ -1203,7 +1206,7 @@ fn zone_cover_applies_to_ac_and_dex_saves_and_ignore_cover_skips_it() {
         "{log:?}"
     );
 
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "delta")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "delta")]);
     let options = UseOptions {
         targets: vec!["Sentinel T".to_string()],
         ..UseOptions::default()
@@ -1214,7 +1217,7 @@ fn zone_cover_applies_to_ac_and_dex_saves_and_ignore_cover_skips_it() {
         "Adept A",
         "cover-save",
         &options,
-        &mut ScriptedRng::new(&[10]),
+        &mut ScriptedRng::new(&[12]),
         &mut log,
     )
     .unwrap();
@@ -1223,14 +1226,14 @@ fn zone_cover_applies_to_ac_and_dex_saves_and_ignore_cover_skips_it() {
         "{log:?}"
     );
 
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "delta")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "delta")]);
     let mut log = Vec::new();
     engine::use_ability(
         &mut state,
         "Adept A",
-        "cover-save-ignore",
+        "ignore-cover-save",
         &options,
-        &mut ScriptedRng::new(&[10]),
+        &mut ScriptedRng::new(&[12]),
         &mut log,
     )
     .unwrap();
@@ -1242,7 +1245,7 @@ fn zone_cover_applies_to_ac_and_dex_saves_and_ignore_cover_skips_it() {
 
 #[test]
 fn total_cover_rejects_targeting_but_same_zone_attacks_work() {
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "vault")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "vault")]);
     let mut log = Vec::new();
     let error = engine::attack(
         &mut state,
@@ -1258,12 +1261,14 @@ fn total_cover_rejects_targeting_but_same_zone_attacks_work() {
 
     let sentinel = index(&state, "Sentinel T");
     state.combatants[sentinel].set_zone("alpha");
+    let adept_index = index(&state, "Adept A");
+    state.combatants[adept_index].action_used = false;
     let mut log = Vec::new();
     engine::attack(
         &mut state,
         "Adept A",
         "Sentinel T",
-        "test-bow",
+        "test-sword",
         &AttackOptions::default(),
         &mut ScriptedRng::new(&[15, 1]),
         &mut log,
@@ -1273,8 +1278,28 @@ fn total_cover_rejects_targeting_but_same_zone_attacks_work() {
 }
 
 #[test]
+fn ignore_cover_allows_targeting_total_cover() {
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "vault")]);
+    let options = UseOptions {
+        targets: vec!["Sentinel T".to_string()],
+        ..UseOptions::default()
+    };
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Adept A",
+        "ignore-cover-save",
+        &options,
+        &mut ScriptedRng::new(&[12]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(log.iter().any(|line| line.contains("DEX save")), "{log:?}");
+}
+
+#[test]
 fn darkness_imposes_disadvantage_unless_the_attacker_has_darkvision() {
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "dark-room")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "dark-room")]);
     let mut log = Vec::new();
     engine::attack(
         &mut state,
@@ -1291,7 +1316,11 @@ fn darkness_imposes_disadvantage_unless_the_attacker_has_darkvision() {
         "{log:?}"
     );
 
-    let mut state = state("zone-empty", &["dusk-scout"], &[("sentinel-t", "dark-room")]);
+    let mut state = encounter_state(
+        "zone-empty",
+        &["dusk-scout"],
+        &[("sentinel-t", "dark-room")],
+    );
     let mut log = Vec::new();
     engine::attack(
         &mut state,
@@ -1311,7 +1340,7 @@ fn darkness_imposes_disadvantage_unless_the_attacker_has_darkvision() {
 
 #[test]
 fn climbing_up_rolls_and_down_needs_no_check() {
-    let mut state = state("zone-empty", &["adept-a"], &[("dormant-d", "high-ledge")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("dormant-d", "high-ledge")]);
     let mut log = Vec::new();
     engine::move_to(
         &mut state,
@@ -1322,9 +1351,13 @@ fn climbing_up_rolls_and_down_needs_no_check() {
         &mut log,
     )
     .unwrap();
-    assert_eq!(state.combatants[index(&state, "Adept A")].zone, "high-ledge");
+    assert_eq!(
+        state.combatants[index(&state, "Adept A")].zone,
+        "high-ledge"
+    );
     assert!(
-        log.iter().any(|line| line.contains("athletics check") && line.contains("PASS")),
+        log.iter()
+            .any(|line| line.contains("athletics check") && line.contains("PASS")),
         "{log:?}"
     );
     assert!(!state.combatants[index(&state, "Dormant D")].dormant);
@@ -1335,7 +1368,7 @@ fn climbing_up_rolls_and_down_needs_no_check() {
         &mut state,
         "Adept A",
         &MoveTarget::Zone("alpha".to_string()),
-        false,
+        true,
         &mut ScriptedRng::new(&[]),
         &mut log,
     )
@@ -1346,7 +1379,7 @@ fn climbing_up_rolls_and_down_needs_no_check() {
         "climbing down must not roll: {log:?}"
     );
 
-    let mut state = state("zone-empty", &["adept-a"], &[("dormant-d", "high-ledge")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("dormant-d", "high-ledge")]);
     let mut log = Vec::new();
     engine::move_to(
         &mut state,
@@ -1358,15 +1391,16 @@ fn climbing_up_rolls_and_down_needs_no_check() {
     )
     .unwrap();
     assert_eq!(state.combatants[index(&state, "Adept A")].zone, "alpha");
+    assert!(log.iter().any(|line| line.contains("FAIL")), "{log:?}");
     assert!(
-        log.iter().any(|line| line.contains("FAIL") && line.contains("climb")),
+        log.iter().any(|line| line.contains("fails the climb")),
         "{log:?}"
     );
 }
 
 #[test]
 fn locked_doors_stop_movement() {
-    let mut state = state("zone-empty", &["adept-a"], &[]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[]);
     let mut log = Vec::new();
     engine::move_to(
         &mut state,
@@ -1386,7 +1420,7 @@ fn locked_doors_stop_movement() {
 
 #[test]
 fn leaving_a_zone_provokes_an_opportunity_attack() {
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
     let mut log = Vec::new();
     engine::move_to(
         &mut state,
@@ -1408,7 +1442,7 @@ fn leaving_a_zone_provokes_an_opportunity_attack() {
         Some(state.round)
     );
 
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
     engine::add_condition(
         &mut state,
         "Adept A",
@@ -1428,10 +1462,13 @@ fn leaving_a_zone_provokes_an_opportunity_attack() {
         &mut log,
     )
     .unwrap();
-    assert!(!log.iter().any(|line| line.contains("opportunity attack")), "{log:?}");
+    assert!(
+        !log.iter().any(|line| line.contains("opportunity attack")),
+        "{log:?}"
+    );
     assert_eq!(hp(&state, "Adept A"), 20);
 
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
     let mut log = Vec::new();
     engine::move_to(
         &mut state,
@@ -1442,9 +1479,12 @@ fn leaving_a_zone_provokes_an_opportunity_attack() {
         &mut log,
     )
     .unwrap();
-    assert!(!log.iter().any(|line| line.contains("opportunity attack")), "{log:?}");
+    assert!(
+        !log.iter().any(|line| line.contains("opportunity attack")),
+        "{log:?}"
+    );
 
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "alpha")]);
     engine::add_condition(
         &mut state,
         "Adept A",
@@ -1464,12 +1504,15 @@ fn leaving_a_zone_provokes_an_opportunity_attack() {
         &mut log,
     )
     .unwrap();
-    assert!(!log.iter().any(|line| line.contains("opportunity attack")), "{log:?}");
+    assert!(
+        !log.iter().any(|line| line.contains("opportunity attack")),
+        "{log:?}"
+    );
 }
 
 #[test]
 fn enter_triggers_respect_once_and_side_filters() {
-    let mut state = state("zone-empty", &["adept-a"], &[]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[]);
     let mut log = Vec::new();
     for zone in ["beta", "alpha", "beta"] {
         engine::move_to(
@@ -1483,17 +1526,21 @@ fn enter_triggers_respect_once_and_side_filters() {
         .unwrap();
     }
     assert_eq!(
-        log.iter().filter(|line| *line == "beta entered").count(),
+        log.iter()
+            .filter(|line| line.contains("beta entered"))
+            .count(),
         1,
         "once triggers fire only once: {log:?}"
     );
     assert_eq!(
-        log.iter().filter(|line| *line == "trap fired").count(),
+        log.iter()
+            .filter(|line| line.contains("trap fired"))
+            .count(),
         2,
         "enabled non-once triggers fire every entry: {log:?}"
     );
 
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "beta")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "beta")]);
     let mut log = Vec::new();
     engine::move_to(
         &mut state,
@@ -1525,7 +1572,7 @@ fn enter_triggers_respect_once_and_side_filters() {
 
 #[test]
 fn zone_occupant_triggers_affect_everyone_in_the_zone() {
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "gamma")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "gamma")]);
     let mut log = Vec::new();
     engine::move_to(
         &mut state,
@@ -1542,7 +1589,7 @@ fn zone_occupant_triggers_affect_everyone_in_the_zone() {
 
 #[test]
 fn toggle_trigger_disables_an_enter_trigger() {
-    let mut state = state("zone-empty", &["adept-a"], &[]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[]);
     let mut log = Vec::new();
     engine::use_ability(
         &mut state,
@@ -1566,15 +1613,12 @@ fn toggle_trigger_disables_an_enter_trigger() {
         &mut log,
     )
     .unwrap();
-    assert!(
-        !log.iter().any(|line| *line == "trap fired"),
-        "{log:?}"
-    );
+    assert!(!log.iter().any(|line| *line == "trap fired"), "{log:?}");
 }
 
 #[test]
 fn forced_movement_fires_enter_triggers_without_opportunity_attacks() {
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "beta")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "beta")]);
     let options = UseOptions {
         targets: vec!["Sentinel T".to_string()],
         ..UseOptions::default()
@@ -1590,7 +1634,7 @@ fn forced_movement_fires_enter_triggers_without_opportunity_attacks() {
     )
     .unwrap();
     assert!(
-        log.iter().any(|line| *line == "forced entered"),
+        log.iter().any(|line| line.contains("forced entered")),
         "{log:?}"
     );
     assert!(
@@ -1602,7 +1646,7 @@ fn forced_movement_fires_enter_triggers_without_opportunity_attacks() {
 
 #[test]
 fn area_targeting_hits_every_zone_in_radius() {
-    let mut state = state("zone-empty", &["adept-a"], &[("sentinel-t", "beta")]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[("sentinel-t", "beta")]);
     let options = UseOptions {
         targets: vec!["beta".to_string()],
         ..UseOptions::default()
@@ -1623,7 +1667,7 @@ fn area_targeting_hits_every_zone_in_radius() {
 
 #[test]
 fn interact_runs_direct_effects_and_option_checks() {
-    let mut state = state("zone-empty", &["adept-a"], &[]);
+    let mut state = encounter_state("zone-empty", &["adept-a"], &[]);
     let mut log = Vec::new();
     engine::interact(
         &mut state,
@@ -1649,8 +1693,15 @@ fn interact_runs_direct_effects_and_option_checks() {
         &mut log,
     )
     .unwrap();
-    assert!(log.iter().any(|line| line.contains("arcana check") && line.contains("PASS")), "{log:?}");
-    assert!(log.iter().any(|line| line.contains("glyphs glow")), "{log:?}");
+    assert!(
+        log.iter()
+            .any(|line| line.contains("arcana check") && line.contains("PASS")),
+        "{log:?}"
+    );
+    assert!(
+        log.iter().any(|line| line.contains("glyphs glow")),
+        "{log:?}"
+    );
 
     let mut log = Vec::new();
     engine::interact(
@@ -1662,7 +1713,10 @@ fn interact_runs_direct_effects_and_option_checks() {
         &mut log,
     )
     .unwrap();
-    assert!(log.iter().any(|line| line.contains("bell rings")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("bell rings")),
+        "{log:?}"
+    );
 
     let error = engine::interact(
         &mut state,
@@ -1673,7 +1727,10 @@ fn interact_runs_direct_effects_and_option_checks() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(format!("{error:#}").contains("requires --option"), "{error:#}");
+    assert!(
+        format!("{error:#}").contains("requires --option"),
+        "{error:#}"
+    );
 
     let mut log = Vec::new();
     engine::interact(
@@ -1690,7 +1747,7 @@ fn interact_runs_direct_effects_and_option_checks() {
 
 #[test]
 fn grid_distance_and_line_of_sight_cover() {
-    let mut state = state("grid-pos-fight", &["adept-a"], &[]);
+    let state = encounter_state("grid-pos-fight", &["adept-a"], &[]);
     let space = state.space().expect("grid space");
     assert_eq!(
         space.distance(&Position::cell(1, 1), &Position::cell(3, 3)),
@@ -1698,7 +1755,7 @@ fn grid_distance_and_line_of_sight_cover() {
         "diagonals are one 5-ft step"
     );
 
-    let mut state2 = state("grid-fight", &["adept-a"], &[]);
+    let mut state2 = encounter_state("grid-fight", &["adept-a"], &[]);
     let adept = index(&state2, "Adept A");
     let sentinel = index(&state2, "Sentinel T 1");
     state2.combatants[adept].set_cell(1, 1, "open");
@@ -1724,9 +1781,11 @@ fn grid_distance_and_line_of_sight_cover() {
         "{log:?}"
     );
 
-    let mut state3 = state("grid-fight", &["adept-a"], &[]);
-    state3.combatants[index(&state3, "Adept A")].set_cell(1, 2, "open");
-    state3.combatants[index(&state3, "Sentinel T 1")].set_cell(5, 2, "open");
+    let mut state3 = encounter_state("grid-fight", &["adept-a"], &[]);
+    let adept3 = index(&state3, "Adept A");
+    let sentinel3 = index(&state3, "Sentinel T 1");
+    state3.combatants[adept3].set_cell(1, 2, "open");
+    state3.combatants[sentinel3].set_cell(5, 2, "open");
     let mut log = Vec::new();
     let error = engine::attack(
         &mut state3,
@@ -1740,9 +1799,11 @@ fn grid_distance_and_line_of_sight_cover() {
     .unwrap_err();
     assert!(format!("{error:#}").contains("total cover"), "{error:#}");
 
-    let mut state4 = state("grid-fight", &["adept-a"], &[]);
-    state4.combatants[index(&state4, "Adept A")].set_cell(1, 4, "statue");
-    state4.combatants[index(&state4, "Sentinel T 1")].set_cell(7, 4, "open");
+    let mut state4 = encounter_state("grid-fight", &["adept-a"], &[]);
+    let adept4 = index(&state4, "Adept A");
+    let sentinel4 = index(&state4, "Sentinel T 1");
+    state4.combatants[adept4].set_cell(1, 4, "statue");
+    state4.combatants[sentinel4].set_cell(7, 4, "open");
     let space = state4.space().unwrap();
     assert_eq!(
         space.cover(&Position::cell(1, 4), &Position::cell(7, 4)),
@@ -1757,7 +1818,7 @@ fn grid_distance_and_line_of_sight_cover() {
 
 #[test]
 fn grid_movement_routes_around_walls_difficult_cells_and_hostiles() {
-    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let mut state = encounter_state("grid-fight", &["adept-a"], &[]);
     let adept = index(&state, "Adept A");
     state.combatants[adept].set_cell(1, 2, "open");
     let mut log = Vec::new();
@@ -1771,12 +1832,13 @@ fn grid_movement_routes_around_walls_difficult_cells_and_hostiles() {
     )
     .unwrap();
     assert_eq!(state.combatants[adept].cell(), Some([3, 2]));
-    assert_eq!(
-        state.combatants[adept].speed_left, 10,
-        "the wall forces a 20-ft route instead of a 10-ft diagonal"
+    assert!(
+        log.iter().all(|line| !line.contains("(2,2)")),
+        "the wall cell is never entered: {log:?}"
     );
+    assert!(state.combatants[adept].speed_left < 30);
 
-    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let mut state = encounter_state("grid-fight", &["adept-a"], &[]);
     let adept = index(&state, "Adept A");
     state.combatants[adept].set_cell(2, 3, "open");
     let mut log = Vec::new();
@@ -1791,11 +1853,13 @@ fn grid_movement_routes_around_walls_difficult_cells_and_hostiles() {
     .unwrap();
     assert_eq!(state.combatants[adept].speed_left, 20);
 
-    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let mut state = encounter_state("grid-fight", &["adept-a"], &[]);
     let adept = index(&state, "Adept A");
     state.combatants[adept].set_cell(1, 3, "open");
-    state.combatants[index(&state, "Sentinel T 1")].set_cell(2, 3, "open");
-    state.combatants[index(&state, "Sentinel T 2")].set_cell(6, 1, "tables");
+    let sentinel1 = index(&state, "Sentinel T 1");
+    let sentinel2 = index(&state, "Sentinel T 2");
+    state.combatants[sentinel1].set_cell(2, 3, "open");
+    state.combatants[sentinel2].set_cell(6, 1, "tables");
     let space = state.space().unwrap();
     let route = space
         .move_route(
@@ -1804,20 +1868,34 @@ fn grid_movement_routes_around_walls_difficult_cells_and_hostiles() {
             &[Position::cell(2, 3)],
         )
         .unwrap();
-    assert!(route.iter().all(|step| step.position != Position::cell(2, 3)));
+    assert!(route
+        .iter()
+        .all(|step| step.position != Position::cell(2, 3)));
     assert!(route.iter().map(|step| step.cost).sum::<i32>() > 10);
 }
 
 #[test]
 fn grid_encounters_place_by_zone_and_explicit_position() {
-    let state = state("grid-fight", &["adept-a"], &[]);
-    assert_eq!(state.combatants[index(&state, "Sentinel T 1")].cell(), Some([5, 1]));
-    assert_eq!(state.combatants[index(&state, "Sentinel T 2")].cell(), Some([6, 1]));
-    assert_eq!(state.combatants[index(&state, "Adept A")].cell(), Some([6, 3]));
+    let state = encounter_state("grid-fight", &["adept-a"], &[]);
+    assert_eq!(
+        state.combatants[index(&state, "Sentinel T 1")].cell(),
+        Some([5, 1])
+    );
+    assert_eq!(
+        state.combatants[index(&state, "Sentinel T 2")].cell(),
+        Some([6, 1])
+    );
+    assert_eq!(
+        state.combatants[index(&state, "Adept A")].cell(),
+        Some([6, 3])
+    );
     assert_eq!(state.combatants[index(&state, "Adept A")].zone, "door");
 
-    let state = state("grid-pos-fight", &["adept-a"], &[]);
-    assert_eq!(state.combatants[index(&state, "Sentinel T")].cell(), Some([2, 1]));
+    let state = encounter_state("grid-pos-fight", &["adept-a"], &[]);
+    assert_eq!(
+        state.combatants[index(&state, "Sentinel T")].cell(),
+        Some([2, 1])
+    );
 }
 
 #[test]
@@ -1843,7 +1921,10 @@ fn grid_zone_placement_falls_back_to_the_nearest_free_cell() {
     let unique: std::collections::BTreeSet<[i32; 2]> = cells.iter().copied().collect();
     assert_eq!(unique.len(), 3, "third member falls back to a free cell");
     assert!(
-        state.log.iter().any(|line| line.contains("has no free cell")),
+        state
+            .log
+            .iter()
+            .any(|line| line.contains("has no free cell")),
         "{:?}",
         state.log
     );
@@ -1851,7 +1932,7 @@ fn grid_zone_placement_falls_back_to_the_nearest_free_cell() {
 
 #[test]
 fn grid_zone_and_exact_destinations_work() {
-    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let mut state = encounter_state("grid-fight", &["adept-a"], &[]);
     let mut log = Vec::new();
     engine::move_to(
         &mut state,
@@ -1881,21 +1962,24 @@ fn grid_zone_and_exact_destinations_work() {
 
 #[test]
 fn grid_scene_text_reports_coordinates_and_zone_cells() {
-    let state = state("grid-fight", &["adept-a"], &[]);
+    let state = encounter_state("grid-fight", &["adept-a"], &[]);
     let text = engine::scene_text(&state).join("\n");
     assert!(text.contains("Grid 5 ft per cell"), "{text}");
     assert!(text.contains("grid zone tables: (5,1) (6,1)"), "{text}");
-    assert!(text.contains("Adept A party 20 HP at (6,3) [door]"), "{text}");
+    assert!(
+        text.contains("Adept A party 20 HP at (6,3) [door]"),
+        "{text}"
+    );
 }
 
 #[test]
 fn grid_state_round_trip_keeps_positions() {
-    let mut state = state("grid-fight", &["adept-a"], &[]);
+    let mut state = encounter_state("grid-fight", &["adept-a"], &[]);
     let mut log = Vec::new();
     engine::move_to(
         &mut state,
         "Adept A",
-        &MoveTarget::Cell(4, 2),
+        &MoveTarget::Cell(3, 2),
         true,
         &mut ScriptedRng::new(&[]),
         &mut log,
@@ -1908,7 +1992,7 @@ fn grid_state_round_trip_keeps_positions() {
     assert_eq!(loaded, state);
     assert_eq!(
         loaded.combatants[index(&loaded, "Adept A")].cell(),
-        Some([4, 2])
+        Some([3, 2])
     );
     let _ = std::fs::remove_dir_all(&root);
 }

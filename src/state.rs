@@ -151,11 +151,9 @@ impl CombatantState {
 
     /// Exact position, falling back to the display zone for older state files.
     pub fn position(&self) -> Position {
-        self.pos
-            .clone()
-            .unwrap_or_else(|| Position::Zone {
-                zone: self.zone.clone(),
-            })
+        self.pos.clone().unwrap_or_else(|| Position::Zone {
+            zone: self.zone.clone(),
+        })
     }
 
     pub fn cell(&self) -> Option<[i32; 2]> {
@@ -1077,7 +1075,10 @@ impl Placement {
         match self.mode {
             SceneMode::Zones => {
                 let PlaceRequest::Zone(zone) = request else {
-                    bail!("scene `{}` uses zones, so grid positions are not valid", scene.id);
+                    bail!(
+                        "scene `{}` uses zones, so grid positions are not valid",
+                        scene.id
+                    );
                 };
                 Ok((zone.clone(), Position::Zone { zone: zone.clone() }))
             }
@@ -1203,7 +1204,8 @@ fn append_instances(
             unique_name(base_name, &existing)
         };
         let (zone, pos) = placement.place(scene, request, log, label)?;
-        let mut runtime = combatant_from_creature(&creature, name, side.clone(), &zone, pos, dormant);
+        let mut runtime =
+            combatant_from_creature(&creature, name, side.clone(), &zone, pos, dormant);
         runtime.ai = ai.clone();
         combatants.push(runtime);
     }

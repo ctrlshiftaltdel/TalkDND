@@ -302,7 +302,12 @@ impl<'a> ZoneGraph<'a> {
         neighbours
     }
 
-    fn shortest_path(&self, from: &str, to: &str) -> Option<(i32, Vec<&crate::content::schema::Edge>)> {
+    fn shortest_path(
+        &self,
+        from: &str,
+        to: &str,
+        movement: bool,
+    ) -> Option<(i32, Vec<&crate::content::schema::Edge>)> {
         if self.zone(from).is_none() || self.zone(to).is_none() {
             return None;
         }
@@ -330,7 +335,12 @@ impl<'a> ZoneGraph<'a> {
                 continue;
             }
             for (next, edge) in self.directed_neighbours(&current) {
-                let candidate = cost.saturating_add(Self::movement_cost(edge));
+                let weight = if movement {
+                    Self::movement_cost(edge)
+                } else {
+                    edge.distance
+                };
+                let candidate = cost.saturating_add(weight);
                 let known = best.get(&next).copied().unwrap_or(i32::MAX);
                 if candidate < known {
                     best.insert(next.clone(), candidate);
@@ -364,7 +374,7 @@ impl Space for ZoneGraph<'_> {
         let (Some(from), Some(to)) = (from.zone_id(), to.zone_id()) else {
             return None;
         };
-        let (travel, _) = self.shortest_path(from, to)?;
+        let (travel, _) = self.shortest_path(from, to, false)?;
         if from == to {
             Some(travel)
         } else {
@@ -376,7 +386,7 @@ impl Space for ZoneGraph<'_> {
         let (Some(from), Some(to)) = (from.zone_id(), to.zone_id()) else {
             return None;
         };
-        self.shortest_path(from, to).map(|(cost, _)| cost)
+        self.shortest_path(from, to, true).map(|(cost, _)| cost)
     }
 
     fn can_reach(&self, from: &Position, to: &Position, reach: i32) -> bool {
@@ -403,7 +413,9 @@ impl Space for ZoneGraph<'_> {
         if attacker == target {
             return Cover::None;
         }
-        self.zone(target).map(|zone| zone.cover).unwrap_or(Cover::None)
+        self.zone(target)
+            .map(|zone| zone.cover)
+            .unwrap_or(Cover::None)
     }
 
     fn light_at(&self, at: &Position) -> Light {
@@ -423,7 +435,7 @@ impl Space for ZoneGraph<'_> {
         let (Some(from), Some(to)) = (from.zone_id(), to.zone_id()) else {
             return None;
         };
-        let (_, edges) = self.shortest_path(from, to)?;
+        let (_, edges) = self.shortest_path(from, to, true)?;
         let mut current = from.to_string();
         let mut route = Vec::new();
         for edge in edges {
@@ -551,7 +563,7 @@ impl GridMap {
         let mut cells = Vec::with_capacity((width * height) as usize);
         let mut zone_tags = Vec::with_capacity((width * height) as usize);
         let mut zones = BTreeSet::new();
-        for (_y, row) in grid.rows.iter().enumerate() {
+        for row in &grid.rows {
             let characters: Vec<char> = row.chars().collect();
             for x in 0..width as usize {
                 let character = characters.get(x).copied().unwrap_or(' ');
@@ -600,12 +612,12 @@ impl GridMap {
     }
 
     pub fn zone_at(&self, x: i32, y: i32) -> Option<String> {
-        self.index(x, y).and_then(|index| self.zone_tags[index].clone())
+        self.index(x, y)
+            .and_then(|index| self.zone_tags[index].clone())
     }
 
     pub fn display_zone(&self, x: i32, y: i32) -> String {
-        self.zone_at(x, y)
-            .unwrap_or_else(|| OPEN_ZONE.to_string())
+        self.zone_at(x, y).unwrap_or_else(|| OPEN_ZONE.to_string())
     }
 
     pub fn cells_in_zone(&self, zone: &str) -> Vec<(i32, i32)> {
@@ -660,9 +672,7 @@ impl GridMap {
     }
 
     fn movement_cost(&self, x: i32, y: i32) -> i32 {
-        let difficult = self
-            .cell_at(x, y)
-            .is_some_and(|cell| cell.difficult);
+        let difficult = self.cell_at(x, y).is_some_and(|cell| cell.difficult);
         if difficult {
             self.cell.saturating_mul(2)
         } else {
@@ -781,11 +791,8 @@ impl<'a> GridSpace<'a> {
         if self.map.is_wall(to.0, to.1) {
             return None;
         }
-        let blocked: BTreeSet<(i32, i32)> = blocked
-            .iter()
-            .filter_map(Position::cell_coords)
-            .filter(|cell| *cell != to)
-            .collect();
+        let blocked: BTreeSet<(i32, i32)> =
+            blocked.iter().filter_map(Position::cell_coords).collect();
         if blocked.contains(&to) {
             return None;
         }
@@ -883,7 +890,10 @@ impl Space for GridSpace<'_> {
                         edge_distance: self.map.cell,
                         climb: None,
                         locked: false,
-                        elevation_change: self.map.cell_at(x, y).and_then(|cell| cell.elevation)
+                        elevation_change: self
+                            .map
+                            .cell_at(x, y)
+                            .and_then(|cell| cell.elevation)
                             .unwrap_or(0)
                             - self
                                 .map
@@ -935,9 +945,7 @@ impl Space for GridSpace<'_> {
             for y in 0..self.map.height {
                 for x in 0..self.map.width {
                     let steps = (x - cx).abs().max((y - cy).abs());
-                    if steps <= max_steps
-                        && !positions.contains(&Position::Cell { x, y })
-                    {
+                    if steps <= max_steps && !positions.contains(&Position::Cell { x, y }) {
                         positions.push(Position::Cell { x, y });
                     }
                 }
