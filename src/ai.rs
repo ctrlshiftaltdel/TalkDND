@@ -474,7 +474,10 @@ impl Ai {
         rng: &mut dyn DiceRng,
         log: &mut dyn LogSink,
     ) -> Result<()> {
-        if state.combatants[actor].action_used {
+        if state.combatants[actor].action_used
+            || state.combatants[actor].hp <= 0
+            || state.combatants[actor].is_dead()
+        {
             return Ok(());
         }
         let choice = self.choose_action(state, actor, plan, target);
