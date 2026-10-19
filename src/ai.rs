@@ -491,22 +491,18 @@ impl Ai {
                 let action = &plan.actions[index];
                 self.execute(state, actor, action, target, None, rng, log)
             }
-            Some(TargetChoice::Multiattack) => {
-                let actor_name = state.combatants[actor].name.clone();
-                let target_name = state.combatants[target].name.clone();
-                engine::attack(
-                    state,
-                    &actor_name,
-                    &target_name,
-                    "",
-                    &AttackOptions {
-                        multi: true,
-                        ..AttackOptions::default()
-                    },
-                    rng,
-                    log,
-                )
-            }
+            Some(TargetChoice::Multiattack) => engine::attack_at(
+                state,
+                actor,
+                target,
+                "",
+                &AttackOptions {
+                    multi: true,
+                    ..AttackOptions::default()
+                },
+                rng,
+                log,
+            ),
             None => Ok(()),
         }
     }
@@ -878,19 +874,15 @@ impl Ai {
         log: &mut dyn LogSink,
     ) -> Result<()> {
         match &action.kind {
-            PlannedKind::Attack(attack) => {
-                let actor_name = state.combatants[actor].name.clone();
-                let target_name = state.combatants[target].name.clone();
-                engine::attack(
-                    state,
-                    &actor_name,
-                    &target_name,
-                    &attack.id,
-                    &AttackOptions::default(),
-                    rng,
-                    log,
-                )
-            }
+            PlannedKind::Attack(attack) => engine::attack_at(
+                state,
+                actor,
+                target,
+                &attack.id,
+                &AttackOptions::default(),
+                rng,
+                log,
+            ),
             PlannedKind::Ability(resolved) => {
                 let targets = self.ability_targets(state, actor, action, target);
                 let center = if action.target_type == TargetType::Zone {
@@ -1129,9 +1121,7 @@ impl Ai {
             .combatants
             .iter()
             .enumerate()
-            .filter(|(index, combatant)| {
-                *index != actor && !combatant.dormant && !combatant.is_dead() && combatant.hp > 0
-            })
+            .filter(|(index, combatant)| *index != actor && !combatant.is_dead())
             .map(|(_, combatant)| combatant.position())
             .collect();
         let nearest = hostiles
@@ -1260,9 +1250,8 @@ impl Ai {
             Position::Cell { x, y } => engine::MoveTarget::Cell(*x, *y),
             Position::Zone { zone } => engine::MoveTarget::Zone(zone.clone()),
         };
-        let name = state.combatants[actor].name.clone();
         let _ = rng;
-        engine::move_to(state, &name, &move_target, false, rng, log)
+        engine::move_to_at(state, actor, &move_target, false, rng, log)
     }
 
     fn move_toward_zone(
@@ -1282,9 +1271,7 @@ impl Ai {
             .combatants
             .iter()
             .enumerate()
-            .filter(|(index, combatant)| {
-                *index != actor && !combatant.dormant && !combatant.is_dead() && combatant.hp > 0
-            })
+            .filter(|(index, combatant)| *index != actor && !combatant.is_dead())
             .map(|(_, combatant)| combatant.position())
             .collect();
         let mut best: Option<(i32, Position)> = None;
@@ -1309,8 +1296,7 @@ impl Ai {
             Position::Cell { x, y } => engine::MoveTarget::Cell(*x, *y),
             Position::Zone { zone } => engine::MoveTarget::Zone(zone.clone()),
         };
-        let name = state.combatants[actor].name.clone();
-        engine::move_to(state, &name, &move_target, false, rng, log)
+        engine::move_to_at(state, actor, &move_target, false, rng, log)
     }
 }
 

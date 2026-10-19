@@ -71,6 +71,10 @@ pub struct EncounterState {
     /// whenever the combatant list or its names change.
     #[serde(skip)]
     name_index: Arc<NameIndex>,
+    /// Whether each combatant owns passive abilities with modifiers. Static
+    /// per creature; conditions are checked separately.
+    #[serde(skip)]
+    static_modifier_sources: Arc<Vec<bool>>,
 }
 
 impl PartialEq for EncounterState {
@@ -94,6 +98,13 @@ impl PartialEq for EncounterState {
 #[derive(Debug, Default)]
 struct NameIndex {
     names: Vec<String>,
+}
+
+fn static_modifier_sources(content: &ContentRegistry, combatants: &[CombatantState]) -> Vec<bool> {
+    combatants
+        .iter()
+        .map(|combatant| combatant.has_static_modifier_sources(content))
+        .collect()
 }
 
 impl NameIndex {
@@ -258,6 +269,30 @@ impl CombatantState {
             .any(|id| id.eq_ignore_ascii_case(condition))
     }
 
+    /// Whether a passive ability on the creature declares modifiers.
+    pub fn has_static_modifier_sources(&self, content: &ContentRegistry) -> bool {
+        use crate::content::schema::AbilityEntry;
+        let actions = self.creature.actions.as_deref().unwrap_or(&[]);
+        let features = self.creature.features.as_deref().unwrap_or(&[]);
+        for entry in actions.iter().chain(features.iter()) {
+            let ability = match entry {
+                AbilityEntry::Inline(ability) => ability,
+                AbilityEntry::Ref(reference) => {
+                    let Some(ability) = content.abilities.get(&reference.reference) else {
+                        continue;
+                    };
+                    ability
+                }
+            };
+            if ability.activation == crate::content::schema::Activation::Passive
+                && !ability.modifiers.is_empty()
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn is_immune_to_condition(&self, condition: &str) -> bool {
         self.creature
             .condition_immunities
@@ -296,6 +331,7 @@ impl CombatantState {
             })
             .unwrap_or_else(|| {
                 ability_from_text(skill)
+                    .or_else(|| skill_ability(skill))
                     .map(|ability| self.creature.ability_modifier(ability))
                     .unwrap_or(0)
             })
@@ -825,6 +861,7 @@ impl EncounterState {
 
         let space_cache = Arc::new(SpaceCache::build(Some(&scene)));
         let name_index = Arc::new(NameIndex::build(&combatants));
+        let static_modifier_sources = Arc::new(static_modifier_sources(&content, &combatants));
         let mut state = Self {
             content,
             scene: Some(scene.clone()),
@@ -845,6 +882,7 @@ impl EncounterState {
             outcome: None,
             space_cache,
             name_index,
+            static_modifier_sources,
         };
         state.refresh_initial_conditions()?;
         state.log.push(format!(
@@ -903,6 +941,17 @@ impl EncounterState {
     pub fn rebuild_caches(&mut self) {
         self.space_cache = Arc::new(SpaceCache::build(self.scene.as_ref()));
         self.name_index = Arc::new(NameIndex::build(&self.combatants));
+        self.static_modifier_sources =
+            Arc::new(static_modifier_sources(&self.content, &self.combatants));
+    }
+
+    /// Whether a combatant has passive modifiers that can affect any check.
+    /// Conditions are dynamic and checked by the caller.
+    pub fn has_static_modifier_sources(&self, index: usize) -> bool {
+        self.static_modifier_sources
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| self.combatants[index].has_static_modifier_sources(&self.content))
     }
 
     /// Refreshes only the name index (combatants added or renamed).
@@ -1493,4 +1542,19 @@ pub fn resolve_state_path(requested: Option<&Path>, state_dir: Option<&Path>) ->
         Some(dir) => dir.join(file),
         None => PathBuf::from(format!("./{file}")),
     }
+}
+
+/// Governing ability of a standard 5e skill (core rules), used when a creature
+/// has no explicit bonus for that skill.
+fn skill_ability(skill: &str) -> Option<AbilityName> {
+    let key = skill.to_ascii_lowercase().replace([' ', '-'], "_");
+    let text = match key.as_str() {
+        "athletics" => "str",
+        "acrobatics" | "sleight_of_hand" | "stealth" => "dex",
+        "arcana" | "history" | "investigation" | "nature" | "religion" => "int",
+        "animal_handling" | "insight" | "medicine" | "perception" | "survival" => "wis",
+        "deception" | "intimidation" | "performance" | "persuasion" => "cha",
+        _ => return None,
+    };
+    ability_from_text(text)
 }

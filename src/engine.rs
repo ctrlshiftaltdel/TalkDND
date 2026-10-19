@@ -1087,6 +1087,9 @@ fn expire_conditions(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    if state.combatants[index].conditions.is_empty() {
+        return Ok(());
+    }
     let name = state.combatants[index].name.clone();
     let mut remove = Vec::new();
     let mut still_active = Vec::new();
@@ -1167,6 +1170,9 @@ fn expire_conditions(
 }
 
 fn expire_start_phases(state: &mut EncounterState, index: usize, log: &mut dyn LogSink) {
+    if state.combatants[index].conditions.is_empty() {
+        return;
+    }
     let name = state.combatants[index].name.clone();
     let mut keep = Vec::new();
     for instance in state.combatants[index].conditions.clone() {
@@ -1202,6 +1208,13 @@ fn expire_subject_conditions(
     phase: UntilPhase,
     log: &mut dyn LogSink,
 ) {
+    if state
+        .combatants
+        .iter()
+        .all(|combatant| combatant.conditions.is_empty())
+    {
+        return;
+    }
     let subject = state.combatants[subject_index].name.clone();
     for holder in 0..state.combatants.len() {
         if holder == subject_index {
@@ -1262,6 +1275,9 @@ fn recharge_resources(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) {
+    if state.combatants[index].resources.is_empty() {
+        return;
+    }
     let name = state.combatants[index].name.clone();
     let ids: Vec<String> = state.combatants[index].resources.keys().cloned().collect();
     for id in ids {
@@ -2274,22 +2290,56 @@ pub fn attack(
     let target_index = state
         .find_index(target)
         .map_err(|error| anyhow!(error.to_string()))?;
+    attack_at(
+        state,
+        attacker_index,
+        target_index,
+        attack_name,
+        options,
+        rng,
+        log,
+    )
+}
+
+/// [`attack`] for callers that already resolved combatant indices. The AI uses
+/// this to skip name formatting and lookup on every action.
+pub fn attack_at(
+    state: &mut EncounterState,
+    attacker_index: usize,
+    target_index: usize,
+    attack_name: &str,
+    options: &AttackOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
     ensure_can_act(state, attacker_index)?;
     ensure_targetable(state, target_index)?;
     if attacker_index == target_index {
         bail!("a creature cannot attack itself");
     }
     if !hostile_to(state, attacker_index, target_index) {
-        bail!("`{target}` is not hostile to `{attacker}`");
+        bail!(
+            "`{}` is not hostile to `{}`",
+            state.combatants[target_index].name,
+            state.combatants[attacker_index].name
+        );
     }
     if options.multi {
         let entries = state.combatants[attacker_index]
             .creature
             .multiattack
             .clone()
-            .ok_or_else(|| anyhow!("`{attacker}` has no multiattack"))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "`{}` has no multiattack",
+                    state.combatants[attacker_index].name
+                )
+            })?;
         spend_action(state, attacker_index, Activation::Action, log)?;
-        log.log(format_args!("{attacker} uses multiattack"));
+        log.log(format_args!(
+            "{} uses multiattack",
+            state.combatants[attacker_index].name
+        ));
         for entry in entries {
             if state.combatants[target_index].is_dead() {
                 log.log(format_args!(
@@ -2860,27 +2910,10 @@ pub fn combatant_has_modifier_sources(state: &EncounterState, owner: usize) -> b
 }
 
 fn has_modifier_sources(state: &EncounterState, owner: usize) -> bool {
-    let combatant = &state.combatants[owner];
-    if !combatant.conditions.is_empty() {
+    if !state.combatants[owner].conditions.is_empty() {
         return true;
     }
-    let actions = combatant.creature.actions.as_deref().unwrap_or(&[]);
-    let features = combatant.creature.features.as_deref().unwrap_or(&[]);
-    for entry in actions.iter().chain(features.iter()) {
-        let ability: &Ability = match entry {
-            AbilityEntry::Inline(ability) => ability,
-            AbilityEntry::Ref(reference) => {
-                let Some(ability) = state.content.abilities.get(&reference.reference) else {
-                    continue;
-                };
-                ability
-            }
-        };
-        if ability.activation == Activation::Passive && !ability.modifiers.is_empty() {
-            return true;
-        }
-    }
-    false
+    state.has_static_modifier_sources(owner)
 }
 
 fn has_owned_trigger(state: &EncounterState, owner: usize, when: TriggerWhen) -> bool {
@@ -5688,6 +5721,18 @@ pub fn move_to(
     let index = state
         .find_index(who)
         .map_err(|error| anyhow!(error.to_string()))?;
+    move_to_at(state, index, target, no_oa, rng, log)
+}
+
+/// [`move_to`] for callers that already hold the mover's index.
+pub fn move_to_at(
+    state: &mut EncounterState,
+    index: usize,
+    target: &MoveTarget,
+    no_oa: bool,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
     let combatant = &state.combatants[index];
     if combatant.dormant {
         bail!("`{}` is dormant and cannot move", combatant.name);
@@ -5718,7 +5763,9 @@ pub fn move_to(
                 .combatants
                 .iter()
                 .enumerate()
-                .any(|(other, combatant)| other != index && combatant.position() == position)
+                .any(|(other, combatant)| {
+                    other != index && !combatant.is_dead() && combatant.position() == position
+                })
             {
                 bail!("cell ({x},{y}) is occupied");
             }
@@ -5974,16 +6021,43 @@ fn fire_enter_triggers(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
-    let Some(scene) = state.scene.clone() else {
+    let trigger_count = state
+        .scene
+        .as_ref()
+        .map(|scene| scene.triggers.len())
+        .unwrap_or(0);
+    if trigger_count == 0
+        || !state.scene.as_ref().is_some_and(|scene| {
+            scene
+                .triggers
+                .iter()
+                .any(|trigger| trigger.on == TriggerWhen::OnEnterArea)
+        })
+    {
         return Ok(());
-    };
+    }
     let Some(entered) = state.space().and_then(|space| space.zone_of(position)) else {
         return Ok(());
     };
-    for (index, trigger) in scene.triggers.iter().enumerate() {
-        if trigger.on != TriggerWhen::OnEnterArea {
+    for index in 0..trigger_count {
+        if state.scene.as_ref().is_none_or(|scene| {
+            scene
+                .triggers
+                .get(index)
+                .is_none_or(|trigger| trigger.on != TriggerWhen::OnEnterArea)
+        }) {
             continue;
         }
+        // Clone only the matching trigger; the scene itself is large.
+        let Some(trigger) = state
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.triggers.get(index))
+            .cloned()
+        else {
+            continue;
+        };
+        let trigger = &trigger;
         let key = EncounterState::trigger_key(index, trigger);
         if !state.trigger_enabled(&key) {
             continue;
