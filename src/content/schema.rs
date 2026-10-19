@@ -1668,6 +1668,9 @@ pub struct AiParams {
     pub resource_threshold: Option<f64>,
     #[serde(default)]
     pub flee_below_pct: Option<i32>,
+    /// Zone to retreat to when fleeing (optional).
+    #[serde(default)]
+    pub flee_zone: Option<String>,
     #[serde(default)]
     pub guard_zone: Option<String>,
     #[serde(default)]

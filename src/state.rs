@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -32,7 +33,7 @@ pub const STATE_SUFFIX: &str = ".state.json";
 pub struct EncounterState {
     /// Self-contained content snapshot used by every later command.
     #[serde(default)]
-    pub content: ContentRegistry,
+    pub content: Arc<ContentRegistry>,
     /// The chosen scene, including any trigger `enabled` flags toggled at runtime.
     #[serde(default)]
     pub scene: Option<Scene>,
@@ -103,7 +104,7 @@ impl fmt::Display for CombatOutcome {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CombatantState {
     /// Resolved creature data, embedded so the state file is self-contained.
-    pub creature: Creature,
+    pub creature: Arc<Creature>,
     /// Instance name, unique within the encounter.
     pub name: String,
     pub side: Side,
@@ -139,6 +140,9 @@ pub struct CombatantState {
     pub initiative_total: Option<i32>,
     #[serde(default)]
     pub dormant: bool,
+    /// Whether an AI opening ability has already been considered on turn one.
+    #[serde(default)]
+    pub opening_used: bool,
     /// Dead flag used for creatures without a configured dead condition.
     #[serde(default)]
     pub dead: bool,
@@ -588,6 +592,15 @@ pub struct NewEncounter {
 impl EncounterState {
     /// Builds a state from an encounter id in `content`.
     pub fn from_encounter(content: ContentRegistry, options: &NewEncounter) -> Result<Self> {
+        Self::from_encounter_shared(Arc::new(content), options)
+    }
+
+    /// Builds a state from an encounter using content shared with a simulation
+    /// template. Clones of the state then only clone the `Arc`.
+    pub fn from_encounter_shared(
+        content: Arc<ContentRegistry>,
+        options: &NewEncounter,
+    ) -> Result<Self> {
         let encounter = content
             .encounters
             .get(&options.encounter)
@@ -1284,7 +1297,7 @@ fn combatant_from_creature(
         })
         .unwrap_or_default();
     CombatantState {
-        creature: creature.clone(),
+        creature: Arc::new(creature.clone()),
         name,
         side,
         max_hp,
@@ -1303,6 +1316,7 @@ fn combatant_from_creature(
         ai: creature.ai.clone(),
         initiative_total: None,
         dormant,
+        opening_used: false,
         dead: false,
     }
 }

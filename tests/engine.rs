@@ -1817,6 +1817,24 @@ fn grid_distance_and_line_of_sight_cover() {
 }
 
 #[test]
+fn grid_elevation_adds_to_attack_distance_but_not_travel() {
+    let registry = registry();
+    let scene = registry.scenes.get("grid-elevation").expect("scene");
+    let space = combat_sim::space::GridSpace::new(scene).expect("grid");
+    let flat = Position::cell(1, 1);
+    let raised = Position::cell(2, 1);
+    assert_eq!(space.distance(&flat, &raised), Some(15));
+    assert_eq!(space.travel_distance(&flat, &raised), Some(5));
+    assert!(!space.can_reach(&flat, &raised, 10));
+    assert!(space.can_reach(&flat, &raised, 15));
+    assert_eq!(
+        space.distance(&flat, &Position::cell(3, 1)),
+        Some(20),
+        "two steps plus the height difference"
+    );
+}
+
+#[test]
 fn grid_movement_routes_around_walls_difficult_cells_and_hostiles() {
     let mut state = encounter_state("grid-fight", &["adept-a"], &[]);
     let adept = index(&state, "Adept A");

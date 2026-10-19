@@ -105,6 +105,9 @@ pub trait Space {
     /// All positions belonging to a zone (a grid zone can cover many cells).
     fn zone_positions(&self, zone: &str) -> Vec<Position>;
 
+    /// Every valid position in the scene (zone nodes or open grid cells).
+    fn all_positions(&self) -> Vec<Position>;
+
     /// Zone tag at a position, when the position belongs to one.
     fn zone_of(&self, at: &Position) -> Option<String>;
 
@@ -204,6 +207,13 @@ impl Space for SpaceView<'_> {
         match self {
             Self::Zones(space) => space.zone_positions(zone),
             Self::Grid(space) => space.zone_positions(zone),
+        }
+    }
+
+    fn all_positions(&self) -> Vec<Position> {
+        match self {
+            Self::Zones(space) => space.all_positions(),
+            Self::Grid(space) => space.all_positions(),
         }
     }
 
@@ -484,6 +494,16 @@ impl Space for ZoneGraph<'_> {
         } else {
             Vec::new()
         }
+    }
+
+    fn all_positions(&self) -> Vec<Position> {
+        self.scene
+            .zones
+            .iter()
+            .map(|zone| Position::Zone {
+                zone: zone.id.clone(),
+            })
+            .collect()
     }
 
     fn zone_of(&self, at: &Position) -> Option<String> {
@@ -843,7 +863,17 @@ impl Space for GridSpace<'_> {
     fn distance(&self, from: &Position, to: &Position) -> Option<i32> {
         let (from, to) = (self.map.point(from)?, self.map.point(to)?);
         let steps = (from.0 - to.0).abs().max((from.1 - to.1).abs());
-        Some(steps.saturating_mul(self.map.cell))
+        let elevation = |x, y| {
+            self.map
+                .cell_at(x, y)
+                .and_then(|cell| cell.elevation)
+                .unwrap_or(0)
+        };
+        Some(
+            steps
+                .saturating_mul(self.map.cell)
+                .saturating_add((elevation(from.0, from.1) - elevation(to.0, to.1)).abs()),
+        )
     }
 
     fn travel_distance(&self, from: &Position, to: &Position) -> Option<i32> {
@@ -957,6 +987,14 @@ impl Space for GridSpace<'_> {
     fn zone_positions(&self, zone: &str) -> Vec<Position> {
         self.map
             .cells_in_zone(zone)
+            .into_iter()
+            .map(|(x, y)| Position::Cell { x, y })
+            .collect()
+    }
+
+    fn all_positions(&self) -> Vec<Position> {
+        self.map
+            .open_cells()
             .into_iter()
             .map(|(x, y)| Position::Cell { x, y })
             .collect()

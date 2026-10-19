@@ -28,6 +28,44 @@ use crate::state::{
     ActiveSaveEnds, CombatOutcome, CombatantState, DeathSaves, EncounterState,
 };
 
+/// Destination for engine log lines.
+///
+/// A disabled sink avoids formatting and allocation entirely, which keeps the
+/// Monte Carlo hot path free of log-string work. `Vec<String>` keeps the
+/// step-by-step command output unchanged.
+pub trait LogSink {
+    fn enabled(&self) -> bool;
+    fn push(&mut self, line: &str);
+
+    fn log(&mut self, args: std::fmt::Arguments<'_>) {
+        if self.enabled() {
+            self.push(&format!("{args}"));
+        }
+    }
+}
+
+impl LogSink for Vec<String> {
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    fn push(&mut self, line: &str) {
+        self.push(line.to_string());
+    }
+}
+
+/// Log sink that drops every line without formatting it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NullSink;
+
+impl LogSink for NullSink {
+    fn enabled(&self) -> bool {
+        false
+    }
+
+    fn push(&mut self, _line: &str) {}
+}
+
 /// Attack command options.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AttackOptions {
@@ -682,7 +720,7 @@ fn consume_modifier_source(
     state: &mut EncounterState,
     owner: usize,
     collected: &CollectedModifier,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     if let Some(condition) = &collected.origin_condition {
         let name = state.combatants[owner].name.clone();
@@ -691,7 +729,7 @@ fn consume_modifier_source(
             .conditions
             .retain(|active| !active.condition.eq_ignore_ascii_case(condition));
         if state.combatants[owner].conditions.len() != before {
-            log.push(format!("{name} is no longer {condition}"));
+            log.log(format_args!("{name} is no longer {condition}"));
         }
     }
     mark_once(
@@ -708,7 +746,7 @@ fn finish_collected_modifiers(
     applies: ModifierApplies,
     context: &PredicateContext,
     source: Option<&EffectSource>,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     let collected = collect_modifiers(state, owner, applies, context, source);
     for modifier in collected {
@@ -833,7 +871,7 @@ pub fn init(
     state: &mut EncounterState,
     overrides: &[(usize, i32)],
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     state.initiative.clear();
     state.round = 1;
@@ -853,7 +891,7 @@ pub fn init(
         }
         let roll = D20Roll::roll(combatant.creature.init_bonus(), RollMode::Normal, rng);
         combatant.initiative_total = Some(roll.total);
-        log.push(format!("Initiative {}: {}", combatant.name, roll.text()));
+        log.log(format_args!("Initiative {}: {}", combatant.name, roll.text()));
         rows.push((index, roll.total, false));
     }
 
@@ -883,7 +921,7 @@ pub fn init(
     }
     for (index, total, set) in rows {
         if set {
-            log.push(format!(
+            log.log(format_args!(
                 "Initiative {}: {total} (set)",
                 state.combatants[index].name
             ));
@@ -893,7 +931,7 @@ pub fn init(
     let first = state.initiative[0];
     let _ = start_turn(state, first, rng, log);
     if let Some(combatant) = state.combatants.get(first) {
-        log.push(format!("Round {} - {}'s turn", state.round, combatant.name));
+        log.log(format_args!("Round {} - {}'s turn", state.round, combatant.name));
     }
     Ok(())
 }
@@ -906,7 +944,7 @@ fn eligible_for_turn(combatant: &CombatantState) -> bool {
 pub fn next_turn(
     state: &mut EncounterState,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     if state.initiative.is_empty() {
         bail!("initiative has not been rolled; run `init` first");
@@ -952,13 +990,13 @@ pub fn next_turn(
             continue;
         }
         let name = state.combatants[next_index].name.clone();
-        log.push(format!("Round {} - {name}'s turn", state.round));
+        log.log(format_args!("Round {} - {name}'s turn", state.round));
         log_outcome(state, log);
         return Ok(());
     }
 }
 
-fn reset_round_state(state: &mut EncounterState, rng: &mut dyn DiceRng, log: &mut Vec<String>) {
+fn reset_round_state(state: &mut EncounterState, rng: &mut dyn DiceRng, log: &mut dyn LogSink) {
     for index in 0..state.combatants.len() {
         state.combatants[index]
             .once_used
@@ -973,7 +1011,7 @@ fn start_turn(
     state: &mut EncounterState,
     index: usize,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> bool {
     let speed = effective_speed(state, index);
     {
@@ -993,7 +1031,7 @@ fn start_turn(
     recharge_resources(state, index, RechargePhase::Turn, rng, log);
     if state.combatants[index].is_dying() {
         let name = state.combatants[index].name.clone();
-        log.push(format!(
+        log.log(format_args!(
             "{name} is dying and must make a death saving throw"
         ));
         let _ = death_save_at(state, index, rng, log);
@@ -1009,7 +1047,7 @@ fn end_turn(
     state: &mut EncounterState,
     index: usize,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     run_owned_triggers(state, index, TriggerWhen::EndOfTurn, None, rng, log);
     expire_conditions(state, index, rng, log)?;
@@ -1021,7 +1059,7 @@ fn expire_conditions(
     state: &mut EncounterState,
     index: usize,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let name = state.combatants[index].name.clone();
     let mut remove = Vec::new();
@@ -1033,7 +1071,7 @@ fn expire_conditions(
         if let Some(save_ends) = instance.save_ends.clone() {
             let bonus = state.combatants[index].save_bonus(save_ends.ability);
             let roll = D20Roll::roll(bonus, RollMode::Normal, rng);
-            log.push(format!(
+            log.log(format_args!(
                 "{} save to end {}: {}",
                 name,
                 instance.condition,
@@ -1082,7 +1120,7 @@ fn expire_conditions(
         }
         if expired {
             remove.push(position);
-            log.push(format!("{name} is no longer {}", instance.condition));
+            log.log(format_args!("{name} is no longer {}", instance.condition));
             if instance.concentration {
                 concentration_broken = true;
             }
@@ -1102,7 +1140,7 @@ fn expire_conditions(
     Ok(())
 }
 
-fn expire_start_phases(state: &mut EncounterState, index: usize, log: &mut Vec<String>) {
+fn expire_start_phases(state: &mut EncounterState, index: usize, log: &mut dyn LogSink) {
     let name = state.combatants[index].name.clone();
     let mut keep = Vec::new();
     for instance in state.combatants[index].conditions.clone() {
@@ -1115,7 +1153,7 @@ fn expire_start_phases(state: &mut EncounterState, index: usize, log: &mut Vec<S
             _ => false,
         };
         if expired {
-            log.push(format!("{name} is no longer {}", instance.condition));
+            log.log(format_args!("{name} is no longer {}", instance.condition));
         } else {
             keep.push(instance);
         }
@@ -1136,7 +1174,7 @@ fn expire_subject_conditions(
     state: &mut EncounterState,
     subject_index: usize,
     phase: UntilPhase,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     let subject = state.combatants[subject_index].name.clone();
     for holder in 0..state.combatants.len() {
@@ -1167,7 +1205,7 @@ fn expire_subject_conditions(
                 _ => false,
             };
             if expired {
-                log.push(format!("{holder_name} is no longer {}", instance.condition));
+                log.log(format_args!("{holder_name} is no longer {}", instance.condition));
                 if instance.concentration {
                     concentration_broken = true;
                 }
@@ -1193,7 +1231,7 @@ fn recharge_resources(
     index: usize,
     phase: RechargePhase,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     let name = state.combatants[index].name.clone();
     let ids: Vec<String> = state.combatants[index].resources.keys().cloned().collect();
@@ -1223,13 +1261,13 @@ fn recharge_resources(
             _ => false,
         };
         if in_range {
-            log.push(format!("{name} recharges {id}"));
+            log.log(format_args!("{name} recharges {id}"));
             restore_resource(state, index, &id, log);
         }
     }
 }
 
-fn restore_resource(state: &mut EncounterState, index: usize, id: &str, _log: &mut Vec<String>) {
+fn restore_resource(state: &mut EncounterState, index: usize, id: &str, _log: &mut dyn LogSink) {
     if let Some(resource) = state.combatants[index].resources.get_mut(id) {
         resource.current = resource.max;
     }
@@ -1255,11 +1293,11 @@ pub fn combat_outcome(state: &EncounterState) -> Option<CombatOutcome> {
     }
 }
 
-fn log_outcome(state: &mut EncounterState, log: &mut Vec<String>) {
+fn log_outcome(state: &mut EncounterState, log: &mut dyn LogSink) {
     let outcome = combat_outcome(state);
     if outcome.is_some() && state.outcome != outcome {
         if let Some(outcome) = &outcome {
-            log.push(format!("Outcome: {outcome}"));
+            log.log(format_args!("Outcome: {outcome}"));
         }
     }
     state.outcome = outcome;
@@ -1593,6 +1631,430 @@ fn effective_ac(
     Ok((ac, terms))
 }
 
+/// Accuracy facts an AI planner can use without rolling dice.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttackForecast {
+    pub to_hit: i32,
+    pub ac: i32,
+    pub advantage: bool,
+    pub disadvantage: bool,
+    pub crit_chance: f64,
+    pub in_range: bool,
+}
+
+fn forecast_profile(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+    profile: &AttackProfile,
+    source: Option<&EffectSource>,
+) -> AttackForecast {
+    let facts = profile.facts();
+    let attack_ability = profile
+        .ability
+        .or_else(|| ability_name_from_attack_kind(profile.kind, &state.combatants[attacker]));
+    let attacker_context = PredicateContext {
+        self_idx: attacker,
+        actor: attacker,
+        target: Some(target),
+        attacker: Some(attacker),
+        linked: None,
+        attack: facts.clone(),
+        has_advantage: false,
+        has_disadvantage: false,
+        damage_dealt: 0,
+        slot_level: source.and_then(|source| source.slot_level),
+        current_attack_total: None,
+        current_ac: None,
+        ability: attack_ability,
+        damage_type: None,
+        source_tags: profile.tags.clone(),
+    };
+    let target_context = PredicateContext {
+        self_idx: target,
+        actor: target,
+        target: Some(target),
+        attacker: Some(attacker),
+        linked: None,
+        attack: facts.clone(),
+        has_advantage: false,
+        has_disadvantage: false,
+        damage_dealt: 0,
+        slot_level: source.and_then(|source| source.slot_level),
+        current_attack_total: None,
+        current_ac: None,
+        ability: attack_ability,
+        damage_type: None,
+        source_tags: profile.tags.clone(),
+    };
+    let mut mode = RollMode::Normal;
+    for collected in collect_modifiers(
+        state,
+        attacker,
+        ModifierApplies::AttackRoll,
+        &attacker_context,
+        source,
+    ) {
+        match collected.modifier.effect {
+            ModifierEffect::Advantage => mode = add_advantage(mode),
+            ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
+            _ => {}
+        }
+    }
+    let target_modifiers = collect_modifiers(
+        state,
+        target,
+        ModifierApplies::IncomingAttack,
+        &target_context,
+        None,
+    );
+    let mut auto_crit = false;
+    for collected in &target_modifiers {
+        match collected.modifier.effect {
+            ModifierEffect::Advantage => mode = add_advantage(mode),
+            ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
+            ModifierEffect::AutoCrit => auto_crit = true,
+            _ => {}
+        }
+    }
+    let (ac, ac_ok) = effective_ac(state, target, Some(attacker), &facts)
+        .map(|(ac, _)| (ac, true))
+        .unwrap_or((state.combatants[target].creature.ac(), false));
+    let mut in_range = ac_ok;
+    if let Some(space) = state.space() {
+        let attacker_position = state.combatants[attacker].position();
+        let target_position = state.combatants[target].position();
+        let distance = space.distance(&attacker_position, &target_position);
+        if let Some(distance) = distance {
+            let mut kind = profile.kind;
+            if kind == AttackKind::MeleeOrRanged {
+                kind = if space.can_reach(&attacker_position, &target_position, profile.reach) {
+                    AttackKind::Melee
+                } else {
+                    AttackKind::Ranged
+                };
+            }
+            in_range = match kind {
+                AttackKind::Melee => {
+                    space.can_reach(&attacker_position, &target_position, profile.reach)
+                }
+                AttackKind::Ranged | AttackKind::MeleeOrRanged => profile
+                    .range
+                    .is_some_and(|[_, long]| distance <= long),
+            };
+            if kind != AttackKind::Melee
+                && profile
+                    .range
+                    .is_some_and(|[normal, _]| distance > normal)
+            {
+                mode = add_disadvantage(mode);
+            }
+            if kind != AttackKind::Melee && hostile_within_5(state, attacker) {
+                mode = add_disadvantage(mode);
+            }
+            if space.light_at(&target_position) == Light::Dark
+                && !has_dark_sense(&state.combatants[attacker])
+            {
+                mode = add_disadvantage(mode);
+            }
+            if space.light_at(&attacker_position) == Light::Dark
+                && !has_dark_sense(&state.combatants[target])
+            {
+                mode = add_advantage(mode);
+            }
+        } else {
+            in_range = false;
+        }
+    }
+    let advantage = mode == RollMode::Advantage;
+    let disadvantage = mode == RollMode::Disadvantage;
+    let crit_chance = if auto_crit {
+        1.0
+    } else {
+        match mode {
+            RollMode::Normal => 0.05,
+            RollMode::Advantage => 0.0975,
+            RollMode::Disadvantage => 0.0025,
+        }
+    };
+    let context = source_context(
+        state,
+        attacker,
+        source,
+        Some(profile.attack_modifier(&state.combatants[attacker])),
+        source.and_then(|source| source.slot_level),
+    );
+    let to_hit = evaluate_value(&context, &profile.to_hit)
+        .map(|(_, expression)| expression.modifier)
+        .unwrap_or(0);
+    AttackForecast {
+        to_hit,
+        ac,
+        advantage,
+        disadvantage,
+        crit_chance,
+        in_range,
+    }
+}
+
+/// Forecasts a creature attack against one target without consuming or rolling.
+pub fn forecast_attack(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+    attack: &Attack,
+) -> AttackForecast {
+    let profile = AttackProfile::from_attack(attack);
+    forecast_profile(state, attacker, target, &profile, None)
+}
+
+/// Forecasts an ability `attack` effect against one target without rolling.
+pub fn forecast_attack_effect(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+    effect: &AttackEffect,
+    tags: &[String],
+    params: &BTreeMap<String, ExprValue>,
+    slot_level: Option<i32>,
+    range: Option<i32>,
+) -> AttackForecast {
+    let source = EffectSource {
+        id: "forecast".to_string(),
+        name: "forecast".to_string(),
+        tags: tags.to_vec(),
+        slot_level,
+        concentration: false,
+        params: params
+            .iter()
+            .map(|(key, value)| (key.clone(), value.as_text()))
+            .collect(),
+        duration: None,
+        range,
+        modifiers: Vec::new(),
+    };
+    let profile = AttackProfile::from_effect(effect, &source, range);
+    forecast_profile(state, attacker, target, &profile, Some(&source))
+}
+
+/// Evaluates an expression for one actor, returning the parsed dice.
+pub fn evaluate_for_actor(
+    state: &EncounterState,
+    actor: usize,
+    value: &ExprValue,
+    params: &BTreeMap<String, ExprValue>,
+    attack_mod: Option<i32>,
+    slot_level: Option<i32>,
+) -> Result<DiceExpr> {
+    let mut context = score_context(&state.combatants[actor]);
+    if !params.is_empty() {
+        context = context.with_params(
+            params
+                .iter()
+                .map(|(key, value)| (key.clone(), value.as_text()))
+                .collect(),
+        );
+    }
+    if let Some(slot_level) = slot_level {
+        context = context.with_slot_level(slot_level);
+    }
+    if let Some(attack_mod) = attack_mod {
+        context = context.with_attack_mod(attack_mod);
+    }
+    Ok(evaluate_value(&context, value)?.1)
+}
+
+/// Evaluates an expression to its average value for one actor.
+pub fn average_expression(
+    state: &EncounterState,
+    actor: usize,
+    value: &ExprValue,
+    params: &BTreeMap<String, ExprValue>,
+    attack_mod: Option<i32>,
+    slot_level: Option<i32>,
+) -> Result<f64> {
+    Ok(evaluate_for_actor(state, actor, value, params, attack_mod, slot_level)?.average())
+}
+
+/// Chance that a target fails a saving throw, including condition modifiers
+/// and (for Dex saves) cover.
+pub fn save_fail_chance(
+    state: &EncounterState,
+    target: usize,
+    ability: AbilityName,
+    dc: i32,
+    ignore_cover: bool,
+    attacker: Option<usize>,
+) -> f64 {
+    let combatant = &state.combatants[target];
+    let context = PredicateContext {
+        self_idx: target,
+        actor: target,
+        target: Some(target),
+        attacker,
+        linked: None,
+        attack: AttackFacts::default(),
+        has_advantage: false,
+        has_disadvantage: false,
+        damage_dealt: 0,
+        slot_level: None,
+        current_attack_total: None,
+        current_ac: None,
+        ability: Some(ability),
+        damage_type: None,
+        source_tags: Vec::new(),
+    };
+    let mut mode = RollMode::Normal;
+    let mut auto_fail = false;
+    let mut bonus = 0.0;
+    for collected in collect_modifiers(state, target, ModifierApplies::Save, &context, None) {
+        match collected.modifier.effect {
+            ModifierEffect::Advantage => mode = add_advantage(mode),
+            ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
+            ModifierEffect::AutoFail => auto_fail = true,
+            ModifierEffect::Bonus => {
+                if let Some(value) = &collected.modifier.value {
+                    if let Ok(average) = average_expression(state, target, value, &BTreeMap::new(), None, None) {
+                        bonus += average;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if auto_fail {
+        return 1.0;
+    }
+    if ability == AbilityName::Dex && !ignore_cover {
+        if let Some(attacker) = attacker {
+            if attacker != target {
+                if let Some(cover_bonus) = cover_bonus(cover_between(state, attacker, target), &state.content.rules) {
+                    bonus += f64::from(cover_bonus);
+                }
+            }
+        }
+    }
+    let need = f64::from(dc) - f64::from(combatant.save_bonus(ability)) - bonus;
+    let success = d20_at_least(need, mode);
+    1.0 - success
+}
+
+fn d20_at_least(need: f64, mode: RollMode) -> f64 {
+    let single = ((21.0 - need).clamp(0.0, 20.0)) / 20.0;
+    match mode {
+        RollMode::Normal => single,
+        RollMode::Advantage => 1.0 - (1.0 - single) * (1.0 - single),
+        RollMode::Disadvantage => single * single,
+    }
+}
+
+/// Damage multiplier from resistances, immunities and damage-taken modifiers.
+pub fn damage_multiplier(
+    state: &EncounterState,
+    target: usize,
+    source: Option<usize>,
+    damage_type: &str,
+    source_tags: &[String],
+) -> f64 {
+    let combatant = &state.combatants[target];
+    let static_immune = combatant
+        .creature
+        .immunities
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(damage_type));
+    if static_immune {
+        return 0.0;
+    }
+    let mut multiplier = 1.0f64;
+    if combatant
+        .creature
+        .resistances
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(damage_type))
+    {
+        multiplier *= 0.5;
+    }
+    if combatant
+        .creature
+        .vulnerabilities
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(damage_type))
+    {
+        multiplier *= 2.0;
+    }
+    let context = PredicateContext {
+        self_idx: target,
+        actor: target,
+        target: Some(target),
+        attacker: source,
+        linked: None,
+        attack: AttackFacts::default(),
+        has_advantage: false,
+        has_disadvantage: false,
+        damage_dealt: 0,
+        slot_level: None,
+        current_attack_total: None,
+        current_ac: None,
+        ability: None,
+        damage_type: Some(damage_type.to_string()),
+        source_tags: source_tags.to_vec(),
+    };
+    for collected in collect_modifiers(state, target, ModifierApplies::DamageTaken, &context, None)
+    {
+        match collected.modifier.effect {
+            ModifierEffect::Immunity => return 0.0,
+            ModifierEffect::Resistance => multiplier *= 0.5,
+            ModifierEffect::Vulnerability => multiplier *= 2.0,
+            _ => {}
+        }
+    }
+    multiplier
+}
+
+/// Whether a combatant currently has a generic engine condition flag.
+pub fn has_condition_flag(state: &EncounterState, index: usize, flag: ConditionFlag) -> bool {
+    has_flag(state, index, flag)
+}
+
+/// Resolves an already-resolved ability directly, mainly for AI turns.
+#[allow(clippy::too_many_arguments)]
+pub fn use_planned_ability(
+    state: &mut EncounterState,
+    actor: usize,
+    resolved: &ResolvedAbility,
+    targets: &[usize],
+    zone_center: Option<&Position>,
+    option: Option<usize>,
+    slot_level: Option<i32>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let source = EffectSource::from_ability(&resolved.ability, &resolved.params);
+    let options = AttackOptions::default();
+    use_resolved_ability(
+        state,
+        actor,
+        resolved,
+        &source,
+        targets,
+        zone_center,
+        &options,
+        option,
+        slot_level,
+        false,
+        rng,
+        log,
+    )?;
+    log_outcome(state, log);
+    Ok(())
+}
+
 fn ac_text(total: i32, terms: &[(i32, String)]) -> String {
     let bonus: i32 = terms.iter().map(|(value, _)| *value).sum();
     let base = total - bonus;
@@ -1618,7 +2080,7 @@ pub fn attack(
     attack_name: &str,
     options: &AttackOptions,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let attacker_index = state
         .find_index(attacker)
@@ -1641,7 +2103,7 @@ pub fn attack(
             .clone()
             .ok_or_else(|| anyhow!("`{attacker}` has no multiattack"))?;
         spend_action(state, attacker_index, Activation::Action, log)?;
-        log.push(format!("{attacker} uses multiattack"));
+        log.log(format_args!("{attacker} uses multiattack"));
         for entry in entries {
             resolve_named_entry(
                 state,
@@ -1681,7 +2143,7 @@ fn resolve_named_entry(
     options: &AttackOptions,
     auto: bool,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let combatant = &state.combatants[attacker];
     if let Ok(attack) = combatant.find_attack(name) {
@@ -1714,7 +2176,7 @@ fn spend_action(
     state: &mut EncounterState,
     index: usize,
     activation: Activation,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     match activation {
         Activation::Action => {
@@ -1743,7 +2205,7 @@ fn spend_action(
     Ok(())
 }
 
-fn spend_reaction(state: &mut EncounterState, index: usize, _log: &mut Vec<String>) -> Result<()> {
+fn spend_reaction(state: &mut EncounterState, index: usize, _log: &mut dyn LogSink) -> Result<()> {
     if state.combatants[index].reaction_round == Some(state.round) {
         bail!(
             "`{}` has already used a reaction this round",
@@ -1772,7 +2234,7 @@ fn resolve_attack(
     source: Option<&EffectSource>,
     options: &AttackOptions,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
     economy_spent: bool,
     ignore_range: bool,
 ) -> Result<()> {
@@ -1995,7 +2457,7 @@ fn resolve_attack(
     let mut crit = result.nat20;
     let mut current_ac = base_ac;
     let mut current_terms = ac_terms.clone();
-    log.push(format!(
+    log.log(format_args!(
         "{attacker_name} attacks {target_name} with {}: {} vs {} {}",
         profile.name,
         result.text(),
@@ -2021,7 +2483,7 @@ fn resolve_attack(
             current_terms = new_terms;
             if result.total < current_ac {
                 hit = false;
-                log.push(format!(
+                log.log(format_args!(
                     "{} now misses: {} vs {} MISS",
                     attacker_name,
                     result.total,
@@ -2184,7 +2646,7 @@ fn try_hit_reactions(
     current_ac: i32,
     source: Option<&EffectSource>,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<Option<(i32, Vec<(i32, String)>)>> {
     let abilities = state.combatants[target].owned_abilities(&state.content)?;
     let mut converted = None;
@@ -2249,7 +2711,7 @@ fn try_hit_reactions(
             spend_reaction(state, target, log)?;
             mark_trigger_used(state, target, trigger, &key);
             let owner_name = state.combatants[target].name.clone();
-            log.push(format!(
+            log.log(format_args!(
                 "{owner_name} uses {} (reaction)",
                 resolved.ability.display_name()
             ));
@@ -2318,7 +2780,7 @@ fn spend_cost(
     state: &mut EncounterState,
     owner: usize,
     cost: &AbilityCost,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<bool> {
     let Some(resource) = state.combatants[owner].resources.get_mut(&cost.resource) else {
         bail!(
@@ -2333,7 +2795,7 @@ fn spend_cost(
     }
     resource.current -= amount;
     let name = state.combatants[owner].name.clone();
-    log.push(format!(
+    log.log(format_args!(
         "{name} spends {} {}{}",
         cost.amount,
         cost.resource,
@@ -2347,7 +2809,7 @@ fn apply_attack_damage_parts(
     context: &EffectContext,
     parts: &[DamagePart],
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<i32> {
     let Some(target) = context.target else {
         return Ok(0);
@@ -2411,7 +2873,7 @@ fn run_mastery_triggers(
     base_context: &EffectContext,
     when: TriggerWhen,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let Some(mastery_id) = &profile.mastery else {
         return Ok(());
@@ -2497,7 +2959,7 @@ fn run_owned_triggers_for(
     profile: &AttackProfile,
     base_context: &EffectContext,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let abilities = state.combatants[owner].owned_abilities(&state.content)?;
     for resolved in abilities {
@@ -2553,7 +3015,7 @@ fn run_owned_triggers(
     when: TriggerWhen,
     _target: Option<usize>,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     let Ok(abilities) = state.combatants[owner].owned_abilities(&state.content) else {
         return;
@@ -2620,7 +3082,7 @@ fn run_owned_triggers(
     }
 }
 
-fn fire_ends_on(state: &mut EncounterState, owner: usize, event: EndsOn, log: &mut Vec<String>) {
+fn fire_ends_on(state: &mut EncounterState, owner: usize, event: EndsOn, log: &mut dyn LogSink) {
     let name = state.combatants[owner].name.clone();
     let mut kept = Vec::new();
     let mut concentration_broken = false;
@@ -2632,7 +3094,7 @@ fn fire_ends_on(state: &mut EncounterState, owner: usize, event: EndsOn, log: &m
                 .get(&instance.condition)
                 .is_some_and(|def| def.ends_on.contains(&event));
         if ends {
-            log.push(format!("{name} is no longer {}", instance.condition));
+            log.log(format_args!("{name} is no longer {}", instance.condition));
             if instance.concentration {
                 concentration_broken = true;
             }
@@ -2669,7 +3131,7 @@ fn apply_effects(
     context: &EffectContext,
     effects: &[Effect],
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     for effect in effects {
         apply_effect(state, context, effect, rng, log)?;
@@ -2682,7 +3144,7 @@ fn apply_effect(
     context: &EffectContext,
     effect: &Effect,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     match effect {
         Effect::Attack(effect) => {
@@ -2891,7 +3353,7 @@ fn apply_effect(
             apply_effects(state, context, &options[index], rng, log)
         }
         Effect::Note(text) => {
-            log.push(format!("MANUAL: {text}"));
+            log.log(format_args!("MANUAL: {text}"));
             Ok(())
         }
         Effect::ToggleTrigger(effect) => {
@@ -2941,7 +3403,7 @@ fn apply_save_effect(
     context: &EffectContext,
     effect: &SaveEffect,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let Some(target) = context.target else {
         bail!("save effect needs a target");
@@ -2970,7 +3432,7 @@ fn apply_save_effect(
         }
     }
     if auto_fail {
-        log.push(format!(
+        log.log(format_args!(
             "{} automatically fails the {} save (DC {dc})",
             state.combatants[target].name,
             effect.ability.as_str().to_uppercase()
@@ -2995,7 +3457,7 @@ fn apply_save_effect(
     );
     let success = result.total >= dc;
     let name = state.combatants[target].name.clone();
-    log.push(format!(
+    log.log(format_args!(
         "{name} {} save: {} vs DC {dc} {}",
         effect.ability.as_str().to_uppercase(),
         result.text(),
@@ -3093,7 +3555,7 @@ fn apply_damage_effect(
     context: &EffectContext,
     effect: &DamageEffect,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let Some(target) = context.target else {
         bail!("damage effect needs a target");
@@ -3170,7 +3632,7 @@ fn apply_heal_effect(
     context: &EffectContext,
     effect: &crate::content::schema::HealEffect,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let Some(target) = context.target else {
         bail!("heal effect needs a target");
@@ -3247,7 +3709,7 @@ fn apply_heal_effect(
     let max_hp = state.combatants[target].max_hp;
     state.combatants[target].hp = (before + amount).min(max_hp);
     let healed = state.combatants[target].hp - before;
-    log.push(format!(
+    log.log(format_args!(
         "{name} regains {healed} HP ({} {})",
         record.text,
         terms.join(" ")
@@ -3258,7 +3720,7 @@ fn apply_heal_effect(
     Ok(())
 }
 
-fn revive_from_zero(state: &mut EncounterState, target: usize, log: &mut Vec<String>) {
+fn revive_from_zero(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
     let dying = state
         .content
         .rules
@@ -3272,7 +3734,7 @@ fn revive_from_zero(state: &mut EncounterState, target: usize, log: &mut Vec<Str
             .conditions
             .retain(|active| !active.condition.eq_ignore_ascii_case(&condition));
         if state.combatants[target].conditions.len() != before {
-            log.push(format!("{name} is no longer {condition}"));
+            log.log(format_args!("{name} is no longer {condition}"));
         }
     }
     state.combatants[target].death_saves = DeathSaves::default();
@@ -3283,7 +3745,7 @@ fn apply_forced_move(
     context: &EffectContext,
     effect: &ForcedMoveEffect,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let Some(target) = context.target else {
         bail!("forced_move needs a target");
@@ -3374,7 +3836,7 @@ fn apply_forced_move(
             Position::Zone { zone } => state.combatants[target].set_zone(zone.clone()),
         }
         let name = state.combatants[target].name.clone();
-        log.push(format!("{name} is moved to {display}"));
+        log.log(format_args!("{name} is moved to {display}"));
         fire_enter_triggers(state, target, &position, rng, log)?;
     }
     Ok(())
@@ -3385,7 +3847,7 @@ fn apply_check_effect(
     context: &EffectContext,
     effect: &CheckEffect,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let who = match effect.who {
         CheckWho::Actor => context.actor,
@@ -3419,7 +3881,7 @@ fn apply_check_effect(
     );
     let success = result.total >= dc;
     let name = state.combatants[who].name.clone();
-    log.push(format!(
+    log.log(format_args!(
         "{name} {label} check: {} vs DC {dc} {}",
         result.text(),
         if success { "PASS" } else { "FAIL" }
@@ -3485,7 +3947,7 @@ fn apply_basic_action(
     state: &mut EncounterState,
     context: &EffectContext,
     action: BasicAction,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let actor = context.actor;
     let name = state.combatants[actor].name.clone();
@@ -3496,7 +3958,7 @@ fn apply_basic_action(
         BasicAction::Hide => "hide",
         BasicAction::Help => "help",
     };
-    log.push(format!("{name} takes the {key} action"));
+    log.log(format_args!("{name} takes the {key} action"));
     if action == BasicAction::Dash {
         let speed = effective_speed(state, actor);
         state.combatants[actor].speed_left += speed;
@@ -3545,7 +4007,7 @@ fn apply_basic_action(
             log,
         )?;
     } else {
-        log.push(format!("MANUAL: resolve the {key} action"));
+        log.log(format_args!("MANUAL: resolve the {key} action"));
     }
     Ok(())
 }
@@ -3553,7 +4015,7 @@ fn apply_basic_action(
 fn toggle_scene_trigger(
     state: &mut EncounterState,
     effect: &ToggleTriggerEffect,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     let key = state
         .scene
@@ -3568,7 +4030,7 @@ fn toggle_scene_trigger(
         })
         .unwrap_or_else(|| effect.trigger.clone());
     state.set_trigger_enabled(&key, effect.enabled);
-    log.push(format!(
+    log.log(format_args!(
         "Scene trigger {} is now {}",
         effect.trigger,
         if effect.enabled {
@@ -3597,14 +4059,14 @@ fn apply_condition_internal(
     created_by: Option<String>,
     concentration: bool,
     _rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let Some(def) = state.content.conditions.get(condition_id) else {
         bail!("unknown condition `{condition_id}`");
     };
     let target_name = state.combatants[target].name.clone();
     if state.combatants[target].is_immune_to_condition(condition_id) {
-        log.push(format!("{target_name} is immune to {condition_id}"));
+        log.log(format_args!("{target_name} is immune to {condition_id}"));
         return Ok(());
     }
     let def = def.clone();
@@ -3650,10 +4112,10 @@ fn apply_condition_internal(
         .find(|existing| existing.condition.eq_ignore_ascii_case(condition_id))
     {
         *existing = active;
-        log.push(format!("{target_name}'s {condition_id} is refreshed"));
+        log.log(format_args!("{target_name}'s {condition_id} is refreshed"));
     } else {
         state.combatants[target].conditions.push(active);
-        log.push(format!("{target_name} is now {condition_id}"));
+        log.log(format_args!("{target_name} is now {condition_id}"));
     }
     let incapacitated = active_condition_ids(&state.content, &state.combatants[target])
         .iter()
@@ -3695,7 +4157,7 @@ fn remove_condition_from(
     state: &mut EncounterState,
     target: usize,
     condition_id: &str,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     let name = state.combatants[target].name.clone();
     let before = state.combatants[target].conditions.len();
@@ -3703,7 +4165,7 @@ fn remove_condition_from(
         .conditions
         .retain(|condition| !condition.condition.eq_ignore_ascii_case(condition_id));
     if state.combatants[target].conditions.len() != before {
-        log.push(format!("{name} is no longer {condition_id}"));
+        log.log(format_args!("{name} is no longer {condition_id}"));
         let concentration_condition = state.content.rules.concentration_condition.clone();
         if concentration_condition
             .as_deref()
@@ -3721,7 +4183,7 @@ pub fn add_condition(
     condition_id: &str,
     options: &AddConditionOptions,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let target = state
         .find_index(who)
@@ -3827,7 +4289,7 @@ pub fn remove_condition(
     state: &mut EncounterState,
     who: &str,
     condition_id: &str,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let target = state
         .find_index(who)
@@ -3853,7 +4315,7 @@ fn use_resolved_ability(
     slot_level: Option<i32>,
     auto: bool,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let ability = &resolved.ability;
     ensure_can_act(state, actor)?;
@@ -3953,7 +4415,7 @@ fn use_resolved_ability(
         begin_concentration(state, actor, ability, log);
     }
     if let Some(manual) = &ability.manual {
-        log.push(format!("MANUAL: {manual}"));
+        log.log(format_args!("MANUAL: {manual}"));
     }
     let slot_level = slot_level.or(ability.slot_level);
     let mut effect_source = source.clone();
@@ -3976,7 +4438,7 @@ fn use_resolved_ability(
         has_advantage: options.advantage,
         has_disadvantage: options.disadvantage,
     };
-    log.push(format!(
+    log.log(format_args!(
         "{} uses {}",
         state.combatants[actor].name,
         ability.display_name()
@@ -4060,7 +4522,7 @@ pub fn use_ability(
     ability_name: &str,
     options: &UseOptions,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let actor = state
         .find_index(actor_name)
@@ -4143,7 +4605,7 @@ pub fn use_entry(
     targets: &[String],
     options: &UseOptions,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let actor = state
         .find_index(actor_name)
@@ -4183,7 +4645,7 @@ fn begin_concentration(
     state: &mut EncounterState,
     actor: usize,
     ability: &Ability,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     let name = state.combatants[actor].name.clone();
     if state.concentration.contains_key(&name) {
@@ -4214,23 +4676,23 @@ fn begin_concentration(
             log,
         );
     }
-    log.push(format!(
+    log.log(format_args!(
         "{name} is concentrating on {}",
         ability.display_name()
     ));
 }
 
-fn break_concentration(state: &mut EncounterState, actor: usize, log: &mut Vec<String>) {
+fn break_concentration(state: &mut EncounterState, actor: usize, log: &mut dyn LogSink) {
     let name = state.combatants[actor].name.clone();
     if state.concentration.remove(&name).is_none() {
         return;
     }
-    log.push(format!("{name}'s concentration ends"));
+    log.log(format_args!("{name}'s concentration ends"));
     for combatant in &mut state.combatants {
         let mut kept = Vec::new();
         for condition in combatant.conditions.drain(..) {
             if condition.concentration && condition.source.as_deref() == Some(name.as_str()) {
-                log.push(format!(
+                log.log(format_args!(
                     "{} is no longer {}",
                     combatant.name, condition.condition
                 ));
@@ -4252,7 +4714,7 @@ fn concentration_damage_check(
     target: usize,
     damage: i32,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let name = state.combatants[target].name.clone();
     if !state.concentration.contains_key(&name) || damage <= 0 {
@@ -4267,7 +4729,7 @@ fn concentration_damage_check(
         rng,
     )?;
     if auto_fail {
-        log.push(format!(
+        log.log(format_args!(
             "{name} automatically fails the concentration save (DC {dc})"
         ));
         break_concentration(state, target, log);
@@ -4284,7 +4746,7 @@ fn concentration_damage_check(
         disadvantages,
         rng,
     );
-    log.push(format!(
+    log.log(format_args!(
         "{name} concentration save: {} vs DC {dc} {}",
         result.text(),
         if result.total >= dc { "PASS" } else { "FAIL" }
@@ -4307,7 +4769,7 @@ fn apply_damage_rolls(
     source_tags: &[String],
     critical: bool,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<i32> {
     if rolls.is_empty() {
         return Ok(0);
@@ -4336,7 +4798,7 @@ fn apply_damage_rolls(
         parts.push(format!("{amount} {damage_type} ({})", formulas.join(", ")));
     }
     if total <= 0 {
-        log.push(format!("{name} takes no damage ({})", parts.join("; ")));
+        log.log(format_args!("{name} takes no damage ({})", parts.join("; ")));
         return Ok(0);
     }
 
@@ -4349,7 +4811,7 @@ fn apply_damage_rolls(
     let before = state.combatants[target].hp;
     let was_at_zero = before <= 0;
     state.combatants[target].hp = (before - hp_damage).max(0);
-    log.push(format!(
+    log.log(format_args!(
         "{name} takes {total} damage ({}){}",
         parts.join("; "),
         if absorbed > 0 {
@@ -4363,7 +4825,7 @@ fn apply_damage_rolls(
     let overflow = hp_damage.saturating_sub(before.max(0));
     let max_hp = state.combatants[target].max_hp;
     if state.combatants[target].hp == 0 && overflow >= max_hp {
-        log.push(format!("{name} dies from massive damage"));
+        log.log(format_args!("{name} dies from massive damage"));
         state.combatants[target].dead = true;
         if state.combatants[target].is_pc() {
             state.combatants[target].death_saves.dead = true;
@@ -4408,7 +4870,7 @@ fn apply_damage_rolls(
                     log,
                 );
             }
-            log.push(format!("{name} is dead"));
+            log.log(format_args!("{name} is dead"));
         }
     }
 
@@ -4427,71 +4889,14 @@ fn mitigate(
     damage_type: &str,
     source_tags: &[String],
 ) -> Result<i32> {
-    let combatant = &state.combatants[target];
-    let mut multiplier = 1.0f64;
-    let static_immune = combatant
-        .creature
-        .immunities
-        .as_deref()
-        .unwrap_or(&[])
-        .iter()
-        .any(|entry| entry.eq_ignore_ascii_case(damage_type));
-    if static_immune {
-        return Ok(0);
-    }
-    if combatant
-        .creature
-        .resistances
-        .as_deref()
-        .unwrap_or(&[])
-        .iter()
-        .any(|entry| entry.eq_ignore_ascii_case(damage_type))
-    {
-        multiplier *= 0.5;
-    }
-    if combatant
-        .creature
-        .vulnerabilities
-        .as_deref()
-        .unwrap_or(&[])
-        .iter()
-        .any(|entry| entry.eq_ignore_ascii_case(damage_type))
-    {
-        multiplier *= 2.0;
-    }
-    let context = PredicateContext {
-        self_idx: target,
-        actor: target,
-        target: Some(target),
-        attacker: Some(source),
-        linked: None,
-        attack: AttackFacts::default(),
-        has_advantage: false,
-        has_disadvantage: false,
-        damage_dealt: 0,
-        slot_level: None,
-        current_attack_total: None,
-        current_ac: None,
-        ability: None,
-        damage_type: Some(damage_type.to_string()),
-        source_tags: source_tags.to_vec(),
-    };
-    for collected in collect_modifiers(state, target, ModifierApplies::DamageTaken, &context, None)
-    {
-        match collected.modifier.effect {
-            ModifierEffect::Immunity => return Ok(0),
-            ModifierEffect::Resistance => multiplier *= 0.5,
-            ModifierEffect::Vulnerability => multiplier *= 2.0,
-            _ => {}
-        }
-    }
+    let multiplier = damage_multiplier(state, target, Some(source), damage_type, source_tags);
     Ok(((amount as f64) * multiplier).floor() as i32)
 }
 
-fn apply_dying(state: &mut EncounterState, target: usize, log: &mut Vec<String>) {
+fn apply_dying(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
     let name = state.combatants[target].name.clone();
     state.combatants[target].death_saves.stable = false;
-    log.push(format!(
+    log.log(format_args!(
         "{name} drops to 0 HP ({}/{} death saves)",
         state.combatants[target].death_saves.successes,
         state.combatants[target].death_saves.failures
@@ -4533,7 +4938,7 @@ fn add_death_save_failures(
     state: &mut EncounterState,
     target: usize,
     failures: u8,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     let name = state.combatants[target].name.clone();
     state.combatants[target].death_saves.stable = false;
@@ -4542,14 +4947,14 @@ fn add_death_save_failures(
         .failures
         .saturating_add(failures);
     let total = state.combatants[target].death_saves.failures;
-    log.push(format!(
+    log.log(format_args!(
         "{name} fails {failures} death saving throw{} from damage ({total}/3)",
         if failures == 1 { "" } else { "s" }
     ));
     if total >= 3 {
         state.combatants[target].death_saves.dead = true;
         state.combatants[target].dead = true;
-        log.push(format!("{name} dies"));
+        log.log(format_args!("{name} dies"));
     }
 }
 
@@ -4559,7 +4964,7 @@ fn run_damage_taken_triggers(
     source: usize,
     damage: i32,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) {
     let Ok(abilities) = state.combatants[target].owned_abilities(&state.content) else {
         return;
@@ -4636,7 +5041,7 @@ pub fn damage(
     damage_type: Option<&str>,
     crit: bool,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let target = state
         .find_index(target_name)
@@ -4674,7 +5079,7 @@ pub fn heal(
     expression: &str,
     from: Option<&str>,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let target = state
         .find_index(target_name)
@@ -4730,7 +5135,7 @@ pub fn heal(
     let max_hp = state.combatants[target].max_hp;
     state.combatants[target].hp = (before + amount).min(max_hp);
     let healed = state.combatants[target].hp - before;
-    log.push(format!(
+    log.log(format_args!(
         "{name} regains {healed} HP ({} {})",
         record.text,
         terms.join(" ")
@@ -4753,7 +5158,7 @@ pub fn save(
     dc: i32,
     mode: RollMode,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let index = state
         .find_index(who)
@@ -4770,7 +5175,7 @@ pub fn save(
     )?;
     let mode = combine_modes(mode, modifier_mode);
     if auto_fail {
-        log.push(format!(
+        log.log(format_args!(
             "{} automatically fails the {} save (DC {dc})",
             state.combatants[index].name,
             ability.as_str().to_uppercase()
@@ -4788,7 +5193,7 @@ pub fn save(
         disadvantages,
         rng,
     );
-    log.push(format!(
+    log.log(format_args!(
         "{} {} save: {} vs DC {dc} {}",
         state.combatants[index].name,
         ability.as_str().to_uppercase(),
@@ -4816,7 +5221,7 @@ pub fn check(
     mode: RollMode,
     bonus: i32,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let index = state
         .find_index(who)
@@ -4851,7 +5256,7 @@ pub fn check(
         disadvantages,
         rng,
     );
-    log.push(format!(
+    log.log(format_args!(
         "{} {} check: {} vs DC {dc} {}",
         state.combatants[index].name,
         skill_or_ability,
@@ -4867,7 +5272,7 @@ pub fn roll_expression(
     mode: RollMode,
     dc: Option<i32>,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let parsed = expression
         .parse::<DiceExpr>()
@@ -4878,7 +5283,7 @@ pub fn roll_expression(
             Some(dc) => roll.vs_dc(dc),
             None => roll.text(),
         };
-        log.push(text);
+        log.push(&text);
     } else {
         let record = parsed.roll(rng);
         let text = match dc {
@@ -4889,7 +5294,7 @@ pub fn roll_expression(
             ),
             None => record.text,
         };
-        log.push(text);
+        log.push(&text);
     }
     Ok(())
 }
@@ -4916,7 +5321,7 @@ pub fn move_to(
     target: &MoveTarget,
     no_oa: bool,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let index = state
         .find_index(who)
@@ -4989,7 +5394,7 @@ pub fn move_to(
                 Some((_, cell)) => cell,
                 None => {
                     if space.zone_of(&start).as_deref() == Some(zone) {
-                        log.push(format!(
+                        log.log(format_args!(
                             "{} is already in {zone}",
                             state.combatants[index].name
                         ));
@@ -5001,7 +5406,7 @@ pub fn move_to(
         }
     };
     if destination == start {
-        log.push(format!(
+        log.log(format_args!(
             "{} is already in {}",
             state.combatants[index].name, state.combatants[index].zone
         ));
@@ -5031,7 +5436,7 @@ pub fn move_to(
             break;
         }
         if step.locked {
-            log.push(format!(
+            log.log(format_args!(
                 "{name} finds a locked door and stops at {}",
                 state.combatants[index].zone
             ));
@@ -5040,7 +5445,7 @@ pub fn move_to(
         if step.elevation_change > 0 {
             if let Some(climb) = &step.climb {
                 if !roll_climb(state, index, climb, rng, log)? {
-                    log.push(format!(
+                    log.log(format_args!(
                         "{name} fails the climb and stops at {}",
                         state.combatants[index].zone
                     ));
@@ -5071,7 +5476,7 @@ pub fn move_to(
             Position::Cell { x, y } => state.combatants[index].set_cell(*x, *y, to_label.clone()),
             Position::Zone { zone } => state.combatants[index].set_zone(zone.clone()),
         }
-        log.push(format!(
+        log.log(format_args!(
             "{name} moves {from_label} -> {to_label} ({} ft)",
             step.cost
         ));
@@ -5079,7 +5484,7 @@ pub fn move_to(
         current = step.position;
     }
     if state.combatants[index].speed_left < 0 {
-        log.push(format!(
+        log.log(format_args!(
             "{name} has used {} ft more than the remaining movement",
             -state.combatants[index].speed_left
         ));
@@ -5092,7 +5497,7 @@ fn roll_climb(
     index: usize,
     climb: &crate::content::schema::ClimbSpec,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<bool> {
     let skill = climb.skill.clone();
     let base = state.combatants[index].skill_bonus(&skill);
@@ -5110,7 +5515,7 @@ fn roll_climb(
     );
     let name = state.combatants[index].name.clone();
     let success = result.total >= climb.dc;
-    log.push(format!(
+    log.log(format_args!(
         "{name} {skill} check: {} vs DC {} {}",
         result.text(),
         climb.dc,
@@ -5145,7 +5550,7 @@ fn opportunity_attacks(
     mover: usize,
     departure: &Position,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     if is_disengaged(state, mover)
         || has_flag(state, mover, ConditionFlag::NoOpportunityAttacksAgainst)
@@ -5181,7 +5586,7 @@ fn opportunity_attacks(
         };
         let profile = AttackProfile::from_attack(&attack);
         state.combatants[hostile].reaction_round = Some(state.round);
-        log.push(format!(
+        log.log(format_args!(
             "{} makes an opportunity attack against {}",
             state.combatants[hostile].name, state.combatants[mover].name
         ));
@@ -5206,7 +5611,7 @@ fn fire_enter_triggers(
     mover: usize,
     position: &Position,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let Some(scene) = state.scene.clone() else {
         return Ok(());
@@ -5257,7 +5662,7 @@ fn fire_enter_triggers(
             }
         }
         if let Some(manual) = &trigger.manual {
-            log.push(format!("MANUAL: {manual}"));
+            log.log(format_args!("MANUAL: {manual}"));
         }
         let occupants: Vec<usize> = match trigger.affects.unwrap_or_default() {
             crate::content::schema::TriggerAffects::Entering => vec![mover],
@@ -5312,7 +5717,7 @@ pub fn interact(
     object_query: &str,
     option: Option<usize>,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let actor = state
         .find_index(who)
@@ -5370,12 +5775,12 @@ pub fn interact(
         ),
     };
     let actor_name = state.combatants[actor].name.clone();
-    log.push(format!(
+    log.log(format_args!(
         "{actor_name} interacts with {}",
         object.name.as_deref().unwrap_or(&object.id)
     ));
     if let Some(manual) = &object.manual {
-        log.push(format!("MANUAL: {manual}"));
+        log.log(format_args!("MANUAL: {manual}"));
     }
     let Some(interact) = object.interact.clone() else {
         if object.manual.is_some() {
@@ -5404,7 +5809,7 @@ fn run_interaction(
     interact: &crate::content::schema::Interact,
     option: Option<usize>,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     if let Some(options) = &interact.options {
         if options.is_empty() {
@@ -5477,7 +5882,7 @@ fn roll_check_spec(
     who: usize,
     check: &crate::content::schema::CheckSpec,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<bool> {
     let (label, base, ability) = if let Some(skill) = &check.skill {
         (
@@ -5507,7 +5912,7 @@ fn roll_check_spec(
     );
     let name = state.combatants[who].name.clone();
     let success = result.total >= check.dc;
-    log.push(format!(
+    log.log(format_args!(
         "{name} {label} check: {} vs DC {} {}",
         result.text(),
         check.dc,
@@ -5680,7 +6085,7 @@ pub fn activate(
     state: &mut EncounterState,
     query: &str,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let matches = state.find_activatable(query);
     if matches.is_empty() {
@@ -5688,7 +6093,7 @@ pub fn activate(
     }
     for index in matches {
         if !state.combatants[index].dormant {
-            log.push(format!(
+            log.log(format_args!(
                 "{} is already active",
                 state.combatants[index].name
             ));
@@ -5701,7 +6106,7 @@ pub fn activate(
         );
         state.combatants[index].dormant = false;
         state.combatants[index].initiative_total = Some(roll.total);
-        log.push(format!(
+        log.log(format_args!(
             "{} activates: {}",
             state.combatants[index].name,
             roll.text()
@@ -5740,7 +6145,7 @@ pub fn death_save(
     state: &mut EncounterState,
     who: &str,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let index = state
         .find_index(who)
@@ -5752,7 +6157,7 @@ fn death_save_at(
     state: &mut EncounterState,
     index: usize,
     rng: &mut dyn DiceRng,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let name = state.combatants[index].name.clone();
     if !state.combatants[index].is_pc() {
@@ -5765,16 +6170,16 @@ fn death_save_at(
         bail!("`{name}` is not dying");
     }
     if state.combatants[index].death_saves.stable {
-        log.push(format!("{name} is stable"));
+        log.log(format_args!("{name} is stable"));
         return Ok(());
     }
     let roll = D20Roll::roll(0, RollMode::Normal, rng);
-    log.push(format!("{name} death save: {}", roll.text()));
+    log.log(format_args!("{name} death save: {}", roll.text()));
     if roll.nat20 {
         state.combatants[index].hp = 1;
         state.combatants[index].death_saves = DeathSaves::default();
         revive_from_zero(state, index, log);
-        log.push(format!("{name} regains 1 HP"));
+        log.log(format_args!("{name} regains 1 HP"));
         return Ok(());
     }
     if roll.nat1 {
@@ -5782,29 +6187,29 @@ fn death_save_at(
             .death_saves
             .failures
             .saturating_add(2);
-        log.push(format!("{name} critical failure (2 death save failures)"));
+        log.log(format_args!("{name} critical failure (2 death save failures)"));
     } else if roll.total >= 10 {
         state.combatants[index].death_saves.successes = state.combatants[index]
             .death_saves
             .successes
             .saturating_add(1);
-        log.push(format!("{name} succeeds on the death save"));
+        log.log(format_args!("{name} succeeds on the death save"));
     } else {
         state.combatants[index].death_saves.failures = state.combatants[index]
             .death_saves
             .failures
             .saturating_add(1);
-        log.push(format!("{name} fails the death save"));
+        log.log(format_args!("{name} fails the death save"));
     }
     if state.combatants[index].death_saves.failures >= 3 {
         state.combatants[index].death_saves.dead = true;
         state.combatants[index].dead = true;
-        log.push(format!("{name} dies"));
+        log.log(format_args!("{name} dies"));
     } else if state.combatants[index].death_saves.successes >= 3 {
         state.combatants[index].death_saves.stable = true;
         state.combatants[index].death_saves.successes = 0;
         state.combatants[index].death_saves.failures = 0;
-        log.push(format!("{name} is stable"));
+        log.log(format_args!("{name} is stable"));
     }
     Ok(())
 }
@@ -5814,7 +6219,7 @@ pub fn rest(
     state: &mut EncounterState,
     kind: RestKind,
     who: Option<&str>,
-    log: &mut Vec<String>,
+    log: &mut dyn LogSink,
 ) -> Result<()> {
     let targets: Vec<usize> = match who {
         Some(name) if name.eq_ignore_ascii_case("all") => (0..state.combatants.len()).collect(),
@@ -5834,14 +6239,14 @@ pub fn rest(
                         resource.restore(regain);
                     }
                 }
-                log.push(format!("{name} takes a short rest"));
+                log.log(format_args!("{name} takes a short rest"));
             }
             RestKind::Long => {
                 for resource in state.combatants[index].resources.values_mut() {
                     resource.current = resource.max;
                 }
                 if state.combatants[index].death_saves.dead {
-                    log.push(format!(
+                    log.log(format_args!(
                         "{name} is dead and cannot benefit from a long rest"
                     ));
                     continue;
@@ -5861,7 +6266,7 @@ pub fn rest(
                         .iter()
                         .any(|id| id.eq_ignore_ascii_case(&condition.condition))
                 });
-                log.push(format!("{name} takes a long rest"));
+                log.log(format_args!("{name} takes a long rest"));
             }
         }
     }

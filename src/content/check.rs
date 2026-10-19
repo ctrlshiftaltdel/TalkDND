@@ -557,6 +557,13 @@ fn check_ai_params(
     params: &AiParams,
     context: &str,
 ) {
+    if params
+        .flee_zone
+        .as_deref()
+        .is_some_and(|zone| zone.trim().is_empty())
+    {
+        report.error(source, format!("{context}: flee_zone must not be empty"));
+    }
     if let Some(conditions) = &params.avoid_targets_with {
         for condition in conditions {
             if registry.conditions.get(condition).is_none() {

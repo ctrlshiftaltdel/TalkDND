@@ -190,6 +190,21 @@ scenes:
         zone: beta
         effects: [{note: "trap fired"}]
 
+  - id: grid-elevation
+    name: Grid Elevation
+    mode: grid
+    light: bright
+    grid:
+      cell: 5
+      legend:
+        "#": {wall: true}
+        ".": {}
+        "^": {elevation: 10}
+      rows:
+        - "#####"
+        - "#.^^#"
+        - "#####"
+
   - id: grid-space
     name: Grid Space
     mode: grid
