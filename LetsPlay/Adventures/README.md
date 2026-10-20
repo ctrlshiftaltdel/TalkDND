@@ -12,6 +12,6 @@ Adventures/
       creatures.yaml                   # 冒险特有的怪物/NPC
 ```
 
-- 存档的 `Saves/<存档>/combat/campaign.yaml` 用 `adventures: [../../../Adventures/<slug>/combat]` 指向战斗数据。路径相对于清单文件；存档与本目录同在 `LetsPlay/` 下，所以这条相对路径仍然有效。
+- 存档清单怎么指向这里，见 `../example/save/combat/campaign.yaml`。那条路径从清单文件数起，仍然落在本目录里。
 - 冒险书本身不区分版本；用 2024 规则跑 2014 冒险也可以（反之亦然），由存档的 `ruleset` 决定按哪版结算。
 - 本目录除本 README 外全部被 `.gitignore` 排除，不会被提交。

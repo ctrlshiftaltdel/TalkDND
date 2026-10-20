@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
+pub mod fetch;
+pub mod install;
 pub mod leaks;
+pub mod letsplay;
 pub mod migrate;
 
 use std::path::PathBuf;

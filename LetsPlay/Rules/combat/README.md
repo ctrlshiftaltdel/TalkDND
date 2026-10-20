@@ -1,6 +1,6 @@
 # LetsPlay/Rules/combat — combat-sim 规则数据（分层）
 
-战役无关的规则数据，供仓库根目录的 `tools/combat-sim` 读取（格式见 `tools/combat-sim/docs/SPEC-v2.md`）。
+战役无关的规则数据，供 combat-sim 读取。字段说明在引擎的开发文档里，不在本目录。
 
 引擎读取存档清单 `campaign.yaml` 里的 `ruleset`（`2014` 或 `2024`，缺省 `2024`），先加载 `common/`，再加载对应版本目录，另一版本目录忽略。
 

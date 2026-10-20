@@ -59,7 +59,15 @@ fn ok(args: &[&str]) -> String {
 fn setup(label: &str, encounter: &str) -> Temp {
     let t = Temp::new(label);
     let m = manifest("manifest.yaml");
-    ok(&["--campaign", &m, "--state", t.p(), "new", "--encounter", encounter]);
+    ok(&[
+        "--campaign",
+        &m,
+        "--state",
+        t.p(),
+        "new",
+        "--encounter",
+        encounter,
+    ]);
     ok(&["--state", t.p(), "init", "--set", "Hero=30", "--seed", "7"]);
     t
 }
@@ -78,7 +86,17 @@ fn combatant(t: &Temp, name: &str) -> Value {
 #[test]
 fn nonlethal_melee_knocks_out_instead_of_killing() {
     let t = setup("ko", "pit-fight");
-    let out = ok(&["--state", t.p(), "attack", "Hero", "Mook 1", "sure-sword", "--nonlethal", "--seed", "1"]);
+    let out = ok(&[
+        "--state",
+        t.p(),
+        "attack",
+        "Hero",
+        "Mook 1",
+        "sure-sword",
+        "--nonlethal",
+        "--seed",
+        "1",
+    ]);
     assert!(out.contains("knocked out"), "{out}");
     let mook = combatant(&t, "Mook 1");
     assert_eq!(mook["dead"], false);
@@ -88,14 +106,33 @@ fn nonlethal_melee_knocks_out_instead_of_killing() {
     ok(&["--state", t.p(), "next", "--seed", "1"]);
     ok(&["--state", t.p(), "next", "--seed", "1"]);
     ok(&["--state", t.p(), "next", "--seed", "1"]);
-    let out = ok(&["--state", t.p(), "attack", "Hero", "Mook 2", "sure-sword", "--seed", "1"]);
+    let out = ok(&[
+        "--state",
+        t.p(),
+        "attack",
+        "Hero",
+        "Mook 2",
+        "sure-sword",
+        "--seed",
+        "1",
+    ]);
     assert!(out.contains("is dead") || out.contains("dies"), "{out}");
 }
 
 #[test]
 fn nonlethal_is_ignored_for_ranged_attacks() {
     let t = setup("ko-ranged", "pit-fight");
-    let out = ok(&["--state", t.p(), "attack", "Hero", "Mook 1", "sure-bow", "--nonlethal", "--seed", "1"]);
+    let out = ok(&[
+        "--state",
+        t.p(),
+        "attack",
+        "Hero",
+        "Mook 1",
+        "sure-bow",
+        "--nonlethal",
+        "--seed",
+        "1",
+    ]);
     assert!(out.contains("non-lethal ignored"), "{out}");
     assert!(out.contains("is dead") || out.contains("dies"), "{out}");
 }
@@ -104,9 +141,34 @@ fn nonlethal_is_ignored_for_ranged_attacks() {
 fn nonlethal_creature_tag_knocks_pcs_out_stable() {
     let t = Temp::new("captor");
     let m = manifest("manifest.yaml");
-    ok(&["--campaign", &m, "--state", t.p(), "new", "--encounter", "captor-fight"]);
-    ok(&["--state", t.p(), "init", "--set", "Captor=30", "--seed", "3"]);
-    let out = ok(&["--state", t.p(), "attack", "Captor", "Hero", "cudgel", "--seed", "3"]);
+    ok(&[
+        "--campaign",
+        &m,
+        "--state",
+        t.p(),
+        "new",
+        "--encounter",
+        "captor-fight",
+    ]);
+    ok(&[
+        "--state",
+        t.p(),
+        "init",
+        "--set",
+        "Captor=30",
+        "--seed",
+        "3",
+    ]);
+    let out = ok(&[
+        "--state",
+        t.p(),
+        "attack",
+        "Captor",
+        "Hero",
+        "cudgel",
+        "--seed",
+        "3",
+    ]);
     assert!(out.contains("knocked out"), "{out}");
     let hero = combatant(&t, "Hero");
     assert_eq!(hero["death_saves"]["stable"], true);
@@ -123,11 +185,27 @@ fn damage_command_accepts_nonlethal() {
 #[test]
 fn simulate_defaults_to_manifest_party_and_errors_without_one() {
     let m = manifest("manifest.yaml");
-    let out = ok(&["--campaign", &m, "simulate", "--encounter", "pit-fight", "--seed", "4"]);
+    let out = ok(&[
+        "--campaign",
+        &m,
+        "simulate",
+        "--encounter",
+        "pit-fight",
+        "--seed",
+        "4",
+    ]);
     assert!(out.contains("Hero"), "{out}");
 
     let m2 = manifest("manifest-noparty.yaml");
-    let out = run(&["--campaign", &m2, "simulate", "--encounter", "pit-fight", "--seed", "4"]);
+    let out = run(&[
+        "--campaign",
+        &m2,
+        "simulate",
+        "--encounter",
+        "pit-fight",
+        "--seed",
+        "4",
+    ]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("party"), "{err}");
@@ -137,20 +215,68 @@ fn simulate_defaults_to_manifest_party_and_errors_without_one() {
 fn heal_with_slot_and_cast_spend_spell_slots() {
     let t = setup("slots", "pit-fight");
     ok(&["--state", t.p(), "damage", "Hero", "10"]);
-    ok(&["--state", t.p(), "heal", "Hero", "2d8+3", "--from", "Hero", "--slot", "1", "--seed", "1"]);
-    assert_eq!(combatant(&t, "Hero")["resources"]["spell-slot-1"]["current"], 2);
-    ok(&["--state", t.p(), "cast", "Hero", "mend", "Hero", "--seed", "1"]);
-    assert_eq!(combatant(&t, "Hero")["resources"]["spell-slot-1"]["current"], 1);
+    ok(&[
+        "--state",
+        t.p(),
+        "heal",
+        "Hero",
+        "2d8+3",
+        "--from",
+        "Hero",
+        "--slot",
+        "1",
+        "--seed",
+        "1",
+    ]);
+    assert_eq!(
+        combatant(&t, "Hero")["resources"]["spell-slot-1"]["current"],
+        2
+    );
+    ok(&[
+        "--state",
+        t.p(),
+        "cast",
+        "Hero",
+        "mend",
+        "Hero",
+        "--seed",
+        "1",
+    ]);
+    assert_eq!(
+        combatant(&t, "Hero")["resources"]["spell-slot-1"]["current"],
+        1
+    );
 }
 
 #[test]
 fn surprised_rolls_initiative_with_disadvantage() {
     let t = Temp::new("surprise");
     let m = manifest("manifest.yaml");
-    ok(&["--campaign", &m, "--state", t.p(), "new", "--encounter", "pit-fight"]);
-    let out = ok(&["--state", t.p(), "init", "--surprised", "Mook 1", "--adv", "Hero", "--seed", "9"]);
+    ok(&[
+        "--campaign",
+        &m,
+        "--state",
+        t.p(),
+        "new",
+        "--encounter",
+        "pit-fight",
+    ]);
+    let out = ok(&[
+        "--state",
+        t.p(),
+        "init",
+        "--surprised",
+        "Mook 1",
+        "--adv",
+        "Hero",
+        "--seed",
+        "9",
+    ]);
     assert!(out.contains("Mook 1 is Surprised"), "{out}");
-    assert!(out.contains("Initiative Mook 1: 1d20(") && out.contains("dis"), "{out}");
+    assert!(
+        out.contains("Initiative Mook 1: 1d20(") && out.contains("dis"),
+        "{out}"
+    );
     assert!(out.contains("adv"), "{out}");
 }
 
@@ -169,7 +295,15 @@ fn climbing_down_costs_extra_and_carrying_halves_speed() {
     assert!(out.contains("climbs 10 ft up"), "{out}");
     assert_eq!(combatant(&t, "Hero")["speed_left"], 10);
 
-    ok(&["--state", t.p(), "condition", "add", "Hero", "carrying-test", "--permanent"]);
+    ok(&[
+        "--state",
+        t.p(),
+        "condition",
+        "add",
+        "Hero",
+        "carrying-test",
+        "--permanent",
+    ]);
     for _ in 0..3 {
         ok(&["--state", t.p(), "next", "--seed", "1"]);
     }
@@ -180,20 +314,59 @@ fn climbing_down_costs_extra_and_carrying_halves_speed() {
 #[test]
 fn acting_out_of_turn_warns() {
     let t = setup("turn", "pit-fight");
-    let out = ok(&["--state", t.p(), "attack", "Mook 1", "Hero", "poke", "--seed", "1"]);
-    assert!(out.contains("WARNING: Mook 1 is acting out of turn"), "{out}");
-    let out = ok(&["--state", t.p(), "attack", "Hero", "Mook 1", "sure-sword", "--seed", "1"]);
+    let out = ok(&[
+        "--state",
+        t.p(),
+        "attack",
+        "Mook 1",
+        "Hero",
+        "poke",
+        "--seed",
+        "1",
+    ]);
+    assert!(
+        out.contains("WARNING: Mook 1 is acting out of turn"),
+        "{out}"
+    );
+    let out = ok(&[
+        "--state",
+        t.p(),
+        "attack",
+        "Hero",
+        "Mook 1",
+        "sure-sword",
+        "--seed",
+        "1",
+    ]);
     assert!(!out.contains("WARNING"), "{out}");
 }
 
 #[test]
 fn new_concentration_spell_ends_the_previous_one() {
     let t = setup("conc", "pit-fight");
-    ok(&["--state", t.p(), "cast", "Hero", "focus-a", "Mook 1", "--seed", "1"]);
+    ok(&[
+        "--state",
+        t.p(),
+        "cast",
+        "Hero",
+        "focus-a",
+        "Mook 1",
+        "--seed",
+        "1",
+    ]);
     ok(&["--state", t.p(), "next", "--seed", "1"]);
     ok(&["--state", t.p(), "next", "--seed", "1"]);
     ok(&["--state", t.p(), "next", "--seed", "1"]);
-    let out = ok(&["--state", t.p(), "cast", "Hero", "focus-b", "Mook 2", "--seed", "1"]);
+    let out = ok(&[
+        "--state",
+        t.p(),
+        "cast",
+        "Hero",
+        "focus-b",
+        "Mook 2",
+        "--seed",
+        "1",
+    ]);
     assert!(out.contains("concentration ends"), "{out}");
     let mook1 = combatant(&t, "Mook 1");
     let conds = mook1["conditions"].to_string();

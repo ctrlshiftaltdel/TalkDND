@@ -1,6 +1,0 @@
-#!/bin/sh
-# Run the repo combat-sim binary. The path is resolved from this wrapper,
-# so the caller's working directory does not matter.
-set -eu
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$here/../../tools/bin/combat-sim" "$@"

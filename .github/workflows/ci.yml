@@ -4,8 +4,73 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # rust-cache saves and restores the cargo cache.
+  actions: write
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            tools/combat-sim
+            tools/talkdnd-dev
+
+      - name: Check formatting
+        run: |
+          cargo fmt --manifest-path tools/combat-sim/Cargo.toml --check
+          cargo fmt --manifest-path tools/talkdnd-dev/Cargo.toml --check
+
+      - name: Clippy combat-sim
+        run: cargo clippy --manifest-path tools/combat-sim/Cargo.toml --all-targets -- -D warnings
+
+      - name: Clippy talkdnd-dev
+        run: cargo clippy --manifest-path tools/talkdnd-dev/Cargo.toml --all-targets -- -D warnings
+
   test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            tools/combat-sim
+            tools/talkdnd-dev
+
+      - name: Test combat-sim
+        run: cargo test --manifest-path tools/combat-sim/Cargo.toml
+
+      - name: Test talkdnd-dev
+        run: cargo test --manifest-path tools/talkdnd-dev/Cargo.toml
+
+  deps:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -14,14 +79,108 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Test combat-sim
-        run: cargo test --manifest-path tools/combat-sim/Cargo.toml
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            tools/combat-sim
+            tools/talkdnd-dev
 
-      - name: Test talkdnd-dev
-        run: cargo test --manifest-path tools/talkdnd-dev/Cargo.toml
+      - name: cargo deny combat-sim
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: tools/combat-sim/Cargo.toml
+          # The action defaults to --all-features, which would override deny.toml.
+          arguments: ""
+          command: check
+
+      - name: cargo deny talkdnd-dev
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: tools/talkdnd-dev/Cargo.toml
+          arguments: ""
+          command: check
+
+  content:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            tools/combat-sim
+            tools/talkdnd-dev
+
+      - name: Build combat-sim
+        run: cargo build --manifest-path tools/combat-sim/Cargo.toml
+
+      - name: Content check shipped rules
+        run: |
+          set -euo pipefail
+          bin=tools/combat-sim/target/debug/combat-sim
+          # Manifests point only at LetsPlay/Rules/combat (no adventures, no saves).
+          # The tool exits non-zero for errors. Warnings are allowed.
+          "$bin" --campaign tools/combat-sim/tests/fixtures/rulesets/real-2014.yaml content check
+          "$bin" --campaign tools/combat-sim/tests/fixtures/rulesets/real-2024.yaml content check
+
+  kit-leaks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            tools/combat-sim
+            tools/talkdnd-dev
 
       - name: Validate AgentOrch kit
         run: python3 scripts/validate_kit.py
 
       - name: Check tracked files for leaks
         run: cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks
+
+      - name: Check LetsPlay stays self-contained
+        run: cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay
+
+  markup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: sudo apt-get update && sudo apt-get install -y yamllint
+
+      - name: YAML lint
+        run: yamllint -c .yamllint .
+
+      - name: Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: true
+          args: >-
+            --offline
+            --no-progress
+            --exclude-path LetsPlay/Rules/2014
+            --exclude-path LetsPlay/Rules/2024
+            --exclude-path LetsPlay/Adventures
+            --exclude-path LetsPlay/Saves
+            --exclude-path LetsPlay/Rules/combat/local
+            --exclude-path Rules/2014
+            --exclude-path Rules/2024
+            --exclude-path Adventures
+            --exclude-path Saves
+            --exclude-path \.worktrees
+            .

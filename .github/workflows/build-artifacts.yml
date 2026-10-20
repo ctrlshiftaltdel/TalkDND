@@ -1,0 +1,67 @@
+name: build-artifacts
+
+# Bare release binaries for main. The target list matches release.yml.
+# Each artifact's root is the binary itself. Extract it into LetsPlay/bin/.
+# talkdnd-dev fetch-binary downloads artifact combat-sim-<target> and installs
+# that file at LetsPlay/bin/combat-sim (combat-sim.exe on Windows).
+# Tag packaging and GitHub Releases stay in release.yml.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_name: combat-sim
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_name: combat-sim.exe
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bin_name: combat-sim
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            tools/combat-sim
+            tools/talkdnd-dev
+
+      - name: Build release
+        run: cargo build --release --manifest-path tools/combat-sim/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: combat-sim-${{ matrix.target }}
+          path: tools/combat-sim/target/${{ matrix.target }}/release/${{ matrix.bin_name }}
+          if-no-files-found: error
+          retention-days: 30

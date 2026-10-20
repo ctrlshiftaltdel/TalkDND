@@ -11,16 +11,6 @@ Saves/<存档>/
   dm-secrets.md         DM 秘密
 ```
 
-`campaign.yaml` 示例：
+`campaign.yaml` 的模板在 `../example/save/combat/campaign.yaml`。把它复制到 `Saves/<存档>/combat/campaign.yaml`，再改名字、`ruleset` 和 `party`。模板里的库路径从清单文件本身数，仍然落在 `../Rules/` 和 `../Adventures/` 里面。
 
-```yaml
-name: "我的战役"
-ruleset: "2024"                     # 本存档使用的规则版本：2014 或 2024
-library: [../../../Rules/combat]     # 引擎自动加载 common/ + 对应版本目录
-adventures: [../../../Adventures/<slug>/combat]
-characters: [../Characters, ../NPCs]
-state_dir: .
-party: [角色id, ...]
-```
-
-规则书与冒险书在同级的 `../Rules/<版本>/`、`../Adventures/`（仓库路径 `LetsPlay/Rules`、`LetsPlay/Adventures`），不随存档复制。清单里的 `../../../Rules/combat` 相对于清单文件本身：`Saves`、`Rules`、`Adventures` 一起放在 `LetsPlay/` 下，所以这条相对路径仍然指向 `LetsPlay/Rules/combat`。
+规则书与冒险书在 `../Rules/<版本>/`、`../Adventures/`，不随存档复制。

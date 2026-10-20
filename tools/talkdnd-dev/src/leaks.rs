@@ -96,7 +96,7 @@ fn book_image(path: &str) -> bool {
 }
 
 fn private_tree(path: &str) -> bool {
-    if PRIVATE_ALLOW.iter().any(|allow| *allow == path) {
+    if PRIVATE_ALLOW.contains(&path) {
         return false;
     }
     PRIVATE_DIRS.iter().any(|dir| is_under(path, dir))
@@ -110,8 +110,8 @@ fn secret_basename(path: &str) -> bool {
 fn disallowed_rules_markdown(path: &str) -> bool {
     // Bash `LetsPlay/Rules/*.md` and `Rules/*.md`: `*` matches slashes, and the
     // pattern is anchored to the whole path. `rulings*.md` is the basename.
-    let under_rules = (is_under(path, "LetsPlay/Rules") || is_under(path, "Rules"))
-        && path.ends_with(".md");
+    let under_rules =
+        (is_under(path, "LetsPlay/Rules") || is_under(path, "Rules")) && path.ends_with(".md");
     if !under_rules {
         return false;
     }

@@ -4,7 +4,7 @@ Living charter for TalkDND. This file is the project charter AgentOrch looks up 
 
 This document states purpose, audience, goals, non-goals, scope, constraints, success criteria, and decisions. It does not contain game-save contents, DM secrets, or text from rulebooks or adventures.
 
-Player guide: [README.md](../README.md). DM guide: [LetsPlay/AGENTS.md](../LetsPlay/AGENTS.md). Development contract: [AGENTS.md](../AGENTS.md) and [ORCHESTRATION-PROJECT.md](../ORCHESTRATION-PROJECT.md).
+Player guide: [LetsPlay/README.md](../LetsPlay/README.md). DM guide: [LetsPlay/AGENTS.md](../LetsPlay/AGENTS.md). Development contract: [AGENTS.md](../AGENTS.md) and [ORCHESTRATION-PROJECT.md](../ORCHESTRATION-PROJECT.md). The root [README.md](../README.md) is for developers.
 
 ## Purpose
 
@@ -46,10 +46,10 @@ Play and development are separate roots.
 
 | Tree | Role |
 |------|------|
-| `LetsPlay/` | Play. The DM agent starts here. `LetsPlay/AGENTS.md` is the DM guide. Players put books in `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/`, and `LetsPlay/Adventures/`. Those directories are local except their README files. Combat data the engine loads lives in `LetsPlay/Rules/combat/`. Saves live in `LetsPlay/Saves/` and are not committed. Launchers live in `LetsPlay/bin/`. |
-| Repository root | Development. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine) and `tools/talkdnd-dev` (dev tools). AgentOrch files, CI, and this charter stay at the root. |
+| `LetsPlay/` | Play. The DM agent starts here. `LetsPlay/README.md` is the player guide. `LetsPlay/AGENTS.md` is the DM guide. Players put books in `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/`, and `LetsPlay/Adventures/`. Those directories are local except their README files. Combat data the engine loads lives in `LetsPlay/Rules/combat/`. Saves live in `LetsPlay/Saves/` and are not committed. The program they run is the gitignored binary `LetsPlay/bin/combat-sim` (Windows: `LetsPlay/bin/combat-sim.exe`). |
+| Repository root | Development only. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine) and `tools/talkdnd-dev` (dev tools). AgentOrch files, CI, and this charter stay at the root. Nothing required to play lives here. |
 
-`tools/bin/combat-sim` is a local binary or a symlink to a local release build. It is not committed. The `LetsPlay/bin` wrappers find it from their own path, so the player's working directory does not matter.
+Release archives and `build-artifacts` artifacts contain that binary at the archive root. Extracting one into `LetsPlay/bin/` is the install. No launcher script points outside `LetsPlay/`.
 
 ## Supported rulesets
 
@@ -69,18 +69,17 @@ Tracked combat data comes only from the SRD (CC-BY-4.0). Attribution is in `NOTI
 Project programs, tools, and scripts are Rust.
 
 - `tools/combat-sim` is the combat engine.
-- `tools/talkdnd-dev` is the development tool (leak check and layout migration) and uses only the Rust standard library.
+- `tools/talkdnd-dev` is the development tool (leak check, LetsPlay path check, layout migration, binary install) and uses only the Rust standard library.
 - Rules data is Markdown and YAML, not a third language runtime.
 
 Accepted exceptions, and no others:
 
 1. Vendored, unmodified AgentOrch Python kit scripts. They stay as upstream files and must not be edited: `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`. They use the Python standard library only.
-2. Tiny `LetsPlay/bin` launcher wrappers: `LetsPlay/bin/combat-sim` (shell) and `LetsPlay/bin/combat-sim.cmd`. They only locate the repo binary and exec it.
-3. CI YAML under `.github/workflows/`, including the shell steps those workflow files contain.
+2. CI YAML under `.github/workflows/`, including the shell steps those workflow files contain.
 
 New Rust crates, third-party Python packages, and external services beyond GitHub Actions need human approval before they are added.
 
-`tools/combat-sim/src` stays non-writable. Make a file writable with `chmod u+w` before editing it, verify, then `chmod a-w`. Rebuild the release binary only when `src` changes.
+`tools/combat-sim/src` stays non-writable. Make a file writable with `chmod u+w` before editing it, verify, then `chmod a-w`. When `src` is unchanged, install the prebuilt binary with `talkdnd-dev fetch-binary`. Rebuild and copy into `LetsPlay/bin/` only when `src` changes (`talkdnd-dev install-local`).
 
 ## Privacy rule
 
@@ -98,7 +97,7 @@ Prebuilt `combat-sim` packages are published for these three targets:
 | Windows x86_64 | `x86_64-pc-windows-msvc` |
 | macOS arm64 (Apple silicon) | `aarch64-apple-darwin` |
 
-There is no prebuilt package for Intel macOS (x86_64). Other machines build `tools/combat-sim` from source. Players do not need a compiler when a prebuilt package matches their system. Developers who run `tools/talkdnd-dev` need Rust.
+There is no prebuilt package for Intel macOS (x86_64). Other machines build `tools/combat-sim` from source and copy the binary into `LetsPlay/bin/`. Players do not need a compiler when a prebuilt package matches their system. Developers who run `tools/talkdnd-dev` need Rust.
 
 ## Development process
 
@@ -114,13 +113,13 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - Platform: a local CLI. Linux, Windows, and macOS are the player platforms. The three prebuilt targets are listed above.
 - Data and privacy: player books and saves are local. Tracked combat data is SRD-only. The privacy rule above is mandatory.
 - Reliability: dice come from the operating system's entropy through `combat-sim`, not from the model inventing a roll.
-- Assumptions: the player can obtain the SRD (or owns the books) and can run an agent that reads `LetsPlay/` and executes the launcher. GitHub is reachable for Issues, pull requests, and CI. One ruleset per save is enough.
+- Assumptions: the player can obtain the SRD (or owns the books) and can run an agent that reads `LetsPlay/` and executes `LetsPlay/bin/combat-sim`. GitHub is reachable for Issues, pull requests, and CI. One ruleset per save is enough.
 
 ## Success criteria
 
-- A player can follow the root README, add their own SRD, start an agent in `LetsPlay/`, and play with real `combat-sim` rolls.
+- A player can follow `LetsPlay/README.md`, add their own SRD, start an agent in `LetsPlay/`, and play with real `combat-sim` rolls from `LetsPlay/bin/combat-sim`.
 - A save's `ruleset` selects 2014 or 2024 data, and the engine does not load the other version's directory.
-- `python3 scripts/validate_kit.py` and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks` pass on a tree that has no player books and no saves.
+- `python3 scripts/validate_kit.py`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
 - Release automation builds the three prebuilt targets named in this charter.
 - A pull request that changes scope, goals, tech stack, rules support, or a user decision also updates this charter in that same pull request.
 
@@ -130,7 +129,8 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 
 - Play files live under `LetsPlay/`. Development files live at the repository root.
 - The AgentOrch edition is `github`.
-- Implementation language is Rust, plus the three exceptions in Tech stack.
+- Implementation language is Rust, plus the two exceptions in Tech stack.
+- The play directory is self-contained. The binary lives in `LetsPlay/bin/` and is not committed.
 - Prebuilt releases cover Linux x86_64, Windows x86_64, and macOS arm64.
 - This file is a living charter, updated in the same pull request as the decision it records.
 
@@ -160,11 +160,12 @@ Alternative considered: the `local` edition with a SQLite task database. Rejecte
 
 ### 2026-10-20 — Rust-only, with named exceptions
 
-All project programs, tools, and scripts are Rust. Markdown and YAML remain the rules data. Three exceptions are accepted and must not grow:
+All project programs, tools, and scripts are Rust. Markdown and YAML remain the rules data. Two exceptions are accepted and must not grow:
 
 1. Vendored, unmodified AgentOrch Python kit scripts: `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`.
-2. Tiny `LetsPlay/bin` shell and `.cmd` launcher wrappers: `LetsPlay/bin/combat-sim` and `LetsPlay/bin/combat-sim.cmd`.
-3. CI YAML under `.github/workflows/`, including the shell steps those workflow files contain.
+2. CI YAML under `.github/workflows/`, including the shell steps those workflow files contain.
+
+The launcher-wrapper exception from the first draft of this decision was removed the same day. See "Play directory is self-contained" below.
 
 Alternative considered: leave new dev scripts in Python or shell. Rejected. Leak checks and layout migration already live in `tools/talkdnd-dev`. The kit scripts stay only because they are upstream files kept as-is.
 
@@ -182,8 +183,19 @@ The charter path is declared in the project docs (`AGENTS.md` and `ORCHESTRATION
 
 Alternative considered: leave scope only inside `ORCHESTRATION-PROJECT.md` and skip a charter. Rejected. AgentOrch expects `docs/PROJECT-CHARTER.md`, and a config file is a poor decision log.
 
+### 2026-10-20 — Play directory is self-contained
+
+Everything needed to play lives under `LetsPlay/`. The repository root holds development content only: source, development docs, CI, and the AgentOrch kit.
+
+The program a player runs is the binary `LetsPlay/bin/combat-sim` (Windows: `LetsPlay/bin/combat-sim.exe`). It is gitignored. There is no shell or `.cmd` launcher, and no tracked file under `LetsPlay/` may reference a path that leaves that directory. `talkdnd-dev check-letsplay` fails the build when one does. A save manifest's `../../../Rules` path, resolved from `Saves/<slot>/combat/`, stays inside `LetsPlay/` and passes.
+
+Release archives and the `build-artifacts` artifacts contain the binary at the archive root. Extracting the archive into `LetsPlay/bin/` installs it. `talkdnd-dev fetch-binary` installs the same file. A local release build is copied there by `talkdnd-dev install-local` (`cargo build --release`, then copy). The Rust-only exception list no longer includes launcher wrappers.
+
+Alternative considered: keep thin `LetsPlay/bin` wrappers that exec a binary under `tools/`. Rejected. A play session must not depend on a path outside `LetsPlay/`.
+
 ## Change history
 
 | Date | Change |
 |------|--------|
 | 2026-10-20 | Initial living charter. Added purpose, audience, goals, non-goals, layout, rulesets, tech stack, privacy rule, release targets, development process, and the five decisions above. Pointed project docs at this path. |
+| 2026-10-20 | Play directory is self-contained. The binary lives in `LetsPlay/bin/` and is gitignored. Launcher wrappers are gone, so the Rust-only exception list is the kit scripts and CI YAML. |

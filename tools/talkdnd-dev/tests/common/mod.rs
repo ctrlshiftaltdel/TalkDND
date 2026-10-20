@@ -1,3 +1,7 @@
+//! Shared by the integration tests. Each file under `tests/` is its own crate,
+//! so a helper used by only one of them is dead code in the others.
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -14,6 +18,11 @@ impl TempRepo {
     pub fn new() -> Self {
         let repo = Self::dir_only();
         git(&repo.path, &["init", "-q"]);
+        // Windows runners otherwise rewrite text to CRLF or materialize
+        // symlinks as plain files. These temp repos must keep the bytes and
+        // links the tests wrote.
+        git(&repo.path, &["config", "core.autocrlf", "false"]);
+        git(&repo.path, &["config", "core.symlinks", "true"]);
         repo
     }
 
@@ -23,10 +32,8 @@ impl TempRepo {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "talkdnd-dev-{tick}-{n}-{}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("talkdnd-dev-{tick}-{n}-{}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         Self { path }
     }
@@ -48,10 +55,10 @@ impl TempRepo {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        std::os::unix::fs::symlink(target, path).unwrap();
+        symlink_to(target, &path);
     }
 
-    #[allow(dead_code)] // leak tests stage paths; migrate tests do not
+    // Leak tests stage paths; migrate tests do not.
     pub fn add(&self, rels: &[&str]) {
         let mut args = vec!["add", "-f", "--"];
         args.extend_from_slice(rels);
@@ -81,14 +88,33 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
+pub fn program() -> PathBuf {
+    bin()
+}
+
 fn bin() -> PathBuf {
-    // The test harness lives in target/<profile>/deps/. The dev binary is the
-    // sibling of deps/. This cargo does not export CARGO_BIN_EXE_* to tests.
+    // Integration tests get the absolute path, including `.exe` on Windows.
+    // Fall back to the sibling of `deps/` when the env var is absent.
+    if let Some(path) = option_env!("CARGO_BIN_EXE_TALKDND_DEV") {
+        return PathBuf::from(path);
+    }
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
-    path.push("talkdnd-dev");
+    let mut name = std::ffi::OsString::from("talkdnd-dev");
+    if cfg!(windows) {
+        name.push(".exe");
+    }
+    path.push(name);
     path
+}
+
+fn symlink_to(target: &str, path: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, path).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(target, path)
+        .unwrap_or_else(|err| panic!("symlink {target} -> {}: {err}", path.display()));
 }
 
 pub fn run(dir: &Path, args: &[&str]) -> Output {
@@ -105,5 +131,9 @@ pub fn run(dir: &Path, args: &[&str]) -> Output {
 }
 
 pub fn text(bytes: &[u8]) -> String {
-    String::from_utf8(bytes.to_vec()).unwrap()
+    // Process output is compared against `\n` fixtures. A Windows pipe can
+    // surface `\r\n`; the program itself writes `\n`.
+    String::from_utf8(bytes.to_vec())
+        .unwrap()
+        .replace("\r\n", "\n")
 }

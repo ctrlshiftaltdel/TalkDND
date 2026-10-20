@@ -422,11 +422,16 @@ pub fn run() -> Result<()> {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let surprise = state.content.rules.surprise.clone().unwrap_or_default();
-                let surprise_dis = surprise.initiative_disadvantage.unwrap_or(surprise.condition.is_none());
+                let surprise_dis = surprise
+                    .initiative_disadvantage
+                    .unwrap_or(surprise.condition.is_none());
                 let no_names: Vec<String> = Vec::new();
                 let mut modes = Vec::new();
                 for (names, mode) in [
-                    (if surprise_dis { &surprised } else { &no_names }, RollMode::Disadvantage),
+                    (
+                        if surprise_dis { &surprised } else { &no_names },
+                        RollMode::Disadvantage,
+                    ),
                     (&dis, RollMode::Disadvantage),
                     (&adv, RollMode::Advantage),
                 ] {
@@ -592,11 +597,21 @@ pub fn run() -> Result<()> {
             dc,
         } => {
             // Stateless unless --state names an existing file (then it is logged there too).
-            let path = state.as_deref().map(|_| state_path(&sources, state.as_deref()));
+            let path = state
+                .as_deref()
+                .map(|_| state_path(&sources, state.as_deref()));
             match path {
-                Some(path) if path.exists() => run_state_command(&path, seed, |_state, rng, lines| {
-                    engine::roll_expression(&expression, RollMode::from_flags(adv, dis), dc, rng, lines)
-                }),
+                Some(path) if path.exists() => {
+                    run_state_command(&path, seed, |_state, rng, lines| {
+                        engine::roll_expression(
+                            &expression,
+                            RollMode::from_flags(adv, dis),
+                            dc,
+                            rng,
+                            lines,
+                        )
+                    })
+                }
                 _ => {
                     let mut lines = Vec::new();
                     let mut rng = make_rng(seed);

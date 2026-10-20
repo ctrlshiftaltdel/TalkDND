@@ -113,10 +113,7 @@ impl Migrator {
         }
         let names = child_names(&src_path)?;
         for name in names {
-            self.move_entry(
-                &format!("{src_dir}/{name}"),
-                &format!("{dest_dir}/{name}"),
-            )?;
+            self.move_entry(&format!("{src_dir}/{name}"), &format!("{dest_dir}/{name}"))?;
         }
         Ok(())
     }
@@ -132,8 +129,7 @@ impl Migrator {
         }
         if present(&dest_path) {
             self.skips += 1;
-            self.lines
-                .push(format!("skip (exists): {src} -> {dest}"));
+            self.lines.push(format!("skip (exists): {src} -> {dest}"));
             return Ok(());
         }
         self.moves += 1;
@@ -171,9 +167,10 @@ fn child_names(dir: &Path) -> Result<Vec<String>, String> {
     let entries = fs::read_dir(dir).map_err(|err| format!("read {}: {err}", dir.display()))?;
     for entry in entries {
         let entry = entry.map_err(|err| format!("read {}: {err}", dir.display()))?;
-        let name = entry.file_name().into_string().map_err(|_| {
-            format!("non-utf8 file name under {}", dir.display())
-        })?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| format!("non-utf8 file name under {}", dir.display()))?;
         match glob_class(&name) {
             Some(0) => normal.push(name),
             Some(1) => hidden.push(name),

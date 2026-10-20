@@ -1,0 +1,37 @@
+# License and advisory checks for tools/combat-sim and tools/talkdnd-dev.
+# cargo-deny starts at the manifest and walks up to this file.
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
+all-features = false
+
+[advisories]
+unmaintained = "none"
+unsound = "none"
+yanked = "warn"
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+]
+private = { ignore = true }
+# talkdnd-dev is publish = false and has no dependencies, so the allow-list
+# licenses are not encountered. That is expected.
+unused-allowed-license = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# syn 2 and syn 3 are both required by the current clap / serde graph.
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"

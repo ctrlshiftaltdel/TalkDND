@@ -39,8 +39,8 @@ fn clean_index_exits_zero_and_prints_nothing() {
         "Adventures/README.md",
         "Saves/README.md",
         "tools/main.rs",
-        "tools/icon.png",
-        "tools/icon.PNG",
+        "tools/lower/icon.png",
+        "tools/upper/icon.PNG",
         "books/manual.Pdf",
         "cover.jpg",
         "other/DM-secrets.md",
@@ -66,13 +66,16 @@ fn clean_index_exits_zero_and_prints_nothing() {
 #[test]
 fn leaks_print_paths_only_and_exit_one() {
     let repo = TempRepo::new();
+    // Each case pair lives in its own directory. APFS and NTFS keep one
+    // directory entry when names differ only by case, so `manual.pdf` and
+    // `manual.PDF` cannot both be tracked from the same folder.
     let hits = [
-        "books/manual.pdf",
-        "books/manual.PDF",
-        "books/manual.epub",
-        "books/manual.EPUB",
-        "books/manual.docx",
-        "books/manual.DOCX",
+        "books/lower/manual.pdf",
+        "books/upper/manual.PDF",
+        "books/lower/manual.epub",
+        "books/upper/manual.EPUB",
+        "books/lower/manual.docx",
+        "books/upper/manual.DOCX",
         "LetsPlay/Rules/2014/players.md",
         "LetsPlay/Rules/2014/rulings.md",
         "LetsPlay/Rules/2024/dmg.txt",
@@ -91,8 +94,8 @@ fn leaks_print_paths_only_and_exit_one() {
         "LetsPlay/Rules/combat/notes.md",
         "Rules/loose.md",
         "Rules/combat/also.md",
-        "LetsPlay/Rules/map.png",
-        "LetsPlay/Rules/map.PNG",
+        "LetsPlay/Rules/img-lower/map.png",
+        "LetsPlay/Rules/img-upper/map.PNG",
         "LetsPlay/Adventures/pic.jpg",
         "LetsPlay/Saves/pic.jpeg",
         "Adventures/pic.gif",
@@ -100,10 +103,10 @@ fn leaks_print_paths_only_and_exit_one() {
         "Rules/pic.tif",
         "LetsPlay/Rules/2024/pic.tiff",
         "Rules/2014/pic.bmp",
-        "prose/over.md",
-        "prose/over.txt",
-        "prose/over.MD",
-        "prose/over.TXT",
+        "prose/lower/over.md",
+        "prose/lower/over.txt",
+        "prose/upper/over.MD",
+        "prose/upper/over.TXT",
         "tools/link.md",
         "ghost.pdf",
     ];
@@ -114,14 +117,17 @@ fn leaks_print_paths_only_and_exit_one() {
         "LetsPlay/Adventures/README.md",
         "tools/ok.png",
         "tools/keep.rs",
-        "books/manual.Pdf",
+        "books/mixed/manual.Pdf",
         "other/DM-secrets.md",
         "other/Scarecrow.yaml",
         "prose/exact.md",
     ];
     for rel in hits.iter().chain(allowed.iter()) {
         match *rel {
-            "prose/over.md" | "prose/over.txt" | "prose/over.MD" | "prose/over.TXT" => {
+            "prose/lower/over.md"
+            | "prose/lower/over.txt"
+            | "prose/upper/over.MD"
+            | "prose/upper/over.TXT" => {
                 repo.write_bytes(rel, &vec![b'Q'; LIMIT + 1]);
             }
             "prose/exact.md" => {
@@ -132,7 +138,15 @@ fn leaks_print_paths_only_and_exit_one() {
         }
     }
     repo.write_bytes("payload.bin", &vec![b'Z'; LIMIT + 1]);
-    repo.symlink("tools/link.md", "../payload.bin");
+    // Absolute target. Windows does not reliably follow `../payload.bin`.
+    let payload = repo.path.join("payload.bin");
+    repo.symlink(
+        "tools/link.md",
+        payload.to_str().expect("utf-8 payload path"),
+    );
+    let followed = fs::metadata(repo.path.join("tools/link.md")).expect("symlink follows payload");
+    assert!(followed.is_file());
+    assert!(followed.len() > LIMIT as u64);
     repo.write("ghost.pdf", MARKER);
     repo.write("untracked/secret.pdf", MARKER);
 
@@ -158,7 +172,10 @@ fn leaks_print_paths_only_and_exit_one() {
     assert!(!stdout.contains("untracked/secret.pdf"));
     assert!(!stdout.contains("payload.bin"));
     for rel in &allowed {
-        assert!(!stdout.lines().any(|line| line == *rel), "{rel} in {stdout}");
+        assert!(
+            !stdout.lines().any(|line| line == *rel),
+            "{rel} in {stdout}"
+        );
     }
     let mut lines: Vec<&str> = stdout.lines().collect();
     let mut expected: Vec<&str> = hits.to_vec();
@@ -178,7 +195,10 @@ fn usage_and_missing_git_exit_two() {
     let output = common::run(Path::new("."), &["check-leaks", "extra"]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(text(&output.stdout), "");
-    assert_eq!(text(&output.stderr).trim(), "usage: talkdnd-dev check-leaks");
+    assert_eq!(
+        text(&output.stderr).trim(),
+        "usage: talkdnd-dev check-leaks"
+    );
 
     let output = common::run(Path::new("."), &[]);
     assert_eq!(output.status.code(), Some(2));
