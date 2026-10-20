@@ -58,7 +58,7 @@ def test_audit_writes_ranked_json(tmp_path):
 def _engine(tmp_path, text):
     script = tmp_path / "eng.py"
     script.write_text(f"import sys\nprint({text!r})\n")
-    return f"cmd:{sys.executable} {script}"
+    return f'cmd:"{sys.executable}" "{script}"'
 
 
 def test_review_accepts_non_regressing_fix(tmp_path):
