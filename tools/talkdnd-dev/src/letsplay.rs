@@ -85,7 +85,10 @@ fn escapes(file_rel: &str, raw: &str) -> bool {
         return true;
     }
     let logical = token.trim_start_matches("./");
-    if logical.starts_with("tools/") || logical.starts_with("scripts/") {
+    // `LetsPlay/tools/pdf2md` is the one play tool that lives under LetsPlay/;
+    // the repository root has no `tools/pdf2md`, so the name is unambiguous.
+    let play_tool = logical == "tools/pdf2md" || logical.starts_with("tools/pdf2md/");
+    if !play_tool && (logical.starts_with("tools/") || logical.starts_with("scripts/")) {
         return true;
     }
     if !token_has_parent(&token) {
@@ -274,6 +277,9 @@ bin/combat-sim
         assert!(hits.iter().any(|hit| hit.contains("../README.md")));
         assert!(hits.iter().any(|hit| hit.contains("../tools/bin")));
         assert!(hits.iter().any(|hit| hit.contains("tools/combat-sim")));
+        assert!(
+            escapes_in("LetsPlay/AGENTS.md", "run `uv sync --project tools/pdf2md`").is_empty()
+        );
         assert!(hits
             .iter()
             .any(|hit| hit.contains("scripts/validate_kit.py")));

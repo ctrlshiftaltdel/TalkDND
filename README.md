@@ -47,7 +47,7 @@ cargo clippy --manifest-path tools/combat-sim/Cargo.toml --all-targets -- -D war
 cargo clippy --manifest-path tools/talkdnd-dev/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path tools/combat-sim/Cargo.toml
 cargo test --manifest-path tools/talkdnd-dev/Cargo.toml
-python3 scripts/validate_kit.py
+uv run --no-project python scripts/validate_kit.py
 cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks
 cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay
 ```

@@ -57,6 +57,13 @@ pub fn is_leak(root: &Path, rel: &str) -> bool {
         || secret_basename(rel)
         || disallowed_rules_markdown(rel)
         || oversized_prose(root, rel)
+        || generated_tree(rel)
+}
+
+/// pdf2md output (`.md/`), its state (`.pdf2md/`) and Python environments (`.venv/`).
+pub fn generated_tree(path: &str) -> bool {
+    path.split('/')
+        .any(|segment| matches!(segment, ".md" | ".pdf2md" | ".venv"))
 }
 
 fn git_ls_files(root: &Path) -> Result<Vec<String>, String> {
