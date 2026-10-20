@@ -1,0 +1,9 @@
+abilities:
+  - id: bad-expr
+    activation: action
+    effects:
+      - save:
+          ability: dex
+          dc: "{nope}+1"
+          on_fail:
+            - damage: {dice: "1d6+{level", type: fire}

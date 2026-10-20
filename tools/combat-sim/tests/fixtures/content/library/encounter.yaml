@@ -1,0 +1,11 @@
+encounters:
+  - id: hall-a-fight
+    scene: hall-a
+    party_zone: entry
+    members:
+      - {creature: dummy-a, count: 2, zone: pit, ai: {template: brute-a, params: {guard_zone: pit, leash: 20}}}
+  - id: grid-a-fight
+    scene: grid-a
+    party_zone: door
+    members:
+      - {creature: scout-b, zone: tables}

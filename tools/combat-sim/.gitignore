@@ -1,0 +1,4 @@
+target/
+.codegraph/
+*.state.json
+combat-state.json

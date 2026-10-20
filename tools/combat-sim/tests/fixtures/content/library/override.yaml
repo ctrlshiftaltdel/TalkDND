@@ -1,0 +1,10 @@
+# Loaded after core.yaml; replaces twin-a by id and merges rules.
+creatures:
+  - id: twin-a
+    name: Twin A Revised
+    kind: monster
+    ac: 13
+    hp: 8
+rules:
+  basic_actions: {hide: dazed}
+  cover: {half: 3}

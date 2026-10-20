@@ -1,0 +1,326 @@
+# Synthetic AI fixtures. Generic names only.
+
+conditions:
+  - id: ai-buffed
+    modifiers:
+      - {applies: incoming_attack, effect: disadvantage}
+  - id: ai-warded
+    flags: [no_reactions]
+  - id: ai-dazed
+    flags: [speed_zero]
+
+ai_templates:
+  - id: ai-melee
+    params: {targeting: nearest, range_pref: melee}
+  - id: ai-ranged
+    params: {targeting: lowest_hp, range_pref: ranged, keep_distance: 30}
+  - id: ai-healer
+    params: {targeting: nearest, heal_ally_below_pct: 60, heal_downed: true}
+  - id: ai-self
+    params: {self_heal_below_pct: 60}
+  - id: ai-support
+    params: {targeting: nearest, range_pref: any}
+  - id: ai-opener
+    params: {targeting: nearest, range_pref: any, opening: [ai-buff]}
+  - id: ai-control
+    params: {targeting: nearest, range_pref: any}
+  - id: ai-thrifty
+    params: {targeting: nearest, range_pref: any, resource_threshold: 1.5}
+  - id: ai-thrifty-high
+    params: {targeting: nearest, range_pref: any, resource_threshold: 3.0}
+  - id: ai-guard
+    params: {targeting: nearest, range_pref: melee, guard_zone: beta, leash: 10}
+  - id: ai-avoid
+    params: {targeting: nearest, avoid_targets_with: [ai-warded]}
+  - id: ai-downed
+    params: {targeting: nearest, attack_downed: true}
+  - id: ai-coward
+    params: {targeting: nearest, flee_below_pct: 60, flee_zone: gamma}
+  - id: ai-multi
+    params: {targeting: nearest}
+
+abilities:
+  - id: ai-heal
+    name: Heal Test
+    activation: action
+    range: 30
+    target: {type: creature, side: ally, count: 1}
+    effects:
+      - heal: {dice: "1d8+2"}
+    ai: {role: heal}
+  - id: ai-self-heal
+    name: Self Heal Test
+    activation: bonus
+    target: {type: self}
+    effects:
+      - heal: {dice: "1d6+2"}
+    ai: {role: self_heal}
+  - id: ai-buff
+    name: Buff Test
+    activation: action
+    range: 30
+    target: {type: creature, side: ally, count: 2}
+    effects:
+      - apply_condition: {condition: ai-buffed, to: target, duration: {rounds: 3}}
+    ai: {role: buff}
+  - id: ai-control
+    name: Control Test
+    activation: action
+    range: 30
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - save:
+          ability: wis
+          dc: 12
+          on_fail:
+            - apply_condition: {condition: ai-dazed, to: target, duration: {rounds: 2}}
+    ai: {role: control}
+  - id: ai-cantrip
+    name: Cantrip Test
+    activation: action
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - damage: {dice: "1d6", type: fire}
+    ai: {role: damage}
+  - id: ai-costly
+    name: Costly Test
+    activation: action
+    cost: {resource: focus, amount: 1}
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - damage: {dice: "2d6", type: fire}
+    ai: {role: damage}
+  - id: ai-disengage
+    name: Disengage Test
+    activation: bonus
+    target: {type: self}
+    effects:
+      - choice: [[{basic_action: dash}], [{basic_action: disengage}]]
+    ai: {role: defense}
+
+creatures:
+  - id: ai-striker
+    name: Striker X
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 14, dex: 12, con: 12, int: 10, wis: 10, cha: 10}
+    attacks:
+      - {id: ai-blade, name: Blade Test, kind: melee, ability: str, to_hit: 4, damage: [{dice: "1d8+2", type: slashing}], reach: 5}
+    ai: {template: ai-melee}
+
+  - id: ai-ranger
+    name: Ranger X
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 14, con: 12, int: 10, wis: 10, cha: 10}
+    attacks:
+      - {id: ai-bow, name: Bow Test, kind: ranged, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: piercing}], range: [60, 120]}
+    actions:
+      - {ref: ai-disengage}
+    ai: {template: ai-ranged}
+
+  - id: ai-healer
+    name: Healer X
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 12, int: 10, wis: 14, cha: 10}
+    actions:
+      - {ref: ai-heal}
+    ai: {template: ai-healer}
+
+  - id: ai-regen
+    name: Regen X
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 12, int: 10, wis: 10, cha: 10}
+    actions:
+      - {ref: ai-self-heal}
+    ai: {template: ai-self}
+
+  - id: ai-buffer
+    name: Buffer X
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 12, int: 10, wis: 10, cha: 10}
+    actions:
+      - {ref: ai-buff}
+    ai: {template: ai-support}
+
+  - id: ai-opener
+    name: Opener X
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 12, int: 10, wis: 10, cha: 10}
+    actions:
+      - {ref: ai-buff}
+    ai: {template: ai-opener}
+
+  - id: ai-controller
+    name: Controller X
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 12, int: 10, wis: 14, cha: 10}
+    actions:
+      - {ref: ai-control}
+    ai: {template: ai-control}
+
+  - id: ai-costed
+    name: Costed X
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 12, int: 14, wis: 10, cha: 10}
+    resources:
+      focus: {max: 1, recharge: long}
+    actions:
+      - {ref: ai-cantrip}
+      - {ref: ai-costly}
+    ai: {template: ai-thrifty}
+
+  - id: ai-avaricious
+    name: Avaricious X
+    kind: pc
+    side: party
+    ac: 14
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 12, int: 14, wis: 10, cha: 10}
+    resources:
+      focus: {max: 1, recharge: long}
+    actions:
+      - {ref: ai-cantrip}
+      - {ref: ai-costly}
+    ai: {template: ai-thrifty-high}
+
+  - id: ai-dummy
+    name: Dummy X
+    kind: monster
+    side: enemy
+    ac: 10
+    hp: 40
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10}
+    ai: {template: ai-melee}
+
+  - id: ai-brute
+    name: Brute X
+    kind: monster
+    side: enemy
+    ac: 12
+    hp: 30
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 14, dex: 10, con: 12, int: 8, wis: 10, cha: 8}
+    attacks:
+      - {id: ai-claw, name: Claw Test, kind: melee, ability: str, to_hit: 4, damage: [{dice: "1d6+2", type: slashing}], reach: 5}
+    multiattack: [ai-claw, ai-claw]
+    ai: {template: ai-multi}
+
+  - id: ai-sentry
+    name: Sentry X
+    kind: monster
+    side: enemy
+    ac: 13
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 12, dex: 10, con: 12, int: 8, wis: 10, cha: 8}
+    attacks:
+      - {id: ai-sword, name: Sword Test, kind: melee, ability: str, to_hit: 3, damage: [{dice: "1d8+1", type: slashing}], reach: 5}
+    ai: {template: ai-guard}
+
+  - id: ai-warded-dummy
+    name: Warded X
+    kind: monster
+    side: enemy
+    ac: 10
+    hp: 40
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10}
+    conditions: [ai-warded]
+    ai: {template: ai-melee}
+
+  - id: ai-dormant
+    name: Dormant X
+    kind: monster
+    side: enemy
+    ac: 10
+    hp: 10
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10}
+    dormant: true
+    attacks:
+      - {id: ai-nip, name: Nip Test, kind: melee, ability: str, to_hit: 3, damage: [{dice: "1d4", type: slashing}], reach: 5}
+    ai: {template: ai-melee}
+
+scenes:
+  - id: ai-arena
+    name: AI Arena
+    mode: zones
+    zones:
+      - {id: alpha}
+      - {id: beta}
+      - {id: gamma}
+    edges:
+      - {a: alpha, b: beta, distance: 5}
+      - {a: alpha, b: gamma, distance: 10}
+      - {a: beta, b: gamma, distance: 30}
+
+encounters:
+  - id: ai-fight
+    name: AI Fight
+    scene: ai-arena
+    party_zone: alpha
+    members:
+      - {creature: ai-dummy, zone: beta}

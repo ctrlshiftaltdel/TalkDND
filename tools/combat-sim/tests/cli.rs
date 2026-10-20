@@ -1,0 +1,501 @@
+//! End-to-end tests for the v2 command-line interface.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::Value;
+
+struct TempState {
+    path: PathBuf,
+}
+
+impl TempState {
+    fn new(label: &str) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is before the Unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "combat-sim-cli-v2-{label}-{}-{nanos}-{count}.state.json",
+            std::process::id()
+        ));
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempState {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn fixture(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/engine")
+        .join(relative)
+}
+
+fn run(state: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("--state")
+        .arg(state)
+        .args(args)
+        .output()
+        .expect("failed to run combat-sim")
+}
+
+fn run_raw(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(args)
+        .output()
+        .expect("failed to run combat-sim")
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn assert_success(output: &Output, context: &str) {
+    assert!(
+        output.status.success(),
+        "{context} failed\nstdout:\n{}\nstderr:\n{}",
+        stdout(output),
+        stderr(output)
+    );
+}
+
+fn status_json(state: &Path) -> Value {
+    let output = run(state, &["status", "--json"]);
+    assert_success(&output, "status --json");
+    serde_json::from_slice(&output.stdout).expect("status JSON should parse")
+}
+
+fn create(state: &TempState, extra: &[&str]) {
+    let manifest = fixture("manifest.yaml");
+    let mut args = vec![
+        "new",
+        "--encounter",
+        "test-fight",
+        "--campaign",
+        manifest.to_str().unwrap(),
+    ];
+    args.extend_from_slice(extra);
+    let output = run(state.path(), &args);
+    assert_success(&output, "new");
+}
+
+#[test]
+fn full_cli_flow() {
+    let temp = TempState::new("flow");
+    create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
+
+    let output = run(temp.path(), &["init", "--seed", "42"]);
+    assert_success(&output, "init");
+    assert!(
+        stdout(&output).contains("Initiative"),
+        "{}",
+        stdout(&output)
+    );
+
+    let status = status_json(temp.path());
+    assert_eq!(status["round"], 1);
+    assert_eq!(status["turn"], 0);
+    let combatants = status["combatants"]
+        .as_array()
+        .expect("combatants should be an array");
+    assert_eq!(combatants.len(), 4);
+    assert!(status["active"].as_str().is_some());
+
+    let output = run(temp.path(), &["status"]);
+    assert_success(&output, "status");
+    assert!(stdout(&output).contains("Round 1 -"));
+    assert!(stdout(&output).contains("| conditions:"));
+    assert!(stdout(&output).contains("| resources:"));
+
+    let output = run(
+        temp.path(),
+        &["attack", "Striker", "Brute", "test-sword", "--seed", "1"],
+    );
+    assert_success(&output, "attack");
+    assert!(stdout(&output).contains("attacks Brute A with Test Sword"));
+    assert!(stdout(&output).contains("vs AC"));
+
+    let output = run(temp.path(), &["damage", "Brute", "3", "--type", "fire"]);
+    assert_success(&output, "damage");
+    assert!(stdout(&output).contains("Brute A takes"));
+
+    let output = run(temp.path(), &["heal", "Striker", "4"]);
+    assert_success(&output, "heal");
+    assert!(stdout(&output).contains("regains"));
+
+    let output = run(
+        temp.path(),
+        &["condition", "add", "Striker", "hindered", "--rounds", "2"],
+    );
+    assert_success(&output, "condition add");
+    assert!(stdout(&output).contains("Striker A is now hindered"));
+    let output = run(temp.path(), &["condition", "remove", "Striker", "hindered"]);
+    assert_success(&output, "condition remove");
+    assert!(stdout(&output).contains("Striker A is no longer hindered"));
+
+    for _ in 0..4 {
+        let output = run(temp.path(), &["next", "--seed", "42"]);
+        assert_success(&output, "next");
+        assert!(stdout(&output).contains("Round"));
+    }
+
+    let output = run(temp.path(), &["log", "--tail", "100"]);
+    assert_success(&output, "log --tail");
+    let log = stdout(&output);
+    assert!(log.contains("Created Test Fight"));
+    assert!(log.contains("Initiative"));
+    assert!(log.contains("attacks Brute A with Test Sword"));
+}
+
+#[test]
+fn unknown_combatant_lists_known_names() {
+    let temp = TempState::new("unknown");
+    create(&temp, &["--party", "striker-a"]);
+
+    let output = run(temp.path(), &["damage", "Nobody", "1"]);
+    let message = stderr(&output);
+    assert!(!output.status.success(), "unknown name should fail");
+    assert!(message.contains("known combatants"), "{message}");
+    assert!(message.contains("Striker A"), "{message}");
+}
+
+#[test]
+fn init_set_uses_a_fixed_total() {
+    let temp = TempState::new("init-set");
+    create(&temp, &["--party", "striker-a,warden-b"]);
+
+    let output = run(
+        temp.path(),
+        &["init", "--set", "Striker A=30", "--seed", "42"],
+    );
+    assert_success(&output, "init --set");
+    assert!(stdout(&output).contains("(set)"));
+
+    let status = status_json(temp.path());
+    assert_eq!(status["active"], "Striker A");
+    let striker = status["combatants"]
+        .as_array()
+        .expect("combatants")
+        .iter()
+        .find(|combatant| combatant["name"] == "Striker A")
+        .expect("Striker A should be present");
+    assert_eq!(striker["initiative"], 30);
+}
+
+#[test]
+fn grid_scenes_create_move_and_report_positions() {
+    let temp = TempState::new("grid");
+    let manifest = fixture("manifest.yaml");
+    let output = run_raw(&[
+        "--state",
+        temp.path().to_str().unwrap(),
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "new",
+        "--encounter",
+        "grid-fight",
+        "--party",
+        "adept-a",
+    ]);
+    assert_success(&output, "new grid scene");
+
+    let status = status_json(temp.path());
+    let adept = status["combatants"]
+        .as_array()
+        .expect("combatants")
+        .iter()
+        .find(|combatant| combatant["name"] == "Adept A")
+        .expect("Adept A should be present");
+    assert_eq!(adept["pos"], serde_json::json!([6, 3]));
+    assert_eq!(adept["zone"], "door");
+
+    let output = run(temp.path(), &["scene"]);
+    assert_success(&output, "scene");
+    assert!(stdout(&output).contains("grid zone tables: (5,1) (6,1)"));
+
+    let output = run(temp.path(), &["move", "Adept", "--to", "3,2", "--no-oa"]);
+    assert_success(&output, "move --to");
+    let status = status_json(temp.path());
+    let adept = status["combatants"]
+        .as_array()
+        .expect("combatants")
+        .iter()
+        .find(|combatant| combatant["name"] == "Adept A")
+        .expect("Adept A should be present");
+    assert_eq!(adept["pos"], serde_json::json!([3, 2]));
+
+    let output = run(temp.path(), &["move", "Adept", "statue", "--no-oa"]);
+    assert_success(&output, "move by grid zone");
+    let status = status_json(temp.path());
+    let adept = status["combatants"]
+        .as_array()
+        .expect("combatants")
+        .iter()
+        .find(|combatant| combatant["name"] == "Adept A")
+        .expect("Adept A should be present");
+    assert_eq!(adept["zone"], "statue");
+    assert_eq!(adept["pos"], serde_json::json!([1, 4]));
+    assert!(stdout(&run(temp.path(), &["status"])).contains("(1,4)"));
+}
+
+#[test]
+fn interact_and_move_flags_work_from_the_cli() {
+    let temp = TempState::new("interact");
+    let manifest = fixture("manifest.yaml");
+    let output = run_raw(&[
+        "--state",
+        temp.path().to_str().unwrap(),
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "new",
+        "--encounter",
+        "zone-empty",
+        "--party",
+        "adept-a",
+    ]);
+    assert_success(&output, "new zone scene");
+
+    let output = run(
+        temp.path(),
+        &[
+            "interact", "Adept", "console", "--option", "1", "--seed", "42",
+        ],
+    );
+    assert_success(&output, "interact");
+    assert!(
+        stdout(&output).contains("arcana check"),
+        "{}",
+        stdout(&output)
+    );
+
+    let output = run(temp.path(), &["move", "Adept", "beta", "--no-oa"]);
+    assert_success(&output, "move --no-oa");
+    assert!(stdout(&output).contains("moves alpha -> beta"));
+
+    let output = run(temp.path(), &["move", "Adept", "--to", "1,2"]);
+    assert!(!output.status.success(), "zone scenes must reject --to");
+    assert!(
+        stderr(&output).contains("needs a grid scene"),
+        "{}",
+        stderr(&output)
+    );
+
+    let output = run(temp.path(), &["scene"]);
+    assert_success(&output, "scene");
+    assert!(stdout(&output).contains("trigger enter-beta"));
+    assert!(stdout(&output).contains("object console"));
+}
+
+#[test]
+fn simulate_runs_once_with_play_by_play_and_summary() {
+    let manifest = fixture("manifest.yaml");
+    let output = run_raw(&[
+        "simulate",
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--encounter",
+        "test-fight",
+        "--party",
+        "striker-a",
+        "--runs",
+        "1",
+        "--seed",
+        "7",
+    ]);
+    assert_success(&output, "simulate --runs 1");
+    let text = stdout(&output);
+    assert!(text.contains("Round 1"), "{text}");
+    assert!(text.contains("Rounds:"), "{text}");
+    assert!(text.contains("Result:"), "{text}");
+    assert!(text.contains("HP left:"), "{text}");
+}
+
+#[test]
+fn simulate_monte_carlo_json_is_sane() {
+    let manifest = fixture("manifest.yaml");
+    let output = run_raw(&[
+        "simulate",
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--encounter",
+        "test-fight",
+        "--party",
+        "striker-a",
+        "--runs",
+        "40",
+        "--threads",
+        "2",
+        "--seed",
+        "11",
+        "--json",
+    ]);
+    assert_success(&output, "simulate --json");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("simulation JSON");
+    assert_eq!(value["runs"], 40);
+    assert_eq!(value["threads"], 2);
+    assert!(value["runs_per_sec"].as_f64().unwrap() > 0.0);
+    assert!(value["wins"].is_object());
+    assert!(value["creatures"].is_array());
+    assert_eq!(
+        value["wins"]["party"].as_u64().unwrap()
+            + value["wins"]["enemy"].as_u64().unwrap()
+            + value["draws"].as_u64().unwrap()
+            + value["timeouts"].as_u64().unwrap()
+            + value["errors"].as_u64().unwrap(),
+        40
+    );
+}
+
+#[test]
+fn simulate_from_state_and_missing_source_errors() {
+    let temp = TempState::new("simulate-from");
+    create(&temp, &["--party", "striker-a"]);
+    let output = run_raw(&[
+        "simulate",
+        "--from-state",
+        temp.path().to_str().unwrap(),
+        "--runs",
+        "1",
+        "--seed",
+        "3",
+    ]);
+    assert_success(&output, "simulate --from-state");
+    assert!(stdout(&output).contains("Result:"), "{}", stdout(&output));
+
+    let output = run_raw(&["simulate"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("simulate needs --encounter"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn content_commands_keep_working() {
+    let temp = TempState::new("content");
+    let manifest = fixture("manifest.yaml");
+    let output = run(
+        temp.path(),
+        &["content", "list", "--campaign", manifest.to_str().unwrap()],
+    );
+    assert_success(&output, "content list");
+    let text = stdout(&output);
+    assert!(text.contains("creature\tstriker-a\t"), "{text}");
+    assert!(text.contains("scene\tarena\t"), "{text}");
+    assert!(text.contains("core.yaml"), "{text}");
+
+    let output = run(
+        temp.path(),
+        &[
+            "content",
+            "list",
+            "--kind",
+            "creatures",
+            "--campaign",
+            manifest.to_str().unwrap(),
+        ],
+    );
+    assert_success(&output, "content list --kind creatures");
+    let text = stdout(&output);
+    assert!(text.contains("striker-a"));
+    assert!(!text.contains("arena"), "kind filter leaked: {text}");
+
+    let output = run(
+        temp.path(),
+        &[
+            "content",
+            "show",
+            "striker-a",
+            "--campaign",
+            manifest.to_str().unwrap(),
+        ],
+    );
+    assert_success(&output, "content show striker-a");
+    let shown: Value = serde_json::from_slice(&output.stdout).expect("show output is JSON");
+    assert_eq!(shown["kind"], "creature");
+    assert_eq!(shown["item"]["id"], "striker-a");
+    assert!(shown["source"].as_str().unwrap().contains("core.yaml"));
+
+    let output = run(
+        temp.path(),
+        &["content", "check", "--campaign", manifest.to_str().unwrap()],
+    );
+    assert_success(&output, "content check");
+    assert!(stdout(&output).contains("content check: 0 error(s)"));
+}
+
+#[test]
+fn bare_state_names_resolve_from_the_manifest_state_dir() {
+    let root = unique_temp_dir("bare-state");
+    std::fs::create_dir_all(&root).unwrap();
+    let manifest = root.join("campaign.yaml");
+    let library = fixture("library");
+    std::fs::write(
+        &manifest,
+        format!(
+            "name: Bare State Test\nlibrary: [\"{}\"]\nstate_dir: .\n",
+            library.display()
+        ),
+    )
+    .unwrap();
+
+    let output = run_raw(&[
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--state",
+        "bare-fight",
+        "new",
+        "--encounter",
+        "test-fight",
+        "--party",
+        "striker-a",
+    ]);
+    assert_success(&output, "new with bare state name");
+    let state_path = root.join("bare-fight.state.json");
+    assert!(state_path.exists(), "expected {}", state_path.display());
+
+    let output = run_raw(&[
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--state",
+        "bare-fight",
+        "status",
+    ]);
+    assert_success(&output, "status with bare state name");
+    assert!(stdout(&output).contains("Striker A"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn unique_temp_dir(label: &str) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before the Unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "combat-sim-cli-dir-{label}-{}-{nanos}-{count}",
+        std::process::id()
+    ))
+}

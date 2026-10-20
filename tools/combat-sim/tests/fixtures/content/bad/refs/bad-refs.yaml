@@ -1,0 +1,82 @@
+conditions:
+  - id: bad-cond
+    implies: [missing-implies]
+    modifiers:
+      - applies: attack_roll
+        effect: disadvantage
+        when: {target_has_condition: missing-predicate}
+masteries:
+  - id: bad-mastery
+    triggers:
+      - on: on_hit
+        effects:
+          - apply_condition: {condition: missing-mastery-condition, to: target}
+abilities:
+  - id: bad-ability
+    activation: action
+    effects:
+      - apply_condition: {condition: missing-effect-condition, to: target}
+      - use: missing-use
+      - save:
+          ability: dex
+          dc: 10
+          on_fail:
+            - apply_condition: {condition: missing-save-condition, to: target}
+  - id: bad-costed
+    activation: bonus
+    cost: {resource: missing-resource, amount: 1}
+    effects: [{note: "costly"}]
+ai_templates:
+  - id: bad-ai
+    params: {avoid_targets_with: [missing-ai-condition]}
+creatures:
+  - id: Bad_Ref
+    kind: monster
+    ac: 10
+    hp: 5
+    attacks:
+      - {id: bad-attack, kind: melee, to_hit: 1, damage: [{dice: "1d4", type: slashing}], mastery: missing-mastery}
+    actions:
+      - {ref: missing-ability}
+    features:
+      - {id: bad-inline, activation: passive, manual: "inline feature"}
+    multiattack: [missing-multiattack]
+    conditions: [missing-initial-condition]
+    condition_immunities: [missing-immunity-condition]
+    ai: {template: missing-template, params: {avoid_targets_with: [missing-creature-avoid]}}
+  - id: bad-costed-user
+    ac: 10
+    hp: 5
+    actions: [{ref: bad-costed}]
+scenes:
+  - id: bad-scene
+    mode: zones
+    zones:
+      - {id: entry}
+    edges:
+      - {a: entry, b: missing-zone, distance: 5}
+    objects:
+      - id: bad-object
+        zone: missing-object-zone
+        interact:
+          effects: [{toggle_trigger: {trigger: missing-trigger, enabled: false}}]
+    triggers:
+      - id: real-trigger
+        on: on_enter_area
+        zone: missing-trigger-zone
+        effects: [{activate: {creature: nobody}}]
+encounters:
+  - id: bad-encounter
+    scene: missing-scene
+    party_zone: missing-party-zone
+    members:
+      - {creature: missing-creature, ai: {template: missing-member-template}}
+  - id: bad-zones
+    scene: bad-scene
+    party_zone: missing-party-zone
+    members:
+      - {creature: bad-costed-user, zone: missing-member-zone}
+rules:
+  dying_conditions: [missing-rule-condition]
+  basic_actions: {dodge: missing-basic-condition}
+  concentration_condition: missing-concentration-condition

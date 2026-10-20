@@ -1,0 +1,22 @@
+{
+  "conditions": [
+    {
+      "id": "exposed",
+      "modifiers": [
+        {"applies": "incoming_attack", "effect": "advantage"}
+      ]
+    }
+  ],
+  "abilities": [
+    {
+      "id": "poke",
+      "name": "Poke",
+      "activation": "action",
+      "target": {"type": "creature", "side": "enemy", "count": 1},
+      "effects": [
+        {"basic_action": "dodge"},
+        {"note": "A generic note effect."}
+      ]
+    }
+  ]
+}

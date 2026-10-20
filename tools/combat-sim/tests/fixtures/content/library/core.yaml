@@ -1,0 +1,72 @@
+# Generic test library. No real campaign content names.
+conditions:
+  - id: dazed
+    modifiers:
+      - {applies: attack_roll, effect: disadvantage}
+  - id: staggered
+    flags: [speed_zero]
+    implies: [dazed]
+masteries:
+  - id: stagger
+    triggers:
+      - on: on_hit
+        effects:
+          - apply_condition: {condition: dazed, to: target, duration: {until: start_of_source_next_turn}}
+abilities:
+  - id: zap
+    name: Zap
+    tags: [spell]
+    activation: action
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - attack: {to_hit: "{spell_attack}", kind: ranged, damage: [{dice: "1d8+{level}", type: force}]}
+    ai: {role: damage}
+  - id: mend
+    name: Mend
+    activation: bonus
+    target: {type: self}
+    effects: [{heal: {dice: "1d6+{level}"}}]
+    ai: {role: self_heal}
+ai_templates:
+  - id: brute-a
+    params:
+      targeting: nearest
+      range_pref: melee
+      self_heal_below_pct: 50
+      resource_threshold: 1.5
+      attack_downed: false
+      avoid_targets_with: [dazed]
+  - id: skirmish-a
+    params: {targeting: lowest_hp, range_pref: ranged, keep_distance: 30}
+creatures:
+  - id: dummy-a
+    name: Dummy A
+    kind: monster
+    side: enemy
+    size: medium
+    ac: 12
+    hp: 10
+    speed: {walk: 30}
+    abilities: {str: 14, dex: 12}
+    resources:
+      focus: {max: 1, recharge: short}
+    attacks:
+      - {id: club, name: Club, kind: melee, ability: str, to_hit: 4, damage: [{dice: "1d6+2", type: bludgeoning}], reach: 5, mastery: stagger}
+    actions:
+      - {ref: zap, params: {dice: "1d8"}, cost: {resource: focus, amount: 1}}
+      - {ref: mend}
+    multiattack: [club]
+    ai: {template: brute-a}
+  - id: twin-a
+    name: Twin A
+    kind: monster
+    ac: 11
+    hp: 8
+rules:
+  dying_conditions: [dazed]
+  basic_actions:
+    dodge: dazed
+    disengage: staggered
+  cover: {half: 2, three_quarters: 5}
+  concentration_condition: staggered

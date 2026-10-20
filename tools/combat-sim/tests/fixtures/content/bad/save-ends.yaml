@@ -1,0 +1,9 @@
+conditions:
+  - id: lingering
+abilities:
+  - id: bad-save-ends
+    activation: action
+    effects:
+      - apply_condition:
+          condition: lingering
+          save_ends: {ability: dex, dc: "{nope}", at: end_of_turn}

@@ -1,0 +1,16 @@
+# Synthetic fixture for apply_condition.save_ends.
+conditions:
+  - id: wavering
+    modifiers:
+      - {applies: save, effect: disadvantage}
+abilities:
+  - id: linger
+    name: Linger
+    activation: action
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - apply_condition:
+          condition: wavering
+          to: target
+          duration: {rounds: 2}
+          save_ends: {ability: wis, dc: "10+{level}", at: end_of_turn}

@@ -1,0 +1,5 @@
+name: Fixture Campaign
+library: [library]
+adventures: [adventure]
+characters: [chars]
+state_dir: state

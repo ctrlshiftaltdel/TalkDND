@@ -1,0 +1,13 @@
+creatures:
+  - id: scout-b
+    base: dummy-a
+    name: Scout B
+    tags: [scout-b, skirmisher]
+    abilities: {dex: 16}
+    ai: {template: skirmish-a}
+  - id: todo-a
+    name: Todo A
+    kind: monster
+    ac: 10
+    hp: 5
+    todo: ["replace with final numbers"]

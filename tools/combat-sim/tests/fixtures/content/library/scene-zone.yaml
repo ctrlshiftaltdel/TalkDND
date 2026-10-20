@@ -1,0 +1,39 @@
+scenes:
+  - id: hall-a
+    name: Hall A
+    mode: zones
+    light: dim
+    zones:
+      - {id: entry}
+      - {id: pit, cover: half, elevation: 5}
+    edges:
+      - {a: entry, b: pit, distance: 10, climb: {skill: athletics, dc: 10}}
+    objects:
+      - id: lever-a
+        zone: entry
+        name: Lever
+        interact:
+          check: {ability: dex, dc: 10}
+          on_success: [{note: "opened"}]
+          on_fail: [{note: "stuck"}]
+      - id: panel-a
+        zone: pit
+        interact:
+          options:
+            - name: "Press the panel"
+              check: {skill: arcana, dc: 12}
+              on_success: [{toggle_trigger: {trigger: snare-a, enabled: false}}]
+              on_fail: [{note: "nothing"}]
+            - name: "Force it"
+              effects: [{note: "forced"}]
+    triggers:
+      - id: snare-a
+        on: on_enter_area
+        zone: pit
+        side: party
+        once: true
+        affects: zone_occupants
+        zones: [pit]
+        effects:
+          - apply_condition: {condition: dazed, to: target, duration: {permanent: true}}
+          - {activate: {creature: dummy-a}}

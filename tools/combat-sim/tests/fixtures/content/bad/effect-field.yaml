@@ -1,0 +1,5 @@
+abilities:
+  - id: bad-field
+    activation: action
+    effects:
+      - damage: {typ: fire, dice: "1d4"}
