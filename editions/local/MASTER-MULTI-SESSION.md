@@ -3,7 +3,7 @@
 此模式仍是**单用户本地工作流**：同一位操作者在同一台机器上开多个 Agent 会话，不代表多人协作。Master 不声称可以观察或等待另一个会话。
 
 1. 恢复本地任务库和 Git 状态。
-2. 在任务进入 READY 后运行 `python scripts/orchestrator.py task dispatch <ID>`，只有锁成功才可交接。
+2. 在任务进入 READY 后运行 `uv run --no-project python scripts/orchestrator.py task dispatch <ID>`，只有锁成功才可交接。
 3. 产出可复制的执行包，包含：任务 ID、目标、完整验收标准、允许 / 禁止路径、依赖必须 VERIFIED、主分支基线、专属 Worktree、验证命令、禁止合并、交回证据要求。
 4. 由操作者在本机新会话启动 `editions/local/START-EXECUTION.md`，提供该任务包。
 5. 后续 Master 重新读取任务库、Git 状态、分支与日志；不依赖新会话口头说“做完了”。

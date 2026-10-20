@@ -12,7 +12,7 @@
 
 ## 工作步骤
 
-1. **检查运行环境**：检查当前目录、Git 是否初始化、已有文件、规则包、工具和可用验证命令，并确认 `edition` 合法。`local` 先运行 `python scripts/orchestrator.py task list`，未初始化则运行 `python scripts/orchestrator.py init`；`github` 先运行 `gh issue list --state open` 与 `gh pr list --state open`，确认仓库与权限可用。若用户项目已有章程或等价文档，先读取并作为澄清起点。
+1. **检查运行环境**：检查当前目录、Git 是否初始化、已有文件、规则包、工具和可用验证命令，并确认 `edition` 合法。`local` 先运行 `uv run --no-project python scripts/orchestrator.py task list`，未初始化则运行 `uv run --no-project python scripts/orchestrator.py init`；`github` 先运行 `gh issue list --state open` 与 `gh pr list --state open`，确认仓库与权限可用。若用户项目已有章程或等价文档，先读取并作为澄清起点。
 2. **提问澄清**：一次最多提 3–5 个问题，聚焦：要解决的问题、目标用户与场景、非目标、关键约束、可观测的成功标准。只问会实质影响方向、安全或不可逆决策的问题；其余缺口不追问，逐条列为假设明确写出，供用户在后续环节纠正。
 3. **复述确认**：用自己的话完整回放你对项目意图的理解，包括目标、用户、范围、非目标、约束与成功标准，请用户纠正后再继续。用户未确认前不得进入章程撰写。
 4. **分块签署**：把章程内容按章节分块展示给用户（目标、用户场景、范围 / 非目标、关键约束、假设、验收、风险、开放决策），每块获得用户确认后再进入下一块。重大歧义记入“开放决策”节并注明影响与建议选项，不擅自替用户决定。

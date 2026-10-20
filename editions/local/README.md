@@ -14,7 +14,7 @@
 - `.orchestration/state.sqlite3` 是唯一任务状态源，由 `scripts/orchestrator.py` 读写。
 - 事件与状态变更记录在同一数据库中；不要手工 `DELETE` / `UPDATE` 绕过 CLI。
 - `init` 会把 `.orchestration/` 加入当前克隆的 `.git/info/exclude`；没有 Git 时需自行加入 `.gitignore`。
-- 备份：`python scripts/orchestrator.py backup`，阶段结束与每日收尾各执行一次。
+- 备份：`uv run --no-project python scripts/orchestrator.py backup`，阶段结束与每日收尾各执行一次。
 
 ## 锁机制
 
@@ -25,13 +25,13 @@
 ## 命令入口
 
 ```bash
-python scripts/orchestrator.py init
-python scripts/orchestrator.py task list
-python scripts/orchestrator.py task add --id TASK-0001 --title "示例任务" --paths src/ --acceptance "验收条目"
-python scripts/orchestrator.py task ready TASK-0001
-python scripts/orchestrator.py task dispatch TASK-0001
-python scripts/orchestrator.py task status TASK-0001 REVIEW_READY --head-sha <sha>
-python scripts/orchestrator.py backup
+uv run --no-project python scripts/orchestrator.py init
+uv run --no-project python scripts/orchestrator.py task list
+uv run --no-project python scripts/orchestrator.py task add --id TASK-0001 --title "示例任务" --paths src/ --acceptance "验收条目"
+uv run --no-project python scripts/orchestrator.py task ready TASK-0001
+uv run --no-project python scripts/orchestrator.py task dispatch TASK-0001
+uv run --no-project python scripts/orchestrator.py task status TASK-0001 REVIEW_READY --head-sha <sha>
+uv run --no-project python scripts/orchestrator.py backup
 ```
 
 `python` 指代当前环境的 Python 3 解释器；本套件不引入第三方依赖。完整流程见本目录 [MASTER.md](MASTER.md) 与 [START-EXECUTION.md](START-EXECUTION.md)。

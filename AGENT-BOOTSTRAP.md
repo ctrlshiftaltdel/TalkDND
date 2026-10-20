@@ -34,7 +34,7 @@ git log -1 --oneline
 `local`：
 
 ```bash
-python scripts/orchestrator.py task list
+uv run --no-project python scripts/orchestrator.py task list
 ```
 
 `github`：

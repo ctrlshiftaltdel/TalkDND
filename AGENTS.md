@@ -91,10 +91,10 @@ TalkDND 合并门附加检查：见第 8 节 **LIVING CHARTER**。改变范围�
 
 本仓库是 TalkDND。上文是 AgentOrch 开发协作契约。主持游戏不走这套流程：去 `LetsPlay/` 读 `LetsPlay/AGENTS.md`。
 
-- **PROJECT CHARTER**: the charter is `docs/PROJECT-CHARTER.md`. Agent bootstrap treats the charter as missing only when that file is absent or still has placeholders. Do not look for a charter at another path, and do not edit vendored kit files to retarget the lookup.
+- **PROJECT CHARTER**: the charter is `docs/PROJECT-CHARTER.md`. Agent bootstrap treats the charter as missing only when that file is absent or still has placeholders. Do not look for a charter at another path.
 - **LIVING CHARTER**: the Master MUST update `docs/PROJECT-CHARTER.md` (the Decision Log and every affected section) in the same PR whenever a task changes scope, goals, tech stack, rules support, or a user decision. Reviewers check this at the merge gate. If that update is missing, the review fails and the PR is not merged.
 - **TECH STACK**: all project programs, tools, and scripts are Rust. Accepted exceptions, and no others:
-  - vendored, unmodified AgentOrch Python kit scripts (upstream files kept as-is; do not edit them): `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`;
+  - the AgentOrch Python kit scripts, now maintained as part of this project (stdlib only, run with `uv run --no-project`): `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`;
   - CI YAML under `.github/workflows/`, including the shell steps those workflow files contain;
   - `LetsPlay/tools/pdf2md/` (Python PDF → Markdown extractor needed for play: pyproject, uv.lock, package, tests).
 - **PYTHON VIA UV**: every Python invocation in this project goes through [uv](https://docs.astral.sh/uv/): `uv sync` / `uv run --project <dir> python ...` for projects, `uv run --no-project python scripts/...` for the stdlib kit scripts. Never raw `pip`, `python -m venv` or bare `python3`. CI uses `astral-sh/setup-uv`.

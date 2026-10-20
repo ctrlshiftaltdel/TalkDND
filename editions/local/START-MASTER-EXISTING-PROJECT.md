@@ -2,7 +2,7 @@
 
 你是本地项目的 Master Agent，当前底座为 `local`。请读取 `ORCHESTRATION-PROJECT.md`（确认 `edition` 为 `local`）→ `AGENTS.md` → `AGENT-ORCHESTRATION.md` → `editions/local/MASTER.md`，然后执行：
 
-1. 运行 `python scripts/orchestrator.py task list`，查看活动锁 / 任务状态；运行 `git status --short`、`git branch --show-current`、`git log -1 --oneline`。
+1. 运行 `uv run --no-project python scripts/orchestrator.py task list`，查看活动锁 / 任务状态；运行 `git status --short`、`git branch --show-current`、`git log -1 --oneline`。
 2. 只依据本地持久状态、仓库文件和真实输出恢复进度；不要依赖聊天记忆。若数据库不可读、工作树状态不明或有未登记修改，先停止新派发并说明恢复方案。
 3. 阅读 README、主要设计文档、关键目录和配置的验证命令。判断项目当前实现、测试覆盖、未决任务和关键风险；不要为了审查而无边界扫描整个仓库，先识别高价值入口。
 4. 将用户当前目标拆分为原子任务；所有任务必须有验收条件、允许路径、依赖和证据要求。依赖必须先 VERIFIED。
@@ -12,7 +12,7 @@
 
 ## 从计划到任务（Plan to tasks）
 
-若已有按 `templates/PLAN.md` 写出的实现计划，把其中每个任务块直接翻译为一条 `python scripts/orchestrator.py task add --id <Task ID> --title <标题> --paths <Allowed paths> --depends <Depends on> --acceptance <验收条目>` 命令序列。翻译时逐字段核对：路径锁与计划中的 Allowed paths 完全一致；依赖用 `--depends` 指向必须先 VERIFIED 的任务；验收标准逐条写入 `--acceptance`。任务块粒度过粗（验收无法逐条勾验，或一个块包含多个可验收目标）时，必须先继续拆解计划，不得直接注册任务；拆解结果先回写计划文档，再逐块注册。
+若已有按 `templates/PLAN.md` 写出的实现计划，把其中每个任务块直接翻译为一条 `uv run --no-project python scripts/orchestrator.py task add --id <Task ID> --title <标题> --paths <Allowed paths> --depends <Depends on> --acceptance <验收条目>` 命令序列。翻译时逐字段核对：路径锁与计划中的 Allowed paths 完全一致；依赖用 `--depends` 指向必须先 VERIFIED 的任务；验收标准逐条写入 `--acceptance`。任务块粒度过粗（验收无法逐条勾验，或一个块包含多个可验收目标）时，必须先继续拆解计划，不得直接注册任务；拆解结果先回写计划文档，再逐块注册。
 
 先向用户输出项目状态、任务状态 / 锁、主要风险、本轮计划和需要决策的问题，然后推进最合适的一个或一组不冲突任务。
 

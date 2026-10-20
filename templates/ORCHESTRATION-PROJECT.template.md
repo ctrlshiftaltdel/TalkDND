@@ -26,14 +26,14 @@
 
 - 快速测试：`FILL_IN`
 - 完整回归：`FILL_IN`
-- 静态检查 / 类型检查：`FILL_IN`（示例：`python -m py_compile <path1> <path2>` 这类零依赖语法检查；不引入第三方依赖）
+- 静态检查 / 类型检查：`FILL_IN`（示例：`uv run --no-project python -m py_compile <path1> <path2>` 这类零依赖语法检查；不引入第三方依赖）
 - 构建 / 打包：`FILL_IN`
 - 手工 / UI 冒烟检查：`FILL_IN`
 - 合并后必须执行：`FILL_IN`
 
 ## 运行配置
 
-生效值由 `.orchestration/config.json` 提供，`python scripts/orchestrator.py config show` 可查看每个键的生效值与来源；文件缺失或值非法时回落到内置缺省。
+生效值由 `.orchestration/config.json` 提供，`uv run --no-project python scripts/orchestrator.py config show` 可查看每个键的生效值与来源；文件缺失或值非法时回落到内置缺省。
 
 - `edition`：`local` | `github`（二选一；缺省 `local`，当前实现只支持 `local`）
 - 并发策略：**按机器余量动态决定，不设固定上限**。派发前观察 CPU / 内存 / 磁盘 / 测试资源争用，有余量即可并行；同一 worktree 同一时刻只允许一个测试进程。把「本机实测可承载并发」作为参考记录，而不是规则常量。

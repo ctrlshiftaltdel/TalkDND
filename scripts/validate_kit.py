@@ -97,7 +97,7 @@ if config_path.is_file():
 # files (*.md / *.txt) and skip code dirs and binaries so the check cannot be
 # satisfied by the validator's own source or by non-document assets.
 DOC_SUFFIXES = ('.md', '.txt')
-EXCLUDED_DIRS = {'scripts', '.orchestration', '.git', '__pycache__'}
+EXCLUDED_DIRS = {'scripts', '.orchestration', '.git', '__pycache__', '.venv', '.worktrees', '.md', '.pdf2md', 'target'}
 doc_texts=[]
 for p in ROOT.rglob('*'):
     if not p.is_file(): continue
@@ -111,7 +111,16 @@ text_all='\n'.join(doc_texts)
 for needle in ['PLANNED', 'DISPATCHED', 'MASTER_REVIEW', 'APPROVED', 'VERIFIED', 'NEEDS_HUMAN_DECISION']:
     if needle not in text_all: errors.append(f'missing expected governance concept: {needle}')
 # Relative Markdown links must resolve. Ignore anchors and external URLs.
+# TalkDND: skip generated / local-only trees (environments, worktrees, pdf2md
+# output folders named `.md`, player books and saves) and anything not a file.
+LOCAL_ONLY_DIRS = {'.git', '.venv', '.worktrees', '.md', '.pdf2md', 'target', 'node_modules'}
+PLAYER_TREES = (('LetsPlay', 'Rules', '2014'), ('LetsPlay', 'Rules', '2024'),
+                ('LetsPlay', 'Adventures'), ('LetsPlay', 'Saves'))
+def _local_only(rel):
+    if LOCAL_ONLY_DIRS & set(rel.parts[:-1]): return True
+    return any(rel.parts[:len(t)] == t and rel.name != 'README.md' for t in PLAYER_TREES)
 for md in ROOT.rglob('*.md'):
+    if not md.is_file() or _local_only(md.relative_to(ROOT)): continue
     content=md.read_text(encoding='utf-8')
     for target in re.findall(r'\[[^\]]*\]\(([^)]+)\)', content):
         if target.startswith(('http://','https://','mailto:','#')): continue

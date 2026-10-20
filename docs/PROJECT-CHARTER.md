@@ -74,7 +74,7 @@ Project programs, tools, and scripts are Rust.
 
 Accepted exceptions, and no others:
 
-1. Vendored, unmodified AgentOrch Python kit scripts. They stay as upstream files and must not be edited: `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`. They use the Python standard library only.
+1. AgentOrch Python kit scripts, maintained as part of this project: `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`. They use the Python standard library only and run through `uv run --no-project`.
 2. CI YAML under `.github/workflows/`, including the shell steps those workflow files contain.
 3. `LetsPlay/tools/pdf2md/`, the Python PDF → Markdown extractor needed for play (decision "pdf2md" below).
 
@@ -163,7 +163,7 @@ Alternative considered: the `local` edition with a SQLite task database. Rejecte
 
 All project programs, tools, and scripts are Rust. Markdown and YAML remain the rules data. Two exceptions are accepted and must not grow:
 
-1. Vendored, unmodified AgentOrch Python kit scripts: `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`.
+1. AgentOrch Python kit scripts: `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py` (maintained in-project since 2026-10-21).
 2. CI YAML under `.github/workflows/`, including the shell steps those workflow files contain.
 
 The launcher-wrapper exception from the first draft of this decision was removed the same day. See "Play directory is self-contained" below.
@@ -233,6 +233,12 @@ Alternative considered: one-off whole-book conversion like ConvertPDF. Rejected:
 
 Every Python invocation goes through uv: `uv sync` / `uv run --project <dir>` for projects (pdf2md has `pyproject.toml` and `uv.lock`), and `uv run --no-project python scripts/...` for the stdlib AgentOrch kit scripts. CI uses `astral-sh/setup-uv`. Raw `pip`, `python -m venv` and bare `python3` are not used in docs or CI.
 
+### 2026-10-21 — AgentOrch is part of the project; uv everywhere
+
+AgentOrch is no longer treated as a vendored, read-only kit. Its docs (`AGENT-BOOTSTRAP.md`, `AGENT-ORCHESTRATION.md`, `editions/`, `prompts/`, `templates/`) and scripts may be changed through normal tasks. Every Python command in them is `uv run --no-project python scripts/...`. `validate_kit.py` skips local-only trees: `.venv`, `.worktrees`, pdf2md `.md/` output, player books and saves. CI runs the kit's unit tests through uv.
+
+Alternative considered: keep the kit read-only and only document uv at the project level. Rejected by the owner.
+
 ## Change history
 
 | Date | Change |
@@ -243,3 +249,4 @@ Every Python invocation goes through uv: `uv sync` / `uv run --project <dir>` fo
 | 2026-10-20 | Dice: one roll path through `combat-sim roll`, extended grammar, check-letsplay dice-source lint. |
 | 2026-10-20 | DM guidance: book is canon for facts and mechanics, presentation improvised; `canon.md` added to the save layout. |
 | 2026-10-21 | pdf2md background extractor (Python exception, OCR, uv); all Python via uv. |
+| 2026-10-21 | AgentOrch kit maintained in-project; all kit commands via `uv run`. |

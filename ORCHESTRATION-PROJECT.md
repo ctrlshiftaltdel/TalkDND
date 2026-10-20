@@ -9,15 +9,15 @@
 - 现有项目 / 新项目：`现有项目`
 - 本地主分支：`main`
 - 语言 / 框架 / 运行方式：项目自己的程序、工具和脚本一律用 Rust（`tools/combat-sim` 战斗引擎，`tools/talkdnd-dev` 开发工具）与 Markdown/YAML 规则数据。玩家在 `LetsPlay/` 里开局。**TECH STACK** 的接受例外只有下面三项，不得再扩大：
-  - 随上游原样保留、不得修改的 AgentOrch Python 套件脚本：`scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py`；
+  - 作为本项目一部分维护的 AgentOrch Python 套件脚本（只用标准库，经 `uv run --no-project` 运行）：`scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py`；
   - CI YAML（`.github/workflows/`，含其中的 shell 步骤）；
   - `LetsPlay/tools/pdf2md/`：游玩所需的 Python PDF → Markdown 转换工具。
   所有 Python 一律经 uv 运行（`uv sync` / `uv run`），不用裸 `pip`、`venv` 或 `python3`。
-- 重要设计 / 需求文件：项目章程是 `docs/PROJECT-CHARTER.md`。AGENT-BOOTSTRAP 判断「章程缺失」时只看这一路径：文件存在且没有占位符，即章程已建立。不要改套件文件来改查找路径。玩家说明是 `LetsPlay/README.md`；DM 手册是 `LetsPlay/AGENTS.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。根目录 `README.md` 只给开发者。
+- 重要设计 / 需求文件：项目章程是 `docs/PROJECT-CHARTER.md`。AGENT-BOOTSTRAP 判断「章程缺失」时只看这一路径：文件存在且没有占位符，即章程已建立。玩家说明是 `LetsPlay/README.md`；DM 手册是 `LetsPlay/AGENTS.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。根目录 `README.md` 只给开发者。
 
 ## 范围与安全
 
-- 允许改动路径：`tools/combat-sim/`、`tools/talkdnd-dev/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、根目录与各目录 `README.md`、`docs/PROJECT-CHARTER.md`、编排文件（`AGENTS.md`、`AGENT-*.md`、`ORCHESTRATION-PROJECT.md`、`editions/`、`prompts/`、`templates/`、`VERSION.txt`）、`.github/`、`scripts/`。具体任务可以再收窄。套件脚本 `scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py` 即使落在 `scripts/` 下也不得修改。
+- 允许改动路径：`tools/combat-sim/`、`tools/talkdnd-dev/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、根目录与各目录 `README.md`、`docs/PROJECT-CHARTER.md`、编排文件（`AGENTS.md`、`AGENT-*.md`、`ORCHESTRATION-PROJECT.md`、`editions/`、`prompts/`、`templates/`、`VERSION.txt`）、`.github/`、`scripts/`。具体任务可以再收窄。套件文件（含 `scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py`）已并入本项目，可按任务修改。
 - 永远禁止改动路径 / 文件：受版权保护的规则书与冒险书（`LetsPlay/Rules/2014/` 与 `LetsPlay/Rules/2024/` 除 `README.md` 外，`LetsPlay/Adventures/` 除 `README.md` 外，以及任何版权文本或其改编数据）；`LetsPlay/Saves/` 除 `README.md` 外；`**/dm-secrets.md`；`LetsPlay/Rules/combat/local/`；`LetsPlay/Rules/combat/2024/monsters/scarecrow.yaml`。
 - 秘密与隐私文件模式：`.local/`（除 `README.md`）、`**/dm-secrets.md`、`LetsPlay/Saves/`（除 `README.md`）、GitHub 凭据、玩家规则书与冒险书文本。
 - 破坏性操作和迁移政策：禁止改写 Git 历史、禁止强推。已有检出里的未跟踪本地书和存档用 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout`（默认 dry-run；真正移动时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout --apply`），不得覆盖已有文件。主持游戏写入 `LetsPlay/Saves/` 豁免开发流程，但那些文件仍然不得提交。
@@ -38,6 +38,7 @@
 - 构建 / 打包：`src` 未改时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- fetch-binary`。它用 `gh run list` / `gh run download` 取 `main` 上最近一次成功的 `build-artifacts` 制品 `combat-sim-<target>`（制品根上就是二进制），安装到 `LetsPlay/bin/combat-sim`（Windows 为 `LetsPlay/bin/combat-sim.exe`），并在 unix 上加上可执行位。`--dry-run` 只打印命令。`--target` 可选 `x86_64-unknown-linux-gnu`、`x86_64-pc-windows-msvc`、`aarch64-apple-darwin`。`src` 改了才运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- install-local`：它执行 `cargo build --release --manifest-path tools/combat-sim/Cargo.toml`，再把 `tools/combat-sim/target/release/combat-sim`（Windows 为 `combat-sim.exe`）复制到 `LetsPlay/bin/`。`--dry-run` 只打印命令。装好的文件只留在本机，不要提交。
 - GitHub：`.github/workflows/ci.yml` 在 push 与 pull request 上跑 fmt、clippy、ubuntu / windows / macos-14 测试、cargo-deny、2014 与 2024 的 `content check`（只读仓库里的 `LetsPlay/Rules/combat`）、`validate_kit.py`、`check-leaks`、`check-letsplay`、yamllint 和离线相对链接检查。`main` 上的 `.github/workflows/build-artifacts.yml` 上传三个平台的 release 二进制，制品根上就是该文件，解压到 `LetsPlay/bin/`。标签发布仍走 `.github/workflows/release.yml`，压缩包根上同样只有该二进制。
 - 手工 / UI 冒烟检查：程序已在 `LetsPlay/bin/` 时，于任意工作目录运行 `LetsPlay/bin/combat-sim roll 1d20+5 --dc 15`（Windows 为 `LetsPlay\bin\combat-sim.exe`）
+- 套件测试：`uv run --no-project python -m unittest tests/test_orchestrator.py`
 - pdf2md 测试：`uv run --project LetsPlay/tools/pdf2md --group dev pytest -q LetsPlay/tools/pdf2md/tests`
 - 合并后必须执行：`cargo test --manifest-path tools/combat-sim/Cargo.toml`；`cargo test --manifest-path tools/talkdnd-dev/Cargo.toml`；`uv run --no-project python scripts/validate_kit.py`；`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`；`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay`
 

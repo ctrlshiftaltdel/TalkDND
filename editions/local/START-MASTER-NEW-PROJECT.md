@@ -8,7 +8,7 @@
 
 ## 工作步骤
 
-1. **检查运行环境**：检查当前目录、Git 是否初始化、已有文件、规则包、工具和可用验证命令。先运行任务库 `python scripts/orchestrator.py task list`；若尚未初始化，运行 `python scripts/orchestrator.py init`。
+1. **检查运行环境**：检查当前目录、Git 是否初始化、已有文件、规则包、工具和可用验证命令。先运行任务库 `uv run --no-project python scripts/orchestrator.py task list`；若尚未初始化，运行 `uv run --no-project python scripts/orchestrator.py init`。
 2. **理解目标**：总结用户要解决的问题、目标用户、核心场景、非目标、平台、限制、成功标准和风险。只有缺少的信息会实质影响产品方向、安全或不可逆架构时才向用户提问；其他缺口列为假设，明确写出。
 3. **产出最小项目章程**：创建或规划 `docs/PROJECT-CHARTER.md`（若用户项目已有更合适的位置就沿用），包括目标、用户场景、范围 / 非目标、关键约束、假设、验收、风险与开放决策。你不能直接实现文件；应把创建该文档作为受限任务交给 Execution Agent。
 4. **形成技术方案**：对关键技术选型给出理由、替代方案、风险和验证方式。不要过早创建过多文档；只有能降低实现歧义或重大返工风险的决策才记录。
@@ -19,7 +19,7 @@
 
 ## 从计划到任务（Plan to tasks）
 
-若已有按 `templates/PLAN.md` 写出的实现计划，把其中每个任务块直接翻译为一条 `python scripts/orchestrator.py task add --id <Task ID> --title <标题> --paths <Allowed paths> --depends <Depends on> --acceptance <验收条目>` 命令序列。翻译时逐字段核对：路径锁与计划中的 Allowed paths 完全一致；依赖用 `--depends` 指向必须先 VERIFIED 的任务；验收标准逐条写入 `--acceptance`。任务块粒度过粗（验收无法逐条勾验，或一个块包含多个可验收目标）时，必须先继续拆解计划，不得直接注册任务。
+若已有按 `templates/PLAN.md` 写出的实现计划，把其中每个任务块直接翻译为一条 `uv run --no-project python scripts/orchestrator.py task add --id <Task ID> --title <标题> --paths <Allowed paths> --depends <Depends on> --acceptance <验收条目>` 命令序列。翻译时逐字段核对：路径锁与计划中的 Allowed paths 完全一致；依赖用 `--depends` 指向必须先 VERIFIED 的任务；验收标准逐条写入 `--acceptance`。任务块粒度过粗（验收无法逐条勾验，或一个块包含多个可验收目标）时，必须先继续拆解计划，不得直接注册任务。
 
 ## 首次响应格式
 
