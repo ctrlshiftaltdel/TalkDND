@@ -51,7 +51,7 @@ jobs:
       - name: Build release
         run: cargo build --release --manifest-path tools/combat-sim/Cargo.toml --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package LetsPlay bundle
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -75,19 +75,48 @@ jobs:
             echo "release binary not found" >&2
             exit 1
           fi
-          name="combat-sim-${tag}-${TARGET}"
+          name="talkdnd-letsplay-${tag}-${TARGET}"
           rm -rf dist
           mkdir -p dist/stage dist/out
-          # Archive root is the binary only, so extracting into LetsPlay/bin/
-          # yields LetsPlay/bin/combat-sim or LetsPlay/bin/combat-sim.exe.
-          cp "$bin" "dist/stage/${BIN_NAME}"
+          # Only git-tracked files: never copy the working tree.
+          git archive --format=tar HEAD LetsPlay | tar -xf - -C dist/stage
+          cp NOTICE LICENSE dist/stage/LetsPlay/
+          cp "$bin" "dist/stage/LetsPlay/bin/${BIN_NAME}"
+          chmod 755 "dist/stage/LetsPlay/bin/${BIN_NAME}"
+          # Allowed list = tracked LetsPlay files + NOTICE + LICENSE + binary.
+          { git ls-files -- LetsPlay; echo LetsPlay/NOTICE; echo LetsPlay/LICENSE; echo "LetsPlay/bin/${BIN_NAME}"; } \
+            | LC_ALL=C sort -u > dist/allowed.txt
           if [ "$ARCHIVE" = "zip" ]; then
             archive="dist/out/${name}.zip"
-            powershell.exe -NoProfile -Command "Compress-Archive -Path 'dist/stage/${BIN_NAME}' -DestinationPath '${archive}' -Force"
+            (cd dist/stage && 7z a -tzip -bd -r "../out/${name}.zip" LetsPlay >/dev/null)
+            7z l -slt "$archive" | sed -n 's/^Path = //p' | tail -n +2 | tr '\\' '/' > dist/raw.txt
+            7z l -slt "$archive" | awk '/^Path = /{p=substr($0,8)} /^Folder = -/{print p}' | tr '\\' '/' | LC_ALL=C sort -u > dist/listed.txt
           else
             archive="dist/out/${name}.tar.gz"
-            COPYFILE_DISABLE=1 tar -czf "$archive" -C dist/stage "$BIN_NAME"
+            COPYFILE_DISABLE=1 tar -czf "$archive" -C dist/stage LetsPlay
+            tar -tzf "$archive" > dist/raw.txt
+            grep -v '/$' dist/raw.txt | LC_ALL=C sort -u > dist/listed.txt
           fi
+          echo "archive entries: $(wc -l < dist/listed.txt)"
+          # Privacy gate: exact match against the allowed list, then deny patterns.
+          if ! diff -u dist/allowed.txt dist/listed.txt; then
+            echo "archive contents differ from tracked LetsPlay list" >&2
+            exit 1
+          fi
+          if grep -Eiq '\.pdf$|(^|/)dm-secrets\.md$' dist/raw.txt; then
+            echo "archive contains a forbidden file" >&2
+            exit 1
+          fi
+          if grep -E '^LetsPlay/Saves/' dist/raw.txt | grep -Ev '^LetsPlay/Saves/(README\.md)?$' | grep -q .; then
+            echo "archive contains save content" >&2
+            exit 1
+          fi
+          for d in Rules/2014 Rules/2024 Adventures; do
+            if grep -E "^LetsPlay/$d/" dist/raw.txt | grep -Ev "^LetsPlay/$d/(README\.md)?\$" | grep -q .; then
+              echo "archive contains player book content" >&2
+              exit 1
+            fi
+          done
           if command -v sha256sum >/dev/null 2>&1; then
             hash=$(sha256sum "$archive" | awk '{print $1}')
           elif command -v shasum >/dev/null 2>&1; then
@@ -105,7 +134,7 @@ jobs:
       - name: Upload package
         uses: actions/upload-artifact@v7
         with:
-          name: combat-sim-${{ matrix.target }}
+          name: talkdnd-letsplay-${{ matrix.target }}
           path: dist/out/
           if-no-files-found: error
 
@@ -124,7 +153,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: release-assets
-          pattern: combat-sim-*
+          pattern: talkdnd-letsplay-*
           merge-multiple: true
 
       - name: Publish release
@@ -132,16 +161,18 @@ jobs:
         with:
           fail_on_unmatched_files: true
           body: |
-            Prebuilt combat-sim binaries for ${{ github.ref_name }}.
+            TalkDND ${{ github.ref_name }}: the play folder `LetsPlay/` with a prebuilt combat-sim.
 
-            - Linux x86_64: `combat-sim-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz`
-            - Windows x86_64: `combat-sim-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip`
-            - macOS Apple Silicon: `combat-sim-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz`
+            - Linux x86_64: `talkdnd-letsplay-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz`
+            - Windows x86_64: `talkdnd-letsplay-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip`
+            - macOS Apple Silicon: `talkdnd-letsplay-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz`
 
-            Each archive contains only the binary, at the archive root.
-            Extract it into `LetsPlay/bin/` (`combat-sim`, or `combat-sim.exe` on Windows).
-            The matching `.sha256` file checksums that archive. macOS Intel builds
-            are not published. LICENSE and NOTICE stay in the repository.
+            Each archive holds the git-tracked `LetsPlay/` tree (DM guide, combat data,
+            rulings, README placeholders), `LICENSE`, `NOTICE`, and the binary at
+            `LetsPlay/bin/`. No rulebooks, adventures, or saves are included: put your
+            own SRD / books into `LetsPlay/Rules/<edition>/` and `LetsPlay/Adventures/`.
+            The matching `.sha256` file checksums that archive. macOS Intel builds are
+            not published.
           files: |
             release-assets/*.tar.gz
             release-assets/*.zip

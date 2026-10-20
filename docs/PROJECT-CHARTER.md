@@ -49,7 +49,7 @@ Play and development are separate roots.
 | `LetsPlay/` | Play. The DM agent starts here. `LetsPlay/README.md` is the player guide. `LetsPlay/AGENTS.md` is the DM guide. Players put books in `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/`, and `LetsPlay/Adventures/`. Those directories are local except their README files. Combat data the engine loads lives in `LetsPlay/Rules/combat/`. Saves live in `LetsPlay/Saves/` and are not committed. The program they run is the gitignored binary `LetsPlay/bin/combat-sim` (Windows: `LetsPlay/bin/combat-sim.exe`). |
 | Repository root | Development only. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine) and `tools/talkdnd-dev` (dev tools). AgentOrch files, CI, and this charter stay at the root. Nothing required to play lives here. |
 
-Release archives and `build-artifacts` artifacts contain that binary at the archive root. Extracting one into `LetsPlay/bin/` is the install. No launcher script points outside `LetsPlay/`.
+Release archives contain the whole git-tracked `LetsPlay/` tree plus the binary at `LetsPlay/bin/`; extracting one gives a ready play folder. `build-artifacts` artifacts contain only the binary at the archive root; extracting one into `LetsPlay/bin/` is the install. No launcher script points outside `LetsPlay/`.
 
 ## Supported rulesets
 
@@ -189,9 +189,15 @@ Everything needed to play lives under `LetsPlay/`. The repository root holds dev
 
 The program a player runs is the binary `LetsPlay/bin/combat-sim` (Windows: `LetsPlay/bin/combat-sim.exe`). It is gitignored. There is no shell or `.cmd` launcher, and no tracked file under `LetsPlay/` may reference a path that leaves that directory. `talkdnd-dev check-letsplay` fails the build when one does. A save manifest's `../../../Rules` path, resolved from `Saves/<slot>/combat/`, stays inside `LetsPlay/` and passes.
 
-Release archives and the `build-artifacts` artifacts contain the binary at the archive root. Extracting the archive into `LetsPlay/bin/` installs it. `talkdnd-dev fetch-binary` installs the same file. A local release build is copied there by `talkdnd-dev install-local` (`cargo build --release`, then copy). The Rust-only exception list no longer includes launcher wrappers.
+The `build-artifacts` artifacts contain the binary at the archive root. Extracting one into `LetsPlay/bin/` installs it (release archives now ship the whole folder; see "Release bundles the play folder"). `talkdnd-dev fetch-binary` installs the same file. A local release build is copied there by `talkdnd-dev install-local` (`cargo build --release`, then copy). The Rust-only exception list no longer includes launcher wrappers.
 
 Alternative considered: keep thin `LetsPlay/bin` wrappers that exec a binary under `tools/`. Rejected. A play session must not depend on a path outside `LetsPlay/`.
+
+### 2026-10-20 — Release bundles the play folder
+
+Each GitHub Release asset (`talkdnd-letsplay-<tag>-<target>`, `.zip` on Windows, `.tar.gz` elsewhere, each with `.sha256`) is the git-tracked `LetsPlay/` tree plus `LICENSE`, `NOTICE`, and the prebuilt binary at `LetsPlay/bin/`. CI stages it from `git archive` only and fails if the archive holds anything outside that list, any PDF, any `dm-secrets.md`, or anything under `Saves/`, `Rules/2014/`, `Rules/2024/`, or `Adventures/` besides their README. `v0.1.0` is the first release. `fetch-binary` still installs the binary alone from `build-artifacts`.
+
+Alternative considered: commit binaries into `LetsPlay/bin/`, or ship the binary alone. Rejected: committed binaries bloat history; a binary-only asset leaves players to assemble the folder.
 
 ## Change history
 
@@ -199,3 +205,4 @@ Alternative considered: keep thin `LetsPlay/bin` wrappers that exec a binary und
 |------|--------|
 | 2026-10-20 | Initial living charter. Added purpose, audience, goals, non-goals, layout, rulesets, tech stack, privacy rule, release targets, development process, and the five decisions above. Pointed project docs at this path. |
 | 2026-10-20 | Play directory is self-contained. The binary lives in `LetsPlay/bin/` and is gitignored. Launcher wrappers are gone, so the Rust-only exception list is the kit scripts and CI YAML. |
+| 2026-10-20 | Release assets bundle the tracked `LetsPlay/` folder with the binary, guarded by a CI content gate. First release `v0.1.0`. |

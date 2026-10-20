@@ -8,7 +8,7 @@
 
 ## 程序放在哪
 
-玩家运行的文件是 `LetsPlay/bin/combat-sim`（Windows 是 `LetsPlay/bin/combat-sim.exe`）。不入库。发布压缩包和 `build-artifacts` 制品的根上就是这一个文件，解压到 `LetsPlay/bin/`。
+玩家运行的文件是 `LetsPlay/bin/combat-sim`（Windows 是 `LetsPlay/bin/combat-sim.exe`）。不入库。GitHub Releases 的资产 `talkdnd-letsplay-<标签>-<target>`（Windows `.zip`，其余 `.tar.gz`，各带 `.sha256`）是整个已入库的 `LetsPlay/` 加上 `LetsPlay/bin/` 里的程序，由 CI 从 `git archive` 打包，并检查包内只有入库文件，没有 PDF、书或存档。`build-artifacts` 制品的根上只有程序，解压到 `LetsPlay/bin/`。发版：在 `main` 上打 `v*` 标签并推送。
 
 `tools/combat-sim/src` 没改时，在仓库根目录拉取 `main` 上最近一次成功构建（需要已登录的 [GitHub CLI](https://cli.github.com/)）：
 
