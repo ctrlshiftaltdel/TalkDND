@@ -8,12 +8,15 @@
 - 一句话目标：让 AI 在聊天里按玩家自备的 D&D 规则书主持冒险，并用 combat-sim 结算战斗；受版权保护的书和冒险、以及个人存档，永不进入仓库或公开记录。
 - 现有项目 / 新项目：`现有项目`
 - 本地主分支：`main`
-- 语言 / 框架 / 运行方式：项目自己的程序、工具和脚本一律用 Rust（`tools/combat-sim` 战斗引擎，`tools/talkdnd-dev` 开发工具）与 Markdown/YAML 规则数据。唯一例外是随上游原样保留、不得修改的 AgentOrch 套件脚本（`scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py`）。CI 的 YAML 与 workflow 里的 shell 一行命令可以保留。玩家在 `LetsPlay/` 里开局。
-- 重要设计 / 需求文件：无独立 `docs/PROJECT-CHARTER.md`。玩家说明是根目录 `README.md`；DM 手册是 `LetsPlay/AGENTS.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。范围、非目标与隐私规则即本文件。
+- 语言 / 框架 / 运行方式：项目自己的程序、工具和脚本一律用 Rust（`tools/combat-sim` 战斗引擎，`tools/talkdnd-dev` 开发工具）与 Markdown/YAML 规则数据。玩家在 `LetsPlay/` 里开局。**TECH STACK** 的接受例外只有下面三项，不得再扩大：
+  - 随上游原样保留、不得修改的 AgentOrch Python 套件脚本：`scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py`；
+  - 极小的 `LetsPlay/bin` 启动包装：`LetsPlay/bin/combat-sim`（sh）与 `LetsPlay/bin/combat-sim.cmd`；
+  - CI YAML（`.github/workflows/`，含其中的 shell 步骤）。
+- 重要设计 / 需求文件：项目章程是 `docs/PROJECT-CHARTER.md`。AGENT-BOOTSTRAP 判断「章程缺失」时只看这一路径：文件存在且没有占位符，即章程已建立。不要改套件文件来改查找路径。玩家说明是根目录 `README.md`；DM 手册是 `LetsPlay/AGENTS.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。
 
 ## 范围与安全
 
-- 允许改动路径：`tools/combat-sim/`、`tools/talkdnd-dev/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、根目录与各目录 `README.md`、编排文件（`AGENTS.md`、`AGENT-*.md`、`ORCHESTRATION-PROJECT.md`、`editions/`、`prompts/`、`templates/`、`VERSION.txt`）、`.github/`、`scripts/`。具体任务可以再收窄。
+- 允许改动路径：`tools/combat-sim/`、`tools/talkdnd-dev/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、根目录与各目录 `README.md`、`docs/PROJECT-CHARTER.md`、编排文件（`AGENTS.md`、`AGENT-*.md`、`ORCHESTRATION-PROJECT.md`、`editions/`、`prompts/`、`templates/`、`VERSION.txt`）、`.github/`、`scripts/`。具体任务可以再收窄。套件脚本 `scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py` 即使落在 `scripts/` 下也不得修改。
 - 永远禁止改动路径 / 文件：受版权保护的规则书与冒险书（`LetsPlay/Rules/2014/` 与 `LetsPlay/Rules/2024/` 除 `README.md` 外，`LetsPlay/Adventures/` 除 `README.md` 外，以及任何版权文本或其改编数据）；`LetsPlay/Saves/` 除 `README.md` 外；`**/dm-secrets.md`；`LetsPlay/Rules/combat/local/`；`LetsPlay/Rules/combat/2024/monsters/scarecrow.yaml`。
 - 秘密与隐私文件模式：`.local/`（除 `README.md`）、`**/dm-secrets.md`、`LetsPlay/Saves/`（除 `README.md`）、GitHub 凭据、玩家规则书与冒险书文本。
 - 破坏性操作和迁移政策：禁止改写 Git 历史、禁止强推。已有检出里的未跟踪本地书和存档用 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout`（默认 dry-run；真正移动时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout --apply`），不得覆盖已有文件。主持游戏写入 `LetsPlay/Saves/` 豁免开发流程，但那些文件仍然不得提交。
@@ -21,6 +24,7 @@
 - 需要人工批准的变化：创建或删除 GitHub 仓库；改写历史或强推；新增依赖；合并到 `main`；规则版本语义变化（`ruleset` 分层、2014/2024 行为差异）。
 - combat-sim 源码只读约定：修改 `tools/combat-sim/src` 下的文件之前先 `chmod u+w`，改完并验证之后 `chmod a-w`。`src` 没有变化时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- fetch-binary`（需要已登录的 `gh`），不要在本机编译。只有 `src` 变化时才重新 `cargo build --release`。
 - **PRIVACY RULE**: never put save contents, DM secrets, or copyrighted text into Issues, PRs, commit messages or CI logs.
+- **LIVING CHARTER**: Master 必须在同一 PR 内更新 `docs/PROJECT-CHARTER.md`（Decision Log 与每一个受影响章节），只要该任务改变了范围、目标、技术栈、规则支持或一项用户决定。审查者在合并门核对这一点。缺了这次更新，审查不通过，PR 不得合并。
 
 ## 验证命令
 
@@ -56,4 +60,4 @@
 
 ## 新项目启动产物
 
-本仓库是现有项目。播放布局在 `LetsPlay/`，开发契约在根目录。不另写章程文件。
+本仓库是现有项目。播放布局在 `LetsPlay/`，开发契约在根目录。项目章程是已填写的 `docs/PROJECT-CHARTER.md`。它是活文档：维护规则见上面的 **LIVING CHARTER**。AGENT-BOOTSTRAP 的章程查找以该路径为准，不修改套件文件。
