@@ -30,9 +30,9 @@ Content sources, loaded in order (later overrides earlier by `id` within the sam
 3. character files/dirs (`--chars PATH`, repeatable; .md/.yaml/.json)
 Or a campaign manifest `--campaign FILE` (also env `COMBAT_SIM_CAMPAIGN`):
 ```yaml
-# Saves/2026-10-19-01/combat/campaign.yaml  (paths relative to this file)
+# LetsPlay/Saves/2026-10-19-01/combat/campaign.yaml  (paths relative to this file)
 name: TalkDND save 2026-10-19-01
-library: [../../../Rules/combat]
+library: [../../../Rules/combat]          # LetsPlay/Rules/combat; Rules moves with Saves
 adventures: [../../../Adventures/keys-from-the-golden-vault/combat]
 characters: [../Characters, ../NPCs]        # dirs: all *.md with combat blocks
 state_dir: .                                # default dir for --state names without '/'

@@ -1,0 +1,10 @@
+# Agent-Orchestration single-user machine-local state
+.orchestration/
+# Worktree root: one execution instance per worktree, at a fixed path
+.worktrees/
+# Private machine-local files (never committed): .env, host info, release-scan rules
+.local/*
+!.local/README.md
+# Python caches from local helper scripts
+__pycache__/
+*.py[cod]

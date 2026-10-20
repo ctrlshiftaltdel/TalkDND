@@ -1,0 +1,8 @@
+[package]
+name = "talkdnd-dev"
+version = "0.1.0"
+edition = "2021"
+description = "Std-only TalkDND helpers: check-leaks and migrate-layout"
+publish = false
+
+[dependencies]

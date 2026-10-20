@@ -27,17 +27,17 @@ cargo fmt -- --check
 
 内容按以下顺序加载，后加载的同 id 条目覆盖先前的：
 
-1. `--lib DIR`：通用库（可重复），如 `Rules/combat`
+1. `--lib DIR`：通用库（可重复），如 `LetsPlay/Rules/combat`
 2. `--adventure DIR`：冒险内容（可重复）
 3. `--chars PATH`：角色卡文件或目录（可重复）
 4. `--campaign FILE`：战役清单；也可用环境变量 `COMBAT_SIM_CAMPAIGN`
 
-清单示例（TalkDND 存档 `Saves/2026-10-19-01/combat/campaign.yaml`）：
+清单示例（TalkDND 存档 `LetsPlay/Saves/2026-10-19-01/combat/campaign.yaml`）：
 
 ```yaml
 name: TalkDND save 2026-10-19-01
 ruleset: "2024"            # 2014 | 2024，缺省 2024
-library: [../../../Rules/combat]
+library: [../../../Rules/combat]   # 相对清单；仍解析到 LetsPlay/Rules/combat
 adventures: [../../../Adventures/keys-from-the-golden-vault/combat]
 characters: [../Characters, ../NPCs]
 state_dir: .
@@ -53,11 +53,11 @@ state_dir: .
 TalkDND 的典型布局：
 
 ```text
-Rules/combat/{common,2014,2024}/  分层规则库：通用 + 按版本（状态、精通(仅2024)、法术、职业能力、怪物、AI 模板）
-Adventures/<剧本>/combat/     冒险内容：场景、特殊生物、遭遇、机关
-Saves/<存档>/Characters/      玩家角色卡（Markdown + combat 数据块）
-Saves/<存档>/NPCs/            队友/重要 NPC 角色卡
-Saves/<存档>/combat/          清单与战斗状态文件
+LetsPlay/Rules/combat/{common,2014,2024}/  分层规则库：通用 + 按版本（状态、精通(仅2024)、法术、职业能力、怪物、AI 模板）
+LetsPlay/Adventures/<剧本>/combat/     冒险内容：场景、特殊生物、遭遇、机关
+LetsPlay/Saves/<存档>/Characters/      玩家角色卡（Markdown + combat 数据块）
+LetsPlay/Saves/<存档>/NPCs/            队友/重要 NPC 角色卡
+LetsPlay/Saves/<存档>/combat/          清单与战斗状态文件
 ```
 
 内容 id 统一为小写连字符字符串（如 `v12-satyr-and-guards`），引用一律按 id。
@@ -105,11 +105,11 @@ control/defense/none）和实际效果决策，不按名字。
 
 ### 添加一个新战役（最小示例）
 
-`my-campaign/combat/campaign.yaml`：
+`LetsPlay/my-campaign/combat/campaign.yaml`（与 `Rules/` 同级）：
 
 ```yaml
 name: My Campaign
-library: [../../Rules/combat]
+library: [../../Rules/combat]   # LetsPlay/Rules/combat
 adventures: [.]
 characters: [./characters]
 state_dir: .
