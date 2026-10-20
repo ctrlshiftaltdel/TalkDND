@@ -1,0 +1,18 @@
+# PHB 2024 weapon mastery properties.
+masteries:
+  - id: cleave
+    triggers: [{on: on_hit, when: {attack_kind: melee}, once_per: turn, effects: [{note: "Cleave: you may make one extra attack vs a second creature within 5 ft of the first and within reach (no ability modifier to damage unless negative)."}]}]
+  - id: graze
+    triggers: [{on: on_miss, effects: [{damage: {dice: "{attack_mod}", type: weapon, crit: never}}]}]
+  - id: nick
+    triggers: [{on: on_hit, effects: [{note: "Nick: the extra Light-weapon attack can be made as part of the Attack action instead of a Bonus Action (once per turn)."}]}]
+  - id: push
+    triggers: [{on: on_hit, when: {target_size_max: large}, effects: [{forced_move: {distance: 10, direction: away, max_size: large}}]}]
+  - id: sap
+    triggers: [{on: on_hit, effects: [{apply_condition: {condition: sapped, to: target, duration: {until: start_of_source_next_turn}}}]}]
+  - id: slow
+    triggers: [{on: on_hit, when: {damage_dealt: true}, effects: [{apply_condition: {condition: slowed, to: target, duration: {until: start_of_source_next_turn}}}]}]
+  - id: topple
+    triggers: [{on: on_hit, effects: [{save: {ability: con, dc: "8+{attack_mod}+{prof}", on_fail: [{apply_condition: {condition: prone, to: target, duration: {permanent: true}}}]}}]}]
+  - id: vex
+    triggers: [{on: on_hit, when: {damage_dealt: true}, effects: [{apply_condition: {condition: vexed, to: target, link: true, duration: {until: end_of_source_next_turn}}}]}]

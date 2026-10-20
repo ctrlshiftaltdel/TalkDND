@@ -1,0 +1,27 @@
+creatures:
+  - id: allosaurus
+    name: Allosaurus
+    kind: monster
+    size: large
+    creature_type: beast
+    ac: 13
+    hp: 51
+    speed: {walk: 60}
+    init_bonus: 1
+    prof: 2
+    abilities: {str: 19, dex: 13, con: 17, int: 2, wis: 12, cha: 5}
+    skills: {perception: 5}
+    senses: "Passive Perception 15"
+    attacks:
+      - {id: bite, name: Bite, kind: melee, ability: str, to_hit: 6, damage: [{dice: "2d10+4", type: piercing}], reach: 5}
+      - id: claws
+        name: Claws
+        kind: melee
+        ability: str
+        to_hit: 6
+        damage: [{dice: "1d8+4", type: slashing}]
+        reach: 5
+        manual: "Pounce: if it moved 30+ ft straight toward a Large-or-smaller target right before the hit, target is Prone and the allosaurus can make one Bite against it."
+    ai: {template: mindless}
+    notes: "MM 2024 Allosaurus, CR 2 (XP 450), HP 51 (6d10+18)."
+    todo: ["OCR shows no Multiattack line - verify", "Pounce not automated"]

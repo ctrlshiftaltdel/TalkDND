@@ -1,0 +1,56 @@
+# Class / species / feat features (PHB 2024).
+abilities:
+  - id: sneak-attack
+    name: Sneak Attack
+    tags: [rogue]
+    activation: passive
+    triggers:
+      - on: on_hit
+        once_per: turn
+        when:
+          all:
+            - attack_has_property: [finesse, ranged]
+            - any:
+                - has_advantage: true
+                - all:
+                    - ally_within_5_of_target: true
+                    - not: {has_disadvantage: true}
+        effects: [{damage: {dice: "{param.dice}", type: weapon}}]
+    source: "PHB 2024 Rogue L1: once per turn, extra damage with Finesse/Ranged weapon if Advantage, or an ally within 5 ft of target and no Disadvantage"
+  - id: cunning-action
+    name: Cunning Action
+    tags: [rogue]
+    activation: bonus
+    target: {type: self}
+    effects:
+      - choice: [[{basic_action: dash}], [{basic_action: disengage}], [{basic_action: hide}]]
+    ai: {role: defense}
+    source: "PHB 2024 Rogue (Dash, Disengage, or Hide as a Bonus Action)"
+    todo: ["2024 PHB grants Cunning Action at Rogue 2; Rina's sheet (level 1) lists it"]
+  - id: second-wind
+    name: Second Wind
+    tags: [fighter, heal]
+    activation: bonus
+    cost: {resource: second-wind, amount: 1}
+    target: {type: self}
+    effects: [{heal: {dice: "1d10+{level}"}}]
+    ai: {role: self_heal}
+    source: "PHB 2024 Fighter L1: Bonus Action, regain 1d10 + Fighter level HP"
+  - id: fighting-style-defense
+    name: "Fighting Style: Defense"
+    tags: [feat]
+    activation: passive
+    manual: "+1 AC while wearing armor. Already included in the AC on the character sheet (not re-applied)."
+  - id: disciple-of-life
+    name: Disciple of Life
+    tags: [cleric]
+    activation: passive
+    modifiers:
+      - {applies: healing_done, effect: bonus, value: "2+{slot_level}", when: {all: [{is_spell: true}, {slot_level_min: 1}]}}
+    source: "PHB 2024 Life Domain: +2 + slot level HP when a slot spell restores HP"
+    todo: ["PHB 2024 grants Disciple of Life at Cleric 3; Sera's sheet (level 1) has it (2014-style)"]
+  - id: heroic-inspiration
+    name: Heroic Inspiration
+    tags: [species]
+    activation: free
+    manual: "Reroll any die immediately after rolling it (once per Heroic Inspiration). Use `roll` again manually."

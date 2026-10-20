@@ -1,0 +1,21 @@
+creatures:
+  - id: guard
+    name: Guard
+    kind: monster
+    size: medium
+    creature_type: humanoid
+    ac: 16
+    hp: 11
+    speed: {walk: 30}
+    init_bonus: 1
+    prof: 2
+    abilities: {str: 13, dex: 12, con: 12, int: 10, wis: 11, cha: 10}
+    skills: {perception: 2}
+    senses: "Passive Perception 12"
+    attacks:
+      - {id: spear, name: Spear, kind: melee_or_ranged, ability: str, to_hit: 3, damage: [{dice: "1d6+1", type: piercing}], reach: 5, range: [20, 60], properties: [thrown, versatile]}
+    ai: {template: brute}
+    notes: "MM 2024 Guard, CR 1/8 (XP 25), HP 11 (2d8+2). Gear: Chain Shirt, Shield, Spear."
+    todo:
+      - "AC: OCR of our MM reads 15, but Chain Shirt 13 + Dex 1 + Shield 2 = 16 (16 used) - verify in the printed book"
+      - "Two-handed (versatile) spear damage not legible in OCR"

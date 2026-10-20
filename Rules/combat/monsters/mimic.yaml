@@ -1,0 +1,43 @@
+creatures:
+  - id: mimic
+    name: Mimic
+    kind: monster
+    size: medium
+    creature_type: monstrosity
+    ac: 12
+    hp: 58
+    speed: {walk: 20}
+    init_bonus: 3
+    prof: 2
+    abilities: {str: 17, dex: 12, con: 15, int: 5, wis: 13, cha: 8}
+    skills: {stealth: 5}
+    immunities: [acid]
+    condition_immunities: [prone]
+    senses: "Darkvision 60 ft.; Passive Perception 11"
+    attacks:
+      - id: bite
+        name: Bite
+        kind: melee
+        ability: str
+        to_hit: 5
+        damage: [{dice: "1d8+3", type: piercing}, {dice: "1d8", type: acid}]
+        reach: 5
+        manual: "Advantage and 2d8+3 piercing (instead of 1d8+3) if the target is Grappled by the mimic."
+      - id: pseudopod
+        name: Pseudopod
+        kind: melee
+        ability: str
+        to_hit: 5
+        damage: [{dice: "1d8+3", type: bludgeoning}, {dice: "1d8", type: acid}]
+        reach: 5
+        on_hit: [{apply_condition: {condition: grappled, to: target, link: true, duration: {permanent: true}}}, {note: "Grappled by mimic: escape DC 13, escape checks have Disadvantage."}]
+    features:
+      - id: mimic-adhesive
+        name: Adhesive (Object Form Only)
+        activation: passive
+        manual: "Creature touching the mimic in object form is Grappled (escape DC 13, checks at Disadvantage)."
+    ai: {template: mindless}
+    notes: "MM 2024 Mimic, CR 2 (XP 450), HP 58 (9d8+18). Shape-Shift bonus action is narrative."
+    todo:
+      - "OCR shows no Multiattack line - verify in the printed book"
+      - "Bite bonus vs grappled target is manual (no conditional damage swap in the vocabulary)"

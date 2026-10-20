@@ -1,0 +1,20 @@
+creatures:
+  - id: animated-armor
+    name: Animated Armor
+    kind: monster
+    size: medium
+    creature_type: construct
+    ac: 18
+    hp: 33
+    speed: {walk: 25}
+    init_bonus: 2
+    prof: 2
+    abilities: {str: 14, dex: 11, con: 13, int: 1, wis: 3, cha: 1}
+    immunities: [poison, psychic]
+    condition_immunities: [charmed, deafened, exhaustion, frightened, paralyzed, petrified, poisoned]
+    senses: "Blindsight 60 ft.; Passive Perception 6"
+    attacks:
+      - {id: slam, name: Slam, kind: melee, ability: str, to_hit: 4, damage: [{dice: "1d6+2", type: bludgeoning}], reach: 5}
+    multiattack: [slam, slam]
+    ai: {template: mindless}
+    notes: "MM 2024 Animated Armor, CR 1 (XP 200), HP 33 (6d8+6). Multiattack: two Slam attacks."

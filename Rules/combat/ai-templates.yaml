@@ -1,0 +1,17 @@
+ai_templates:
+  - id: brute
+    params: {targeting: nearest, range_pref: melee, self_heal_below_pct: 50, resource_threshold: 1.5, attack_downed: false, avoid_targets_with: [sanctuary-warded]}
+  - id: defender
+    params: {targeting: nearest, range_pref: melee, self_heal_below_pct: 50, resource_threshold: 1.5, avoid_targets_with: [sanctuary-warded]}
+  - id: skirmisher
+    params: {targeting: lowest_hp, range_pref: ranged, keep_distance: 30, resource_threshold: 1.5, avoid_targets_with: [sanctuary-warded]}
+  - id: caster
+    params: {targeting: lowest_hp, range_pref: ranged, keep_distance: 30, resource_threshold: 1.2, avoid_targets_with: [sanctuary-warded]}
+  - id: healer
+    params: {targeting: nearest, range_pref: any, heal_ally_below_pct: 30, heal_downed: true, resource_threshold: 2.0, opening: [], avoid_targets_with: [sanctuary-warded]}
+  - id: guardian
+    params: {targeting: nearest, range_pref: melee, guard_zone: null, leash: 30, attack_downed: false}
+  - id: coward
+    params: {targeting: lowest_hp, range_pref: any, flee_below_pct: 30}
+  - id: mindless
+    params: {targeting: nearest, range_pref: melee, attack_downed: true}

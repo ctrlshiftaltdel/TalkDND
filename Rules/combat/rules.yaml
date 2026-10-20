@@ -1,0 +1,9 @@
+rules:
+  dying_conditions: [unconscious]
+  basic_actions:
+    dodge: dodging
+    disengage: disengaged
+    hide: hidden
+    help: helped
+  cover: {half: 2, three_quarters: 5}
+  concentration_condition: concentrating

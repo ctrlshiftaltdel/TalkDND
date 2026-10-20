@@ -1,0 +1,144 @@
+# PHB 2024 spells used so far in TalkDND. Spellcasting numbers come from the caster's
+# `spellcasting` block ({spell_attack}, {spell_dc}, {spell_mod}).
+abilities:
+  - id: fire-bolt
+    name: Fire Bolt
+    tags: [spell, cantrip]
+    activation: action
+    range: 120
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - attack: {to_hit: "{spell_attack}", kind: ranged, damage: [{dice: "1d10", type: fire}]}
+    ai: {role: damage}
+    source: "PHB 2024 Fire Bolt (cantrip upgrade at levels 5/11/17 not modelled)"
+  - id: shocking-grasp
+    name: Shocking Grasp
+    tags: [spell, cantrip]
+    activation: action
+    range: 5
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - attack:
+          to_hit: "{spell_attack}"
+          kind: melee
+          damage: [{dice: "1d8", type: lightning}]
+          on_hit: [{apply_condition: {condition: no-opportunity-attacks, to: target, duration: {until: end_of_target_next_turn}}}]
+    ai: {role: damage}
+    source: "PHB 2024: target can't make Opportunity Attacks until the start of its next turn"
+    todo: ["Duration approximated as end of target's next turn (rule: start of its next turn)"]
+  - id: sacred-flame
+    name: Sacred Flame
+    tags: [spell, cantrip]
+    activation: action
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - save: {ability: dex, dc: "{spell_dc}", ignore_cover: true, on_fail: [{damage: {dice: "1d8", type: radiant}}]}
+    ai: {role: damage}
+    source: "PHB 2024: no benefit from Half or Three-Quarters Cover"
+  - id: magic-missile
+    name: Magic Missile
+    tags: [spell, magic-missile]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 120
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - damage: {dice: "1d4+1", type: force, repeat: 3}
+    ai: {role: damage}
+    source: "PHB 2024: three darts, 1d4+1 force each, automatically hit (all darts on one target here)"
+  - id: shield
+    name: Shield
+    tags: [spell]
+    activation: reaction
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 0
+    target: {type: self}
+    triggers:
+      - on: on_hit_taken
+        reaction: true
+        when: {would_miss_with_ac_bonus: 5}
+        effects: [{apply_condition: {condition: shielded, to: self, duration: {until: start_of_source_next_turn}}}]
+    ai: {role: defense}
+    source: "PHB 2024: +5 AC until start of your next turn incl. triggering attack; no damage from Magic Missile"
+  - id: cure-wounds
+    name: Cure Wounds
+    tags: [spell, heal]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 5
+    target: {type: creature, side: ally, count: 1}
+    effects:
+      - heal: {dice: "2d8+{spell_mod}"}
+    ai: {role: heal}
+    source: "PHB 2024: 2d8 + spellcasting modifier"
+  - id: bless
+    name: Bless
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 30
+    target: {type: creature, side: ally, count: 3}
+    concentration: true
+    effects:
+      - apply_condition: {condition: blessed, to: target, duration: {minutes: 1}}
+    ai: {role: buff}
+    source: "PHB 2024: up to three creatures add 1d4 to attack rolls and saves; concentration 1 minute"
+  - id: sanctuary
+    name: Sanctuary
+    tags: [spell]
+    activation: bonus
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 30
+    target: {type: creature, side: ally, count: 1}
+    effects:
+      - apply_condition: {condition: sanctuary-warded, to: target, duration: {minutes: 1}}
+    ai: {role: defense}
+    manual: "Attackers must pass a WIS save vs caster DC or pick a new target; AI enemies avoid warded targets via avoid_targets_with."
+    source: "PHB 2024 Sanctuary (OCR partial)"
+  - id: sleep
+    name: Sleep
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 60
+    target: {type: zone, side: enemy}
+    area: {radius: 5}
+    concentration: true
+    effects:
+      - save:
+          ability: wis
+          dc: "{spell_dc}"
+          on_fail:
+            - apply_condition: {condition: incapacitated, to: target, duration: {until: end_of_target_next_turn}, ends_on: [damage_taken]}
+            - note: "Sleep: at the end of its next turn the target repeats the WIS save; on a failure it is Unconscious for the duration (ends if it takes damage or someone uses an action to shake it)."
+    ai: {role: control}
+    source: "PHB 2024 Sleep: 5-ft-radius sphere, WIS save or Incapacitated until end of next turn, then repeat save or Unconscious"
+    todo: ["Second save -> unconscious is manual (needs chained save_ends→condition)"]
+  - id: detect-magic
+    name: Detect Magic
+    tags: [spell, ritual]
+    activation: action
+    target: {type: self}
+    effects: [{note: "Detect Magic: sense magic within 30 ft for up to 10 minutes (concentration)."}]
+    ai: {role: none}
+  - id: mage-hand
+    name: Mage Hand
+    tags: [spell, cantrip]
+    activation: action
+    target: {type: self}
+    effects: [{note: "Mage Hand: spectral hand within 30 ft manipulates objects (no attacks)."}]
+    ai: {role: none}
+  - id: minor-illusion
+    name: Minor Illusion
+    tags: [spell, cantrip]
+    activation: action
+    target: {type: self}
+    effects: [{note: "Minor Illusion: sound or image; Investigation vs spell DC to discern."}]
+    ai: {role: none}
