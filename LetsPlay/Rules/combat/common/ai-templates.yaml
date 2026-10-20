@@ -15,3 +15,5 @@ ai_templates:
     params: {targeting: lowest_hp, range_pref: any, flee_below_pct: 30}
   - id: mindless
     params: {targeting: nearest, range_pref: melee, attack_downed: true}
+  - id: support
+    params: {targeting: nearest, range_pref: any, heal_ally_below_pct: 50, heal_downed: true, resource_threshold: 1.5, opening: [], avoid_targets_with: [sanctuary-warded]}
