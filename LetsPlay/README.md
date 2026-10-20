@@ -59,13 +59,13 @@ bin/
 
 | 系统 | 压缩包 |
 |------|--------|
-| Linux x86_64 | `combat-sim-<标签>-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows x86_64 | `combat-sim-<标签>-x86_64-pc-windows-msvc.zip` |
-| macOS（Apple 芯片，arm64） | `combat-sim-<标签>-aarch64-apple-darwin.tar.gz` |
+| Linux x86_64 | `talkdnd-letsplay-<标签>-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows x86_64 | `talkdnd-letsplay-<标签>-x86_64-pc-windows-msvc.zip` |
+| macOS（Apple 芯片，arm64） | `talkdnd-letsplay-<标签>-aarch64-apple-darwin.tar.gz` |
 
 没有 macOS Intel（x86_64）的预编译包。Intel Mac 需要开发者在本机编译后，把程序放进 `bin/`。
 
-压缩包的根上只有一个文件：`combat-sim`，Windows 是 `combat-sim.exe`。没有子目录。把压缩包**解压到本目录的 `bin/`**，得到 `bin/combat-sim`（Windows：`bin/combat-sim.exe`）。
+压缩包里是完整的 `LetsPlay/` 文件夹（DM 手册、战斗数据、裁定、各目录的 README），程序已经放在 `LetsPlay/bin/combat-sim`（Windows：`LetsPlay/bin/combat-sim.exe`）。解压到任意位置，进入 `LetsPlay/` 即可。压缩包**不含**任何规则书、冒险书或存档，需要你自己放进 `Rules/2014/`、`Rules/2024/`、`Adventures/`。
 
 Linux、macOS 解压后赋予执行权限，并在系统拦截未签名程序时去掉隔离属性：
 
@@ -94,7 +94,7 @@ Windows PowerShell 里对照 `.sha256` 文件中的哈希：
 Get-FileHash <文件名> -Algorithm SHA256
 ```
 
-`main` 分支上每次成功构建也会留下约 30 天的程序包，根上同样是这一个文件，解压位置相同。开发者可以用仓库根的开发工具把它直接装进 `bin/`。
+`main` 分支上每次成功构建也会留下约 30 天的程序包（只有程序本身，根上就是这一个文件，解压到 `bin/`）。开发者可以用仓库根的开发工具把它直接装进 `bin/`。
 
 放好之后，在本目录试一次。Linux / macOS：
 
