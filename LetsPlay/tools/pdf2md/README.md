@@ -16,7 +16,7 @@ uv run --project tools/pdf2md python -m pdf2md render "<book>" <pdf-page>
 `Foo.pdf` produces `.md/Foo/` next to it: `Foo.md` (page anchors `<a id="pN"></a>`, N = PDF page), `index.md` / `index.json`, `manifest.json`, `pages/` chunks, and `img/` page images for maps and figures.
 
 - **Incremental:** 10-page chunks, written atomically. `manifest.json` stores the PDF's SHA-256, so a changed PDF starts over and an unchanged one resumes.
-- **Tool upgrades:** when the pdf2md version changes, an unchanged PDF keeps its old pages (marked as being redone) and is reconverted chunk by chunk, so the book stays readable. Upgrades listed in `SELECTIVE_UPGRADES` redo only the chunks they affect (0.2.0 → 0.2.1: pages that used the text-layer fallback, which now keeps headings).
+- **Tool upgrades:** when the pdf2md version changes, an unchanged PDF keeps its old pages (marked as being redone) and is reconverted chunk by chunk, so the book stays readable. Upgrades listed in `SELECTIVE_UPGRADES` redo only the chunks they affect (0.2.0 → 0.2.1 and 0.2.1 → 0.2.2: pages that used the text-layer fallback; 0.2.2 judges fallback headings against the page's body font size instead of fixed point sizes).
 - **`--book`:** puts that book first; the rest of the queue follows. Add `--only` to stop after it.
 - **Single worker:** a lock in `.pdf2md/worker.lock` (stale after 10 minutes) allows one worker at a time.
 - **Background-friendly:** it runs at low CPU priority.

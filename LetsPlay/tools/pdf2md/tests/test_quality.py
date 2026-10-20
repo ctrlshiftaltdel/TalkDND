@@ -183,3 +183,15 @@ def test_selective_upgrade_redoes_only_fallback_chunks(letsplay, monkeypatch):
     b = convert.Book(str(letsplay / "Rules/2024/Core Rules 2024.pdf"))
     assert b.m["stale"] == ["p0006-0010"]
     assert sorted(b.m["chunks"]) == ["p0001-0005", "p0011-0012"]
+
+
+def test_fallback_headings_relative_to_body_size():
+    from pdf2md import fallback
+    body = 14.0  # scaled page: body text larger than the old absolute 12.2 pt cut-off
+    assert not fallback.is_heading("their characters' actions, then incorporate", 14.1, False, body)
+    assert not fallback.is_heading("Keep your descriptions short and evocative.", 14.5, False, body)
+    assert fallback.is_heading("NARRATION", 20.0, False, body)
+    assert fallback.is_heading("Brevity", 14.0, True, body)
+    assert not fallback.is_heading("look down the shaft. Just make sure", 20.0, False, body)
+    assert not fallback.is_heading("==", 20.0, False, body)
+    assert fallback.body_size([(14.1, 300), (13.8, 200), (20.0, 20)]) == 14.0
