@@ -111,7 +111,9 @@ def run_engine(engine, wd, timeout=900):
                 raise RuntimeError("engine returned no JSON markdown") from None
         return res["markdown"]
     if engine.startswith("cmd:"):
-        r = subprocess.run(shlex.split(engine[4:]) + [prompt], capture_output=True, text=True,
+        # Windows paths contain backslashes: split without POSIX escapes there
+        argv = [a.strip('"') for a in shlex.split(engine[4:], posix=os.name != "nt")]
+        r = subprocess.run(argv + [prompt], capture_output=True, text=True,
                            timeout=timeout, cwd=wd)
         if r.returncode != 0:
             raise RuntimeError(f"engine exit {r.returncode}: {r.stderr[-300:]}")
