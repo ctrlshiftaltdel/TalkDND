@@ -207,6 +207,12 @@ The `roll` grammar is: terms joined by `+`/`-`; dice `NdS` with optional `khN`, 
 
 Alternative considered: allow any die size. Rejected: no D&D rule rolls a d7, and rejecting it catches typos.
 
+### 2026-10-20 — Book is canon, presentation is improvised
+
+The owner wants the adventure book followed faithfully for facts, structure, and mechanics (plot beats, NPC motives and secrets, clues, maps, stat blocks, DCs) while scenes, dialogue, NPC personality, and reactions are improvised rather than read aloud. The DM guide (`LetsPlay/AGENTS.md` section 5) now says so: paraphrase boxed text and never recite it; react to player choices through world logic; invent minor details freely and record them so they become canon (public ones in `Saves/<slot>/canon.md` or `NPCs/`, hidden ones in `dm-secrets.md`); keep improvisation consistent with book secrets; give each companion a distinct voice; manage pacing; end scenes with suggested options plus free input; follow the save's ruleset strictly and rule only where the rules are silent; use the adventure PDF maps. The guidance names no particular agent.
+
+Alternative considered: read boxed text verbatim. Rejected by the owner, and it would put copyrighted text into session logs.
+
 ## Change history
 
 | Date | Change |
@@ -215,3 +221,4 @@ Alternative considered: allow any die size. Rejected: no D&D rule rolls a d7, an
 | 2026-10-20 | Play directory is self-contained. The binary lives in `LetsPlay/bin/` and is gitignored. Launcher wrappers are gone, so the Rust-only exception list is the kit scripts and CI YAML. |
 | 2026-10-20 | Release assets bundle the tracked `LetsPlay/` folder with the binary, guarded by a CI content gate. First release `v0.1.0`. |
 | 2026-10-20 | Dice: one roll path through `combat-sim roll`, extended grammar, check-letsplay dice-source lint. |
+| 2026-10-20 | DM guidance: book is canon for facts and mechanics, presentation improvised; `canon.md` added to the save layout. |
