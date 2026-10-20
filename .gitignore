@@ -38,6 +38,9 @@ Saves/*
 # --- Build artifacts / tool state ---
 tools/combat-sim/target/
 tools/talkdnd-dev/target/
+# Windows players drop the release binary here. The Unix tools/bin/combat-sim
+# path stays a tracked symlink to the local release build.
+tools/bin/combat-sim.exe
 target/
 .codegraph/
 *.state.json
