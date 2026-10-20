@@ -158,7 +158,10 @@ fn leaks_print_paths_only_and_exit_one() {
     assert!(!stdout.contains("untracked/secret.pdf"));
     assert!(!stdout.contains("payload.bin"));
     for rel in &allowed {
-        assert!(!stdout.lines().any(|line| line == *rel), "{rel} in {stdout}");
+        assert!(
+            !stdout.lines().any(|line| line == *rel),
+            "{rel} in {stdout}"
+        );
     }
     let mut lines: Vec<&str> = stdout.lines().collect();
     let mut expected: Vec<&str> = hits.to_vec();
@@ -178,7 +181,10 @@ fn usage_and_missing_git_exit_two() {
     let output = common::run(Path::new("."), &["check-leaks", "extra"]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(text(&output.stdout), "");
-    assert_eq!(text(&output.stderr).trim(), "usage: talkdnd-dev check-leaks");
+    assert_eq!(
+        text(&output.stderr).trim(),
+        "usage: talkdnd-dev check-leaks"
+    );
 
     let output = common::run(Path::new("."), &[]);
     assert_eq!(output.status.code(), Some(2));

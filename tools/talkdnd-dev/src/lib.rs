@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod fetch;
 pub mod leaks;
 pub mod migrate;
 

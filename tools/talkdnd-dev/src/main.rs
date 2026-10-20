@@ -41,8 +41,9 @@ fn dispatch(args: &[String]) -> Result<u8, String> {
             print!("{}", outcome.stdout());
             Ok(0)
         }
+        Some("fetch-binary") => talkdnd_dev::fetch::run(&args[1..]),
         _ => {
-            usage("usage: talkdnd-dev <check-leaks|migrate-layout>");
+            usage("usage: talkdnd-dev <check-leaks|migrate-layout|fetch-binary>");
             Ok(2)
         }
     }

@@ -24,8 +24,8 @@ use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
 use crate::space::{Position, Space, OPEN_ZONE};
 use crate::state::{
-    ability_from_text, active_duration, ActiveCondition, ActiveDuration,
-    ActiveSaveEnds, CombatOutcome, CombatantState, DeathSaves, EncounterState,
+    ability_from_text, active_duration, ActiveCondition, ActiveDuration, ActiveSaveEnds,
+    CombatOutcome, CombatantState, DeathSaves, EncounterState,
 };
 
 /// Destination for engine log lines.
@@ -940,15 +940,15 @@ pub fn init_with_modes(
             rows.push((index, *total, true));
             continue;
         }
-        let mode = modes
-            .iter()
-            .filter(|(target, _)| *target == index)
-            .fold(RollMode::Normal, |acc, (_, mode)| match (acc, *mode) {
+        let mode = modes.iter().filter(|(target, _)| *target == index).fold(
+            RollMode::Normal,
+            |acc, (_, mode)| match (acc, *mode) {
                 (RollMode::Normal, other) => other,
                 (current, RollMode::Normal) => current,
                 (current, other) if current == other => current,
                 _ => RollMode::Normal,
-            });
+            },
+        );
         let roll = D20Roll::roll(combatant.creature.init_bonus(), mode, rng);
         combatant.initiative_total = Some(roll.total);
         log.log(format_args!(
@@ -2541,7 +2541,16 @@ fn resolve_attack(
     let previous = state.nonlethal_active;
     state.nonlethal_active = wants_nonlethal && melee;
     let result = resolve_attack_inner(
-        state, attacker, target, profile, source, options, rng, log, economy_spent, ignore_range,
+        state,
+        attacker,
+        target,
+        profile,
+        source,
+        options,
+        rng,
+        log,
+        economy_spent,
+        ignore_range,
     );
     state.nonlethal_active = previous;
     result
@@ -2684,7 +2693,8 @@ fn resolve_attack_inner(
         .ok_or_else(|| anyhow!("this state has no scene"))?;
     let attacker_position = state.combatants[attacker].position_ref();
     let target_position = state.combatants[target].position_ref();
-    let (attacker_position, target_position) = (attacker_position.as_ref(), target_position.as_ref());
+    let (attacker_position, target_position) =
+        (attacker_position.as_ref(), target_position.as_ref());
     let distance = space
         .distance(attacker_position, target_position)
         .ok_or_else(|| anyhow!("no path between the combatants"))?;
@@ -3035,9 +3045,7 @@ fn trigger_abilities(
                 .content
                 .abilities
                 .get(&reference.reference)
-                .is_some_and(|ability| {
-                    ability.triggers.iter().any(|trigger| trigger.on == when)
-                }),
+                .is_some_and(|ability| ability.triggers.iter().any(|trigger| trigger.on == when)),
         };
         if matches {
             if let Ok(ability) = state.content.resolve_ability(entry) {
@@ -6044,18 +6052,21 @@ pub fn move_to_at(
         }
         // 2024 PHB: climbing (up or down) costs 1 extra foot per foot unless the
         // creature has a Climb Speed.
-        let climb_extra = if step.elevation_change != 0
-            && state.combatants[index].creature.speed().climb <= 0
-        {
-            step.elevation_change.abs()
-        } else {
-            0
-        };
+        let climb_extra =
+            if step.elevation_change != 0 && state.combatants[index].creature.speed().climb <= 0 {
+                step.elevation_change.abs()
+            } else {
+                0
+            };
         if climb_extra > 0 {
             log.log(format_args!(
                 "{name} climbs {} ft {}: +{climb_extra} ft movement (no Climb Speed)",
                 step.elevation_change.abs(),
-                if step.elevation_change > 0 { "up" } else { "down" }
+                if step.elevation_change > 0 {
+                    "up"
+                } else {
+                    "down"
+                }
             ));
         }
         state.combatants[index].speed_left -= step.cost + climb_extra;

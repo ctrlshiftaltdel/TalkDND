@@ -44,7 +44,7 @@ LetsPlay/
 ### 4. 其他
 
 - 一个能执行命令行的 AI 助手（能读写本目录文件、运行 shell）。
-- combat-sim：从 GitHub Releases 下载预编译二进制（见下文），或安装 [Rust](https://rustup.rs) 后从源码编译。开发工具 `tools/talkdnd-dev` 仍需要 Rust。
+- combat-sim：从 GitHub Releases 下载预编译二进制（见下文），用 `talkdnd-dev fetch-binary` 拉取 `main` 上最近一次成功构建，或安装 [Rust](https://rustup.rs) 后从源码编译。开发工具 `tools/talkdnd-dev` 仍需要 Rust。`fetch-binary` 还需要已登录的 [GitHub CLI](https://cli.github.com/)（`gh`）。
 - Python 3（可选，用于掷骰的备用方式）。
 
 ## 获取 combat-sim
@@ -97,6 +97,21 @@ Windows PowerShell 里对照 `.sha256` 文件中的哈希：
 Get-FileHash <文件名> -Algorithm SHA256
 ```
 
+### 用 gh 安装 main 上的最新构建（玩家和 Agent）
+
+已经 `gh auth login` 时，在仓库根目录运行：
+
+```bash
+cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- fetch-binary
+```
+
+命令会查找本仓库 `main` 上最近一次成功的 `build-artifacts` 运行，下载当前系统的 `combat-sim`，放到 `tools/bin/combat-sim`（Windows 是 `tools\bin\combat-sim.exe`），并在 Linux / macOS 上设置可执行位。这一步会编译很小的 `talkdnd-dev`，不会在本机编译 combat-sim。制品大约保留 30 天。
+
+- `--dry-run`：只打印将要执行的 `gh run list` / `gh run download` 命令，不下载。
+- `--target <triple>`：不跟当前系统走。可以是 `x86_64-unknown-linux-gnu`、`x86_64-pc-windows-msvc` 或 `aarch64-apple-darwin`。
+
+Agent：`tools/combat-sim/src` 没改时用这条命令取二进制。只有源码改了才按下一节在本地做 `--release` 编译，并让 `tools/bin/combat-sim` 指向新构建。装好的文件只留在本机，不要提交。Unix 上下载会替换仓库里原来的符号链接。
+
 放好之后，在仓库任意目录试一次。Linux / macOS：
 
 ```bash
@@ -113,7 +128,7 @@ LetsPlay\bin\combat-sim.cmd roll 1d20+5
 
 ### 从源码编译
 
-没有合适的预编译包，或你要改引擎时，在仓库根目录：
+没有合适的预编译包，或你改了 `tools/combat-sim/src` 时，在仓库根目录：
 
 ```bash
 cd tools/combat-sim && cargo build --release && cd ../..

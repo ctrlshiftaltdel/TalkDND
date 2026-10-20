@@ -19,7 +19,7 @@
 - 破坏性操作和迁移政策：禁止改写 Git 历史、禁止强推。已有检出里的未跟踪本地书和存档用 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout`（默认 dry-run；真正移动时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout --apply`），不得覆盖已有文件。主持游戏写入 `LetsPlay/Saves/` 豁免开发流程，但那些文件仍然不得提交。
 - 新依赖政策：新增依赖（Rust crate、Python 第三方包、GitHub Action 以外的外部服务）必须先得到人工批准。`tools/talkdnd-dev` 只用 Rust 标准库。三份 AgentOrch 套件脚本保持上游 Python 标准库，不得改写。
 - 需要人工批准的变化：创建或删除 GitHub 仓库；改写历史或强推；新增依赖；合并到 `main`；规则版本语义变化（`ruleset` 分层、2014/2024 行为差异）。
-- combat-sim 源码只读约定：修改 `tools/combat-sim/src` 下的文件之前先 `chmod u+w`，改完并验证之后 `chmod a-w`。只有 `src` 变化时才重新 `cargo build --release`。
+- combat-sim 源码只读约定：修改 `tools/combat-sim/src` 下的文件之前先 `chmod u+w`，改完并验证之后 `chmod a-w`。`src` 没有变化时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- fetch-binary`（需要已登录的 `gh`），不要在本机编译。只有 `src` 变化时才重新 `cargo build --release`。
 - **PRIVACY RULE**: never put save contents, DM secrets, or copyrighted text into Issues, PRs, commit messages or CI logs.
 
 ## 验证命令
@@ -29,7 +29,8 @@
 - 快速测试：`python3 scripts/validate_kit.py` 与 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`
 - 完整回归：`cargo test --manifest-path tools/combat-sim/Cargo.toml` 与 `cargo test --manifest-path tools/talkdnd-dev/Cargo.toml`
 - 静态检查 / 类型检查：`python3 -m py_compile scripts/orchestrator.py scripts/validate_kit.py`
-- 构建 / 打包：`cargo build --release --manifest-path tools/combat-sim/Cargo.toml`（`tools/bin/combat-sim` 是指向 `tools/combat-sim/target/release/combat-sim` 的符号链接，不把二进制提交进 Git）
+- 构建 / 打包：`src` 未改时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- fetch-binary`。它用 `gh run list` / `gh run download` 取 `main` 上最近一次成功的 `build-artifacts` 制品 `combat-sim-<target>`，安装到 `tools/bin/combat-sim`（Windows 为 `tools/bin/combat-sim.exe`），并在 unix 上加上可执行位。`--dry-run` 只打印命令。`--target` 可选 `x86_64-unknown-linux-gnu`、`x86_64-pc-windows-msvc`、`aarch64-apple-darwin`。下载结果是本机文件，不要提交；Unix 上它会替换仓库里指向 `tools/combat-sim/target/release/combat-sim` 的符号链接。只有 `tools/combat-sim/src` 变化时才 `cargo build --release --manifest-path tools/combat-sim/Cargo.toml`，并让 `tools/bin/combat-sim` 重新指向该 release 二进制。不把二进制提交进 Git。
+- GitHub：`.github/workflows/ci.yml` 在 push 与 pull request 上跑 fmt、clippy、ubuntu / windows / macos-14 测试、cargo-deny、2014 与 2024 的 `content check`（只读仓库里的 `LetsPlay/Rules/combat`）、`validate_kit.py`、`check-leaks`、yamllint 和离线相对链接检查。`main` 上的 `.github/workflows/build-artifacts.yml` 上传三个平台的 release 二进制。标签发布仍走 `.github/workflows/release.yml`。
 - 手工 / UI 冒烟检查：`LetsPlay/bin/combat-sim roll 1d20+5 --dc 15`（可在任意工作目录调用该包装脚本）
 - 合并后必须执行：`cargo test --manifest-path tools/combat-sim/Cargo.toml`；`cargo test --manifest-path tools/talkdnd-dev/Cargo.toml`；`python3 scripts/validate_kit.py`；`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`
 

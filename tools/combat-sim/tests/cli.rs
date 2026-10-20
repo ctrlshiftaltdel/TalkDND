@@ -449,13 +449,10 @@ fn bare_state_names_resolve_from_the_manifest_state_dir() {
     let root = unique_temp_dir("bare-state");
     std::fs::create_dir_all(&root).unwrap();
     let manifest = root.join("campaign.yaml");
-    let library = fixture("library");
+    let library = yaml_path(&fixture("library"));
     std::fs::write(
         &manifest,
-        format!(
-            "name: Bare State Test\nlibrary: [\"{}\"]\nstate_dir: .\n",
-            library.display()
-        ),
+        format!("name: Bare State Test\nlibrary: [\"{library}\"]\nstate_dir: .\n"),
     )
     .unwrap();
 
@@ -485,6 +482,11 @@ fn bare_state_names_resolve_from_the_manifest_state_dir() {
     assert!(stdout(&output).contains("Striker A"));
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// YAML double quotes treat `\` as an escape. Forward slashes work on Windows.
+fn yaml_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn unique_temp_dir(label: &str) -> PathBuf {

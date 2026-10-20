@@ -1,0 +1,22 @@
+extends: relaxed
+
+rules:
+  line-length: disable
+
+ignore: |
+  .git
+  .worktrees
+  .orchestration
+  .local
+  target
+  tools/combat-sim/target
+  tools/talkdnd-dev/target
+  LetsPlay/Rules/2014
+  LetsPlay/Rules/2024
+  LetsPlay/Adventures
+  LetsPlay/Saves
+  LetsPlay/Rules/combat/local
+  Rules/2014
+  Rules/2024
+  Adventures
+  Saves

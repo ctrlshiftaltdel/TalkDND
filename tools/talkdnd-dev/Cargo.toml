@@ -2,7 +2,8 @@
 name = "talkdnd-dev"
 version = "0.1.0"
 edition = "2021"
-description = "Std-only TalkDND helpers: check-leaks and migrate-layout"
+description = "Std-only TalkDND helpers: check-leaks, migrate-layout, and fetch-binary"
+license = "MIT"
 publish = false
 
 [dependencies]
