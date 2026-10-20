@@ -30,8 +30,14 @@ def _lines(page):
         for ln in blk["lines"]:
             t = "".join(sp["text"] for sp in ln["spans"]).strip()
             if t:
-                out.append((ln["bbox"], t))
+                size = max(sp["size"] for sp in ln["spans"])
+                bold = "bold" in ln["spans"][0]["font"].lower()
+                out.append((ln["bbox"], t, size >= 12.2 or (8.7 <= size <= 9.4 and bold)))
     return out
+
+
+def _texts(page):
+    return [(r, t) for r, t, _ in _lines(page)]
 
 
 def _junk(t):
@@ -50,7 +56,7 @@ def column_text(page):
     mid = page.rect.x0 + width / 2
     pad = width * 0.03
     lines = _lines(page)
-    full = sorted(r[1] for r, _ in lines if r[0] < mid - pad and r[2] > mid + pad)
+    full = sorted(r[1] for r, _, _ in lines if r[0] < mid - pad and r[2] > mid + pad)
 
     def key(item):
         r = item[0]
@@ -60,9 +66,15 @@ def column_text(page):
 
     paras, cur, prev = [], [], None
     lines = [x for x in lines if not _junk(x[1])]
-    for r, t in sorted(lines, key=key):
+    for r, t, head in sorted(lines, key=key):
         k = key((r, t))[:2]
         h = r[3] - r[1]
+        if head and len(t) <= 80:
+            if cur:
+                paras.append(" ".join(cur))
+            paras.append("### " + t)
+            cur, prev = [], None
+            continue
         if prev and (k != prev[0] or r[1] - prev[1][3] > h * 0.8 or r[1] < prev[1][1]):
             paras.append(" ".join(cur))
             cur = []
@@ -158,7 +170,7 @@ def _ocr_heading(page, text, ocr_engine, dpi):
     key = re.sub(r"[^a-z]", "", text.lower())
     if len(key) < 3:
         return None
-    lines = _lines(page)
+    lines = _texts(page)
     r = None
     for bbox, t in lines:
         k = re.sub(r"[^a-z]", "", t.lower())
