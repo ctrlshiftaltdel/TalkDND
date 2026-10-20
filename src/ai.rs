@@ -1805,6 +1805,7 @@ fn condition_def_value(definition: &ConditionDef) -> f64 {
             ConditionFlag::NoOpportunityAttacksAgainst => 0.15,
             ConditionFlag::StandUpHalfSpeed => 0.1,
             ConditionFlag::Unaware => 0.35,
+            ConditionFlag::SpeedHalved => 0.25,
         };
     }
     for modifier in &definition.modifiers {

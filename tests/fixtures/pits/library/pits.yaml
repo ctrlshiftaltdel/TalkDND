@@ -1,0 +1,113 @@
+rules:
+  dying_conditions: [ko-test]
+  concentration_condition: focus-test
+
+conditions:
+  - id: ko-test
+    flags: [incapacitated, speed_zero]
+  - id: focus-test
+  - id: marked-test
+  - id: carrying-test
+    flags: [speed_halved]
+
+abilities:
+  - id: focus-a
+    name: Focus A
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    concentration: true
+    effects:
+      - apply_condition: {condition: marked-test, to: target, duration: {minutes: 1}}
+  - id: focus-b
+    name: Focus B
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    concentration: true
+    effects:
+      - apply_condition: {condition: marked-test, to: target, duration: {minutes: 1}}
+  - id: mend
+    name: Mend
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 5
+    target: {type: creature, side: ally, count: 1}
+    effects:
+      - heal: {dice: "2d8+3"}
+
+creatures:
+  - id: hero
+    name: Hero
+    kind: pc
+    side: party
+    ac: 18
+    hp: 30
+    speed: {walk: 30}
+    init_bonus: 2
+    prof: 2
+    abilities: {str: 16, dex: 12, con: 14, int: 10, wis: 14, cha: 10}
+    spellcasting: {ability: wis, attack: 4, dc: 12}
+    resources:
+      spell-slot-1: {max: 3, recharge: long}
+    attacks:
+      - {id: sure-sword, name: Sure Sword, kind: melee, ability: str, to_hit: 50, damage: [{dice: "1d8+3", type: slashing}], reach: 5}
+      - {id: sure-bow, name: Sure Bow, kind: ranged, ability: dex, to_hit: 50, damage: [{dice: "1d6+1", type: piercing}], range: [80, 320]}
+    actions:
+      - {ref: focus-a}
+      - {ref: focus-b}
+      - {ref: mend}
+  - id: mook
+    name: Mook
+    kind: monster
+    side: enemy
+    ac: 10
+    hp: 1
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10}
+    attacks:
+      - {id: poke, name: Poke, kind: melee, ability: str, to_hit: 2, damage: [{dice: "1d4", type: piercing}], reach: 5}
+  - id: captor
+    name: Captor
+    kind: monster
+    side: enemy
+    tags: [nonlethal]
+    ac: 10
+    hp: 5
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10}
+    attacks:
+      - {id: cudgel, name: Cudgel, kind: melee, ability: str, to_hit: 60, damage: [{dice: "100", type: bludgeoning}], reach: 5}
+
+scenes:
+  - id: ledge-room
+    name: Ledge Room
+    mode: zones
+    zones:
+      - {id: ledge, elevation: 10}
+      - {id: floor, elevation: 0}
+    edges:
+      - {a: ledge, b: floor, distance: 10}
+
+encounters:
+  - id: pit-fight
+    name: Pit Fight
+    scene: ledge-room
+    party_zone: floor
+    members:
+      - {creature: mook, count: 2, zone: floor}
+  - id: captor-fight
+    name: Captor Fight
+    scene: ledge-room
+    party_zone: floor
+    members:
+      - {creature: captor, zone: floor}

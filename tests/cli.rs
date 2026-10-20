@@ -368,7 +368,7 @@ fn simulate_monte_carlo_json_is_sane() {
 #[test]
 fn simulate_from_state_and_missing_source_errors() {
     let temp = TempState::new("simulate-from");
-    create(&temp, &[]);
+    create(&temp, &["--party", "striker-a"]);
     let output = run_raw(&[
         "simulate",
         "--from-state",

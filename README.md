@@ -214,6 +214,30 @@ combat-sim --campaign campaign.yaml content show guard
 combat-sim --campaign campaign.yaml content check
 ```
 
+### 实战补丁（2026-10-20，来自第一次实战踩坑）
+
+```bash
+# 非致命击倒（2024 PHB「Knocking Out a Creature」，仅近战）：降到 0 HP 时改为昏迷+稳定
+combat-sim --state v13 attack "Will" "Guard 2" longsword --nonlethal
+combat-sim --state v13 damage "Guard 2" 6 --nonlethal          # DM 手动结算的近战击打
+#   生物数据加 tags: [nonlethal] = 该生物的近战默认非致命（如想抓活口的博物馆守卫）
+# 突袭：被突袭者先攻劣势（2024）；隐形等可给优势
+combat-sim --state v13 init --surprised "Guard 1" --surprised "Guard 2" [--adv "Rina"] [--dis X]
+# 独立掷骰：不需要状态文件，OS 熵随机
+combat-sim roll 1d20+7 --adv --dc 12
+# 治疗消耗法术位：首选 cast（自动扣位）；只用 heal 时加 --slot
+combat-sim --state v13 cast "Sera" cure-wounds "Sera"
+combat-sim --state v13 heal "Sera" 2d8+3 --from "Sera" --slot 1
+# 扛人/拖人：速度减半
+combat-sim --state v13 condition add "Will" carrying --permanent   # 放下时 condition remove
+```
+
+- 攀爬：区域/格子之间有高度差、且生物没有攀爬速度时，每上/下 1 尺多花 1 尺移动（日志会写 `climbs N ft`）。
+- 越回合行动：`attack/cast/use/move/interact` 的执行者不是当前回合者时打印 `WARNING ... acting out of turn`（反应/准备动作可忽略）。
+- 专注：施放新的专注法术会自动结束旧的（日志 `concentration ends`）。
+- `simulate --encounter` / `new` 省略 `--party` 时使用战役清单里的 `party: [...]`；`simulate` 若只有一方会直接报错，不再静默给出「敌方 100% 胜」。
+- `status --json` 新增 `dead`、`knocked_out`、`speed_left`。
+
 `attack --multi` 按生物的 `multiattack` 列表依次结算。`cast`/`use` 的目标写法与
 数据中的 `target` 一致；`--option N` 用于 `choice` 效果。`next` 会重置动作/附赠
 动作/每轮反应并结算回合结束/开始效果、死亡豁免和资源恢复。

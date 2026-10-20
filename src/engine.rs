@@ -73,6 +73,8 @@ pub struct AttackOptions {
     pub disadvantage: bool,
     pub multi: bool,
     pub no_reactions: bool,
+    /// Knock the target out instead of killing it if this melee attack drops it to 0 HP.
+    pub nonlethal: bool,
 }
 
 /// Ability/use command options.
@@ -84,6 +86,8 @@ pub struct UseOptions {
     pub advantage: bool,
     pub disadvantage: bool,
     pub no_reactions: bool,
+    /// Knock out instead of kill on a melee attack that drops the target to 0 HP.
+    pub nonlethal: bool,
 }
 
 /// A character's condition-duration override supplied by the CLI.
@@ -261,9 +265,10 @@ fn effective_speed(state: &EncounterState, index: usize) -> i32 {
     if has_flag(state, index, ConditionFlag::SpeedZero) {
         return 0;
     }
+    let halved = has_flag(state, index, ConditionFlag::SpeedHalved);
     let base = state.combatants[index].base_speed();
     if !has_modifier_sources(state, index) {
-        return base;
+        return if halved { base / 2 } else { base };
     }
     let modifiers = collect_modifiers(
         state,
@@ -282,6 +287,9 @@ fn effective_speed(state: &EncounterState, index: usize) -> i32 {
                 }
             }
         }
+    }
+    if halved {
+        speed /= 2;
     }
     speed.max(0)
 }
@@ -904,6 +912,18 @@ pub fn init(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    init_with_modes(state, overrides, &[], rng, log)
+}
+
+/// [`init`] with per-combatant roll modes. 2024 PHB: a Surprised creature
+/// rolls initiative with Disadvantage; Invisible creatures roll with Advantage.
+pub fn init_with_modes(
+    state: &mut EncounterState,
+    overrides: &[(usize, i32)],
+    modes: &[(usize, RollMode)],
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
     state.initiative.clear();
     state.round = 1;
     state.turn = 0;
@@ -920,7 +940,16 @@ pub fn init(
             rows.push((index, *total, true));
             continue;
         }
-        let roll = D20Roll::roll(combatant.creature.init_bonus(), RollMode::Normal, rng);
+        let mode = modes
+            .iter()
+            .filter(|(target, _)| *target == index)
+            .fold(RollMode::Normal, |acc, (_, mode)| match (acc, *mode) {
+                (RollMode::Normal, other) => other,
+                (current, RollMode::Normal) => current,
+                (current, other) if current == other => current,
+                _ => RollMode::Normal,
+            });
+        let roll = D20Roll::roll(combatant.creature.init_bonus(), mode, rng);
         combatant.initiative_total = Some(roll.total);
         log.log(format_args!(
             "Initiative {}: {}",
@@ -2482,7 +2511,61 @@ fn has_dark_sense(combatant: &CombatantState) -> bool {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_attack(
+    state: &mut EncounterState,
+    attacker: usize,
+    target: usize,
+    profile: &AttackProfile,
+    source: Option<&EffectSource>,
+    options: &AttackOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+    economy_spent: bool,
+    ignore_range: bool,
+) -> Result<()> {
+    let wants_nonlethal = options.nonlethal
+        || state.combatants[attacker]
+            .creature
+            .tags
+            .as_ref()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == "nonlethal"));
+    let melee = matches!(profile.kind, AttackKind::Melee | AttackKind::MeleeOrRanged)
+        && attacker_in_melee_reach(state, attacker, target, profile);
+    if options.nonlethal && !melee {
+        log.log(format_args!(
+            "note: non-lethal ignored for `{}`: only melee attacks can knock out (2024 PHB)",
+            profile.name
+        ));
+    }
+    let previous = state.nonlethal_active;
+    state.nonlethal_active = wants_nonlethal && melee;
+    let result = resolve_attack_inner(
+        state, attacker, target, profile, source, options, rng, log, economy_spent, ignore_range,
+    );
+    state.nonlethal_active = previous;
+    result
+}
+
+fn attacker_in_melee_reach(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+    profile: &AttackProfile,
+) -> bool {
+    if profile.kind == AttackKind::Melee {
+        return true;
+    }
+    let Some(space) = state.space() else {
+        return true;
+    };
+    let from = state.combatants[attacker].position_ref();
+    let to = state.combatants[target].position_ref();
+    space.can_reach(from.as_ref(), to.as_ref(), profile.reach)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_attack_inner(
     state: &mut EncounterState,
     attacker: usize,
     target: usize,
@@ -3108,6 +3191,29 @@ fn can_afford(state: &EncounterState, owner: usize, cost: &AbilityCost) -> bool 
         .is_some_and(|resource| resource.current >= i32::try_from(cost.amount).unwrap_or(i32::MAX))
 }
 
+/// Spends one `spell-slot-N` from `owner` (used by `heal --slot`).
+pub fn spend_spell_slot(
+    state: &mut EncounterState,
+    owner_name: &str,
+    level: i32,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let owner = state
+        .find_index(owner_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let cost = AbilityCost {
+        resource: format!("spell-slot-{level}"),
+        amount: 1,
+    };
+    if !spend_cost(state, owner, &cost, log)? {
+        bail!(
+            "`{}` has no level {level} spell slot left",
+            state.combatants[owner].name
+        );
+    }
+    Ok(())
+}
+
 fn spend_cost(
     state: &mut EncounterState,
     owner: usize,
@@ -3524,6 +3630,7 @@ fn apply_effect(
                 disadvantage: context.has_disadvantage,
                 multi: false,
                 no_reactions: false,
+                nonlethal: state.nonlethal_request,
             };
             resolve_attack(
                 state,
@@ -4101,6 +4208,7 @@ fn apply_heal_effect(
 }
 
 fn revive_from_zero(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
+    state.combatants[target].knocked_out = false;
     let dying = state
         .content
         .rules
@@ -4936,6 +5044,7 @@ pub fn use_ability(
         disadvantage: options.disadvantage,
         multi: false,
         no_reactions: options.no_reactions,
+        nonlethal: options.nonlethal,
     };
     use_resolved_ability(
         state,
@@ -5006,6 +5115,7 @@ pub fn use_entry(
             disadvantage: options.disadvantage,
             multi: false,
             no_reactions: options.no_reactions,
+            nonlethal: options.nonlethal,
         };
         resolve_attack(
             state, actor, target, &profile, None, &options, rng, log, false, false,
@@ -5230,6 +5340,14 @@ fn apply_damage_rolls(
     // Massive damage.
     let overflow = hp_damage.saturating_sub(before.max(0));
     let max_hp = state.combatants[target].max_hp;
+    if state.combatants[target].hp == 0 && !was_at_zero && state.nonlethal_active {
+        // 2024 PHB "Knocking Out a Creature": Unconscious and stable instead.
+        knock_out(state, target, source, log);
+        concentration_damage_check(state, target, total, rng, log)?;
+        run_damage_taken_triggers(state, target, source, total, rng, log);
+        fire_ends_on(state, target, EndsOn::DamageTaken, log);
+        return Ok(total);
+    }
     if state.combatants[target].hp == 0 && overflow >= max_hp {
         if log.enabled() {
             log.log(format_args!("{name} dies from massive damage"));
@@ -5301,6 +5419,47 @@ fn mitigate(
 ) -> Result<i32> {
     let multiplier = damage_multiplier(state, target, Some(source), damage_type, source_tags);
     Ok(((amount as f64) * multiplier).floor() as i32)
+}
+
+fn knock_out(state: &mut EncounterState, target: usize, source: usize, log: &mut dyn LogSink) {
+    let name = state.combatants[target].name.clone();
+    state.combatants[target].knocked_out = true;
+    state.combatants[target].death_saves.stable = true;
+    let conditions = state
+        .content
+        .rules
+        .dying_conditions
+        .clone()
+        .unwrap_or_default();
+    for condition in conditions {
+        let mut rng = seeded_rng(0);
+        let _ = apply_condition_internal(
+            state,
+            target,
+            &condition,
+            Some(source),
+            None,
+            Some(Duration {
+                rounds: None,
+                until: None,
+                minutes: None,
+                permanent: Some(true),
+                ends_on: Vec::new(),
+            }),
+            None,
+            None,
+            Vec::new(),
+            None,
+            false,
+            &mut rng,
+            log,
+        );
+    }
+    if log.enabled() {
+        log.log(format_args!(
+            "{name} is knocked out (non-lethal): out of the fight (dying conditions applied, stable); wakes at 1 HP after a Short Rest, on any healing, or DC 10 Medicine first aid"
+        ));
+    }
 }
 
 fn apply_dying(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
@@ -5883,7 +6042,23 @@ pub fn move_to_at(
                 break;
             }
         }
-        state.combatants[index].speed_left -= step.cost;
+        // 2024 PHB: climbing (up or down) costs 1 extra foot per foot unless the
+        // creature has a Climb Speed.
+        let climb_extra = if step.elevation_change != 0
+            && state.combatants[index].creature.speed().climb <= 0
+        {
+            step.elevation_change.abs()
+        } else {
+            0
+        };
+        if climb_extra > 0 {
+            log.log(format_args!(
+                "{name} climbs {} ft {}: +{climb_extra} ft movement (no Climb Speed)",
+                step.elevation_change.abs(),
+                if step.elevation_change > 0 { "up" } else { "down" }
+            ));
+        }
+        state.combatants[index].speed_left -= step.cost + climb_extra;
         let (from_label, to_label) = {
             let space = state.space();
             let from_label = state.combatants[index].zone.clone();

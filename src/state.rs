@@ -68,6 +68,12 @@ pub struct EncounterState {
     /// state; rebuilt after loading a state file.
     #[serde(skip)]
     space_cache: Arc<SpaceCache>,
+    /// Transient: the damage being applied comes from a non-lethal melee attack.
+    #[serde(skip)]
+    pub nonlethal_active: bool,
+    /// Transient: the current `use`/`cast` command asked for non-lethal attacks.
+    #[serde(skip)]
+    pub nonlethal_request: bool,
     /// Lowercased combatant names for fast `find_index` lookups. Rebuilt
     /// whenever the combatant list or its names change.
     #[serde(skip)]
@@ -200,6 +206,10 @@ pub struct CombatantState {
     /// Dead flag used for creatures without a configured dead condition.
     #[serde(default)]
     pub dead: bool,
+    /// Knocked out by a non-lethal melee blow (2024 "Knocking Out a Creature"):
+    /// Unconscious and stable instead of dying/dead.
+    #[serde(default)]
+    pub knocked_out: bool,
 }
 
 impl CombatantState {
@@ -912,6 +922,8 @@ impl EncounterState {
             space_cache,
             name_index,
             static_modifier_sources,
+            nonlethal_active: false,
+            nonlethal_request: false,
         };
         state.refresh_initial_conditions()?;
         state.log.push(format!(
@@ -1489,6 +1501,7 @@ fn combatant_from_creature(
         dormant,
         opening_used: false,
         dead: false,
+        knocked_out: false,
     }
 }
 

@@ -385,6 +385,9 @@ pub struct CampaignManifest {
     pub characters: Vec<PathBuf>,
     #[serde(default)]
     pub state_dir: Option<PathBuf>,
+    /// Default party creature ids for `new` / `simulate` when `--party` is omitted.
+    #[serde(default)]
+    pub party: Vec<String>,
 }
 
 /// Core-rule wiring supplied by data. No condition ids are hard-coded in code.
@@ -1560,6 +1563,8 @@ pub enum ConditionFlag {
     NoOpportunityAttacksAgainst,
     StandUpHalfSpeed,
     Unaware,
+    /// Speed is halved (for example while carrying or dragging a creature).
+    SpeedHalved,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

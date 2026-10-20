@@ -85,6 +85,15 @@ pub enum Command {
         /// Fixed initiative total for one combatant, repeatable.
         #[arg(long = "set", value_name = "NAME=TOTAL")]
         set: Vec<String>,
+        /// Surprised combatant (2024: rolls initiative with Disadvantage), repeatable.
+        #[arg(long = "surprised", value_name = "NAME")]
+        surprised: Vec<String>,
+        /// Combatant rolling initiative with Advantage (e.g. Invisible), repeatable.
+        #[arg(long = "adv", value_name = "NAME")]
+        adv: Vec<String>,
+        /// Combatant rolling initiative with Disadvantage, repeatable.
+        #[arg(long = "dis", value_name = "NAME")]
+        dis: Vec<String>,
     },
 
     /// Show the current encounter.
@@ -103,6 +112,9 @@ pub enum Command {
         multi: bool,
         #[arg(long)]
         no_reactions: bool,
+        /// Knock out instead of kill if a melee attack drops the target to 0 HP (2024 PHB).
+        #[arg(long)]
+        nonlethal: bool,
     },
 
     /// Apply damage from an expression or flat number.
@@ -113,6 +125,9 @@ pub enum Command {
         damage_type: Option<String>,
         #[arg(long)]
         crit: bool,
+        /// The damage is a melee blow that knocks out at 0 HP instead of killing.
+        #[arg(long)]
+        nonlethal: bool,
     },
 
     /// Heal a creature.
@@ -122,6 +137,9 @@ pub enum Command {
         /// Creature whose healing is being applied.
         #[arg(long = "from", value_name = "NAME")]
         from: Option<String>,
+        /// Spend one spell slot of this level from --from (prefer `cast`).
+        #[arg(long, value_name = "N", requires = "from")]
+        slot: Option<i32>,
     },
 
     /// Roll a saving throw.
@@ -174,6 +192,9 @@ pub enum Command {
         dis: bool,
         #[arg(long)]
         no_reactions: bool,
+        /// Knock out instead of kill if a melee attack drops the target to 0 HP (2024 PHB).
+        #[arg(long)]
+        nonlethal: bool,
     },
 
     /// Use an owned ability or a creature attack.
@@ -191,6 +212,9 @@ pub enum Command {
         dis: bool,
         #[arg(long)]
         no_reactions: bool,
+        /// Knock out instead of kill if a melee attack drops the target to 0 HP (2024 PHB).
+        #[arg(long)]
+        nonlethal: bool,
     },
 
     /// Add or remove a condition.
@@ -389,9 +413,31 @@ pub fn run() -> Result<()> {
             party_zone,
             add,
         ),
-        Command::Init { set } => {
+        Command::Init {
+            set,
+            surprised,
+            adv,
+            dis,
+        } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
+                let mut modes = Vec::new();
+                for (names, mode) in [
+                    (&surprised, RollMode::Disadvantage),
+                    (&dis, RollMode::Disadvantage),
+                    (&adv, RollMode::Advantage),
+                ] {
+                    for name in names {
+                        modes.push((canonical_index(state, name.trim())?, mode));
+                    }
+                }
+                for name in &surprised {
+                    let index = canonical_index(state, name.trim())?;
+                    lines.push(format!(
+                        "{} is Surprised: initiative rolled with Disadvantage",
+                        state.combatants[index].name
+                    ));
+                }
                 let mut overrides = Vec::new();
                 for token in &set {
                     let (name, total) = token.split_once('=').ok_or_else(|| {
@@ -404,7 +450,7 @@ pub fn run() -> Result<()> {
                     let index = canonical_index(state, name.trim())?;
                     overrides.push((index, total));
                 }
-                engine::init(state, &overrides, rng, lines)
+                engine::init_with_modes(state, &overrides, &modes, rng, lines)
             })
         }
         Command::Status => print_status(&state_path(&sources, state.as_deref()), json),
@@ -416,16 +462,19 @@ pub fn run() -> Result<()> {
             dis,
             multi,
             no_reactions,
+            nonlethal,
         } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let attacker = canonical_name(state, &attacker)?;
+                warn_out_of_turn(state, &attacker, lines);
                 let target = canonical_name(state, &target)?;
                 let options = AttackOptions {
                     advantage: adv,
                     disadvantage: dis,
                     multi,
                     no_reactions,
+                    nonlethal,
                 };
                 engine::attack(state, &attacker, &target, &attack, &options, rng, lines)
             })
@@ -435,10 +484,12 @@ pub fn run() -> Result<()> {
             expression,
             damage_type,
             crit,
+            nonlethal,
         } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let target = canonical_name(state, &target)?;
+                state.nonlethal_active = nonlethal;
                 engine::damage(
                     state,
                     &target,
@@ -454,6 +505,7 @@ pub fn run() -> Result<()> {
             target,
             expression,
             from,
+            slot,
         } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
@@ -462,6 +514,9 @@ pub fn run() -> Result<()> {
                     .as_deref()
                     .map(|name| canonical_name(state, name))
                     .transpose()?;
+                if let (Some(level), Some(caster)) = (slot, from.as_deref()) {
+                    engine::spend_spell_slot(state, caster, level, lines)?;
+                }
                 engine::heal(state, &target, &expression, from.as_deref(), rng, lines)
             })
         }
@@ -515,10 +570,26 @@ pub fn run() -> Result<()> {
             dis,
             dc,
         } => {
-            let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |_state, rng, lines| {
-                engine::roll_expression(&expression, RollMode::from_flags(adv, dis), dc, rng, lines)
-            })
+            // Stateless unless --state names an existing file (then it is logged there too).
+            let path = state.as_deref().map(|_| state_path(&sources, state.as_deref()));
+            match path {
+                Some(path) if path.exists() => run_state_command(&path, seed, |_state, rng, lines| {
+                    engine::roll_expression(&expression, RollMode::from_flags(adv, dis), dc, rng, lines)
+                }),
+                _ => {
+                    let mut lines = Vec::new();
+                    let mut rng = make_rng(seed);
+                    engine::roll_expression(
+                        &expression,
+                        RollMode::from_flags(adv, dis),
+                        dc,
+                        rng.as_mut(),
+                        &mut lines,
+                    )?;
+                    print_lines(&lines);
+                    Ok(())
+                }
+            }
         }
         Command::Cast {
             who,
@@ -529,10 +600,12 @@ pub fn run() -> Result<()> {
             adv,
             dis,
             no_reactions,
+            nonlethal,
         } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
+                warn_out_of_turn(state, &who, lines);
                 let options = UseOptions {
                     targets,
                     option,
@@ -540,7 +613,9 @@ pub fn run() -> Result<()> {
                     advantage: adv,
                     disadvantage: dis,
                     no_reactions,
+                    nonlethal,
                 };
+                state.nonlethal_request = nonlethal;
                 engine::use_ability(state, &who, &ability, &options, rng, lines)
             })
         }
@@ -553,10 +628,12 @@ pub fn run() -> Result<()> {
             adv,
             dis,
             no_reactions,
+            nonlethal,
         } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
+                warn_out_of_turn(state, &who, lines);
                 let options = UseOptions {
                     targets: targets.clone(),
                     option,
@@ -564,7 +641,9 @@ pub fn run() -> Result<()> {
                     advantage: adv,
                     disadvantage: dis,
                     no_reactions,
+                    nonlethal,
                 };
+                state.nonlethal_request = nonlethal;
                 engine::use_entry(state, &who, &ability, &targets, &options, rng, lines)
             })
         }
@@ -656,6 +735,7 @@ pub fn run() -> Result<()> {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
+                warn_out_of_turn(state, &who, lines);
                 engine::move_to(state, &who, &target, no_oa, rng, lines)
             })
         }
@@ -667,6 +747,7 @@ pub fn run() -> Result<()> {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
+                warn_out_of_turn(state, &who, lines);
                 engine::interact(state, &who, &object, option, rng, lines)
             })
         }
@@ -728,6 +809,22 @@ pub fn run() -> Result<()> {
 // ---------------------------------------------------------------------------
 // State path and content loading
 // ---------------------------------------------------------------------------
+
+fn read_manifest(sources: &ContentSources) -> Option<crate::content::schema::CampaignManifest> {
+    let path = sources.campaign_path()?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let value: serde_json::Value = if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        serde_json::from_str(&text).ok()?
+    } else {
+        let value: serde_norway::Value = serde_norway::from_str(&text).ok()?;
+        serde_json::to_value(value).ok()?
+    };
+    serde_json::from_value(value).ok()
+}
 
 fn manifest_state_dir(sources: &ContentSources) -> Option<PathBuf> {
     let path = sources.campaign_path()?;
@@ -838,6 +935,46 @@ fn make_rng(seed: Option<u64>) -> Box<dyn DiceRng> {
     }
 }
 
+/// Warns (does not block) when someone other than the active combatant acts:
+/// legitimate for reactions and readied actions, a bookkeeping slip otherwise.
+fn warn_out_of_turn(state: &EncounterState, actor: &str, lines: &mut Vec<String>) {
+    if state.initiative.is_empty() || state.outcome.is_some() {
+        return;
+    }
+    let Some(&active) = state.initiative.get(state.turn) else {
+        return;
+    };
+    let active_name = &state.combatants[active].name;
+    if !active_name.eq_ignore_ascii_case(actor) {
+        lines.push(format!(
+            "WARNING: {actor} is acting out of turn (round {}, active: {active_name}). OK for reactions/readied actions; otherwise run `next` first.",
+            state.round
+        ));
+    }
+}
+
+/// Party ids from `--party`, else the manifest's `party:` list, else an error.
+fn resolve_party(sources: &ContentSources, party: Option<String>) -> Result<Vec<String>> {
+    let explicit: Vec<String> = party
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    if !explicit.is_empty() {
+        return Ok(explicit);
+    }
+    if let Some(manifest) = read_manifest(sources) {
+        if !manifest.party.is_empty() {
+            return Ok(manifest.party);
+        }
+    }
+    bail!(
+        "no party: pass --party a,b,c or add `party: [a, b, c]` to the campaign manifest (an empty party would make every fight a 100% enemy win)"
+    )
+}
+
 fn run_state_command<F>(state_path: &Path, seed: Option<u64>, action: F) -> Result<()>
 where
     F: FnOnce(&mut EncounterState, &mut dyn DiceRng, &mut Vec<String>) -> Result<()>,
@@ -864,13 +1001,10 @@ fn new_state(
     add: Vec<String>,
 ) -> Result<()> {
     let content = load_content(sources)?;
-    let party = party
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(ToString::to_string)
-        .collect();
+    let party = resolve_party(sources, party).unwrap_or_else(|error| {
+        eprintln!("warning: {error}");
+        Vec::new()
+    });
     let adds = add
         .iter()
         .map(|spec| AddSpec::parse(spec))
@@ -940,13 +1074,7 @@ fn run_simulate(
     }
     let state = if let Some(encounter) = encounter {
         let content = load_content(sources)?;
-        let party = party
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(ToString::to_string)
-            .collect();
+        let party = resolve_party(sources, party)?;
         let options = NewEncounter {
             encounter,
             party,
@@ -970,6 +1098,17 @@ fn run_simulate(
             .with_context(|| format!("failed to load state {}", path.display()))?
     };
 
+    let sides: std::collections::BTreeSet<&str> = state
+        .combatants
+        .iter()
+        .map(|combatant| combatant.side.as_str())
+        .collect();
+    if sides.len() < 2 {
+        bail!(
+            "simulate: only one side present ({}); pass --party a,b,c or set `party:` in the campaign manifest",
+            sides.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
     let ai = Ai::prepare(&state);
     let mut rng = make_rng(seed);
     if runs == 1 {
@@ -1228,6 +1367,9 @@ struct CombatantStatus {
     death_saves: Option<crate::state::DeathSaves>,
     dormant: bool,
     concentrating: bool,
+    dead: bool,
+    knocked_out: bool,
+    speed_left: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -1304,6 +1446,9 @@ impl StatusOutput {
                     },
                     dormant: combatant.dormant,
                     concentrating: state.concentration.contains_key(&combatant.name),
+                    dead: combatant.is_dead(),
+                    knocked_out: combatant.knocked_out,
+                    speed_left: combatant.speed_left,
                 }
             })
             .collect();
