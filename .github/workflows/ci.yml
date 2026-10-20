@@ -17,8 +17,11 @@ jobs:
       - name: Test combat-sim
         run: cargo test --manifest-path tools/combat-sim/Cargo.toml
 
+      - name: Test talkdnd-dev
+        run: cargo test --manifest-path tools/talkdnd-dev/Cargo.toml
+
       - name: Validate AgentOrch kit
         run: python3 scripts/validate_kit.py
 
       - name: Check tracked files for leaks
-        run: bash scripts/check_leaks.sh
+        run: cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks

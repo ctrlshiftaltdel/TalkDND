@@ -7,7 +7,7 @@ TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D
 - 每一步都写进存档日志，下次可以从存档点接着玩；
 - 战斗由自带的后台引擎 **combat-sim** 结算（命中、伤害、状态、专注、移动、借机攻击……）。
 
-要玩：把规则书放进 `LetsPlay/Rules/<版本>/`，把冒险书放进 `LetsPlay/Adventures/`，然后 `cd LetsPlay`，在那个目录启动你的 Agent。开发与改代码请看仓库根目录的 `AGENTS.md`（那是开发协作契约，不是 DM 手册）。DM 手册是 `LetsPlay/AGENTS.md`。
+要玩：把规则书放进 `LetsPlay/Rules/<版本>/`，把冒险书放进 `LetsPlay/Adventures/`，然后 `cd LetsPlay`，在那个目录启动你的 Agent。开发与改代码请看仓库根目录的 `AGENTS.md`（那是开发协作契约，不是 DM 手册）。DM 手册是 `LetsPlay/AGENTS.md`。本仓库的程序和工具用 Rust 编写；开发工具在 `tools/talkdnd-dev`。
 
 ## 你需要准备什么
 
@@ -44,7 +44,7 @@ LetsPlay/
 ### 4. 其他
 
 - 一个能执行命令行的 AI 助手（能读写本目录文件、运行 shell）。
-- Rust 工具链（编译 combat-sim）：<https://rustup.rs>。
+- Rust 工具链（编译 `tools/combat-sim` 与 `tools/talkdnd-dev`）：<https://rustup.rs>。
 - Python 3（可选，用于掷骰的备用方式）。
 
 ## 开始一局

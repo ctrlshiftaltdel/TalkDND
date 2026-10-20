@@ -89,6 +89,7 @@ Master 逐条对照验收标准检查，不采信“我已经完成”的自述�
 
 本仓库是 TalkDND。上文是 AgentOrch 开发协作契约。主持游戏不走这套流程：去 `LetsPlay/` 读 `LetsPlay/AGENTS.md`。
 
+- **TECH STACK**: all project programs, tools, and scripts are Rust. The only exception is the vendored, unmodified AgentOrch kit scripts (`scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`), which are upstream third-party files kept as-is. CI YAML and shell one-liners inside workflows are allowed.
 - **版权材料不入库。** 规则书和冒险书由玩家自备，至少放入对应版本的 SRD，位置是 `LetsPlay/Rules/2014/`、`LetsPlay/Rules/2024/`、`LetsPlay/Adventures/`。这些目录除 README 外不得提交。战斗数据只收 SRD，署名见 `NOTICE`。
 - **combat-sim 源码只读约定。** `tools/combat-sim/src` 平时保持不可写。改某个源文件之前先对该文件执行 `chmod u+w`，改完并验证之后执行 `chmod a-w`。只有 `src` 发生变化时才 `cargo build --release`，并让 `tools/bin/combat-sim` 指向新的 release 二进制。
 - **规则版本分层。** `LetsPlay/Rules/combat/common/` 是两版共用层；`LetsPlay/Rules/combat/2014/` 与 `LetsPlay/Rules/combat/2024/` 是版本层。存档清单里的 `ruleset` 决定加载哪一层。通用裁定在 `LetsPlay/Rules/rulings.md`，版本差异在 `LetsPlay/Rules/rulings-2014.md` 与 `LetsPlay/Rules/rulings-2024.md`。

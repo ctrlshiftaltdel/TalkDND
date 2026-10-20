@@ -8,16 +8,16 @@
 - 一句话目标：让 AI 在聊天里按玩家自备的 D&D 规则书主持冒险，并用 combat-sim 结算战斗；受版权保护的书和冒险、以及个人存档，永不进入仓库或公开记录。
 - 现有项目 / 新项目：`现有项目`
 - 本地主分支：`main`
-- 语言 / 框架 / 运行方式：Rust（`tools/combat-sim`）与 Markdown/YAML 规则数据；编排脚本是 Python 3 标准库。玩家在 `LetsPlay/` 里开局。
+- 语言 / 框架 / 运行方式：项目自己的程序、工具和脚本一律用 Rust（`tools/combat-sim` 战斗引擎，`tools/talkdnd-dev` 开发工具）与 Markdown/YAML 规则数据。唯一例外是随上游原样保留、不得修改的 AgentOrch 套件脚本（`scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py`）。CI 的 YAML 与 workflow 里的 shell 一行命令可以保留。玩家在 `LetsPlay/` 里开局。
 - 重要设计 / 需求文件：无独立 `docs/PROJECT-CHARTER.md`。玩家说明是根目录 `README.md`；DM 手册是 `LetsPlay/AGENTS.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。范围、非目标与隐私规则即本文件。
 
 ## 范围与安全
 
-- 允许改动路径：`tools/combat-sim/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、根目录与各目录 `README.md`、编排文件（`AGENTS.md`、`AGENT-*.md`、`ORCHESTRATION-PROJECT.md`、`editions/`、`prompts/`、`templates/`、`VERSION.txt`）、`.github/`、`scripts/`。具体任务可以再收窄。
+- 允许改动路径：`tools/combat-sim/`、`tools/talkdnd-dev/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、根目录与各目录 `README.md`、编排文件（`AGENTS.md`、`AGENT-*.md`、`ORCHESTRATION-PROJECT.md`、`editions/`、`prompts/`、`templates/`、`VERSION.txt`）、`.github/`、`scripts/`。具体任务可以再收窄。
 - 永远禁止改动路径 / 文件：受版权保护的规则书与冒险书（`LetsPlay/Rules/2014/` 与 `LetsPlay/Rules/2024/` 除 `README.md` 外，`LetsPlay/Adventures/` 除 `README.md` 外，以及任何版权文本或其改编数据）；`LetsPlay/Saves/` 除 `README.md` 外；`**/dm-secrets.md`；`LetsPlay/Rules/combat/local/`；`LetsPlay/Rules/combat/2024/monsters/scarecrow.yaml`。
 - 秘密与隐私文件模式：`.local/`（除 `README.md`）、`**/dm-secrets.md`、`LetsPlay/Saves/`（除 `README.md`）、GitHub 凭据、玩家规则书与冒险书文本。
-- 破坏性操作和迁移政策：禁止改写 Git 历史、禁止强推。已有检出里的未跟踪本地书和存档用 `scripts/migrate_local_layout.sh`（默认 dry-run，`--apply` 才移动），不得覆盖已有文件。主持游戏写入 `LetsPlay/Saves/` 豁免开发流程，但那些文件仍然不得提交。
-- 新依赖政策：新增依赖（Rust crate、Python 第三方包、GitHub Action 以外的外部服务）必须先得到人工批准。编排脚本保持 Python 标准库。
+- 破坏性操作和迁移政策：禁止改写 Git 历史、禁止强推。已有检出里的未跟踪本地书和存档用 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout`（默认 dry-run；真正移动时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout --apply`），不得覆盖已有文件。主持游戏写入 `LetsPlay/Saves/` 豁免开发流程，但那些文件仍然不得提交。
+- 新依赖政策：新增依赖（Rust crate、Python 第三方包、GitHub Action 以外的外部服务）必须先得到人工批准。`tools/talkdnd-dev` 只用 Rust 标准库。三份 AgentOrch 套件脚本保持上游 Python 标准库，不得改写。
 - 需要人工批准的变化：创建或删除 GitHub 仓库；改写历史或强推；新增依赖；合并到 `main`；规则版本语义变化（`ruleset` 分层、2014/2024 行为差异）。
 - combat-sim 源码只读约定：修改 `tools/combat-sim/src` 下的文件之前先 `chmod u+w`，改完并验证之后 `chmod a-w`。只有 `src` 变化时才重新 `cargo build --release`。
 - **PRIVACY RULE**: never put save contents, DM secrets, or copyrighted text into Issues, PRs, commit messages or CI logs.
@@ -26,12 +26,12 @@
 
 下列命令已在接入时于本机执行。合并前和合并后都要重跑「合并后必须执行」里的命令。
 
-- 快速测试：`python3 scripts/validate_kit.py` 与 `bash scripts/check_leaks.sh`
-- 完整回归：`cargo test --manifest-path tools/combat-sim/Cargo.toml`
+- 快速测试：`python3 scripts/validate_kit.py` 与 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`
+- 完整回归：`cargo test --manifest-path tools/combat-sim/Cargo.toml` 与 `cargo test --manifest-path tools/talkdnd-dev/Cargo.toml`
 - 静态检查 / 类型检查：`python3 -m py_compile scripts/orchestrator.py scripts/validate_kit.py`
 - 构建 / 打包：`cargo build --release --manifest-path tools/combat-sim/Cargo.toml`（`tools/bin/combat-sim` 是指向 `tools/combat-sim/target/release/combat-sim` 的符号链接，不把二进制提交进 Git）
 - 手工 / UI 冒烟检查：`LetsPlay/bin/combat-sim roll 1d20+5 --dc 15`（可在任意工作目录调用该包装脚本）
-- 合并后必须执行：`cargo test --manifest-path tools/combat-sim/Cargo.toml`；`python3 scripts/validate_kit.py`；`bash scripts/check_leaks.sh`
+- 合并后必须执行：`cargo test --manifest-path tools/combat-sim/Cargo.toml`；`cargo test --manifest-path tools/talkdnd-dev/Cargo.toml`；`python3 scripts/validate_kit.py`；`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`
 
 `tools/combat-sim/tests/real_content.rs` 在 `LetsPlay/Saves/2026-10-19-01/combat/campaign.yaml` 不存在时跳过并打印说明。CI 没有版权书，也没有存档。
 

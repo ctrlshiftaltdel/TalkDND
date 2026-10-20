@@ -37,6 +37,7 @@ Saves/*
 
 # --- Build artifacts / tool state ---
 tools/combat-sim/target/
+tools/talkdnd-dev/target/
 target/
 .codegraph/
 *.state.json
