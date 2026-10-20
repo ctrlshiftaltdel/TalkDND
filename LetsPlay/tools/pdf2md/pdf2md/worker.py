@@ -172,7 +172,7 @@ def parse_pages(spec):
 
 
 def run(root, budget_seconds=None, budget_pages=None, book=None, pages=None, chunk_size=10,
-        ocr_engine="rapid", save=None, nice=True):
+        ocr_engine="rapid", save=None, nice=True, only=False):
     """Convert pending chunks in priority order until done or out of budget."""
     from .convert import Book
 
@@ -188,7 +188,7 @@ def run(root, budget_seconds=None, budget_pages=None, book=None, pages=None, chu
         pdfs = prioritise(root, scan(root), save=save, first=book)
         if book:
             pdfs = [p for p in pdfs if repair_slug(book) in repair_slug(os.path.basename(p))] + \
-                [p for p in pdfs if repair_slug(book) not in repair_slug(os.path.basename(p))]
+                ([] if only else [p for p in pdfs if repair_slug(book) not in repair_slug(os.path.basename(p))])
         wanted = parse_pages(pages)
         for pdf in pdfs:
             try:
