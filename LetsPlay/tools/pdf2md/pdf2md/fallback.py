@@ -229,3 +229,28 @@ def _ocr_heading(page, text, ocr_engine, dpi):
                       key=lambda ln: ln.x0)
     got = " ".join(ln.text.strip() for ln in rows)
     return got.strip() or None
+
+
+_HEAD = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
+
+
+def body_like_heading(text):
+    """Heading text that is really a line of body text (or OCR junk)."""
+    t = re.sub(r"<[^>]+>|\*", "", text).strip().lstrip("\u2018\u2019'\"")
+    letters = [c for c in t if c.isalpha()]
+    if len(letters) < 3 or letters[0].islower():
+        return True
+    if len(t) > 60:
+        return True
+    return len(t.split()) >= 5 and t.endswith((",", "-", ";"))
+
+
+def demote_body_headings(md):
+    """Turn sentence-like headings (OCR / text-layer fallback pages) back into text."""
+    out = []
+    for line in md.split("\n"):
+        m = _HEAD.match(line)
+        if m and body_like_heading(m.group(2)):
+            line = m.group(2)
+        out.append(line)
+    return "\n".join(out)

@@ -195,3 +195,29 @@ def test_fallback_headings_relative_to_body_size():
     assert not fallback.is_heading("look down the shaft. Just make sure", 20.0, False, body)
     assert not fallback.is_heading("==", 20.0, False, body)
     assert fallback.body_size([(14.1, 300), (13.8, 200), (20.0, 20)]) == 14.0
+
+
+def test_demote_body_headings():
+    from pdf2md import fallback
+    md = "### NARRATION\n### their characters' actions, then\n## eeee\n### Interior Illustrators: Helder Almeida, Joy Ang, David Astruga, Someone Else,\n#### Brevity\n### ==\n### Stat Blocks"
+    out = fallback.demote_body_headings(md).split("\n")
+    assert out == ["### NARRATION", "their characters' actions, then", "eeee",
+                   "Interior Illustrators: Helder Almeida, Joy Ang, David Astruga, Someone Else,",
+                   "#### Brevity", "==", "### Stat Blocks"]
+
+
+def test_column_text_large_body_font_synthetic_pdf():
+    """Scaled page (body 14 pt, heading 22 pt): only the real heading becomes ###."""
+    import pymupdf
+    from pdf2md import fallback
+    doc = pymupdf.open()
+    page = doc.new_page(width=980, height=1365)
+    page.insert_text((60, 80), "NARRATION", fontsize=22)
+    y = 120
+    for i in range(14):
+        page.insert_text((60, y), f"keep your descriptions short and evocative line {i} of body", fontsize=14)
+        y += 18
+    t = fallback.column_text(page)
+    heads = [l for l in t.split("\n") if l.startswith("#")]
+    assert heads == ["### NARRATION"]
+    assert "line 13 of body" in t

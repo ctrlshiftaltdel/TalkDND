@@ -41,6 +41,8 @@ SELECTIVE_UPGRADES = {
     ("0.2.0", "0.2.1"): lambda info: "fallback" in info,
     ("0.2.1", "0.2.2"): lambda info: "fallback" in info,
     ("0.2.0", "0.2.2"): lambda info: "fallback" in info,
+    # 0.2.3 demotes sentence-like headings on OCR and fallback pages
+    ("0.2.2", "0.2.3"): lambda info: "fallback" in info or "ocr" in info,
 }
 
 
@@ -224,6 +226,8 @@ class Book:
             body = postprocess(md_by_page.get(p, ""), hmap)
             if p in text_pages:
                 body = self.check_text_page(p, body, hmap, info[p])
+            if p not in text_pages or info[p].get("fallback"):
+                body = fallback.demote_body_headings(body)
             q = page_quality(body, info[p])
             info[p]["quality"] = q
             if "figure" in info[p]["flags"]:
