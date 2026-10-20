@@ -37,11 +37,11 @@ Tests use synthetic PDFs only: `uv run --project tools/pdf2md --group dev pytest
 ```
 uv run --project tools/pdf2md python -m pdf2md audit [--book NAME] [--threshold 25]
 uv run --project tools/pdf2md python -m pdf2md fix-queue [--book NAME] [--limit 20]
-uv run --project tools/pdf2md python -m pdf2md review --book NAME [--page 12,30-32 | --top 10] [--engine grok|cmd:CMD] [--jobs 2]
+uv run --project tools/pdf2md python -m pdf2md review --book NAME [--page 12,30-32 | --top 10] [--engine grok|cmd:CMD] [--jobs 2] [--rejudge]
 uv run --project tools/pdf2md python -m pdf2md apply [--book NAME]
 ```
 
 - `audit` scores every page against the PDF text layer and writes `.md/<stem>/audit.json` worst-first.
 - `fixes/pNNNN.md` overrides page N when the book is assembled (header: PDF sha256 + tool version; ignored for another PDF).
-- `review` runs an agent on a page and keeps the result only if recall does not drop and unknown words do not rise; otherwise it goes to `fixes/rejected/`. Every attempt is logged in `fixes/review.log.jsonl`. Grok Build: set `PDF2MD_GROK_MODEL` to pick a model.
+- `review` runs an agent on a page and keeps the result when scores do not regress. A small recall drop (≤ 0.05) is allowed on structured / stat-block pages when unknown/1k improves, word count stays ≥ 90%, and badness does not worsen; hard reject if unknown/1k rises or words fall below 50%. Otherwise the output goes to `fixes/rejected/`. `--rejudge` re-scores rejected files with the current gate (no agent). Grok Build defaults to 60 max turns and retries once on max-turns with a short prompt; set `PDF2MD_GROK_MODEL` to pick a model. Lessons and thresholds: `docs/LESSONS.md`.
 - `apply` rebuilds the book now (only when no worker holds the lock).
