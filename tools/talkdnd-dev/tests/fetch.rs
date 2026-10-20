@@ -244,13 +244,9 @@ fn locate_git() -> PathBuf {
 fn install_git_stub(dir: &Path, git: &Path) {
     #[cfg(unix)]
     {
-        let quoted = git.to_string_lossy().replace('\'', "'\\''");
-        let script = dir.join("git");
-        fs::write(&script, format!("#!/bin/sh\nexec '{quoted}' \"$@\"\n")).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&script).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&script, perms).unwrap();
+        // A symlink, not a freshly written script: exec of a file another
+        // test thread may still hold open for writing fails with ETXTBSY.
+        std::os::unix::fs::symlink(git, dir.join("git")).unwrap();
     }
     #[cfg(windows)]
     {
