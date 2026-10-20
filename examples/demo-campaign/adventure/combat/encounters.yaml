@@ -1,0 +1,13 @@
+# Original demo encounter using SRD 5.2 monsters (Guard).
+creatures:
+  - id: tower-warden
+    base: guard
+    name: Tower Warden
+    tags: [nonlethal]
+encounters:
+  - id: watchtower-ambush
+    name: Watchtower Ambush
+    scene: old-watchtower
+    party_zone: doorway
+    members:
+      - {creature: tower-warden, count: 2, zone: crates}

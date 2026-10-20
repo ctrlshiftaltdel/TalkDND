@@ -1,0 +1,15 @@
+# Original demo scene (TalkDND, MIT). Not taken from any published adventure.
+scenes:
+  - id: old-watchtower
+    name: The Old Watchtower (ground floor)
+    mode: zones
+    light: dim
+    zones:
+      - {id: doorway, elevation: 0}
+      - {id: hall, elevation: 0, cover: none}
+      - {id: crates, elevation: 0, cover: half}
+      - {id: balcony, elevation: 10, cover: three_quarters}
+    edges:
+      - {a: doorway, b: hall, distance: 15}
+      - {a: hall, b: crates, distance: 10}
+      - {a: hall, b: balcony, distance: 10, climb: {skill: athletics, dc: 10}}
