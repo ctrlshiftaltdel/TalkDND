@@ -1,7 +1,0 @@
-# Demo campaign manifest (paths relative to this file).
-name: "TalkDND demo campaign"
-library: [../../../../Rules/combat]
-adventures: [../../adventure/combat]
-characters: [../Characters, ../NPCs]
-state_dir: .
-party: [aria, bram]

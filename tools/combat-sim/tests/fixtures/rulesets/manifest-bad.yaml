@@ -1,0 +1,4 @@
+name: Bad
+ruleset: "3.5"
+library: [lib]
+party: [hero]

@@ -1,0 +1,31 @@
+# 2024 (SRD 5.2.1) edition-specific conditions.
+conditions:
+  - id: exhaustion
+    manual: "2024: each level -2 to d20 Tests and -5 ft speed; level 6 = death. Track level manually."
+  - id: grappled
+    flags: [speed_zero]
+    modifiers:
+      - {applies: attack_roll, effect: disadvantage, when: {not: {linked_is_target: true}}}
+    manual: "Grappler can drag/carry it (speed halved). Escape: action, Athletics/Acrobatics vs escape DC."
+  - id: incapacitated
+    flags: [incapacitated]
+    manual: "No actions, bonus actions or reactions; concentration ends; can't speak; disadvantage on initiative."
+  - id: hidden
+    modifiers:
+      - {applies: attack_roll, effect: advantage}
+      - {applies: incoming_attack, effect: disadvantage}
+    duration_default: {until: end_of_target_next_turn}
+    ends_on: [own_attack]
+    manual: "2024 Hide: DC 15 Stealth check, needs cover/obscurement; ends when you attack, make noise, or are found."
+  - id: sapped
+    modifiers:
+      - {applies: attack_roll, effect: disadvantage, consume: true}
+  - id: slowed
+    modifiers:
+      - {applies: speed, effect: bonus, value: -10}
+  - id: vexed
+    modifiers:
+      - {applies: incoming_attack, effect: advantage, when: {linked_is_attacker: true}, consume: true}
+  - id: carrying
+    flags: [speed_halved]
+    manual: "Carrying/dragging a creature: Speed halved. Remove when the load is put down."

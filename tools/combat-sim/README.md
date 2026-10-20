@@ -36,19 +36,24 @@ cargo fmt -- --check
 
 ```yaml
 name: TalkDND save 2026-10-19-01
+ruleset: "2024"            # 2014 | 2024，缺省 2024
 library: [../../../Rules/combat]
 adventures: [../../../Adventures/keys-from-the-golden-vault/combat]
 characters: [../Characters, ../NPCs]
 state_dir: .
 ```
 
-路径相对于清单文件解析。支持 `.yaml`、`.yml`、`.json`，以及 Markdown 中的
+路径相对于清单文件解析。
+
+**规则版本分层**：若某个 library 目录下有 `common/`，引擎加载 `common/` 再加载 `<ruleset>/`（`2014` 或 `2024`），忽略另一版本目录；没有 `common/` 的目录照常整体加载。版本相关的核心规则写在 `rules.surprise`：
+`{initiative_disadvantage: true}`（2024：被突袭先攻劣势）或 `{initiative_disadvantage: false, condition: surprised}`（2014：给 `surprised` 状态，到其第一回合结束移除）。未知 `ruleset` 会报错。
+支持 `.yaml`、`.yml`、`.json`，以及 Markdown 中的
 ` ```combat yaml ` / ` ```combat json ` 代码块（角色卡就是这种形式）。
 
 TalkDND 的典型布局：
 
 ```text
-Rules/combat/                 通用库：规则接线、状态、专精、法术、职业能力、怪物、AI 模板
+Rules/combat/{common,2014,2024}/  分层规则库：通用 + 按版本（状态、精通(仅2024)、法术、职业能力、怪物、AI 模板）
 Adventures/<剧本>/combat/     冒险内容：场景、特殊生物、遭遇、机关
 Saves/<存档>/Characters/      玩家角色卡（Markdown + combat 数据块）
 Saves/<存档>/NPCs/            队友/重要 NPC 角色卡

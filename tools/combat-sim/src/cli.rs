@@ -26,7 +26,7 @@ use crate::state::{
 #[command(
     name = "combat-sim",
     version,
-    about = "Headless D&D 5e (2024 rules) combat helper"
+    about = "Headless D&D 5e (2014 / 2024 rules, selected per campaign) combat helper"
 )]
 pub struct Cli {
     /// Persisted encounter state. A bare name resolves to
@@ -421,9 +421,12 @@ pub fn run() -> Result<()> {
         } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, seed, |state, rng, lines| {
+                let surprise = state.content.rules.surprise.clone().unwrap_or_default();
+                let surprise_dis = surprise.initiative_disadvantage.unwrap_or(surprise.condition.is_none());
+                let no_names: Vec<String> = Vec::new();
                 let mut modes = Vec::new();
                 for (names, mode) in [
-                    (&surprised, RollMode::Disadvantage),
+                    (if surprise_dis { &surprised } else { &no_names }, RollMode::Disadvantage),
                     (&dis, RollMode::Disadvantage),
                     (&adv, RollMode::Advantage),
                 ] {
@@ -433,11 +436,14 @@ pub fn run() -> Result<()> {
                 }
                 for name in &surprised {
                     let index = canonical_index(state, name.trim())?;
-                    lines.push(format!(
-                        "{} is Surprised: initiative rolled with Disadvantage",
-                        state.combatants[index].name
-                    ));
+                    if surprise_dis {
+                        lines.push(format!(
+                            "{} is Surprised: initiative rolled with Disadvantage",
+                            state.combatants[index].name
+                        ));
+                    }
                 }
+                let surprise_condition = surprise.condition.clone();
                 let mut overrides = Vec::new();
                 for token in &set {
                     let (name, total) = token.split_once('=').ok_or_else(|| {
@@ -450,7 +456,22 @@ pub fn run() -> Result<()> {
                     let index = canonical_index(state, name.trim())?;
                     overrides.push((index, total));
                 }
-                engine::init_with_modes(state, &overrides, &modes, rng, lines)
+                engine::init_with_modes(state, &overrides, &modes, rng, lines)?;
+                if let Some(condition) = surprise_condition {
+                    for name in &surprised {
+                        let who = canonical_name(state, name.trim())?;
+                        let options = engine::AddConditionOptions {
+                            until: Some(crate::content::schema::DurationUntil::EndOfTargetNextTurn),
+                            until_subject: Some(who.clone()),
+                            ..Default::default()
+                        };
+                        engine::add_condition(state, &who, &condition, &options, rng, lines)?;
+                        lines.push(format!(
+                            "{who} is Surprised (2014): no move/action on its first turn, no reactions until that turn ends"
+                        ));
+                    }
+                }
+                Ok(())
             })
         }
         Command::Status => print_status(&state_path(&sources, state.as_deref()), json),

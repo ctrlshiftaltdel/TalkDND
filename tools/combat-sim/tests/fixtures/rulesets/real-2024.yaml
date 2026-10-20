@@ -1,0 +1,3 @@
+name: Real 2024
+ruleset: "2024"
+library: [../../../../../Rules/combat]

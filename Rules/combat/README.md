@@ -1,15 +1,13 @@
-# Rules/combat — combat-sim 通用内容库
+# Rules/combat — combat-sim 规则数据（分层）
 
-战役无关的 5e (2024) 内容，供 `tools/combat-sim` 读取（格式见 `tools/combat-sim/docs/SPEC-v2.md`）。
+战役无关的规则数据，供 `tools/combat-sim` 读取（格式见 `tools/combat-sim/docs/SPEC-v2.md`）。
 
-| 文件 | 内容 |
+引擎读取存档清单 `campaign.yaml` 里的 `ruleset`（`2014` 或 `2024`，缺省 `2024`），先加载 `common/`，再加载对应版本目录，另一版本目录忽略。
+
+| 目录 | 内容 |
 |------|------|
-| `rules.yaml` | 核心规则接线（濒死状态、基础动作对应的状态、掩护数值） |
-| `conditions.yaml` | 状态（PHB 2024 附录 C） |
-| `masteries.yaml` | 武器精通（PHB 2024 第 6 章） |
-| `spells.yaml` | 已用到的法术 |
-| `features.yaml` | 职业/专长能力 |
-| `ai-templates.yaml` | AI 行为模板 |
-| `monsters/*.yaml` | 通用怪物（MM 2024） |
+| `common/` | 两版通用：核心接线 `rules.yaml`、通用状态 `conditions.yaml`、`ai-templates.yaml` |
+| `2014/` | 5e（SRD 5.1）：突袭规则（失去首回合，`surprised` 状态）、版本相关状态（力竭/擒抱/失能/躲藏）、2014 版法术与职业特性。**无武器精通**。怪物数据待补（只收 SRD 5.1 内的） |
+| `2024/` | 5.5e（SRD 5.2.1）：突袭（先攻劣势）、版本相关状态、`masteries.yaml`、法术、特性、`monsters/` |
 
-数据来源为本目录上级的 OCR 规则书；读不清或可能有误的地方写在各条目的 `todo` 里。
+入库数据只取自 SRD（5.1 / 5.2.1，CC-BY-4.0，见 `NOTICE`）。非 SRD 的数据（例如只在怪物图鉴里的生物）放在本地，并加入 `.gitignore`。

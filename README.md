@@ -1,6 +1,6 @@
 # TalkDND —— 在聊天里玩 D&D
 
-TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D 第五版 2024 规则**带你跑官方或自制冒险：
+TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D 5e（2014）或 5.5e（2024）规则**（每个存档自选）带你跑冒险：
 - 你扮演自己的角色，AI 负责叙述、扮演同伴和所有 NPC；
 - 每一幕结尾给几个选项，也可以随便输入你想做的事；
 - 所有骰子都是真随机（在命令行里用操作系统熵掷出），并把完整算式展示给你；
@@ -9,46 +9,61 @@ TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D
 
 ## 你需要准备什么
 
-本仓库**不包含**任何受版权保护的规则书或冒险书内容，你需要使用自己**合法拥有**的书，转成 Markdown 文本后放到下面的位置：
+本仓库**只有程序和原创文档**，不包含任何规则书、冒险书或示例战役。要玩，你必须自己准备：
+
+### 1. 选择规则版本
+
+| 版本 | 存档里写 | 规则书放在 | 最低要求 |
+|------|----------|------------|----------|
+| 5e（2014） | `ruleset: "2014"` | `Rules/2014/` | **SRD 5.1**（`SRD_CC_v5.1`，免费，CC-BY-4.0） |
+| 5.5e（2024） | `ruleset: "2024"` | `Rules/2024/` | **SRD 5.2.1**（`SRD_CC_v5.2.1`，免费，CC-BY-4.0） |
+
+SRD 可在 Wizards of the Coast 官网免费下载：<https://dnd.wizards.com/resources/systems-reference-document>。如果你有正式的玩家手册 / 城主指南 / 怪物图鉴，也放进对应目录，AI DM 会优先使用。每个存档只用一个版本，DM 不会混用两版规则。
+
+### 2. 准备冒险书
+
+把你自己合法拥有的冒险书放进 `Adventures/`（一本一个文件，或一个文件夹）。冒险的战斗数据由 AI DM 按书建在 `Adventures/<slug>/combat/`。
+
+### 3. 放置位置
 
 ```
 Rules/
-  Players-Handbook-2024.md        # 玩家手册 2024
-  Dungeon-Masters-Guide-2024.md   # 城主指南 2024
-  Monster-Manual-2024.md          # 怪物图鉴 2024
+  2014/  SRD_CC_v5.1.md   [Players-Handbook-2014.md  Dungeon-Masters-Guide-2014.md  Monster-Manual-2014.md]
+  2024/  SRD_CC_v5.2.1.md [Players-Handbook-2024.md  Dungeon-Masters-Guide-2024.md  Monster-Manual-2024.md]
 Adventures/
-  Keys-from-the-Golden-Vault.md   # 你要跑的冒险书（文件名随意，建议用英文书名）
-  keys-from-the-golden-vault/     # （可选）该冒险的战斗数据，让 AI 按书自建
-    combat/
-      scenes/*.yaml
-      encounters.yaml
-      creatures.yaml
+  Keys-from-the-Golden-Vault.md      # 你要跑的冒险书
+  keys-from-the-golden-vault/combat/ # （AI 自建）该冒险的场景、遭遇、怪物数据
 ```
 
-这些文件已在 `.gitignore` 中排除，只留在你本地。
+- **优先用转好的 Markdown / 纯文本**（AI 用关键词检索，又快又准）；PDF 也可以，但检索慢、可能有识别错误。
+- 这些目录除 README 外都在 `.gitignore` 中，不会被提交，只留在你本地。
 
-另外需要：
+### 4. 其他
+
 - 一个能执行命令行的 AI 助手（能读写本目录文件、运行 shell）。
 - Rust 工具链（编译 combat-sim）：<https://rustup.rs>。
 - Python 3（可选，用于掷骰的备用方式）。
 
 ## 开始一局
 
-1. 克隆仓库，放好规则书和冒险书。
+1. 克隆仓库，按上面放好规则书和冒险书。
 2. 编译战斗引擎：
    ```bash
    cd tools/combat-sim && cargo build --release && cd ../..
-   tools/bin/combat-sim --campaign examples/demo-campaign/save/combat/campaign.yaml content check
+   tools/bin/combat-sim roll 1d20+5      # 能出结果就说明编译好了
    ```
 3. 在本目录打开你的 AI 助手，对它说：
-   > 请阅读 AGENTS.md，担任 DM，用《(冒险名)》开一局新游戏。我的角色是……
-   
+   > 请阅读 AGENTS.md，担任 DM，用 2024 规则和《(冒险名)》开一局新游戏。我的角色是……
+
    或者继续已有存档：
-   > 请阅读 AGENTS.md，从 Saves/2026-10-19-01 最后的存档点继续。
-4. AI 会建立 `Saves/YYYY-MM-DD-NN/` 存档：角色卡、同伴、会话日志、战斗清单。
+   > 请阅读 AGENTS.md，从 Saves/<存档名> 最后的存档点继续。
+4. AI 会建立 `Saves/YYYY-MM-DD-NN/` 存档（结构见 `Saves/README.md`），其中 `combat/campaign.yaml` 记录本存档用的规则版本：
+   ```yaml
+   ruleset: "2024"   # 或 "2014"
+   ```
 5. 想结束时说「今天先到这，存档」，AI 会写好存档点。
 
-`AGENTS.md` 是给 AI DM 的完整工作手册（桌规、存档格式、战斗引擎用法、交接清单）；`Rules/rulings.md` 是规则书没写清时的统一裁定。
+`AGENTS.md` 是给 AI DM 的完整工作手册；`Rules/rulings.md`（通用）和 `Rules/rulings-2014.md` / `Rules/rulings-2024.md`（版本差异）是规则书没写清时的统一裁定。
 
 ## 骰子和日志
 
@@ -61,30 +76,28 @@ Adventures/
 ## 战斗引擎 combat-sim
 
 `tools/combat-sim/` 是一个无界面、数据驱动、与具体战役无关的 Rust 引擎：
-- 人物来自角色卡里的 ```` ```combat yaml ```` 数据块，怪物、法术、状态、武器精通来自 `Rules/combat/`，场景和遭遇来自 `Adventures/<冒险>/combat/`；程序里不写死任何战役内容。
+- 人物来自角色卡里的 ```` ```combat yaml ```` 数据块，怪物、法术、状态、武器精通来自 `Rules/combat/`（按版本分层），场景和遭遇来自 `Adventures/<冒险>/combat/`；程序里不写死任何战役内容。
 - 空间以**区域图**为主（区域之间的距离、掩护、高度、门锁、攀爬），重要战斗可以用 5 尺**网格**。
 - 支持逐步结算（DM 一条条命令推进）和 Monte Carlo 批量模拟（预估遭遇难度）。
 
+两个版本的差异由数据决定：`Rules/combat/common/` 是通用部分，`Rules/combat/2014/`、`Rules/combat/2024/` 是各版本特有的状态、法术、特性、武器精通（仅 2024）和突袭规则（2014 失去首回合 / 2024 先攻劣势）。引擎读存档清单里的 `ruleset` 自动选择。
+
 ```bash
 CS=tools/bin/combat-sim
-M=examples/demo-campaign/save/combat/campaign.yaml
-$CS --campaign $M --state demo new --encounter watchtower-ambush
-$CS --campaign $M --state demo init
-$CS --campaign $M --state demo attack Aria "Tower Warden 1" longsword --nonlethal
-$CS --campaign $M --state demo next
-$CS --campaign $M simulate --encounter watchtower-ambush --runs 1000
+M=Saves/<存档>/combat/campaign.yaml
+$CS --campaign $M content check
+$CS --campaign $M --state fight new --encounter <遭遇id>
+$CS --campaign $M --state fight init --surprised "Guard 1"
+$CS --campaign $M --state fight attack <角色> "Guard 2" longsword
+$CS --campaign $M simulate --encounter <遭遇id> --runs 1000
 $CS roll 1d20+5 --adv --dc 15
 ```
 
 完整说明见 `tools/combat-sim/README.md`、`tools/combat-sim/docs/`。
 
-## 示例战役
-
-`examples/demo-campaign/` 是一个**原创**小示例（旧瞭望塔里的两名守卫），角色和场景都是原创，怪物用 SRD 5.2 的 Guard。可以直接用来测试引擎，也可以照它的结构建立你自己的存档。
-
 ## 版权与许可
 
-- 代码（`tools/`）、文档、`Rules/rulings.md`、示例战役：MIT 许可，见 `LICENSE`。
-- `Rules/combat/` 中的规则数据（状态、武器精通、法术、职业特性、怪物）只取自 **System Reference Document 5.2**，按 CC-BY-4.0 使用，署名见 `NOTICE`。
+- 代码（`tools/`）、文档、`Rules/rulings*.md`：MIT 许可，见 `LICENSE`。
+- `Rules/combat/` 中的规则数据（状态、武器精通、法术、职业特性、怪物）只取自 **System Reference Document 5.1**（2014）与 **5.2.1**（2024），按 CC-BY-4.0 使用，署名见 `NOTICE`。
 - 「Dungeons & Dragons」「D&D」是 Wizards of the Coast 的商标。本项目是非官方的爱好者作品，与 Wizards of the Coast 无关，也未获其认可。
 - 本仓库不包含、也不分发任何非 SRD 的规则书或冒险书文本；请使用你自己合法拥有的书。

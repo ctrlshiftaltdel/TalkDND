@@ -184,6 +184,8 @@ pub struct ContentRegistry {
     pub encounters: ItemStore<Encounter>,
     #[serde(default)]
     pub rules: Rules,
+    /// Active rules edition (`2014` or `2024`).
+    pub ruleset: String,
     #[serde(default)]
     pub rules_source: Option<ContentSource>,
     #[serde(default)]
@@ -478,8 +480,19 @@ impl ContentSources {
         let mut adventures = Vec::new();
         let mut characters = Vec::new();
 
+        let mut ruleset = String::from("2024");
         if let Some(manifest_path) = self.campaign_path() {
             let manifest = load_manifest(&manifest_path)?;
+            if let Some(value) = &manifest.ruleset {
+                if !SUPPORTED_RULESETS.contains(&value.as_str()) {
+                    bail!(
+                        "unsupported ruleset `{value}` in {}; expected one of {:?}",
+                        manifest_path.display(),
+                        SUPPORTED_RULESETS
+                    );
+                }
+                ruleset = value.clone();
+            }
             let base = manifest_path
                 .parent()
                 .filter(|path| !path.as_os_str().is_empty())
@@ -519,6 +532,11 @@ impl ContentSources {
             );
         }
 
+        registry.ruleset = ruleset.clone();
+        let libraries: Vec<PathBuf> = libraries
+            .iter()
+            .flat_map(|path| expand_layers(path, &ruleset))
+            .collect();
         for source in [&libraries, &adventures, &characters] {
             for path in source {
                 let mut files = Vec::new();
@@ -530,6 +548,25 @@ impl ContentSources {
         }
 
         Ok(registry)
+    }
+}
+
+/// Rules editions the loader understands.
+pub const SUPPORTED_RULESETS: [&str; 2] = ["2014", "2024"];
+
+/// A layered library (`<dir>/common/` present) expands to `common/` then
+/// `<ruleset>/`; other edition folders are ignored. Plain dirs load as-is.
+fn expand_layers(path: &Path, ruleset: &str) -> Vec<PathBuf> {
+    let common = path.join("common");
+    if path.is_dir() && common.is_dir() {
+        let mut out = vec![common];
+        let layer = path.join(ruleset);
+        if layer.is_dir() {
+            out.push(layer);
+        }
+        out
+    } else {
+        vec![path.to_path_buf()]
     }
 }
 

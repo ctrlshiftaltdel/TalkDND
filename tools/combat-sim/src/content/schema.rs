@@ -388,6 +388,10 @@ pub struct CampaignManifest {
     /// Default party creature ids for `new` / `simulate` when `--party` is omitted.
     #[serde(default)]
     pub party: Vec<String>,
+    /// Rules edition: `2014` (5e) or `2024` (5.5e). Default `2024`. Selects the
+    /// `<lib>/<ruleset>/` layer next to `<lib>/common/` in layered libraries.
+    #[serde(default)]
+    pub ruleset: Option<String>,
 }
 
 /// Core-rule wiring supplied by data. No condition ids are hard-coded in code.
@@ -404,6 +408,20 @@ pub struct Rules {
     pub cover: Option<CoverRules>,
     #[serde(default)]
     pub concentration_condition: Option<String>,
+    /// How `init --surprised` works (edition-dependent).
+    #[serde(default)]
+    pub surprise: Option<SurpriseRule>,
+}
+
+/// Surprise handling. 2024: initiative with disadvantage. 2014: normal
+/// initiative, plus a condition that lasts until the end of the creature's first turn.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurpriseRule {
+    #[serde(default)]
+    pub initiative_disadvantage: Option<bool>,
+    #[serde(default)]
+    pub condition: Option<String>,
 }
 
 impl Rules {
@@ -429,6 +447,9 @@ impl Rules {
         }
         if other.concentration_condition.is_some() {
             self.concentration_condition = other.concentration_condition;
+        }
+        if other.surprise.is_some() {
+            self.surprise = other.surprise;
         }
     }
 }

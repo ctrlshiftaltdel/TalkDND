@@ -1,0 +1,4 @@
+# 2014 (SRD 5.1): surprised creatures roll initiative normally but can't move or
+# act on their first turn (and no reactions until it ends).
+rules:
+  surprise: {initiative_disadvantage: false, condition: surprised}

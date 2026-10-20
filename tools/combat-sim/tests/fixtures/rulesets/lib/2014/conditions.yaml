@@ -1,0 +1,6 @@
+conditions:
+  - id: surprised
+    implies: [incapacitated]
+    flags: [speed_zero]
+  - id: incapacitated
+    flags: [incapacitated]

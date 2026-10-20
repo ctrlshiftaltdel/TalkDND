@@ -1,0 +1,136 @@
+# 2014 (SRD 5.1) versions of the spells used so far in TalkDND. Spellcasting numbers come from the caster's
+# `spellcasting` block ({spell_attack}, {spell_dc}, {spell_mod}).
+abilities:
+  - id: fire-bolt
+    name: Fire Bolt
+    tags: [spell, cantrip]
+    activation: action
+    range: 120
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - attack: {to_hit: "{spell_attack}", kind: ranged, damage: [{dice: "1d10", type: fire}]}
+    ai: {role: damage}
+    source: "SRD 5.1 Fire Bolt (cantrip upgrade at levels 5/11/17 not modelled)"
+  - id: shocking-grasp
+    name: Shocking Grasp
+    tags: [spell, cantrip]
+    activation: action
+    range: 5
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - attack:
+          to_hit: "{spell_attack}"
+          kind: melee
+          damage: [{dice: "1d8", type: lightning}]
+          on_hit: [{apply_condition: {condition: no-opportunity-attacks, to: target, duration: {until: end_of_target_next_turn}}}]
+    ai: {role: damage}
+    source: "SRD 5.1: target can't take reactions until the start of its next turn"
+    todo: ["Duration approximated as end of target's next turn (rule: start of its next turn)"]
+  - id: sacred-flame
+    name: Sacred Flame
+    tags: [spell, cantrip]
+    activation: action
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - save: {ability: dex, dc: "{spell_dc}", ignore_cover: true, on_fail: [{damage: {dice: "1d8", type: radiant}}]}
+    ai: {role: damage}
+    source: "SRD 5.1: no benefit from Half or Three-Quarters Cover"
+  - id: magic-missile
+    name: Magic Missile
+    tags: [spell, magic-missile]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 120
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - damage: {dice: "1d4+1", type: force, repeat: 3}
+    ai: {role: damage}
+    source: "SRD 5.1: three darts, 1d4+1 force each, automatically hit (all darts on one target here)"
+  - id: shield
+    name: Shield
+    tags: [spell]
+    activation: reaction
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 0
+    target: {type: self}
+    triggers:
+      - on: on_hit_taken
+        reaction: true
+        when: {would_miss_with_ac_bonus: 5}
+        effects: [{apply_condition: {condition: shielded, to: self, duration: {until: start_of_source_next_turn}}}]
+    ai: {role: defense}
+    source: "SRD 5.1: +5 AC until start of your next turn incl. triggering attack; no damage from Magic Missile"
+  - id: cure-wounds
+    name: Cure Wounds
+    tags: [spell, heal]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 5
+    target: {type: creature, side: ally, count: 1}
+    effects:
+      - heal: {dice: "1d8+{spell_mod}"}
+    ai: {role: heal}
+    source: "SRD 5.1: touch, 1d8 + spellcasting modifier"
+  - id: bless
+    name: Bless
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 30
+    target: {type: creature, side: ally, count: 3}
+    concentration: true
+    effects:
+      - apply_condition: {condition: blessed, to: target, duration: {minutes: 1}}
+    ai: {role: buff}
+    source: "SRD 5.1: up to three creatures add 1d4 to attack rolls and saves; concentration 1 minute"
+  - id: sanctuary
+    name: Sanctuary
+    tags: [spell]
+    activation: bonus
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 30
+    target: {type: creature, side: ally, count: 1}
+    effects:
+      - apply_condition: {condition: sanctuary-warded, to: target, duration: {minutes: 1}}
+    ai: {role: defense}
+    manual: "Attackers must pass a WIS save vs caster DC or pick a new target; AI enemies avoid warded targets via avoid_targets_with."
+    source: "SRD 5.1 Sanctuary (OCR partial)"
+  - id: sleep
+    name: Sleep
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 90
+    target: {type: self}
+    effects:
+      - note: "Sleep (2014): roll 5d8 (+2d8 per slot level above 1st). Creatures within 20 ft of the point, lowest current HP first, fall Unconscious if their HP <= remaining pool (subtract each). Undead and charm-immune unaffected. No save, no concentration, 1 minute; wakes on damage or an action to shake. Apply with `roll 5d8` + `condition add <name> unconscious --minutes 1`."
+    ai: {role: none}
+    source: "SRD 5.1 Sleep: HP pool 5d8, no save, no concentration"
+  - id: detect-magic
+    name: Detect Magic
+    tags: [spell, ritual]
+    activation: action
+    target: {type: self}
+    effects: [{note: "Detect Magic: sense magic within 30 ft for up to 10 minutes (concentration)."}]
+    ai: {role: none}
+  - id: mage-hand
+    name: Mage Hand
+    tags: [spell, cantrip]
+    activation: action
+    target: {type: self}
+    effects: [{note: "Mage Hand: spectral hand within 30 ft manipulates objects (no attacks)."}]
+    ai: {role: none}
+  - id: minor-illusion
+    name: Minor Illusion
+    tags: [spell, cantrip]
+    activation: action
+    target: {type: self}
+    effects: [{note: "Minor Illusion: sound or image; Investigation vs spell DC to discern."}]
+    ai: {role: none}

@@ -1,0 +1,54 @@
+# Class / feat features, 2014 rules (SRD 5.1).
+abilities:
+  - id: sneak-attack
+    name: Sneak Attack
+    tags: [rogue]
+    activation: passive
+    triggers:
+      - on: on_hit
+        once_per: turn
+        when:
+          all:
+            - attack_has_property: [finesse, ranged]
+            - any:
+                - has_advantage: true
+                - all:
+                    - ally_within_5_of_target: true
+                    - not: {has_disadvantage: true}
+        effects: [{damage: {dice: "{param.dice}", type: weapon}}]
+    source: "SRD 5.1 Rogue L1: once per turn, finesse/ranged weapon, advantage or an ally within 5 ft of target and no disadvantage"
+  - id: cunning-action
+    name: Cunning Action
+    tags: [rogue]
+    activation: bonus
+    target: {type: self}
+    effects:
+      - choice: [[{basic_action: dash}], [{basic_action: disengage}], [{basic_action: hide}]]
+    ai: {role: defense}
+    source: "SRD 5.1 Rogue L2: Dash, Disengage, or Hide as a bonus action"
+  - id: second-wind
+    name: Second Wind
+    tags: [fighter, heal]
+    activation: bonus
+    cost: {resource: second-wind, amount: 1}
+    target: {type: self}
+    effects: [{heal: {dice: "1d10+{level}"}}]
+    ai: {role: self_heal}
+    source: "SRD 5.1 Fighter L1: bonus action, regain 1d10 + fighter level HP; once per short/long rest"
+  - id: fighting-style-defense
+    name: "Fighting Style: Defense"
+    tags: [feat]
+    activation: passive
+    manual: "+1 AC while wearing armor. Already included in the AC on the character sheet (not re-applied)."
+  - id: disciple-of-life
+    name: Disciple of Life
+    tags: [cleric]
+    activation: passive
+    modifiers:
+      - {applies: healing_done, effect: bonus, value: "2+{slot_level}", when: {all: [{is_spell: true}, {slot_level_min: 1}]}}
+    source: "SRD 5.1 Life Domain L1: healing spells of 1st level+ restore extra 2 + spell level HP"
+  - id: inspiration
+    name: Inspiration
+    tags: [dm]
+    activation: free
+    manual: "2014 Inspiration: spend to gain advantage on one attack roll, saving throw or ability check (decide before rolling). Use --adv manually."

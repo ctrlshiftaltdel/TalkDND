@@ -1,5 +1,4 @@
-# PHB 2024 Appendix C (Rules Glossary). Only mechanical parts the engine can apply are encoded;
-# the rest is in `manual`.
+# Conditions shared by 2014 (SRD 5.1) and 2024 (SRD 5.2.1). Edition-specific ones live in ../2014 and ../2024.
 conditions:
   - id: blinded
     modifiers:
@@ -10,21 +9,11 @@ conditions:
     manual: "Can't attack the charmer or target it with damaging abilities; charmer has advantage on social checks."
   - id: deafened
     manual: "Can't hear; automatically fails checks that require hearing."
-  - id: exhaustion
-    manual: "2024: each level -2 to d20 Tests and -5 ft speed; level 6 = death. Track level manually."
   - id: frightened
     modifiers:
       - {applies: attack_roll, effect: disadvantage}
       - {applies: check, effect: disadvantage}
     manual: "Disadvantage only while the source of fear is in line of sight; can't willingly move closer to it."
-  - id: grappled
-    flags: [speed_zero]
-    modifiers:
-      - {applies: attack_roll, effect: disadvantage, when: {not: {linked_is_target: true}}}
-    manual: "Grappler can drag/carry it (speed halved). Escape: action, Athletics/Acrobatics vs escape DC."
-  - id: incapacitated
-    flags: [incapacitated]
-    manual: "No actions, bonus actions or reactions; concentration ends; can't speak; disadvantage on initiative."
   - id: invisible
     modifiers:
       - {applies: attack_roll, effect: advantage}
@@ -81,28 +70,12 @@ conditions:
   - id: disengaged
     flags: [no_opportunity_attacks_against]
     manual: "Movement doesn't provoke Opportunity Attacks for the rest of the turn."
-  - id: hidden
-    modifiers:
-      - {applies: attack_roll, effect: advantage}
-      - {applies: incoming_attack, effect: disadvantage}
-    duration_default: {until: end_of_target_next_turn}
-    ends_on: [own_attack]
-    manual: "2024 Hide: DC 15 Stealth check, needs cover/obscurement; ends when you attack, make noise, or are found."
   - id: helped
     modifiers:
       - {applies: attack_roll, effect: advantage, consume: true}
     manual: "Help: advantage on next attack vs that enemy (or next check) before your next turn."
   - id: concentrating
     manual: "Concentrating on a spell; CON save DC max(10, half damage) when damaged."
-  - id: sapped
-    modifiers:
-      - {applies: attack_roll, effect: disadvantage, consume: true}
-  - id: slowed
-    modifiers:
-      - {applies: speed, effect: bonus, value: -10}
-  - id: vexed
-    modifiers:
-      - {applies: incoming_attack, effect: advantage, when: {linked_is_attacker: true}, consume: true}
   - id: no-opportunity-attacks
     flags: [no_opportunity_attacks]
   - id: shielded
@@ -121,6 +94,3 @@ conditions:
     manual: "Weighted net: action + DC 10 STR check frees self or a creature within reach; net AC 10, 12 HP."
   # Not an official condition: TalkDND bookkeeping marker. 2024 PHB: carrying,
   # dragging or pushing a creature/heavy load halves Speed (see Rules/rulings.md).
-  - id: carrying
-    flags: [speed_halved]
-    manual: "Carrying/dragging a creature: Speed halved. Remove when the load is put down."

@@ -1,4 +1,4 @@
-//! Headless D&D 5e (2024 rules) combat engine.
+//! Headless D&D 5e (2014 / 2024 rules, selected per campaign) combat engine.
 //!
 //! The crate is split into small modules so that the generic rules engine, the
 //! persisted encounter state and the command-line interface can be tested

@@ -1,0 +1,25 @@
+# 2014 (SRD 5.1 Appendix PH-A) edition-specific conditions.
+conditions:
+  - id: exhaustion
+    manual: "2014: 6 levels. 1 disadv. ability checks; 2 speed halved; 3 disadv. attacks & saves; 4 HP max halved; 5 speed 0; 6 death. Track level manually."
+  - id: grappled
+    flags: [speed_zero]
+    manual: "2014: speed 0 only (no attack penalty). Escape: action, Athletics/Acrobatics contest vs grappler's Athletics."
+  - id: incapacitated
+    flags: [incapacitated]
+    manual: "2014: can't take actions or reactions."
+  - id: hidden
+    modifiers:
+      - {applies: attack_roll, effect: advantage}
+      - {applies: incoming_attack, effect: disadvantage}
+    ends_on: [own_attack]
+    manual: "2014 Hide: Stealth check contested by Passive/active Perception; ends when you attack, make noise, or are found."
+  # 2014 surprise: a surprised creature can't move or take an action on its first turn
+  # and can't take a reaction until that turn ends (wired via rules.surprise.condition).
+  - id: surprised
+    implies: [incapacitated]
+    flags: [speed_zero]
+    manual: "2014 Surprised: no move/action/bonus action on first turn; no reactions until that turn ends."
+  - id: carrying
+    flags: [speed_halved]
+    manual: "Carrying/dragging a creature (2014: dragging/grappled creature halves speed). Remove when put down."

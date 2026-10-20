@@ -1,0 +1,3 @@
+# 2024 (SRD 5.2.1): surprised creatures roll initiative with Disadvantage.
+rules:
+  surprise: {initiative_disadvantage: true}
