@@ -1,7 +1,7 @@
 mod common;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -151,14 +151,16 @@ fn missing_gh_fails_before_install() {
         .map(|meta| meta.file_type().is_symlink());
     let before_target = fs::read_link(&dest).ok();
 
-    let path = path_with_git_without_gh();
+    // Runners keep git and gh in the same directory, so a PATH that merely
+    // drops gh's directory also drops git. This directory can run git only.
+    let git_only = GitWithoutGh::new();
     let output = run(
         &["fetch-binary", "--target", "x86_64-unknown-linux-gnu"],
-        &path,
+        &git_only.path(),
     );
     assert_ne!(output.status.code(), Some(0));
     let err = text(&output.stderr);
-    assert!(err.contains("gh"), "{err}");
+    assert!(err.contains("failed to run gh"), "{err}");
     assert_eq!(text(&output.stdout), "");
 
     let after_kind = fs::symlink_metadata(&dest)
@@ -168,27 +170,81 @@ fn missing_gh_fails_before_install() {
     assert_eq!(fs::read_link(&dest).ok(), before_target);
 }
 
-fn path_with_git_without_gh() -> String {
-    let raw = std::env::var_os("PATH").unwrap_or_default();
-    let mut kept = Vec::new();
+/// A PATH directory whose only command is a `git` stub. `gh` is absent.
+struct GitWithoutGh {
+    dir: PathBuf,
+}
+
+impl GitWithoutGh {
+    fn new() -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "talkdnd-git-only-{}-{}",
+            std::process::id(),
+            tick()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        install_git_stub(&dir, &locate_git());
+        let path = dir.to_string_lossy().into_owned();
+        let git = Command::new("git")
+            .arg("--version")
+            .env("PATH", &path)
+            .output()
+            .expect("git on stub PATH");
+        assert!(
+            git.status.success(),
+            "stub PATH lost git: {path} {}",
+            text(&git.stderr)
+        );
+        let gh = Command::new("gh").env("PATH", &path).output();
+        assert!(gh.is_err(), "stub PATH can still run gh: {path}");
+        Self { dir }
+    }
+
+    fn path(&self) -> String {
+        self.dir.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for GitWithoutGh {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn locate_git() -> PathBuf {
+    let names: &[&str] = if cfg!(windows) {
+        &["git.exe", "git.cmd", "git.bat", "git"]
+    } else {
+        &["git"]
+    };
+    let raw = std::env::var_os("PATH").expect("PATH");
     for dir in std::env::split_paths(&raw) {
-        let gh = if cfg!(windows) {
-            dir.join("gh.exe")
-        } else {
-            dir.join("gh")
-        };
-        let gh_cmd = dir.join("gh.cmd");
-        if !gh.exists() && !gh_cmd.exists() {
-            kept.push(dir);
+        for name in names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return candidate;
+            }
         }
     }
-    let joined = std::env::join_paths(kept).expect("PATH");
-    let path = joined.to_string_lossy().into_owned();
-    let git = Command::new("git")
-        .arg("--version")
-        .env("PATH", &path)
-        .output()
-        .expect("git on filtered PATH");
-    assert!(git.status.success(), "filtered PATH lost git: {path}");
-    path
+    panic!("git not found on PATH");
+}
+
+fn install_git_stub(dir: &Path, git: &Path) {
+    #[cfg(unix)]
+    {
+        let quoted = git.to_string_lossy().replace('\'', "'\\''");
+        let script = dir.join("git");
+        fs::write(&script, format!("#!/bin/sh\nexec '{quoted}' \"$@\"\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let script = dir.join("git.cmd");
+        let windows = git.to_string_lossy().replace('"', "");
+        fs::write(&script, format!("@echo off\r\n\"{windows}\" %*\r\n")).unwrap();
+    }
 }
