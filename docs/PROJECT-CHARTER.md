@@ -239,6 +239,15 @@ AgentOrch is no longer treated as a vendored, read-only kit. Its docs (`AGENT-BO
 
 Alternative considered: keep the kit read-only and only document uv at the project level. Rejected by the owner.
 
+
+### 2026-10-21 — 2014 combat monsters and party spells
+
+`LetsPlay/Rules/combat/2014/monsters/` now holds SRD 5.1 creatures needed for keyed adventures that share bases with the 2024 set: Guard, Animated Armor, Mimic (tracked). Allosaurus and Scarecrow are **not** in SRD 5.1, so their 2014 YAML stays local and gitignored (same pattern as 2024 Scarecrow). Edition notes: 2014 Mimic speed 15 ft; 2014 Animated Armor lists Blinded among condition immunities; Scarecrow (local) uses MM 2014 numbers (HP 36, Multiattack, claw WIS save frighten, nonmagical B/P/S resistance).
+
+2014 `spells.yaml` gains Guidance, Mending, Healing Word, Command, and Mage Armor from SRD 5.1 so party casters resolve those refs. `common/ai-templates.yaml` gains a `support` template (buff/heal ally bias) usable by both rulesets.
+
+Alternative considered: commit Allosaurus under 2014 because 2024 already tracks it (SRD 5.2.1). Rejected: 2014 tracked data must stay SRD 5.1 only.
+
 ## Change history
 
 | Date | Change |
@@ -251,6 +260,7 @@ Alternative considered: keep the kit read-only and only document uv at the proje
 | 2026-10-21 | pdf2md background extractor (Python exception, OCR, uv); all Python via uv. |
 | 2026-10-21 | AgentOrch kit maintained in-project; all kit commands via `uv run`. |
 | 2026-10-21 | pdf2md audit + local page-fix layer + optional agent review (Grok Build on the box; agent-agnostic), accepted only when scores do not regress. |
+| 2026-10-21 | 2014 `monsters/` (SRD Guard/Animated Armor/Mimic), local Allosaurus/Scarecrow gitignore, five SRD spells, `support` AI template. |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 

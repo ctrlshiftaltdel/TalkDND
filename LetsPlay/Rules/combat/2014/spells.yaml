@@ -134,3 +134,66 @@ abilities:
     target: {type: self}
     effects: [{note: "Minor Illusion: sound or image; Investigation vs spell DC to discern."}]
     ai: {role: none}
+  - id: guidance
+    name: Guidance
+    tags: [spell, cantrip]
+    activation: action
+    range: 5
+    target: {type: creature, side: ally, count: 1}
+    concentration: true
+    effects:
+      - note: "Guidance (SRD 5.1): touch willing creature; once before the spell ends, target adds 1d4 to one ability check (before or after the roll). Concentration up to 1 minute. Apply with `roll 1d4` on the check."
+    ai: {role: buff}
+    source: "SRD 5.1 Guidance (divination cantrip)"
+  - id: mending
+    name: Mending
+    tags: [spell, cantrip]
+    activation: action
+    range: 5
+    target: {type: self}
+    effects:
+      - note: "Mending (SRD 5.1): casting time 1 minute; repair a single break or tear no larger than 1 foot in an object you touch. Can physically repair a magic item or construct but does not restore magic."
+    ai: {role: none}
+    source: "SRD 5.1 Mending (transmutation cantrip)"
+    todo: ["Casting time is 1 minute (not a combat action); activation listed as action for cataloguing only"]
+  - id: healing-word
+    name: Healing Word
+    tags: [spell, heal]
+    activation: bonus
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 60
+    target: {type: creature, side: ally, count: 1}
+    effects:
+      - heal: {dice: "1d4+{spell_mod}"}
+    ai: {role: heal}
+    source: "SRD 5.1 Healing Word: bonus action, 1d4 + spellcasting modifier; no effect on undead or constructs. +1d4 per slot above 1st is manual."
+  - id: command
+    name: Command
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - save:
+          ability: wis
+          dc: "{spell_dc}"
+          on_fail:
+            - note: "Command (SRD 5.1): on its next turn the target follows a one-word command (Approach, Drop, Flee, Grovel, Halt, or another the GM allows). No effect on undead, if it doesn't understand you, or if the command is directly harmful. Apply the matching condition/move manually."
+    ai: {role: control}
+    source: "SRD 5.1 Command: WIS save, 1 round. At higher levels: +1 creature per slot above 1st (within 30 ft of each other)."
+    todo: ["Specific command behaviors are manual"]
+  - id: mage-armor
+    name: Mage Armor
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 5
+    target: {type: creature, side: ally, count: 1}
+    effects:
+      - note: "Mage Armor (SRD 5.1): willing creature not wearing armor; base AC becomes 13 + Dexterity modifier for 8 hours. Ends if the target dons armor or you dismiss it as an action. Update the creature's AC on the sheet (engine has no set-base-AC effect)."
+    ai: {role: buff}
+    source: "SRD 5.1 Mage Armor"

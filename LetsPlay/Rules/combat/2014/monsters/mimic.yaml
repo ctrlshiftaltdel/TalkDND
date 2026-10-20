@@ -1,0 +1,48 @@
+creatures:
+  - id: mimic
+    name: Mimic
+    kind: monster
+    size: medium
+    creature_type: monstrosity
+    ac: 12
+    hp: 58
+    speed: {walk: 15}
+    init_bonus: 1
+    prof: 2
+    abilities: {str: 17, dex: 12, con: 15, int: 5, wis: 13, cha: 8}
+    skills: {stealth: 5}
+    immunities: [acid]
+    condition_immunities: [prone]
+    senses: "Darkvision 60 ft.; Passive Perception 11"
+    attacks:
+      - id: pseudopod
+        name: Pseudopod
+        kind: melee
+        ability: str
+        to_hit: 5
+        damage: [{dice: "1d8+3", type: bludgeoning}]
+        reach: 5
+        manual: "If the mimic is in object form, the target is subjected to Adhesive (grappled, escape DC 13, escape checks have Disadvantage)."
+      - id: bite
+        name: Bite
+        kind: melee
+        ability: str
+        to_hit: 5
+        damage: [{dice: "1d8+3", type: piercing}, {dice: "1d8", type: acid}]
+        reach: 5
+        manual: "Grappler: advantage on attack rolls against any creature grappled by the mimic."
+    features:
+      - id: shapechanger
+        name: Shapechanger
+        activation: action
+        manual: "Action to polymorph into an object or back to amorphous form. Reverts on death."
+      - id: mimic-adhesive
+        name: Adhesive (Object Form Only)
+        activation: passive
+        manual: "Huge or smaller creature that touches it is grappled (escape DC 13; escape checks have Disadvantage)."
+      - id: false-appearance
+        name: False Appearance (Object Form Only)
+        activation: passive
+        manual: "While motionless in object form, indistinguishable from an ordinary object."
+    ai: {template: mindless}
+    notes: "SRD 5.1 Mimic, CR 2 (XP 450), HP 58 (9d8+18). Speed 15 ft (2024 data uses 20). Shapechanger is an Action in 2014."
