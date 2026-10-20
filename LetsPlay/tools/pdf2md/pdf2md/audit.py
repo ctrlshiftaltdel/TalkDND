@@ -45,8 +45,15 @@ def unknown_words(text):
     return sum(1 for w in lw if w not in repair.WORDS), len(lw)
 
 
+def normalize_ref(text):
+    """Join words hyphenated across line ends in the PDF text layer ("materi-\\nalizing")."""
+    text = text.replace("\u00ad\n", "").replace("\u00ad", "")
+    return re.sub(r"(?<=[A-Za-z])[-\u2010]\s*\n\s*(?=[a-z])", "", text)
+
+
 def score_page(pdf_text, md, info=None):
     info = info or {}
+    pdf_text = normalize_ref(pdf_text)
     body = _STRIP.sub(" ", md)
     pw, mw = words(pdf_text), words(body)
     s = {}

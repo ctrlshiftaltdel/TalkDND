@@ -77,3 +77,10 @@ def test_review_rejects_regression(tmp_path):
     assert not os.path.exists(audit.fix_path(b, 1))
     log = open(os.path.join(b.dir, "fixes", "review.log.jsonl")).read()
     assert '"rejected"' in log
+
+
+def test_hyphenated_text_layer_does_not_penalise_joined_words():
+    ref = ("the hero is restored to life, materi-\nalizing in the vault. Char-\nacters find some common treasure "
+           "with the goblin warrior and the dragon in the vault for the hero ") * 2
+    md = ref.replace("materi-\nalizing", "materializing").replace("Char-\nacters", "Characters")
+    assert audit.score_page(ref, md)["recall"] == 1.0
