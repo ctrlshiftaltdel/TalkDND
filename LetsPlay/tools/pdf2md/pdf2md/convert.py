@@ -35,6 +35,18 @@ STATBLOCK_RE = re.compile(
 ABILITY_RE = re.compile(r"\bSTR\b.{0,80}\bDEX\b|\bStr\b.{0,80}\bDex\b", re.S | re.I)
 
 
+# (from version, to version) -> predicate on a page's manifest entry. Chunks with no
+# matching page are kept as they are; the rest are redone.
+SELECTIVE_UPGRADES = {
+    ("0.2.0", "0.2.1"): lambda info: "fallback" in info,
+}
+
+
+def _chunk_pages(key):
+    a, b = key[1:].split("-")
+    return range(int(a) - 1, int(b))
+
+
 def out_dir(pdf_path):
     pdf_path = os.path.abspath(pdf_path)
     stem = os.path.splitext(os.path.basename(pdf_path))[0]
@@ -83,8 +95,13 @@ class Book:
         digest = m["sha256"] if quick else sha256_file(self.pdf)
         if m and m.get("sha256") == digest and m.get("tool") != VERSION:
             # tool upgrade: keep the old pages readable and reconvert chunk by chunk
-            m["stale"] = sorted(set(m.get("stale", [])) | set(m["chunks"]))
-            m["chunks"] = {}
+            redo = set(m["chunks"])
+            only = SELECTIVE_UPGRADES.get((m.get("tool"), VERSION))
+            if only:  # this upgrade only changes some pages: redo just their chunks
+                redo = {c for c in m["chunks"] if any(
+                    only(m["pages"].get(str(p + 1), {})) for p in _chunk_pages(c))}
+            m["stale"] = sorted(set(m.get("stale", [])) | redo)
+            m["chunks"] = {c: v for c, v in m["chunks"].items() if c not in redo}
             m["tool"] = VERSION
         if not m or m.get("sha256") != digest:
             self._reset()

@@ -156,3 +156,30 @@ def test_tool_upgrade_keeps_old_pages_readable(letsplay, monkeypatch):
     m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
     assert m["tool"] == "9.9.9" and not m["stale"] and m["chunks"]
     assert os.path.exists(d / "SRD Test.md")
+
+
+def test_fallback_keeps_headings(tmp_path):
+    def pdf(path):
+        doc = pymupdf.open()
+        p = doc.new_page()
+        p.insert_text((60, 70), "Goblin Warrior", fontsize=16)
+        for i in range(20):
+            p.insert_text((60, 100 + 16 * i), f"{LEFT[i]} {col_line('L', i)}", fontsize=10)
+        doc.save(path)
+    _ = pdf(str(tmp_path / "h.pdf"))
+    t = fallback.column_text(pymupdf.open(str(tmp_path / "h.pdf"))[0])
+    assert t.startswith("### Goblin Warrior\n\n")
+
+
+def test_selective_upgrade_redoes_only_fallback_chunks(letsplay, monkeypatch):
+    root = str(letsplay)
+    monkeypatch.setattr(convert, "VERSION", "0.2.0")
+    worker.run(root, book="Core Rules", only=True, chunk_size=5, nice=False)
+    d = letsplay / "Rules/2024/.md/Core Rules 2024"
+    m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    m["pages"]["7"]["fallback"] = "empty"
+    (d / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    monkeypatch.setattr(convert, "VERSION", "0.2.1")
+    b = convert.Book(str(letsplay / "Rules/2024/Core Rules 2024.pdf"))
+    assert b.m["stale"] == ["p0006-0010"]
+    assert sorted(b.m["chunks"]) == ["p0001-0005", "p0011-0012"]
