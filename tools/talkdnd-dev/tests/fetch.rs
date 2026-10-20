@@ -1,7 +1,9 @@
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -143,6 +145,10 @@ fn bad_fetch_args_exit_two() {
     }
 }
 
+// Windows `Command` also searches the parent process PATH and the application
+// and system directories, so a child PATH cannot hide `gh`. Skip this test
+// and the git-only PATH helpers it alone uses.
+#[cfg(not(windows))]
 #[test]
 fn missing_gh_fails_before_install() {
     let dest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../LetsPlay/bin/combat-sim");
@@ -171,10 +177,12 @@ fn missing_gh_fails_before_install() {
 }
 
 /// A PATH directory whose only command is a `git` stub. `gh` is absent.
+#[cfg(not(windows))]
 struct GitWithoutGh {
     dir: PathBuf,
 }
 
+#[cfg(not(windows))]
 impl GitWithoutGh {
     fn new() -> Self {
         let dir = std::env::temp_dir().join(format!(
@@ -206,12 +214,14 @@ impl GitWithoutGh {
     }
 }
 
+#[cfg(not(windows))]
 impl Drop for GitWithoutGh {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.dir);
     }
 }
 
+#[cfg(not(windows))]
 fn locate_git() -> PathBuf {
     let names: &[&str] = if cfg!(windows) {
         &["git.exe", "git.cmd", "git.bat", "git"]
@@ -230,6 +240,7 @@ fn locate_git() -> PathBuf {
     panic!("git not found on PATH");
 }
 
+#[cfg(not(windows))]
 fn install_git_stub(dir: &Path, git: &Path) {
     #[cfg(unix)]
     {
