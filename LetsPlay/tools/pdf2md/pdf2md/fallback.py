@@ -22,8 +22,16 @@ def words(text):
     return _W.findall(text.lower())
 
 
+def body_size(sizes):
+    """Font size carrying the most characters on the page (the body text)."""
+    c = collections.Counter()
+    for size, n in sizes:
+        c[round(size * 2) / 2] += n
+    return c.most_common(1)[0][0] if c else 0
+
+
 def _lines(page):
-    out = []
+    raw = []
     for blk in page.get_text("dict", sort=True)["blocks"]:
         if blk.get("type") != 0:
             continue
@@ -32,8 +40,22 @@ def _lines(page):
             if t:
                 size = max(sp["size"] for sp in ln["spans"])
                 bold = "bold" in ln["spans"][0]["font"].lower()
-                out.append((ln["bbox"], t, size >= 12.2 or (8.7 <= size <= 9.4 and bold)))
-    return out
+                raw.append((ln["bbox"], t, size, bold))
+    # headings are judged against this page's body size, not absolute points:
+    # page sizes (and scaled scans) differ from book to book
+    body = body_size((s, len(t)) for _, t, s, _ in raw)
+    return [(r, t, is_heading(t, s, b, body)) for r, t, s, b in raw]
+
+
+def is_heading(text, size, bold, body):
+    t = text.strip()
+    letters = [c for c in t if c.isalpha()]
+    # too short to be a word, or a body line that merely starts mid-sentence
+    if not body or len(letters) < 3 or letters[0].islower() or len(t) > 80:
+        return False
+    if size >= body * 1.25:
+        return True
+    return bold and size >= body * 0.95 and len(text) <= 60 and not text.rstrip().endswith(("-", ","))
 
 
 def _texts(page):

@@ -39,6 +39,8 @@ ABILITY_RE = re.compile(r"\bSTR\b.{0,80}\bDEX\b|\bStr\b.{0,80}\bDex\b", re.S | r
 # matching page are kept as they are; the rest are redone.
 SELECTIVE_UPGRADES = {
     ("0.2.0", "0.2.1"): lambda info: "fallback" in info,
+    ("0.2.1", "0.2.2"): lambda info: "fallback" in info,
+    ("0.2.0", "0.2.2"): lambda info: "fallback" in info,
 }
 
 
