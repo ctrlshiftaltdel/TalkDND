@@ -279,7 +279,45 @@ def fix_digit_one(md):
     return DIGIT1_AFTER.sub(_sub, md)
 
 
+# ---------------------------------------------------------------- OCR'd text layers
+_GLUE_HEADS = ("of", "if", "to", "in", "on", "at", "is", "as", "by", "and", "the", "that", "for", "with")
+_TOKEN_RE = re.compile(r"\b[A-Za-z]{3,}\b")
+
+
+def _fix_word(w):
+    lw = w.lower()
+    if not WORDS or lw in WORDS:
+        return w
+    # l-for-I at word start: "lnitiative" -> "Initiative", "lllusion" -> "Illusion"
+    if w[0] == "l" and ("i" + lw[1:]) in WORDS:
+        return "I" + w[1:]
+    if w[:2] in ("lI", "Il", "ll") and ("i" + lw[1:]) in WORDS:
+        return "I" + w[1:]
+    # glued function word: "ofyour" -> "of your", "thatyou" -> "that you"
+    for h in _GLUE_HEADS:
+        rest = lw[len(h):]
+        if w.islower() and lw.startswith(h) and len(rest) >= 2 and rest in WORDS and (len(rest) >= 3 or rest in FUNC):
+            return w[:len(h)] + " " + w[len(h):]
+    return w
+
+
+_SUP_WORD_RE = re.compile(r"(\w?)<sup>([A-Za-z][A-Za-z,.;:'\u2019 -]{2,})</sup>")
+
+
+def fix_ocr_words(md):
+    """Dictionary-checked fixes for text layers made by OCR software."""
+    # baseline jitter turns ordinary words into <sup>words</sup>; real superscripts are short
+    md = _SUP_WORD_RE.sub(lambda m: m.group(1) + (" " if m.group(1) else "") + m.group(2), md)
+    out = []
+    for line in md.split("\n"):
+        if line.startswith("<a id=") or line.startswith("<!--") or line.startswith("!["):
+            out.append(line)
+            continue
+        out.append(_TOKEN_RE.sub(lambda m: _fix_word(m.group(0)), line))
+    return "\n".join(out)
+
+
 def apply_glitch_rules(md):
     for pat, rep in GLITCH_RULES:
         md = re.sub(pat, rep, md)
-    return fix_digit_one(md)
+    return fix_ocr_words(fix_digit_one(md))

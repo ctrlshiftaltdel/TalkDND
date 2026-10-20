@@ -19,7 +19,7 @@ import re
 import sys
 import time
 
-from . import VERSION, headings, ocr, repair, tables
+from . import VERSION, fallback, headings, ocr, repair, tables
 
 TEXT_MIN_CHARS = 40          # fewer text-layer characters -> OCR the page
 FIGURE_MAX_CHARS = 600       # figure page: little text ...
@@ -27,6 +27,9 @@ FIGURE_MIN_COVER = 0.45      # ... and a large picture
 OCR_DPI = 200
 IMG_DPI = 150
 LOW_CONF = 0.80
+MAX_PIXELS = 40_000_000      # render cap: poster-size pages are drawn at a lower dpi
+MIN_ORDER = 0.55             # bigram agreement with column order below this -> interleaved
+MIN_RECALL = 0.6             # share of text-layer words kept below this -> fallback
 STATBLOCK_RE = re.compile(
     r"(\bArmor Class\b|\*\*AC\*\*|\bAC \d+\b).{0,400}?(\bHit Points\b|\*\*HP\*\*|\bHP \d+)", re.S)
 ABILITY_RE = re.compile(r"\bSTR\b.{0,80}\bDEX\b|\bStr\b.{0,80}\bDex\b", re.S | re.I)
@@ -78,7 +81,12 @@ class Book:
         m = self._load()
         quick = m and m.get("size") == st.st_size and m.get("mtime") == int(st.st_mtime)
         digest = m["sha256"] if quick else sha256_file(self.pdf)
-        if not m or m.get("sha256") != digest or m.get("tool") != VERSION:
+        if m and m.get("sha256") == digest and m.get("tool") != VERSION:
+            # tool upgrade: keep the old pages readable and reconvert chunk by chunk
+            m["stale"] = sorted(set(m.get("stale", [])) | set(m["chunks"]))
+            m["chunks"] = {}
+            m["tool"] = VERSION
+        if not m or m.get("sha256") != digest:
             self._reset()
             self.doc = pymupdf.open(self.pdf)
             m = {
@@ -176,10 +184,14 @@ class Book:
                 md_by_page[ch["metadata"]["page_number"] - 1] = ch["text"]
         for p in ocr_pages:
             page = self.doc[p]
-            pix = page.get_pixmap(dpi=OCR_DPI)
             try:
+                pix = safe_pixmap(page, OCR_DPI)
                 engine = ocr.get_engine(self.ocr_engine)
                 text, conf = ocr.lines_to_markdown(engine.read(pix.tobytes("png")), pix.width)
+            except RuntimeError as err:  # pymupdf render limits
+                text, conf = "", 0.0
+                info[p]["flags"].append("render-failed")
+                print(f"warning: PDF p.{p + 1}: {err}", file=sys.stderr)
             except ocr.OcrUnavailable as err:
                 text, conf = "", 0.0
                 info[p]["flags"].append("ocr-unavailable")
@@ -191,12 +203,17 @@ class Book:
         parts = []
         for p in range(a, b):
             body = postprocess(md_by_page.get(p, ""), hmap)
+            if p in text_pages:
+                body = self.check_text_page(p, body, hmap, info[p])
             q = page_quality(body, info[p])
             info[p]["quality"] = q
             if "figure" in info[p]["flags"]:
                 rel = self.render_page(p)
-                body = (body + "\n\n" if body else "") + \
-                    f"![Map or illustration, PDF p.{p + 1}]({rel}) (open the PDF page for full detail)"
+                if rel:
+                    body = (body + "\n\n" if body else "") + \
+                        f"![Map or illustration, PDF p.{p + 1}]({rel}) (open the PDF page for full detail)"
+                else:
+                    info[p]["flags"].append("render-failed")
             note = ""
             if q == "low":
                 note = f"\n> Low-quality extraction ({', '.join(info[p]['flags']) or 'check'}): use PDF p.{p + 1}.\n"
@@ -206,15 +223,45 @@ class Book:
         for p, i in info.items():
             self.m["pages"][str(p + 1)] = i
         self.m["chunks"][chunk_key(a, b)] = {"seconds": round(time.time() - t0, 2)}
+        if chunk_key(a, b) in self.m.get("stale", []):
+            self.m["stale"].remove(chunk_key(a, b))
         self.save()
         return md
 
+    def check_text_page(self, p, body, hmap, info):
+        """Fall back to the plain text layer when the layout extractor lost, repeated
+        or interleaved text; re-read garbled headings."""
+        page = self.doc[p]
+        ref = fallback.column_text(page)
+        reason = None
+        if len(fallback.words(ref)) >= 30:
+            if fallback.has_stutter(body):
+                reason = "stutter"
+            elif fallback.recall(body, ref) < MIN_RECALL:
+                reason = "empty" if not body.strip() else "lost-text"
+            elif "\n|" not in "\n" + body and (
+                    fallback.order_score(body, ref) < MIN_ORDER or fallback.interleaved_lines(body, ref)):
+                # pages with tables keep the layout output: the fallback would flatten them
+                reason = "interleaved"
+        if reason:
+            info["fallback"] = reason
+            body = postprocess(ref, hmap)
+        body, n = fallback.repair_headings(body, page, self.ocr_engine)
+        if n:
+            info["headings_ocr"] = n
+        return body
+
     def render_page(self, p, dpi=IMG_DPI):
-        """Write img/pNNNN.webp and return its path relative to the book folder."""
+        """Write img/pNNNN.webp and return its path relative to the book folder
+        (None when the page cannot be rendered)."""
         name = "p%04d.webp" % (p + 1)
         path = os.path.join(self.dir, "img", name)
         if not os.path.exists(path):
-            pix = self.doc[p].get_pixmap(dpi=dpi)
+            try:
+                pix = safe_pixmap(self.doc[p], dpi)
+            except RuntimeError as err:
+                print(f"warning: PDF p.{p + 1}: cannot render: {err}", file=sys.stderr)
+                return None
             try:
                 from PIL import Image
 
@@ -237,13 +284,16 @@ class Book:
             "",
             f"> Extracted from `{self.m['pdf']}` by pdf2md {VERSION}. **The PDF is authoritative.**",
             "> Each page starts with `<a id=\"pN\"></a>` where N is the PDF page number.",
-            f"> Progress: {self.done_pages()}/{pc} pages. Pages marked low quality, stat blocks, and maps: read the PDF.",
+            f"> Progress: {self.done_pages()}/{pc} pages"
+            + (f" ({len(self.m['stale'])} chunks from an older pdf2md, being redone)" if self.m.get("stale") else "")
+            + f". Pages marked low quality, stat blocks, and maps: read the PDF.",
             "",
         ]
         body = []
         for a, b in self.ranges:
             path = os.path.join(self.dir, "pages", chunk_key(a, b) + ".md")
-            if chunk_key(a, b) in self.m["chunks"] and os.path.exists(path):
+            known = chunk_key(a, b) in self.m["chunks"] or chunk_key(a, b) in self.m.get("stale", [])
+            if known and os.path.exists(path):
                 with open(path, encoding="utf-8") as f:
                     body.append(f.read())
             else:
@@ -292,6 +342,20 @@ class Book:
         _write_atomic(os.path.join(self.dir, "index.md"), "\n".join(lines))
 
 
+def safe_pixmap(page, dpi):
+    """get_pixmap with the dpi lowered for huge pages; RuntimeError if it still fails."""
+    w, h = page.rect.width / 72, page.rect.height / 72
+    if w * h * dpi * dpi > MAX_PIXELS:
+        dpi = max(18, int((MAX_PIXELS / (w * h)) ** 0.5))
+    while True:
+        try:
+            return page.get_pixmap(dpi=dpi)
+        except Exception as err:  # pymupdf raises FzErrorLimit / MemoryError subclasses
+            if dpi <= 18:
+                raise RuntimeError(str(err)) from err
+            dpi = max(18, dpi // 2)
+
+
 def postprocess(md, hmap):
     md = repair.strip_picture_text(md)
     lines = []
@@ -320,7 +384,7 @@ def page_quality(body, info):
         flags.append("low-yield")
     if "ocr-unavailable" in flags or (not body.strip() and "figure" not in flags):
         flags.append("empty")
-    bad = {"statblock", "table", "ocr-low-conf", "low-yield", "empty"}
+    bad = {"statblock", "table", "ocr-low-conf", "low-yield", "empty", "render-failed"}
     return "low" if bad & set(flags) else "ok"
 
 

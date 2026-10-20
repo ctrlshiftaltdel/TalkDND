@@ -18,7 +18,8 @@ def main(argv=None):
     r = sub.add_parser("run", help="convert pending pages")
     r.add_argument("--budget", type=float, help="stop after this many seconds")
     r.add_argument("--budget-pages", type=int, help="stop after this many pages")
-    r.add_argument("--book", help="PDF name (or part of it) to do first")
+    r.add_argument("--book", help="PDF name (or part of it) to do first; the rest of the queue follows unless --only")
+    r.add_argument("--only", action="store_true", help="with --book: stop after that book")
     r.add_argument("--pages", help="with --book: PDF pages first, e.g. 12-20,31")
     r.add_argument("--chunk", type=int, default=10, help="pages per chunk (new books only)")
     r.add_argument("--ocr-engine", choices=ocr.ENGINES, default=os.environ.get("PDF2MD_OCR", "rapid"))
@@ -49,7 +50,7 @@ def main(argv=None):
             print(os.path.relpath(p, root))
         return 0
     if args.cmd == "run":
-        return worker.run(root, budget_seconds=args.budget, budget_pages=args.budget_pages, book=args.book,
+        return worker.run(root, budget_seconds=args.budget, budget_pages=args.budget_pages, book=args.book, only=args.only,
                           pages=args.pages, chunk_size=args.chunk, ocr_engine=args.ocr_engine,
                           nice=not args.no_nice)
     if args.cmd == "status":
