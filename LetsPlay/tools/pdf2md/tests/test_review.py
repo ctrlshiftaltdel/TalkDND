@@ -80,6 +80,9 @@ def test_review_rejects_regression(tmp_path):
 
 
 def test_hyphenated_text_layer_does_not_penalise_joined_words():
+    from pdf2md import repair
+    repair.set_words("the hero is restored to life materializing in vault characters find some common "
+                     "treasure with goblin warrior and dragon for".split())
     ref = ("the hero is restored to life, materi-\nalizing in the vault. Char-\nacters find some common treasure "
            "with the goblin warrior and the dragon in the vault for the hero ") * 2
     md = ref.replace("materi-\nalizing", "materializing").replace("Char-\nacters", "Characters")
