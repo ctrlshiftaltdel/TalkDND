@@ -17,7 +17,7 @@
 | `Adventures/<书名>.md` | 玩家自备的冒险书文本 | ❌ 仅 README 入库 |
 | `Adventures/<冒险名>/combat/` | 该冒险的战斗数据：`scenes/`、`encounters.yaml`、`creatures.yaml` | ❌（由书改编，本地自建） |
 | `Saves/YYYY-MM-DD-NN/` | 一份存档：`Characters/`（玩家角色卡）、`NPCs/`（同伴与重要 NPC，含 `_party.md`）、`Sessions/`（会话日志）、`combat/`（`campaign.yaml` 清单 + `*.state.json` 战斗状态）、`dm-secrets.md`（🔒） | ❌（个人进度） |
-| `../tools/combat-sim/` | 战斗引擎（Rust，无界面）。`../tools/bin/combat-sim` 是指向 release 构建的软链接；本目录的 `bin/combat-sim` 是调用它的包装脚本 | ✅（不含 `target/`） |
+| `../tools/combat-sim/` | 战斗引擎（Rust，无界面）。二进制放在 `../tools/bin/`：Linux/macOS 是 `combat-sim`（源码构建时为指向 release 产物的软链接，也可换成 GitHub Releases 下载的文件）；Windows 是玩家放入的 `combat-sim.exe`（不入库）。本目录 `bin/combat-sim`（sh）与 `bin/combat-sim.cmd` 按自身位置调用它 | ✅（不含 `target/` 与 `combat-sim.exe`） |
 
 角色卡是 Markdown：上半部分写给人看，末尾有一个 ```` ```combat yaml ```` 数据块给引擎读，**两者数值必须同步**。
 
@@ -36,7 +36,7 @@
 1. **严格按存档 `ruleset` 指定的版本**（只用 `Rules/<版本>/` 的书）。规则书没写或不明确时，DM 合理推断，并优先查 `Rules/rulings.md` 与 `Rules/rulings-<版本>.md`；版本相关的新裁定写进版本文件，通用的写进 `rulings.md`；产生新的可复用裁定就追加进去。
 2. **全程用简体中文**主持（术语可在首次出现时附英文）。
 3. **每一幕结尾给 2–4 个选项**（如果聊天界面支持选项控件就用控件），同时明确允许玩家自由输入。
-4. **真随机**：所有骰子在 shell 里掷——`bin/combat-sim roll 1d20+5 [--adv|--dis] [--dc 15]`（不需要战斗状态；包装脚本会找到仓库里的 `../tools/bin/combat-sim`），或 `python3 -c "import random;r=random.SystemRandom();print(r.randint(1,20))"`。绝不编造骰子。
+4. **真随机**：所有骰子在 shell 里掷——Linux/macOS 用 `bin/combat-sim roll 1d20+5 [--adv|--dis] [--dc 15]`，Windows 用 `bin\combat-sim.cmd` 和同一组参数（不需要战斗状态；包装脚本会找到 `../tools/bin/` 里的二进制），或 `python3 -c "import random;r=random.SystemRandom();print(r.randint(1,20))"`。绝不编造骰子。
 5. **展示完整算式**：`潜行 d20(14)+7 = 21 vs 被动察觉 12 → 成功`；优势/劣势写出两颗骰。
 6. **预掷纪律**（R-01）：尽量不预掷；预掷了就按顺序用，并在日志标注；不能因为结果不好而作废重掷。
 7. **每一步都记日志**：每个掷骰、裁定、HP/资源/金币/物品变化，写进当次会话日志（`Saves/<存档>/Sessions/<日期>-session-NN-<标题>.md`），时间用游戏内时间。
@@ -64,7 +64,7 @@
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
 export COMBAT_SIM_CAMPAIGN=$PWD/Saves/<存档>/combat/campaign.yaml
-CS=bin/combat-sim
+CS=bin/combat-sim          # Windows：CS=bin\combat-sim.cmd
 ```
 
 ```bash
@@ -101,7 +101,7 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 
 规则数据分层：引擎按清单的 `ruleset` 加载 `Rules/combat/common/` + `Rules/combat/<版本>/`。只把 SRD 内容提交进仓库；非 SRD 数据（如只在 MM 里的怪物）放到 `Rules/combat/local/` 或加进 `.gitignore`，并在清单的 `library:` 里另列。
 
-修改引擎：`cd ../tools/combat-sim && cargo test --release && cargo build --release`（`../tools/bin/combat-sim` 软链接会自动指向新的 release 构建；`bin/combat-sim` 不用改）。
+修改引擎：`cd ../tools/combat-sim && cargo test --release && cargo build --release`（Linux/macOS 上 `../tools/bin/combat-sim` 软链接会自动指向新的 release 构建，`bin/combat-sim` 不用改；Windows 把 `../tools/combat-sim/target/release/combat-sim.exe` 复制到 `../tools/bin/combat-sim.exe`，`bin/combat-sim.cmd` 不用改）。不编译时，从 GitHub Releases 下载预编译包，把二进制放到同一位置，见仓库根目录 `README.md`。
 
 ## 7. 裁定文件
 
