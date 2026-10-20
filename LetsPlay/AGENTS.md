@@ -57,8 +57,8 @@ Rules/2024/.md/Player's Handbook 2024/img/p0123.webp              # 地图/插�
 
 - 先看进度：`uv run --project tools/pdf2md python -m pdf2md status`。
 - **能开后台任务 / 子代理时**：在后台启动 `uv run --project tools/pdf2md python -m pdf2md run`，不要等待它，继续主持。它自动低优先级运行，顺序是：当前存档的冒险书 → 当前规则版本的 SRD → 该版其他书 → 其他冒险 → 另一版规则书。中断后再次运行会接着做；同一时间只会有一个转换进程。
-- **不能开后台任务时**：只在场景之间（不在战斗或关键剧情中）跑一小段：`... python -m pdf2md run --budget 60`（最多 60 秒）。
-- 马上要用某几页而它们还没转：`... python -m pdf2md run --book "<书名的一部分>" --pages 40-52 --budget 120`。
+- **不能开后台任务时**：只在场景之间（不在战斗或关键剧情中）跑一小段：`uv run --project tools/pdf2md python -m pdf2md run --budget 60`（最多 60 秒）。
+- 马上要用某几页而它们还没转：`uv run --project tools/pdf2md python -m pdf2md run --book "<书名的一部分>" --pages 40-52 --budget 120`。
 - 输出不入库，也不要贴进任何 issue、PR 或日志。
 
 **查书顺序**：

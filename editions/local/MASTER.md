@@ -7,7 +7,7 @@
 1. 阅读 `AGENTS.md`、`AGENT-ORCHESTRATION.md`、`ORCHESTRATION-PROJECT.md`，确认 `edition` 为 `local`。
 2. 运行：
    ```bash
-   python scripts/orchestrator.py task list
+   uv run --no-project python scripts/orchestrator.py task list
    git status --short
    git branch --show-current
    git log -1 --oneline
@@ -19,15 +19,15 @@
 ## 任务生命周期
 
 1. 将需求变成单一目标任务：目标、允许 / 禁止路径、依赖、逐条验收、验证命令、风险和回退方式。
-2. 创建任务：`python scripts/orchestrator.py task add ...`。
-3. 检查依赖并标记 READY：`python scripts/orchestrator.py task ready <ID>`。
-4. 获取本地路径锁并记录派发：`python scripts/orchestrator.py task dispatch <ID>`。锁成功后，才向真实 Execution Agent 提供完整任务包。
+2. 创建任务：`uv run --no-project python scripts/orchestrator.py task add ...`。
+3. 检查依赖并标记 READY：`uv run --no-project python scripts/orchestrator.py task ready <ID>`。
+4. 获取本地路径锁并记录派发：`uv run --no-project python scripts/orchestrator.py task dispatch <ID>`。锁成功后，才向真实 Execution Agent 提供完整任务包。
 5. 派发分两条路径，按运行时真实能力选择其一（能力判定按 `AGENT-ORCHESTRATION.md` 的 C1–C4 逐条探测）：
    - 5a. 子代理驱动路径（C1–C4 全部通过时）：每个任务用独立上下文的子代理执行完整任务包（目标、允许 / 禁止路径、逐条验收、验证命令、风险），逐任务顺序派发而非并行轰炸；子代理返回后必须回收其交付证据（变更文件清单、`git status --short`、head SHA、验证命令输出与退出码、验收自检、未完成项），证据不全视为未交付，不得进入审查。Master 仍然只派发与审查，不亲手实现；子代理不得自批或合并。提示词见 `editions/local/MASTER-SINGLE-SESSION.md`。
    - 5b. 多会话交接路径（任一能力不满足时）：由当前操作者另开本地会话执行，Master 不等待，也不声称已派发成功；人工会话同样不得自批或合并。提示词见 `editions/local/MASTER-MULTI-SESSION.md`。
 6. 收回分支 / Diff / head SHA / 测试输出后，独立审查。退回任务要写明验收条款、缺失证据、修复指引与轮次。
 7. 通过后将 `APPROVED` 绑定到当前 head SHA，再由 Master 合并。合并后重新运行验证，只有结果通过才标记 `VERIFIED`。
-8. 在任务库记录每次状态与证据。每阶段末运行 `python scripts/orchestrator.py backup`。
+8. 在任务库记录每次状态与证据。每阶段末运行 `uv run --no-project python scripts/orchestrator.py backup`。
 
 ## 并发与资源
 

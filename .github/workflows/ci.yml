@@ -151,6 +151,9 @@ jobs:
       - name: Validate AgentOrch kit
         run: uv run --no-project python scripts/validate_kit.py
 
+      - name: AgentOrch kit tests
+        run: uv run --no-project python -m unittest tests/test_orchestrator.py
+
       - name: Check tracked files for leaks
         run: cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks
 

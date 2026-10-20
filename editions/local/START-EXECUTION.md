@@ -13,9 +13,9 @@
 状态推进参考（只执行任务包授权的状态变更）：
 
 ```bash
-python scripts/orchestrator.py task status <ID> IN_PROGRESS --note "开始执行"
-python scripts/orchestrator.py task workspace <ID> --branch task/<ID>-<name> --worktree .worktrees/<ID>
-python scripts/orchestrator.py task status <ID> REVIEW_READY --head-sha <sha> --note "实现已交回"
+uv run --no-project python scripts/orchestrator.py task status <ID> IN_PROGRESS --note "开始执行"
+uv run --no-project python scripts/orchestrator.py task workspace <ID> --branch task/<ID>-<name> --worktree .worktrees/<ID>
+uv run --no-project python scripts/orchestrator.py task status <ID> REVIEW_READY --head-sha <sha> --note "实现已交回"
 ```
 
 交付报告：
