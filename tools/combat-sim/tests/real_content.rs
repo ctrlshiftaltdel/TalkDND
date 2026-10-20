@@ -13,7 +13,7 @@ use combat_sim::engine::NullSink;
 use combat_sim::sim;
 use combat_sim::state::{EncounterState, NewEncounter};
 
-const MANIFEST: &str = "/workspace/projects/talkdnd/Saves/2026-10-19-01/combat/campaign.yaml";
+const MANIFEST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Saves/2026-10-19-01/combat/campaign.yaml");
 const PARTY: &[&str] = &["will", "rina", "milo", "sera"];
 
 #[test]
