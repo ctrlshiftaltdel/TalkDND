@@ -30,3 +30,11 @@ scripts/orchestrator.py, scripts/validate_kit.py, and
 tests/test_orchestrator.py) are taken from AgentOrch, MIT License,
 https://github.com/ctrlshiftaltdel/AgentOrch. The kit license text is in
 LICENSE.txt. TalkDND's own code and original documents remain under LICENSE.
+
+pdf2md (LetsPlay/tools/pdf2md) contains text-repair, table-repair, heading and
+check routines ported from ConvertPDF by the project owner, relicensed here
+under the MIT License. Its English word list is downloaded at setup time from
+dwyl/english-words (public domain / Unlicense). PyMuPDF and pymupdf4llm
+(AGPL-3.0), RapidOCR (Apache-2.0) and the optional PaddleOCR / PaddlePaddle
+(Apache-2.0) are installed separately by uv and are not distributed with
+TalkDND.

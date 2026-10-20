@@ -1,0 +1,35 @@
+[project]
+name = "pdf2md"
+version = "0.1.0"
+description = "Incremental PDF -> Markdown extraction for TalkDND play books (PDF stays authoritative)."
+license = "MIT"
+requires-python = ">=3.11,<3.14"
+# AGPL (PyMuPDF) and Apache (RapidOCR) dependencies are installed by `uv sync`,
+# never bundled in TalkDND.
+dependencies = [
+    "pymupdf==2.0",
+    "pymupdf4llm==2.0",
+    "pymupdf-layout==2.0",
+    "rapidocr-onnxruntime==1.2.3",
+    "pillow>=10",
+]
+
+[project.optional-dependencies]
+# Optional PaddleOCR 3.x engine: `uv sync --extra paddle`, then `--ocr-engine paddle`.
+paddle = [
+    "paddlepaddle>=3.0,<4",
+    "paddleocr>=3.0,<4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

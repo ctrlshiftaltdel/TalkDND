@@ -8,9 +8,11 @@
 - 一句话目标：让 AI 在聊天里按玩家自备的 D&D 规则书主持冒险，并用 combat-sim 结算战斗；受版权保护的书和冒险、以及个人存档，永不进入仓库或公开记录。
 - 现有项目 / 新项目：`现有项目`
 - 本地主分支：`main`
-- 语言 / 框架 / 运行方式：项目自己的程序、工具和脚本一律用 Rust（`tools/combat-sim` 战斗引擎，`tools/talkdnd-dev` 开发工具）与 Markdown/YAML 规则数据。玩家在 `LetsPlay/` 里开局。**TECH STACK** 的接受例外只有下面两项，不得再扩大：
+- 语言 / 框架 / 运行方式：项目自己的程序、工具和脚本一律用 Rust（`tools/combat-sim` 战斗引擎，`tools/talkdnd-dev` 开发工具）与 Markdown/YAML 规则数据。玩家在 `LetsPlay/` 里开局。**TECH STACK** 的接受例外只有下面三项，不得再扩大：
   - 随上游原样保留、不得修改的 AgentOrch Python 套件脚本：`scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py`；
-  - CI YAML（`.github/workflows/`，含其中的 shell 步骤）。
+  - CI YAML（`.github/workflows/`，含其中的 shell 步骤）；
+  - `LetsPlay/tools/pdf2md/`：游玩所需的 Python PDF → Markdown 转换工具。
+  所有 Python 一律经 uv 运行（`uv sync` / `uv run`），不用裸 `pip`、`venv` 或 `python3`。
 - 重要设计 / 需求文件：项目章程是 `docs/PROJECT-CHARTER.md`。AGENT-BOOTSTRAP 判断「章程缺失」时只看这一路径：文件存在且没有占位符，即章程已建立。不要改套件文件来改查找路径。玩家说明是 `LetsPlay/README.md`；DM 手册是 `LetsPlay/AGENTS.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。根目录 `README.md` 只给开发者。
 
 ## 范围与安全
@@ -30,13 +32,14 @@
 
 下列命令已在接入时于本机执行。合并前和合并后都要重跑「合并后必须执行」里的命令。
 
-- 快速测试：`python3 scripts/validate_kit.py`、`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks` 与 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay`
+- 快速测试：`uv run --no-project python scripts/validate_kit.py`、`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks` 与 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay`
 - 完整回归：`cargo test --manifest-path tools/combat-sim/Cargo.toml` 与 `cargo test --manifest-path tools/talkdnd-dev/Cargo.toml`
-- 静态检查 / 类型检查：`python3 -m py_compile scripts/orchestrator.py scripts/validate_kit.py`
+- 静态检查 / 类型检查：`uv run --no-project python -m py_compile scripts/orchestrator.py scripts/validate_kit.py`
 - 构建 / 打包：`src` 未改时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- fetch-binary`。它用 `gh run list` / `gh run download` 取 `main` 上最近一次成功的 `build-artifacts` 制品 `combat-sim-<target>`（制品根上就是二进制），安装到 `LetsPlay/bin/combat-sim`（Windows 为 `LetsPlay/bin/combat-sim.exe`），并在 unix 上加上可执行位。`--dry-run` 只打印命令。`--target` 可选 `x86_64-unknown-linux-gnu`、`x86_64-pc-windows-msvc`、`aarch64-apple-darwin`。`src` 改了才运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- install-local`：它执行 `cargo build --release --manifest-path tools/combat-sim/Cargo.toml`，再把 `tools/combat-sim/target/release/combat-sim`（Windows 为 `combat-sim.exe`）复制到 `LetsPlay/bin/`。`--dry-run` 只打印命令。装好的文件只留在本机，不要提交。
 - GitHub：`.github/workflows/ci.yml` 在 push 与 pull request 上跑 fmt、clippy、ubuntu / windows / macos-14 测试、cargo-deny、2014 与 2024 的 `content check`（只读仓库里的 `LetsPlay/Rules/combat`）、`validate_kit.py`、`check-leaks`、`check-letsplay`、yamllint 和离线相对链接检查。`main` 上的 `.github/workflows/build-artifacts.yml` 上传三个平台的 release 二进制，制品根上就是该文件，解压到 `LetsPlay/bin/`。标签发布仍走 `.github/workflows/release.yml`，压缩包根上同样只有该二进制。
 - 手工 / UI 冒烟检查：程序已在 `LetsPlay/bin/` 时，于任意工作目录运行 `LetsPlay/bin/combat-sim roll 1d20+5 --dc 15`（Windows 为 `LetsPlay\bin\combat-sim.exe`）
-- 合并后必须执行：`cargo test --manifest-path tools/combat-sim/Cargo.toml`；`cargo test --manifest-path tools/talkdnd-dev/Cargo.toml`；`python3 scripts/validate_kit.py`；`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`；`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay`
+- pdf2md 测试：`uv run --project LetsPlay/tools/pdf2md --group dev pytest -q LetsPlay/tools/pdf2md/tests`
+- 合并后必须执行：`cargo test --manifest-path tools/combat-sim/Cargo.toml`；`cargo test --manifest-path tools/talkdnd-dev/Cargo.toml`；`uv run --no-project python scripts/validate_kit.py`；`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`；`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay`
 
 `tools/combat-sim/tests/real_content.rs` 在 `LetsPlay/Saves/2026-10-19-01/combat/campaign.yaml` 不存在时跳过并打印说明。CI 没有版权书，也没有存档。
 
@@ -45,7 +48,7 @@
 本项目的底座以本文件为准，不以 `scripts/orchestrator.py` 的内置缺省为准。
 
 - `edition`：`github`
-- 活跃底座是 `github`：任务单在 GitHub Issue，证据在 PR 与 CI。`editions/local/` 必须留在树里，因为 `scripts/validate_kit.py` 要求两套底座文件齐全；不得把 local 任务库当作第二套状态源，也不得双写。不要为本项目运行 `python3 scripts/orchestrator.py init`（该命令会按内置缺省写下 `edition=local` 的本地库）。
+- 活跃底座是 `github`：任务单在 GitHub Issue，证据在 PR 与 CI。`editions/local/` 必须留在树里，因为 `scripts/validate_kit.py` 要求两套底座文件齐全；不得把 local 任务库当作第二套状态源，也不得双写。不要为本项目运行 `uv run --no-project python scripts/orchestrator.py init`（该命令会按内置缺省写下 `edition=local` 的本地库）。
 - 并发策略：按机器余量动态决定，不设固定上限。同一 worktree 同一时刻只允许一个测试进程。
 - 本地私有目录：`.local/`（`.env`、机器信息）。永不入库。
 

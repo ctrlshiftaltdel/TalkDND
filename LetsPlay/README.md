@@ -48,6 +48,12 @@ bin/
 - 一个能执行命令行的 AI 助手（能读写本目录文件、运行 shell）。
 - combat-sim 程序，见下一节。玩的时候不需要编译器。
 
+## 书籍转文字（自动，后台）
+
+你只需要放 PDF。AI DM 会用 `tools/pdf2md` 在后台把 PDF 逐步转成可搜索的 Markdown（放在 PDF 旁边的隐藏目录 `.md/<PDF 文件名>/`），先转当前冒险，再转规则书；不会打断游戏，PDF 始终是权威来源。扫描版里没有文字层的页面会自动 OCR。
+
+第一次需要安装 [uv](https://docs.astral.sh/uv/)（AI DM 会按 `AGENTS.md` 2.1 节自己装），并联网下载依赖（约 500 MB，含 PyMuPDF 与 RapidOCR，不随本项目分发）。
+
 ## 获取 combat-sim
 
 程序放在 `bin/combat-sim`。Windows 是 `bin/combat-sim.exe`。这两个文件都不入库。

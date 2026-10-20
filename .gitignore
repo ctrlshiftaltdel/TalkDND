@@ -59,3 +59,10 @@ combat-state.json
 # Python caches from local helper scripts
 __pycache__/
 *.py[cod]
+
+# --- pdf2md: generated Markdown, page images, state, environments (never committed) ---
+**/.md/
+LetsPlay/.pdf2md/
+LetsPlay/tools/pdf2md/.venv/
+.venv/
+.pytest_cache/

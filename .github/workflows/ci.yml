@@ -145,14 +145,47 @@ jobs:
             tools/combat-sim
             tools/talkdnd-dev
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Validate AgentOrch kit
-        run: python3 scripts/validate_kit.py
+        run: uv run --no-project python scripts/validate_kit.py
 
       - name: Check tracked files for leaks
         run: cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks
 
       - name: Check LetsPlay stays self-contained
         run: cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay
+
+  pdf2md:
+    name: pdf2md (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    defaults:
+      run:
+        working-directory: LetsPlay
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: LetsPlay/tools/pdf2md/uv.lock
+
+      # Same commands LetsPlay/AGENTS.md tells the DM agent to run.
+      # The optional PaddleOCR extra is not installed in CI (large); RapidOCR is tested.
+      - name: Setup smoke test
+        run: |
+          uv sync --locked --project tools/pdf2md
+          uv run --project tools/pdf2md python -m pdf2md setup
+
+      - name: Tests on synthetic PDFs (incl. OCR of an image-only page)
+        run: uv run --locked --project tools/pdf2md --group dev pytest -q tools/pdf2md/tests
 
   markup:
     runs-on: ubuntu-latest

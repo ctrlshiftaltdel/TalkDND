@@ -204,3 +204,14 @@ fn usage_and_missing_git_exit_two() {
     assert_eq!(output.status.code(), Some(2));
     assert!(text(&output.stderr).contains("usage:"));
 }
+
+#[test]
+fn pdf2md_output_and_environments_are_leaks() {
+    use talkdnd_dev::leaks::generated_tree;
+    assert!(generated_tree("LetsPlay/Rules/2024/.md/Book/Book.md"));
+    assert!(generated_tree("LetsPlay/Adventures/x/.md/X/img/p0001.webp"));
+    assert!(generated_tree("LetsPlay/.pdf2md/status.json"));
+    assert!(generated_tree("LetsPlay/tools/pdf2md/.venv/pyvenv.cfg"));
+    assert!(!generated_tree("LetsPlay/tools/pdf2md/pdf2md/convert.py"));
+    assert!(!generated_tree("LetsPlay/README.md"));
+}

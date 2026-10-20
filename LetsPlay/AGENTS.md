@@ -17,6 +17,7 @@
 | `Adventures/<书名>.md` | 玩家自备的冒险书文本 | ❌ 仅 README 入库 |
 | `Adventures/<冒险名>/combat/` | 该冒险的战斗数据：`scenes/`、`encounters.yaml`、`creatures.yaml` | ❌（由书改编，本地自建） |
 | `Saves/YYYY-MM-DD-NN/` | 一份存档：`Characters/`（玩家角色卡）、`NPCs/`（同伴与重要 NPC，含 `_party.md`）、`Sessions/`（会话日志）、`combat/`（`campaign.yaml` 清单 + `*.state.json` 战斗状态）、`canon.md`（即兴定论）、`dm-secrets.md`（🔒） | ❌（个人进度） |
+| `tools/pdf2md/` | PDF → Markdown 后台转换工具（Python，经 uv 运行）。输出在各 PDF 旁的隐藏目录 `.md/<PDF 文件名>/`，见 2.1 | ✅ 源码；❌ 输出与 `.venv` |
 | `bin/combat-sim` | 战斗程序本体。Windows 文件名是 `bin/combat-sim.exe`。不入库。放法见 `README.md` 和 `bin/README.md` | ❌ 本地文件 |
 
 角色卡是 Markdown：上半部分写给人看，末尾有一个 ```` ```combat yaml ```` 数据块给引擎读，**两者数值必须同步**。
@@ -27,9 +28,44 @@
 2. **确认规则版本**：读 `Saves/<存档>/combat/campaign.yaml` 的 `ruleset`（`"2014"` 或 `"2024"`；没写按 2024）。之后**只查阅 `Rules/<版本>/` 里的书和 `Rules/rulings-<版本>.md`**，不要混用另一版的规则；`Rules/<版本>/` 里没有任何书（连 SRD 都没有）时，先请玩家放入再开局。
 3. 读最新的会话日志 `Saves/<存档>/Sessions/` 里日期最新的文件，定位**最后一个 `## 存档点`** 小节：那里写着游戏内时间、各角色 HP/资源/金币、持有物品、未决事项。从这里继续。
 4. 读 `Saves/<存档>/dm-secrets.md`（🔒 只给自己看）、`canon.md`（已成定论的即兴设定）、`Characters/`、`NPCs/`（含同伴性格与说话方式）。
-5. 读冒险书对应章节：剧情节点、NPC 动机与秘密、地图、数据块（按关键词搜索定位，不要整本读）。地图以 `Adventures/` 里的 PDF 为准（文字版没有地图）；看不了图时，按 PDF 的房间编号与描述理解布局。
+5. 读冒险书对应章节：剧情节点、NPC 动机与秘密、地图、数据块（按关键词搜索定位，不要整本读）。查书顺序见 2.1：先查 pdf2md 生成的 Markdown 与索引，拿不准时看 PDF。地图一律看 PDF（或 pdf2md 链接的页面图）；看不了图时，按 PDF 的房间编号与描述理解布局。
 6. 用一段简短的「前情提要」+ 当前场景描述开场，结尾给选项。
 7. 新开一局：先问玩家用 2014 还是 2024 规则（看 `Rules/2014/`、`Rules/2024/` 里实际有哪版书），再建 `Saves/YYYY-MM-DD-NN/`（结构见 `Saves/README.md`）：角色卡、`combat/campaign.yaml`（写上 `ruleset` 和 `party: [...]`）、`dm-secrets.md`、第一份会话日志。冒险的战斗数据按书建在 `Adventures/<slug>/combat/`。2014 存档的角色卡不能写 `mastery`。
+
+### 2.1 书籍文本：pdf2md（后台转换，PDF 为准）
+
+玩家只需把 PDF 放进 `Rules/2014/`、`Rules/2024/`、`Adventures/`（可放子目录）。`tools/pdf2md` 会在后台把 PDF 逐段转成便于搜索的 Markdown，放在 PDF 旁边的隐藏目录里，文件名与 PDF 相同：
+
+```
+Rules/2024/Player's Handbook 2024.pdf
+Rules/2024/.md/Player's Handbook 2024/Player's Handbook 2024.md   # 全书，<a id="pN"></a> = PDF 第 N 页
+Rules/2024/.md/Player's Handbook 2024/index.md                    # 标题 → 页码、数据块页、地图页、低质量页
+Rules/2024/.md/Player's Handbook 2024/img/p0123.webp              # 地图/插图页面图（链接，不嵌入）
+```
+
+**首次使用（每台机器一次）**。所有 Python 都通过 [uv](https://docs.astral.sh/uv/) 运行：
+
+1. 没有 `uv` 时先安装（官方安装器）：
+   - Linux / macOS：`curl -LsSf https://astral.sh/uv/install.sh | sh`
+   - Windows（PowerShell）：`powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+2. 在本目录执行：`uv sync --project tools/pdf2md`（自动下载合适的 Python 和依赖，装进 `tools/pdf2md/.venv/`）。
+3. 再执行：`uv run --project tools/pdf2md python -m pdf2md setup`（下载英文词表、检查 OCR 引擎）。出现 `setup OK` 即可。
+
+依赖 PyMuPDF / pymupdf4llm（AGPL）与 RapidOCR 由这一步从网上安装，不随 TalkDND 分发。可选的 PaddleOCR 引擎：`uv sync --project tools/pdf2md --extra paddle`，运行时加 `--ocr-engine paddle`（体积约 1 GB、CPU 上明显更慢，一般不需要）。以后去掉 paddle 时要执行 `uv sync --project tools/pdf2md --reinstall-package opencv-python`，否则两个 OpenCV 包共用的目录会被删坏。
+
+**每次开局**：
+
+- 先看进度：`uv run --project tools/pdf2md python -m pdf2md status`。
+- **能开后台任务 / 子代理时**：在后台启动 `uv run --project tools/pdf2md python -m pdf2md run`，不要等待它，继续主持。它自动低优先级运行，顺序是：当前存档的冒险书 → 当前规则版本的 SRD → 该版其他书 → 其他冒险 → 另一版规则书。中断后再次运行会接着做；同一时间只会有一个转换进程。
+- **不能开后台任务时**：只在场景之间（不在战斗或关键剧情中）跑一小段：`... python -m pdf2md run --budget 60`（最多 60 秒）。
+- 马上要用某几页而它们还没转：`... python -m pdf2md run --book "<书名的一部分>" --pages 40-52 --budget 120`。
+- 输出不入库，也不要贴进任何 issue、PR 或日志。
+
+**查书顺序**：
+
+1. 先查该书的 `index.md`，或用关键词搜 `<书名>.md`，按 `<a id="pN">` 得到 PDF 页码。
+2. 以下情况一律打开 PDF 对应页核对：`index.md` 列为低质量的页、**怪物/NPC 数据块**（转换不重建数据块，数值以 PDF 为准）、表格看起来错位、文字明显缺漏，以及所有**地图**（用 PDF 或 `img/` 下的页面图）。
+3. 书还没转到那一页：直接查 PDF。**PDF 永远是权威来源**；Markdown 只是便于检索的副本。
 
 ## 3. 桌规（必须遵守）
 

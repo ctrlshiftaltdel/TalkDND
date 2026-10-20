@@ -76,6 +76,7 @@ Accepted exceptions, and no others:
 
 1. Vendored, unmodified AgentOrch Python kit scripts. They stay as upstream files and must not be edited: `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`. They use the Python standard library only.
 2. CI YAML under `.github/workflows/`, including the shell steps those workflow files contain.
+3. `LetsPlay/tools/pdf2md/`, the Python PDF → Markdown extractor needed for play (decision "pdf2md" below).
 
 New Rust crates, third-party Python packages, and external services beyond GitHub Actions need human approval before they are added.
 
@@ -101,7 +102,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 
 ## Development process
 
-- Orchestration is AgentOrch, **github** edition. Issues are the task list. Evidence is the pull request, CI, and the head SHA. Do not run `python3 scripts/orchestrator.py init`. Do not keep a parallel local task database.
+- Orchestration is AgentOrch, **github** edition. Issues are the task list. Evidence is the pull request, CI, and the head SHA. Do not run `uv run --no-project python scripts/orchestrator.py init`. Do not keep a parallel local task database.
 - The Execution Agent is a Grok Build session. It implements one dispatched task in its own worktree on a `task/<ID>-<name>` branch. It does not approve or merge its own work.
 - The Master Agent plans, schedules, reviews, and merges. The Master does not implement a task unless the owner writes that exception into the task record.
 - Review uses the merge gates in `AGENT-ORCHESTRATION.md`. A green CI run does not replace a criterion-by-criterion review.
@@ -119,7 +120,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 
 - A player can follow `LetsPlay/README.md`, add their own SRD, start an agent in `LetsPlay/`, and play with real `combat-sim` rolls from `LetsPlay/bin/combat-sim`.
 - A save's `ruleset` selects 2014 or 2024 data, and the engine does not load the other version's directory.
-- `python3 scripts/validate_kit.py`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
+- `uv run --no-project python scripts/validate_kit.py`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
 - Release automation builds the three prebuilt targets named in this charter.
 - A pull request that changes scope, goals, tech stack, rules support, or a user decision also updates this charter in that same pull request.
 
@@ -154,7 +155,7 @@ Alternative considered: keep play files and the development contract in one root
 
 ### 2026-10-20 — GitHub edition
 
-AgentOrch runs in the `github` edition. Tasks are GitHub Issues. Evidence is the pull request, CI, and the head SHA. `editions/local/` remains in the tree because `scripts/validate_kit.py` requires both editions. It is not a second status source. Do not dual-write. Do not run `python3 scripts/orchestrator.py init`.
+AgentOrch runs in the `github` edition. Tasks are GitHub Issues. Evidence is the pull request, CI, and the head SHA. `editions/local/` remains in the tree because `scripts/validate_kit.py` requires both editions. It is not a second status source. Do not dual-write. Do not run `uv run --no-project python scripts/orchestrator.py init`.
 
 Alternative considered: the `local` edition with a SQLite task database. Rejected for this repository. The project owner chose GitHub Issues and CI as the record.
 
@@ -213,6 +214,25 @@ The owner wants the adventure book followed faithfully for facts, structure, and
 
 Alternative considered: read boxed text verbatim. Rejected by the owner, and it would put copyrighted text into session logs.
 
+### 2026-10-21 — pdf2md: background PDF → Markdown, PDF authoritative
+
+Players only add PDFs to `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/` and `LetsPlay/Adventures/`. `LetsPlay/tools/pdf2md` (Python, a scoped exception to the Rust-only rule) converts them incrementally in the background into a hidden `.md/<PDF stem>/` folder next to each PDF. That folder holds `<PDF stem>.md` with PDF-page anchors, `index.md`/`index.json`, `manifest.json`, chunk files and page images. Work is done in 10-page chunks with a SHA-256 manifest, a single-worker lock, a time or page budget, and low CPU priority. Order: the current save's adventure, then that ruleset's SRD, then its other books, then other adventures, then the other ruleset. Pages without a text layer are OCR'd. RapidOCR (rapidocr-onnxruntime) is the default engine and PaddleOCR 3.x is an optional extra (`--ocr-engine paddle`). Repair passes are ported from the owner's ConvertPDF under MIT (credited in `NOTICE`); book-specific corrections were dropped. Stat blocks are not rebuilt. Their pages are flagged low quality and the DM reads the PDF, as for maps (linked page images, never embedded). Outputs, state and environments are gitignored, and `check-leaks` fails if they are tracked. Old hand-made `.md` files stay for now.
+
+Dependencies are not bundled. PyMuPDF and pymupdf4llm (AGPL-3.0, pinned 2.0; chosen over 0.3.x because 0.3.x lost table structure on SRD tables) and RapidOCR are installed by `uv sync`. The DM guide tells any agent to install uv and run `uv sync` plus `pdf2md setup` on first use.
+
+Box benchmark on five scanned 2014 PHB pages rendered at 200 dpi, CPU only:
+- **RapidOCR:** 2.1 s/page, 99.0% word-list hits.
+- **PaddleOCR 3.3** (mobile PP-OCRv5, oneDNN off because it crashes): 23 s/page, 99.3% hits.
+- **Environment size:** about 0.5 GB with RapidOCR, about 1.5 GB with Paddle.
+
+RapidOCR stays the default, and CI tests only RapidOCR.
+
+Alternative considered: one-off whole-book conversion like ConvertPDF. Rejected: it blocks play and cannot resume.
+
+### 2026-10-21 — All Python through uv
+
+Every Python invocation goes through uv: `uv sync` / `uv run --project <dir>` for projects (pdf2md has `pyproject.toml` and `uv.lock`), and `uv run --no-project python scripts/...` for the stdlib AgentOrch kit scripts. CI uses `astral-sh/setup-uv`. Raw `pip`, `python -m venv` and bare `python3` are not used in docs or CI.
+
 ## Change history
 
 | Date | Change |
@@ -222,3 +242,4 @@ Alternative considered: read boxed text verbatim. Rejected by the owner, and it 
 | 2026-10-20 | Release assets bundle the tracked `LetsPlay/` folder with the binary, guarded by a CI content gate. First release `v0.1.0`. |
 | 2026-10-20 | Dice: one roll path through `combat-sim roll`, extended grammar, check-letsplay dice-source lint. |
 | 2026-10-20 | DM guidance: book is canon for facts and mechanics, presentation improvised; `canon.md` added to the save layout. |
+| 2026-10-21 | pdf2md background extractor (Python exception, OCR, uv); all Python via uv. |
