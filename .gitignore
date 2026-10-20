@@ -1,0 +1,20 @@
+# --- Copyrighted material: players supply their own legally owned copies ---
+Rules/*.md
+!Rules/rulings.md
+Adventures/*
+# Non-SRD monster stat blocks (Monster Manual only)
+Rules/combat/monsters/scarecrow.yaml
+
+# --- Personal play data (saves, session logs, DM secrets) ---
+Saves/*
+!Saves/README.md
+Saves/**/dm-secrets.md
+**/dm-secrets.md
+
+# --- Build artifacts / tool state ---
+tools/combat-sim/target/
+target/
+.codegraph/
+*.state.json
+combat-state.json
+.opencode/
