@@ -47,7 +47,6 @@ bin/
 
 - 一个能执行命令行的 AI 助手（能读写本目录文件、运行 shell）。
 - combat-sim 程序，见下一节。玩的时候不需要编译器。
-- Python 3（可选，用于掷骰的备用方式）。
 
 ## 获取 combat-sim
 
@@ -127,7 +126,7 @@ bin\combat-sim.exe roll 1d20+5
 ## 骰子和日志
 
 - 每个检定都会显示成这样：`潜行 优势(4,17)→17+7 = 24 vs DC 15 成功`。
-- 骰子由 `bin/combat-sim roll 1d20+5 --adv` 掷出（Windows 为 `bin\combat-sim.exe`），或由 Python `random.SystemRandom()` 掷出，不是 AI 编的。
+- 骰子由 `bin/combat-sim roll 1d20+5 --adv` 掷出（Windows 为 `bin\combat-sim.exe`）掷出，不是 AI 编的，也不用其他随机数工具。每次掷骰都显示完整算式和每颗骰子。
 - AI 不会「先掷好再挑结果」；如果为了节奏预先掷了骰，会在日志里标明并按顺序使用。
 - 会话日志在 `Saves/<存档>/Sessions/`，每个掷骰、HP/金币变化都有记录；你随时可以翻看。
 - DM 的秘密（反派身份、隐藏的陷阱）放在 `Saves/<存档>/dm-secrets.md`。想保持惊喜就别打开它。

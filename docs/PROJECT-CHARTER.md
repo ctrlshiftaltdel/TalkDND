@@ -199,6 +199,20 @@ Each GitHub Release asset (`talkdnd-letsplay-<tag>-<target>`, `.zip` on Windows,
 
 Alternative considered: commit binaries into `LetsPlay/bin/`, or ship the binary alone. Rejected: committed binaries bloat history; a binary-only asset leaves players to assemble the folder.
 
+### 2026-10-20 — One dice path for play
+
+Every die rolled in play goes through `bin/combat-sim roll` (or a combat command that uses the same engine). The DM guide forbids mental, invented, or other-RNG rolls and requires every roll, as printed, in the session log. The Python fallback was removed from play docs. `talkdnd-dev check-letsplay` now fails if a tracked play file names another dice source.
+
+The `roll` grammar is: terms joined by `+`/`-`; dice `NdS` with optional `khN`, `klN`, `dhN`, `dlN`; `d%` for d100; flat integers. Accepted dice are d4, d6, d8, d10, d12, d20, d100 and d2/d3 (which the rules mention); others are rejected. A term has 1 to 100 dice, an expression at most 20 terms. `--adv`/`--dis` apply only to one 1d20 plus flat modifiers. `--crit` doubles the dice count of every damage term and adds modifiers once (identical in 2014 and 2024); it rejects d20 and keep/drop terms. `--dc` and `--json` work on every expression. Dropped dice print in brackets. The data-file `DiceExpr` and its output are unchanged. The owner approved this change to the read-only combat-sim source.
+
+Alternative considered: allow any die size. Rejected: no D&D rule rolls a d7, and rejecting it catches typos.
+
+### 2026-10-20 — Book is canon, presentation is improvised
+
+The owner wants the adventure book followed faithfully for facts, structure, and mechanics (plot beats, NPC motives and secrets, clues, maps, stat blocks, DCs) while scenes, dialogue, NPC personality, and reactions are improvised rather than read aloud. The DM guide (`LetsPlay/AGENTS.md` section 5) now says so: paraphrase boxed text and never recite it; react to player choices through world logic; invent minor details freely and record them so they become canon (public ones in `Saves/<slot>/canon.md` or `NPCs/`, hidden ones in `dm-secrets.md`); keep improvisation consistent with book secrets; give each companion a distinct voice; manage pacing; end scenes with suggested options plus free input; follow the save's ruleset strictly and rule only where the rules are silent; use the adventure PDF maps. The guidance names no particular agent.
+
+Alternative considered: read boxed text verbatim. Rejected by the owner, and it would put copyrighted text into session logs.
+
 ## Change history
 
 | Date | Change |
@@ -206,3 +220,5 @@ Alternative considered: commit binaries into `LetsPlay/bin/`, or ship the binary
 | 2026-10-20 | Initial living charter. Added purpose, audience, goals, non-goals, layout, rulesets, tech stack, privacy rule, release targets, development process, and the five decisions above. Pointed project docs at this path. |
 | 2026-10-20 | Play directory is self-contained. The binary lives in `LetsPlay/bin/` and is gitignored. Launcher wrappers are gone, so the Rust-only exception list is the kit scripts and CI YAML. |
 | 2026-10-20 | Release assets bundle the tracked `LetsPlay/` folder with the binary, guarded by a CI content gate. First release `v0.1.0`. |
+| 2026-10-20 | Dice: one roll path through `combat-sim roll`, extended grammar, check-letsplay dice-source lint. |
+| 2026-10-20 | DM guidance: book is canon for facts and mechanics, presentation improvised; `canon.md` added to the save layout. |

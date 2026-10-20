@@ -8,6 +8,7 @@ Saves/<存档>/
   NPCs/                 同伴与重要 NPC（_party.md 为总览）
   Sessions/             会话日志（每个掷骰都记录，末尾是「## 存档点」）
   combat/campaign.yaml  战斗清单，含 ruleset: "2014" | "2024"
+  canon.md              即兴发明、已成定论的公开设定（店名、路人、小道消息……）
   dm-secrets.md         DM 秘密
 ```
 

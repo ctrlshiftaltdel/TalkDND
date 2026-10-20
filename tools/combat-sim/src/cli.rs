@@ -175,6 +175,9 @@ pub enum Command {
         dis: bool,
         #[arg(long)]
         dc: Option<i32>,
+        /// Critical hit: double every damage die (modifiers once). Same in 2014 and 2024.
+        #[arg(long)]
+        crit: bool,
     },
 
     /// Cast an owned ability.
@@ -595,37 +598,55 @@ pub fn run() -> Result<()> {
             adv,
             dis,
             dc,
+            crit,
         } => {
             // Stateless unless --state names an existing file (then it is logged there too).
             let path = state
                 .as_deref()
                 .map(|_| state_path(&sources, state.as_deref()));
+            let mode = RollMode::from_flags(adv, dis);
+            let mut outcome = None;
             match path {
-                Some(path) if path.exists() => {
+                Some(path) if path.exists() && !json => {
                     run_state_command(&path, seed, |_state, rng, lines| {
-                        engine::roll_expression(
+                        engine::roll_expression(&expression, mode, dc, crit, rng, lines).map(|_| ())
+                    })?;
+                }
+                Some(path) if path.exists() => {
+                    run_state_command_quiet(&path, seed, |_state, rng, lines| {
+                        outcome = Some(engine::roll_expression(
                             &expression,
-                            RollMode::from_flags(adv, dis),
+                            mode,
                             dc,
+                            crit,
                             rng,
                             lines,
-                        )
-                    })
+                        )?);
+                        Ok(())
+                    })?;
                 }
                 _ => {
                     let mut lines = Vec::new();
                     let mut rng = make_rng(seed);
-                    engine::roll_expression(
+                    let result = engine::roll_expression(
                         &expression,
-                        RollMode::from_flags(adv, dis),
+                        mode,
                         dc,
+                        crit,
                         rng.as_mut(),
                         &mut lines,
                     )?;
-                    print_lines(&lines);
-                    Ok(())
+                    if json {
+                        outcome = Some(result);
+                    } else {
+                        print_lines(&lines);
+                    }
                 }
             }
+            if let Some(outcome) = outcome {
+                println!("{}", serde_json::to_string_pretty(&outcome)?);
+            }
+            Ok(())
         }
         Command::Cast {
             who,
@@ -1026,6 +1047,22 @@ where
         .with_context(|| format!("failed to save state {}", state_path.display()))?;
     print_lines(&lines);
     Ok(())
+}
+
+/// Like [`run_state_command`] but does not print the log lines.
+fn run_state_command_quiet<F>(state_path: &Path, seed: Option<u64>, action: F) -> Result<()>
+where
+    F: FnOnce(&mut EncounterState, &mut dyn DiceRng, &mut Vec<String>) -> Result<()>,
+{
+    let mut state = EncounterState::load(state_path)
+        .with_context(|| format!("failed to load state {}", state_path.display()))?;
+    let mut lines = Vec::new();
+    let mut rng = make_rng(seed);
+    action(&mut state, rng.as_mut(), &mut lines)?;
+    state.log.extend(lines.iter().cloned());
+    state
+        .save(state_path)
+        .with_context(|| format!("failed to save state {}", state_path.display()))
 }
 
 fn new_state(
