@@ -61,6 +61,13 @@ Rules/2024/.md/Player's Handbook 2024/img/p0123.webp              # 地图/插�
 - 马上要用某几页而它们还没转：`uv run --project tools/pdf2md python -m pdf2md run --book "<书名的一部分>" --pages 40-52 --budget 120`。
 - 输出不入库，也不要贴进任何 issue、PR 或日志。
 
+**可选：质量审核与逐页修正**（任何代理都能担任审核角色，不是开局必需）：
+
+- `uv run --project tools/pdf2md python -m pdf2md audit [--book 名称]`：逐页对照 PDF 文字层打分（召回率、未知词/千词、可疑标题、表格结构、空页/重复/串栏、低质量标记、`inferred`/`check PDF` 标记数），结果按最差在前写入 `.md/<书名>/audit.json`；`pdf2md fix-queue` 列出待审页。
+- `pdf2md review --book 名称 [--page 12,30-32 | --top 10] --engine grok|cmd:<命令> --jobs 2`：把该页 Markdown、PDF 文字层和页面图交给审核代理改写。`grok` 用 Grok Build；`cmd:<命令>` 可接任何代理（提示文件路径作为最后一个参数，修正后的 Markdown 输出到 stdout）。拿不准的地方先查页面图、SRD 与其他本地书、本书交叉引用；仍不确定就按上下文合理补全并标 `<!-- inferred: 原因 -->`，只有完全无法辨认才标 `<!-- check PDF -->`。
+- 只有召回率不降、未知词不升时才采用，保存为 `fixes/pNNNN.md`，重新转换后依然生效；否则放进 `fixes/rejected/` 并记入 `fixes/review.log.jsonl`。`pdf2md apply` 在没有转换进程时立即重建该书（否则下次组装时自动应用）。
+- 修正文件同样只在本地，不入库、不贴出去。查书时遇到 `inferred` 标记，关键数值仍以 PDF 为准。
+
 **查书顺序**：
 
 1. 先查该书的 `index.md`，或用关键词搜 `<书名>.md`，按 `<a id="pN">` 得到 PDF 页码。

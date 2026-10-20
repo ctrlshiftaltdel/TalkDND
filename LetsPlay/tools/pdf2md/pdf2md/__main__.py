@@ -30,6 +30,21 @@ def main(argv=None):
     g = sub.add_parser("render", help="write a page image for a map or figure")
     g.add_argument("book")
     g.add_argument("page", type=int, help="PDF page number (1-based)")
+    a = sub.add_parser("audit", help="score every converted page against the PDF text layer (audit.json)")
+    a.add_argument("--book")
+    a.add_argument("--threshold", type=float, default=25)
+    q = sub.add_parser("fix-queue", help="pages that need review, worst first")
+    q.add_argument("--book")
+    q.add_argument("--limit", type=int, default=20)
+    ap_ = sub.add_parser("apply", help="rebuild <book>.md with fixes/ applied (waits for no worker)")
+    ap_.add_argument("--book")
+    rv = sub.add_parser("review", help="agent review of pages; keeps a fix only if scores do not regress")
+    rv.add_argument("--book", required=True)
+    rv.add_argument("--page", help="PDF pages, e.g. 12,30-32 (default: worst pages from fix-queue)")
+    rv.add_argument("--top", type=int, default=10)
+    rv.add_argument("--engine", default=os.environ.get("PDF2MD_REVIEW_ENGINE", "grok"),
+                    help="grok (Grok Build) or cmd:<command> (any agent; prompt file passed last, markdown on stdout)")
+    rv.add_argument("--jobs", type=int, default=2)
     args = ap.parse_args(argv)
     root = os.path.abspath(args.root) if args.root else worker.letsplay_root()
 
@@ -69,7 +84,73 @@ def main(argv=None):
         b = Book(pdf)
         print(os.path.join(b.dir, b.render_page(args.page - 1)))
         return 0
+    if args.cmd in ("audit", "fix-queue", "apply", "review"):
+        return reviewcmd(root, args)
     return 2
+
+
+def _books(root, name):
+    from .convert import out_dir
+
+    for pdf in worker.scan(root):
+        if name and worker.repair_slug(name) not in worker.repair_slug(os.path.basename(pdf)):
+            continue
+        d, stem = out_dir(pdf)
+        if os.path.exists(os.path.join(d, "manifest.json")) and os.path.exists(os.path.join(d, stem + ".md")):
+            yield pdf
+
+
+def _pages(spec):
+    out = []
+    for part in spec.split(","):
+        a, _, b = part.partition("-")
+        out += list(range(int(a), int(b or a) + 1))
+    return out
+
+
+def reviewcmd(root, args):
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import audit, repair, review
+
+    repair.load_words(os.path.join(worker.state_dir(root), "words_alpha.txt"))
+    rc = 0
+    for pdf in _books(root, args.book):
+        if args.cmd == "apply":
+            from .convert import Book
+
+            lock = worker.Lock(root)
+            if not lock.acquire():
+                print("worker running: fixes will be applied when it next assembles the book")
+                return 1
+            try:
+                Book(pdf).assemble()
+            finally:
+                lock.release()
+            print("rebuilt", os.path.basename(pdf))
+            continue
+        bv = audit.BookView(pdf)
+        rows = audit.audit_book(bv, getattr(args, "threshold", 25))
+        if args.cmd == "audit":
+            sm = json.load(open(os.path.join(bv.dir, "audit.json"), encoding="utf-8"))["summary"]
+            print(f"{bv.stem}: {sm['pages']} pages, {sm['need_review']} need review, {sm['fixed']} fixed")
+        elif args.cmd == "fix-queue":
+            for r in [r for r in rows if r["review"] and not r["fixed"]][:args.limit]:
+                print(f"{bv.stem} p.{r['page']:<4} badness {r['badness']:<6} recall {r['recall']} "
+                      f"unknown/1k {r['unknown_1k']} heads {r['sus_heads']} tables {r['table_issues']} {','.join(r['flags'])}")
+        else:
+            pages = _pages(args.page) if args.page else \
+                [r["page"] for r in rows if r["review"] and not r["fixed"]][:args.top]
+            with ThreadPoolExecutor(max(1, args.jobs)) as ex:
+                for rec in ex.map(lambda p: review.review_page(bv, p, args.engine), pages):
+                    b, a_ = rec["before"], rec.get("after") or {}
+                    print(f"{bv.stem} p.{rec['page']}: {rec['status']} in {rec['time']}s "
+                          f"recall {b['recall']}->{a_.get('recall')} unknown/1k {b['unknown_1k']}->{a_.get('unknown_1k')} "
+                          f"inferred {a_.get('inferred', 0)} {'; '.join(rec.get('reasons', []))}", flush=True)
+                    rc |= rec["status"] == "error"
+            audit.audit_book(bv)
+    return rc
 
 
 def _find(root, name):

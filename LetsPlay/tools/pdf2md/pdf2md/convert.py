@@ -322,6 +322,9 @@ class Book:
             else:
                 body.append(f"> PDF pages {a + 1}-{b} not converted yet.\n")
         md = "\n".join(head) + "\n" + "\n".join(body)
+        from . import fixes
+
+        md = fixes.apply_fixes(md, fixes.load_fixes(self.dir, self.m["sha256"]))
         _write_atomic(os.path.join(self.dir, self.stem + ".md"), md)
         self.write_index(md)
         return md
