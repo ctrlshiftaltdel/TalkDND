@@ -38,8 +38,10 @@ Saves/*
 # --- Build artifacts / tool state ---
 tools/combat-sim/target/
 tools/talkdnd-dev/target/
-# Windows players drop the release binary here. The Unix tools/bin/combat-sim
-# path stays a tracked symlink to the local release build.
+# The play binary is local. Release archives and fetch-binary unpack it here.
+# The old tools/bin path stays ignored so a leftover file is not committed.
+LetsPlay/bin/combat-sim
+LetsPlay/bin/combat-sim.exe
 tools/bin/combat-sim.exe
 target/
 .codegraph/

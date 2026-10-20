@@ -1,7 +1,9 @@
 name: build-artifacts
 
 # Bare release binaries for main. The target list matches release.yml.
-# talkdnd-dev fetch-binary downloads artifact combat-sim-<target>.
+# Each artifact's root is the binary itself. Extract it into LetsPlay/bin/.
+# talkdnd-dev fetch-binary downloads artifact combat-sim-<target> and installs
+# that file at LetsPlay/bin/combat-sim (combat-sim.exe on Windows).
 # Tag packaging and GitHub Releases stay in release.yml.
 
 on:

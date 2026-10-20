@@ -151,6 +151,9 @@ jobs:
       - name: Check tracked files for leaks
         run: cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks
 
+      - name: Check LetsPlay stays self-contained
+        run: cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay
+
   markup:
     runs-on: ubuntu-latest
     steps:

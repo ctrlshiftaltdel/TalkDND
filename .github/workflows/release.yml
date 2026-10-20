@@ -77,15 +77,16 @@ jobs:
           fi
           name="combat-sim-${tag}-${TARGET}"
           rm -rf dist
-          mkdir -p "dist/stage/${name}" dist/out
-          cp "$bin" "dist/stage/${name}/"
-          cp README.md LICENSE NOTICE "dist/stage/${name}/"
+          mkdir -p dist/stage dist/out
+          # Archive root is the binary only, so extracting into LetsPlay/bin/
+          # yields LetsPlay/bin/combat-sim or LetsPlay/bin/combat-sim.exe.
+          cp "$bin" "dist/stage/${BIN_NAME}"
           if [ "$ARCHIVE" = "zip" ]; then
             archive="dist/out/${name}.zip"
-            powershell.exe -NoProfile -Command "Compress-Archive -Path 'dist/stage/${name}' -DestinationPath '${archive}' -Force"
+            powershell.exe -NoProfile -Command "Compress-Archive -Path 'dist/stage/${BIN_NAME}' -DestinationPath '${archive}' -Force"
           else
             archive="dist/out/${name}.tar.gz"
-            COPYFILE_DISABLE=1 tar -czf "$archive" -C dist/stage "$name"
+            COPYFILE_DISABLE=1 tar -czf "$archive" -C dist/stage "$BIN_NAME"
           fi
           if command -v sha256sum >/dev/null 2>&1; then
             hash=$(sha256sum "$archive" | awk '{print $1}')
@@ -137,9 +138,10 @@ jobs:
             - Windows x86_64: `combat-sim-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip`
             - macOS Apple Silicon: `combat-sim-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz`
 
-            Each archive contains the binary plus README.md, LICENSE, and NOTICE.
+            Each archive contains only the binary, at the archive root.
+            Extract it into `LetsPlay/bin/` (`combat-sim`, or `combat-sim.exe` on Windows).
             The matching `.sha256` file checksums that archive. macOS Intel builds
-            are not published. Put the binary in `tools/bin/` as described in the README.
+            are not published. LICENSE and NOTICE stay in the repository.
           files: |
             release-assets/*.tar.gz
             release-assets/*.zip

@@ -145,13 +145,11 @@ fn bad_fetch_args_exit_two() {
 
 #[test]
 fn missing_gh_fails_before_install() {
-    let link = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../bin/combat-sim");
-    let before = fs::symlink_metadata(&link).expect("tools/bin/combat-sim");
-    let before_target = fs::read_link(&link).ok();
-    assert!(
-        before.file_type().is_symlink() || before.file_type().is_file(),
-        "tools/bin/combat-sim should stay a local symlink or file"
-    );
+    let dest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../LetsPlay/bin/combat-sim");
+    let before_kind = fs::symlink_metadata(&dest)
+        .ok()
+        .map(|meta| meta.file_type().is_symlink());
+    let before_target = fs::read_link(&dest).ok();
 
     let path = path_with_git_without_gh();
     let output = run(
@@ -163,12 +161,11 @@ fn missing_gh_fails_before_install() {
     assert!(err.contains("gh"), "{err}");
     assert_eq!(text(&output.stdout), "");
 
-    let after = fs::symlink_metadata(&link).unwrap();
-    assert_eq!(
-        before.file_type().is_symlink(),
-        after.file_type().is_symlink()
-    );
-    assert_eq!(fs::read_link(&link).ok(), before_target);
+    let after_kind = fs::symlink_metadata(&dest)
+        .ok()
+        .map(|meta| meta.file_type().is_symlink());
+    assert_eq!(before_kind, after_kind);
+    assert_eq!(fs::read_link(&dest).ok(), before_target);
 }
 
 fn path_with_git_without_gh() -> String {

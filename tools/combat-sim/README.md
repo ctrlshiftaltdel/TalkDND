@@ -23,6 +23,14 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt -- --check
 ```
 
+玩的时候程序在 `LetsPlay/bin/combat-sim`（Windows 为 `LetsPlay/bin/combat-sim.exe`），不入库。在仓库根目录构建并复制：
+
+```bash
+cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- install-local
+```
+
+`src` 没改时不要在本机编译，用 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- fetch-binary` 把 `main` 上的构建装到同一位置。
+
 ## 内容来源
 
 内容按以下顺序加载，后加载的同 id 条目覆盖先前的：

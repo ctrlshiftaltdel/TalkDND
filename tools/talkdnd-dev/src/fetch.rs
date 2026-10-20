@@ -1,5 +1,5 @@
 //! Download a release `combat-sim` from the latest successful `build-artifacts`
-//! run on `main`.
+//! run on `main` and install it at `LetsPlay/bin/`.
 //!
 //! The command shells out to `gh` (`run list`, then `run download`). `--dry-run`
 //! prints those commands and does not use the network.
@@ -177,7 +177,7 @@ pub fn fetch_plan(target: &str, host_unix: bool) -> Result<FetchPlan, String> {
     validate_target(target)?;
     let binary_name = binary_name(target).to_string();
     let artifact = format!("combat-sim-{target}");
-    let install_rel = format!("tools/bin/{binary_name}");
+    let install_rel = format!("LetsPlay/bin/{binary_name}");
     let list_args = vec![
         "gh".to_string(),
         "run".to_string(),
@@ -487,7 +487,7 @@ mod tests {
         let linux = fetch_plan("x86_64-unknown-linux-gnu", true).unwrap();
         assert_eq!(linux.binary_name, "combat-sim");
         assert_eq!(linux.artifact, "combat-sim-x86_64-unknown-linux-gnu");
-        assert_eq!(linux.install_rel, "tools/bin/combat-sim");
+        assert_eq!(linux.install_rel, "LetsPlay/bin/combat-sim");
         assert!(linux.chmod);
         assert_eq!(
             linux.list_args,
@@ -523,7 +523,7 @@ mod tests {
 
         let windows = fetch_plan("x86_64-pc-windows-msvc", false).unwrap();
         assert_eq!(windows.binary_name, "combat-sim.exe");
-        assert_eq!(windows.install_rel, "tools/bin/combat-sim.exe");
+        assert_eq!(windows.install_rel, "LetsPlay/bin/combat-sim.exe");
         assert!(!windows.chmod);
         assert!(!windows.install_rel.contains('\\'));
 
@@ -538,13 +538,13 @@ mod tests {
             "\
 gh run list --workflow build-artifacts.yml --branch main --status success --limit 1 --json databaseId
 gh run download <run-id> --name combat-sim-x86_64-unknown-linux-gnu --dir <download-dir>
-cp <download-dir>/combat-sim tools/bin/combat-sim
-chmod u+x tools/bin/combat-sim
+cp <download-dir>/combat-sim LetsPlay/bin/combat-sim
+chmod u+x LetsPlay/bin/combat-sim
 "
         );
         let windows_text = dry_run_text(&windows);
         assert!(
-            windows_text.contains("cp <download-dir>/combat-sim.exe tools/bin/combat-sim.exe\n")
+            windows_text.contains("cp <download-dir>/combat-sim.exe LetsPlay/bin/combat-sim.exe\n")
         );
         assert!(!windows_text.contains("chmod"));
     }

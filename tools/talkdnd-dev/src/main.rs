@@ -41,9 +41,24 @@ fn dispatch(args: &[String]) -> Result<u8, String> {
             print!("{}", outcome.stdout());
             Ok(0)
         }
+        Some("check-letsplay") => {
+            if args.len() != 1 {
+                usage("usage: talkdnd-dev check-letsplay");
+                return Ok(2);
+            }
+            let root = talkdnd_dev::repo_root()?;
+            let hits = talkdnd_dev::letsplay::scan(&root)?;
+            for hit in &hits {
+                println!("{hit}");
+            }
+            Ok(if hits.is_empty() { 0 } else { 1 })
+        }
         Some("fetch-binary") => talkdnd_dev::fetch::run(&args[1..]),
+        Some("install-local") => talkdnd_dev::install::run(&args[1..]),
         _ => {
-            usage("usage: talkdnd-dev <check-leaks|migrate-layout|fetch-binary>");
+            usage(
+                "usage: talkdnd-dev <check-leaks|check-letsplay|migrate-layout|fetch-binary|install-local>",
+            );
             Ok(2)
         }
     }
