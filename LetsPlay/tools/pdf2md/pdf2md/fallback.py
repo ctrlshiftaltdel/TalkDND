@@ -40,10 +40,6 @@ def _texts(page):
     return [(r, t) for r, t, _ in _lines(page)]
 
 
-def _unused():
-    return out
-
-
 def _junk(t):
     """Stray glyphs from artwork: mostly 1-2 character tokens, few letters."""
     toks = t.split()
