@@ -87,3 +87,76 @@ def test_hyphenated_text_layer_does_not_penalise_joined_words():
            "with the goblin warrior and the dragon in the vault for the hero ") * 2
     md = ref.replace("materi-\nalizing", "materializing").replace("Char-\nacters", "Characters")
     assert audit.score_page(ref, md)["recall"] == 1.0
+
+def test_judge_soft_accepts_small_recall_drop_on_statblock():
+    before = {"recall": 0.99, "unknown_1k": 20.0, "words": 500, "badness": 30.0, "flags": ["statblock"]}
+    after = {"recall": 0.96, "unknown_1k": 8.0, "words": 480, "badness": 12.0, "flags": ["statblock"]}
+    ok, reasons = review.judge(before, after, "## Goblin\n**Armor Class** 15\n**Hit Points** 7\n| STR |")
+    assert ok and not reasons
+
+
+def test_judge_rejects_large_recall_drop_or_deletion():
+    before = {"recall": 0.97, "unknown_1k": 200.0, "words": 400, "badness": 80.0, "flags": []}
+    deleted = {"recall": 0.86, "unknown_1k": 0.0, "words": 250, "badness": 20.0, "flags": []}
+    ok, reasons = review.judge(before, deleted, "short page")
+    assert not ok and any("recall" in r for r in reasons)
+    hard = {"recall": 0.97, "unknown_1k": 0.0, "words": 100, "badness": 5.0, "flags": ["statblock"]}
+    ok2, reasons2 = review.judge(before, hard, "**Armor Class** 10")
+    assert not ok2 and any("words" in r for r in reasons2)
+
+
+def test_lookup_snippets_injects_matching_section(tmp_path):
+    ref = tmp_path / "SRD_fake.md"
+    ref.write_text("# SRD\n\n## Fire Bolt\nA simple cantrip that deals fire damage to one target.\n\n## Mage Hand\nA spectral hand appears.\n")
+    snip = review.lookup_snippets(["Fire Bolt", "Missing Name"], [str(ref)], max_chars=2000)
+    assert "Fire Bolt" in snip and "cantrip" in snip
+    assert "Missing Name" not in snip
+    prompt_bits = review.PROMPT.format(page=1, refs="- x", book_md="y", snippets=snip)
+    assert "Local reference snippets" in review.PROMPT and "cantrip" in prompt_bits
+
+
+def test_rejudge_accepts_soft_improvement(tmp_path):
+    b = make_book(tmp_path)
+    # Corrupt page 1 in the assembled book so "before" scores poorly on unknown words,
+    # then place a cleaned rejected fix that only dips recall slightly and has structure markers.
+    md_path = os.path.join(b.dir, b.stem + ".md")
+    with open(md_path, encoding="utf-8") as f:
+        md = f.read()
+    pages = audit.split_pages(md)
+    noisy = pages[1].replace("goblin", "g0blin").replace("dragon", "draggon")
+    # Keep enough of the text layer words so recall stays measurable; inject junk unknowns.
+    noisy += "\nzzxqword qqqxyz foobarz\n"
+    new_md = md.replace(pages[1], noisy)
+    open(md_path, "w", encoding="utf-8").write(new_md)
+    b.m["pages"]["1"] = {**b.m["pages"].get("1", {}), "flags": ["statblock"]}
+    open(os.path.join(b.dir, "manifest.json"), "w").write(json.dumps(b.m))
+    # Soft-improved fix: almost full TEXT plus structure markers (slightly shorter is ok).
+    fixed = ('<a id="p1"></a>\n## Test Creature\n**Armor Class** 12\n**Hit Points** 9\n'
+             '| STR | DEX |\n| --- | --- |\n| 10 | 10 |\n' + TEXT)
+    rej = os.path.join(b.dir, "fixes", "rejected", "p0001.md")
+    fixes.write_fix(rej, b.m["sha256"], "test", "fake", fixed)
+    bv = audit.BookView(b.pdf)
+    # Reload manifest flags
+    bv.m["pages"]["1"] = b.m["pages"]["1"]
+    rec = review.rejudge_page(bv, 1)
+    assert rec["status"] == "accepted", rec
+    assert os.path.exists(audit.fix_path(b, 1))
+    assert not os.path.exists(rej)
+
+
+def test_max_turns_retries_with_short_prompt(tmp_path, monkeypatch):
+    b = make_book(tmp_path)
+    calls = []
+
+    def fake_run(engine, wd, timeout=900, max_turns=None):
+        prompt = open(os.path.join(wd, "prompt.md"), encoding="utf-8").read()
+        calls.append({"retry_prompt": "RETRY" in prompt, "max_turns": max_turns})
+        if len(calls) == 1:
+            raise RuntimeError("grok exit 1: Error: max turns reached\n")
+        return "Chapter 1\n" + TEXT
+
+    monkeypatch.setattr(review, "run_engine", fake_run)
+    rec = review.review_page(audit.BookView(b.pdf), 1, "grok")
+    assert rec["status"] == "accepted"
+    assert rec.get("retried") == "max-turns"
+    assert len(calls) == 2 and calls[1]["retry_prompt"]

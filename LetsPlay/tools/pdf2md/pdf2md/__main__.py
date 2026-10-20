@@ -45,6 +45,8 @@ def main(argv=None):
     rv.add_argument("--engine", default=os.environ.get("PDF2MD_REVIEW_ENGINE", "grok"),
                     help="grok (Grok Build) or cmd:<command> (any agent; prompt file passed last, markdown on stdout)")
     rv.add_argument("--jobs", type=int, default=2)
+    rv.add_argument("--rejudge", action="store_true",
+                    help="re-score fixes/rejected/ with the current gate; no agent call")
     args = ap.parse_args(argv)
     root = os.path.abspath(args.root) if args.root else worker.letsplay_root()
 
@@ -139,6 +141,21 @@ def reviewcmd(root, args):
             for r in [r for r in rows if r["review"] and not r["fixed"]][:args.limit]:
                 print(f"{bv.stem} p.{r['page']:<4} badness {r['badness']:<6} recall {r['recall']} "
                       f"unknown/1k {r['unknown_1k']} heads {r['sus_heads']} tables {r['table_issues']} {','.join(r['flags'])}")
+        elif getattr(args, "rejudge", False):
+            recs = review.rejudge_book(bv)
+            if args.page:
+                want = set(_pages(args.page))
+                recs = [r for r in recs if r["page"] in want]
+                # also rejudge specific pages even if not currently under rejected/
+                have = {r["page"] for r in recs}
+                for p in want - have:
+                    recs.append(review.rejudge_page(bv, p))
+            for rec in recs:
+                b, a_ = rec.get("before") or {}, rec.get("after") or {}
+                print(f"{bv.stem} p.{rec['page']}: {rec['status']} (rejudge) "
+                      f"recall {b.get('recall')}->{a_.get('recall')} unknown/1k {b.get('unknown_1k')}->{a_.get('unknown_1k')} "
+                      f"{'; '.join(rec.get('reasons', []))}", flush=True)
+            audit.audit_book(bv)
         else:
             pages = _pages(args.page) if args.page else \
                 [r["page"] for r in rows if r["review"] and not r["fixed"]][:args.top]
