@@ -267,21 +267,26 @@ pub fn monte_carlo(
         .num_threads(threads)
         .build()?;
     let worker = AtomicUsize::new(0);
+    // The base snapshot is cloned per run; its log starts empty so the hot
+    // loop never clones and then clears log strings.
+    let mut base = template.clone();
+    base.log.clear();
+    let creature_count = template.combatants.len();
     let start = Instant::now();
     let stats = pool.install(|| {
         (0..config.runs)
             .into_par_iter()
-            .map_init(
+            .fold(
                 || {
                     let index = worker.fetch_add(1, Ordering::Relaxed);
-                    dice::thread_rng(config.seed, index)
+                    (
+                        dice::thread_rng(config.seed, index),
+                        Stats::new(sides.len(), creature_count),
+                    )
                 },
-                |rng, _| {
-                    let mut stats = Stats::new(sides.len(), template.combatants.len());
-                    let mut run_state = template.clone();
-                    run_state.log.clear();
-                    match play_quiet(run_state, ai, rng, config.max_rounds) {
-                        Ok(outcome) => stats.record(outcome, &side_index, template),
+                |(mut rng, mut stats), _| {
+                    match play_quiet(base.clone(), ai, &mut rng, config.max_rounds) {
+                        Ok(outcome) => stats.record(outcome, &side_index, &base),
                         Err(error) => {
                             stats.runs += 1;
                             stats.errors += 1;
@@ -290,11 +295,12 @@ pub fn monte_carlo(
                             }
                         }
                     }
-                    stats
+                    (rng, stats)
                 },
             )
+            .map(|(_, stats)| stats)
             .reduce(
-                || Stats::new(sides.len(), template.combatants.len()),
+                || Stats::new(sides.len(), creature_count),
                 |mut a, b| {
                     a.merge(b);
                     a

@@ -6,6 +6,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
@@ -36,7 +37,7 @@ pub struct EncounterState {
     pub content: Arc<ContentRegistry>,
     /// The chosen scene, including any trigger `enabled` flags toggled at runtime.
     #[serde(default)]
-    pub scene: Option<Scene>,
+    pub scene: Option<Arc<Scene>>,
     #[serde(default)]
     pub encounter_name: Option<String>,
     #[serde(default)]
@@ -213,6 +214,17 @@ impl CombatantState {
         })
     }
 
+    /// Borrowed position for hot spatial lookups. Only legacy state files
+    /// without `pos` need to build a temporary zone position.
+    pub fn position_ref(&self) -> Cow<'_, Position> {
+        match &self.pos {
+            Some(position) => Cow::Borrowed(position),
+            None => Cow::Owned(Position::Zone {
+                zone: self.zone.clone(),
+            }),
+        }
+    }
+
     pub fn cell(&self) -> Option<[i32; 2]> {
         match &self.pos {
             Some(Position::Cell { x, y }) => Some([*x, *y]),
@@ -264,9 +276,25 @@ impl CombatantState {
         if self.conditions.is_empty() {
             return false;
         }
-        active_condition_ids(content, self)
+        let mut stack: Vec<&str> = self
+            .conditions
             .iter()
-            .any(|id| id.eq_ignore_ascii_case(condition))
+            .map(|active| active.condition.as_str())
+            .collect();
+        let mut seen: Vec<&str> = Vec::with_capacity(stack.len());
+        while let Some(id) = stack.pop() {
+            if seen.iter().any(|known| known.eq_ignore_ascii_case(id)) {
+                continue;
+            }
+            if id.eq_ignore_ascii_case(condition) {
+                return true;
+            }
+            seen.push(id);
+            if let Some(def) = content.conditions.get(id) {
+                stack.extend(def.implies.iter().map(String::as_str));
+            }
+        }
+        false
     }
 
     /// Whether a passive ability on the creature declares modifiers.
@@ -862,6 +890,7 @@ impl EncounterState {
         let space_cache = Arc::new(SpaceCache::build(Some(&scene)));
         let name_index = Arc::new(NameIndex::build(&combatants));
         let static_modifier_sources = Arc::new(static_modifier_sources(&content, &combatants));
+        let scene = Arc::new(scene);
         let mut state = Self {
             content,
             scene: Some(scene.clone()),
@@ -939,7 +968,7 @@ impl EncounterState {
 
     /// Rebuilds the derived spatial and name indices from the current state.
     pub fn rebuild_caches(&mut self) {
-        self.space_cache = Arc::new(SpaceCache::build(self.scene.as_ref()));
+        self.space_cache = Arc::new(SpaceCache::build(self.scene.as_deref()));
         self.name_index = Arc::new(NameIndex::build(&self.combatants));
         self.static_modifier_sources =
             Arc::new(static_modifier_sources(&self.content, &self.combatants));
@@ -1089,6 +1118,7 @@ impl EncounterState {
 
     pub fn set_trigger_enabled(&mut self, key: &str, enabled: bool) {
         if let Some(scene) = &mut self.scene {
+            let scene = Arc::make_mut(scene);
             for (index, trigger) in scene.triggers.iter_mut().enumerate() {
                 if Self::trigger_key(index, trigger) == key {
                     trigger.enabled = enabled;

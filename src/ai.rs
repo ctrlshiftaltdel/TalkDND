@@ -1124,9 +1124,10 @@ impl Ai {
             .filter(|(index, combatant)| *index != actor && !combatant.is_dead())
             .map(|(_, combatant)| combatant.position())
             .collect();
+        let start_ref = state.combatants[actor].position_ref();
         let nearest = hostiles
             .iter()
-            .filter_map(|position| space.distance(&start, position))
+            .filter_map(|position| space.distance(start_ref.as_ref(), position))
             .min()
             .unwrap_or(9999);
 
@@ -1846,18 +1847,19 @@ fn action_in_range(
     let Some(space) = state.space() else {
         return true;
     };
-    let from = state.combatants[actor].position();
-    let to = state.combatants[target].position();
-    let Some(distance) = space.distance(&from, &to) else {
+    let from = state.combatants[actor].position_ref();
+    let to = state.combatants[target].position_ref();
+    let (from, to) = (from.as_ref(), to.as_ref());
+    let Some(distance) = space.distance(from, to) else {
         return false;
     };
     match action.attack_kind {
-        Some(AttackKind::Melee) => space.can_reach(&from, &to, action.reach),
+        Some(AttackKind::Melee) => space.can_reach(from, to, action.reach),
         Some(AttackKind::Ranged) => action
             .attack_range
             .is_some_and(|[_, long]| distance <= long),
         Some(AttackKind::MeleeOrRanged) => {
-            space.can_reach(&from, &to, action.reach)
+            space.can_reach(from, to, action.reach)
                 || action
                     .attack_range
                     .is_some_and(|[_, long]| distance <= long)
@@ -1893,10 +1895,9 @@ fn distance(
 ) -> i32 {
     space
         .and_then(|space| {
-            space.distance(
-                &state.combatants[a].position(),
-                &state.combatants[b].position(),
-            )
+            let from = state.combatants[a].position_ref();
+            let to = state.combatants[b].position_ref();
+            space.distance(from.as_ref(), to.as_ref())
         })
         .unwrap_or(9999)
 }
@@ -1905,7 +1906,7 @@ fn nearest_hostile_distance(state: &EncounterState, actor: usize) -> i32 {
     let Some(space) = state.space() else {
         return 9999;
     };
-    let position = state.combatants[actor].position();
+    let position = state.combatants[actor].position_ref();
     state
         .combatants
         .iter()
@@ -1917,7 +1918,10 @@ fn nearest_hostile_distance(state: &EncounterState, actor: usize) -> i32 {
                 && !combatant.is_dead()
                 && combatant.hp > 0
         })
-        .filter_map(|(_, combatant)| space.distance(&position, &combatant.position()))
+        .filter_map(|(_, combatant)| {
+            let other = combatant.position_ref();
+            space.distance(position.as_ref(), other.as_ref())
+        })
         .min()
         .unwrap_or(9999)
 }

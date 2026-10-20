@@ -24,7 +24,7 @@ use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
 use crate::space::{Position, Space, OPEN_ZONE};
 use crate::state::{
-    ability_from_text, active_condition_ids, active_duration, ActiveCondition, ActiveDuration,
+    ability_from_text, active_duration, ActiveCondition, ActiveDuration,
     ActiveSaveEnds, CombatOutcome, CombatantState, DeathSaves, EncounterState,
 };
 
@@ -194,15 +194,25 @@ fn has_flag(state: &EncounterState, index: usize, flag: ConditionFlag) -> bool {
     if combatant.conditions.is_empty() {
         return false;
     }
-    active_condition_ids(&state.content, combatant)
+    let mut stack: Vec<&str> = combatant
+        .conditions
         .iter()
-        .any(|id| {
-            state
-                .content
-                .conditions
-                .get(id)
-                .is_some_and(|def| def.flags.contains(&flag))
-        })
+        .map(|active| active.condition.as_str())
+        .collect();
+    let mut seen: Vec<&str> = Vec::with_capacity(stack.len());
+    while let Some(id) = stack.pop() {
+        if seen.iter().any(|known| known.eq_ignore_ascii_case(id)) {
+            continue;
+        }
+        seen.push(id);
+        if let Some(def) = state.content.conditions.get(id) {
+            if def.flags.contains(&flag) {
+                return true;
+            }
+            stack.extend(def.implies.iter().map(String::as_str));
+        }
+    }
+    false
 }
 
 fn is_incapacitated(state: &EncounterState, index: usize) -> bool {
@@ -459,10 +469,9 @@ fn hp_below_pct(combatant: &CombatantState, percent: i32) -> bool {
 fn distance_between(state: &EncounterState, a: Option<usize>, b: Option<usize>) -> Option<i32> {
     let (a, b) = (a?, b?);
     let space = state.space()?;
-    space.distance(
-        &state.combatants[a].position(),
-        &state.combatants[b].position(),
-    )
+    let from = state.combatants[a].position_ref();
+    let to = state.combatants[b].position_ref();
+    space.distance(from.as_ref(), to.as_ref())
 }
 
 fn ally_within_5(state: &EncounterState, actor: usize, target: Option<usize>) -> bool {
@@ -472,7 +481,7 @@ fn ally_within_5(state: &EncounterState, actor: usize, target: Option<usize>) ->
     let Some(space) = state.space() else {
         return false;
     };
-    let target_pos = state.combatants[target].position();
+    let target_pos = state.combatants[target].position_ref();
     state
         .combatants
         .iter()
@@ -483,9 +492,12 @@ fn ally_within_5(state: &EncounterState, actor: usize, target: Option<usize>) ->
                 && combatant.side == state.combatants[actor].side
                 && combatant.is_active()
                 && !is_incapacitated(state, index)
-                && space
-                    .distance(&combatant.position(), &target_pos)
-                    .is_some_and(|distance| distance <= 5)
+                && {
+                    let position = combatant.position_ref();
+                    space
+                        .distance(position.as_ref(), target_pos.as_ref())
+                        .is_some_and(|distance| distance <= 5)
+                }
         })
 }
 
@@ -1626,10 +1638,9 @@ fn cover_between(state: &EncounterState, attacker: usize, target: usize) -> Cove
     let Some(space) = state.space() else {
         return Cover::None;
     };
-    space.cover(
-        &state.combatants[attacker].position(),
-        &state.combatants[target].position(),
-    )
+    let from = state.combatants[attacker].position_ref();
+    let to = state.combatants[target].position_ref();
+    space.cover(from.as_ref(), to.as_ref())
 }
 
 /// Rejects a single-creature target behind total cover.
@@ -1821,13 +1832,15 @@ fn forecast_profile(
         .unwrap_or((state.combatants[target].creature.ac(), false));
     let mut in_range = ac_ok;
     if let Some(space) = state.space() {
-        let attacker_position = state.combatants[attacker].position();
-        let target_position = state.combatants[target].position();
-        let distance = space.distance(&attacker_position, &target_position);
+        let attacker_position = state.combatants[attacker].position_ref();
+        let target_position = state.combatants[target].position_ref();
+        let (attacker_position, target_position) =
+            (attacker_position.as_ref(), target_position.as_ref());
+        let distance = space.distance(attacker_position, target_position);
         if let Some(distance) = distance {
             let mut kind = profile.kind;
             if kind == AttackKind::MeleeOrRanged {
-                kind = if space.can_reach(&attacker_position, &target_position, profile.reach) {
+                kind = if space.can_reach(attacker_position, target_position, profile.reach) {
                     AttackKind::Melee
                 } else {
                     AttackKind::Ranged
@@ -1835,7 +1848,7 @@ fn forecast_profile(
             }
             in_range = match kind {
                 AttackKind::Melee => {
-                    space.can_reach(&attacker_position, &target_position, profile.reach)
+                    space.can_reach(attacker_position, target_position, profile.reach)
                 }
                 AttackKind::Ranged | AttackKind::MeleeOrRanged => {
                     profile.range.is_some_and(|[_, long]| distance <= long)
@@ -1849,12 +1862,12 @@ fn forecast_profile(
             if kind != AttackKind::Melee && hostile_within_5(state, attacker) {
                 mode = add_disadvantage(mode);
             }
-            if space.light_at(&target_position) == Light::Dark
+            if space.light_at(target_position) == Light::Dark
                 && !has_dark_sense(&state.combatants[attacker])
             {
                 mode = add_disadvantage(mode);
             }
-            if space.light_at(&attacker_position) == Light::Dark
+            if space.light_at(attacker_position) == Light::Dark
                 && !has_dark_sense(&state.combatants[target])
             {
                 mode = add_advantage(mode);
@@ -1920,31 +1933,31 @@ pub fn simple_attack_forecast(
     let mut in_range = true;
     let mut total_cover = false;
     let mut mode = RollMode::Normal;
-    if let (Some(space), Some(attacker_position), Some(target_position)) = (
-        space.as_ref(),
-        Some(state.combatants[attacker].position()),
-        Some(state.combatants[target].position()),
-    ) {
+    let attacker_position = state.combatants[attacker].position_ref();
+    let target_position = state.combatants[target].position_ref();
+    if let Some(space) = space.as_ref() {
+        let attacker_position = attacker_position.as_ref();
+        let target_position = target_position.as_ref();
         if attacker != target {
             match cover_bonus(
-                space.cover(&attacker_position, &target_position),
+                space.cover(attacker_position, target_position),
                 &state.content.rules,
             ) {
                 Some(bonus) => ac += bonus,
                 None => total_cover = true,
             }
         }
-        if let Some(distance) = space.distance(&attacker_position, &target_position) {
+        if let Some(distance) = space.distance(attacker_position, target_position) {
             let mut effective_kind = kind;
             if effective_kind == AttackKind::MeleeOrRanged {
-                effective_kind = if space.can_reach(&attacker_position, &target_position, reach) {
+                effective_kind = if space.can_reach(attacker_position, target_position, reach) {
                     AttackKind::Melee
                 } else {
                     AttackKind::Ranged
                 };
             }
             in_range = match effective_kind {
-                AttackKind::Melee => space.can_reach(&attacker_position, &target_position, reach),
+                AttackKind::Melee => space.can_reach(attacker_position, target_position, reach),
                 AttackKind::Ranged | AttackKind::MeleeOrRanged => {
                     range.is_some_and(|[_, long]| distance <= long)
                 }
@@ -1957,12 +1970,12 @@ pub fn simple_attack_forecast(
             if effective_kind != AttackKind::Melee && hostile_within_5(state, attacker) {
                 mode = add_disadvantage(mode);
             }
-            if space.light_at(&target_position) == Light::Dark
+            if space.light_at(target_position) == Light::Dark
                 && !has_dark_sense(&state.combatants[attacker])
             {
                 mode = add_disadvantage(mode);
             }
-            if space.light_at(&attacker_position) == Light::Dark
+            if space.light_at(attacker_position) == Light::Dark
                 && !has_dark_sense(&state.combatants[target])
             {
                 mode = add_advantage(mode);
@@ -2586,15 +2599,16 @@ fn resolve_attack(
     let space = state
         .space()
         .ok_or_else(|| anyhow!("this state has no scene"))?;
-    let attacker_position = state.combatants[attacker].position();
-    let target_position = state.combatants[target].position();
+    let attacker_position = state.combatants[attacker].position_ref();
+    let target_position = state.combatants[target].position_ref();
+    let (attacker_position, target_position) = (attacker_position.as_ref(), target_position.as_ref());
     let distance = space
-        .distance(&attacker_position, &target_position)
+        .distance(attacker_position, target_position)
         .ok_or_else(|| anyhow!("no path between the combatants"))?;
     if !ignore_range {
         let mut kind = profile.kind;
         if kind == AttackKind::MeleeOrRanged {
-            kind = if space.can_reach(&attacker_position, &target_position, profile.reach) {
+            kind = if space.can_reach(attacker_position, target_position, profile.reach) {
                 AttackKind::Melee
             } else {
                 AttackKind::Ranged
@@ -2602,7 +2616,7 @@ fn resolve_attack(
         }
         match kind {
             AttackKind::Melee => {
-                if !space.can_reach(&attacker_position, &target_position, profile.reach) {
+                if !space.can_reach(attacker_position, target_position, profile.reach) {
                     bail!(
                         "`{target_name}` is out of reach ({distance} ft; reach {})",
                         profile.reach
@@ -2627,13 +2641,13 @@ fn resolve_attack(
             }
         }
     }
-    if space.light_at(&target_position) == Light::Dark
+    if space.light_at(target_position) == Light::Dark
         && !has_dark_sense(&state.combatants[attacker])
     {
         disadvantage_sources.push("darkness".to_string());
         mode = add_disadvantage(mode);
     }
-    if space.light_at(&attacker_position) == Light::Dark
+    if space.light_at(attacker_position) == Light::Dark
         && !has_dark_sense(&state.combatants[target])
     {
         advantage_sources.push("unseen".to_string());
@@ -2887,7 +2901,7 @@ fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
     let Some(space) = state.space() else {
         return false;
     };
-    let position = state.combatants[index].position();
+    let position = state.combatants[index].position_ref();
     state
         .combatants
         .iter()
@@ -2896,9 +2910,12 @@ fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
             other != index
                 && combatant.is_active()
                 && combatant.side != state.combatants[index].side
-                && space
-                    .distance(&position, &combatant.position())
-                    .is_some_and(|distance| distance <= 5)
+                && {
+                    let other_position = combatant.position_ref();
+                    space
+                        .distance(position.as_ref(), other_position.as_ref())
+                        .is_some_and(|distance| distance <= 5)
+                }
         })
 }
 
@@ -2916,25 +2933,36 @@ fn has_modifier_sources(state: &EncounterState, owner: usize) -> bool {
     state.has_static_modifier_sources(owner)
 }
 
-fn has_owned_trigger(state: &EncounterState, owner: usize, when: TriggerWhen) -> bool {
+/// Resolves only the owned abilities that declare a trigger for `when`.
+fn trigger_abilities(
+    state: &EncounterState,
+    owner: usize,
+    when: TriggerWhen,
+) -> Vec<ResolvedAbility> {
     let combatant = &state.combatants[owner];
     let actions = combatant.creature.actions.as_deref().unwrap_or(&[]);
     let features = combatant.creature.features.as_deref().unwrap_or(&[]);
+    let mut resolved = Vec::new();
     for entry in actions.iter().chain(features.iter()) {
-        let ability: &Ability = match entry {
-            AbilityEntry::Inline(ability) => ability,
-            AbilityEntry::Ref(reference) => {
-                let Some(ability) = state.content.abilities.get(&reference.reference) else {
-                    continue;
-                };
-                ability
+        let matches = match entry {
+            AbilityEntry::Inline(ability) => {
+                ability.triggers.iter().any(|trigger| trigger.on == when)
             }
+            AbilityEntry::Ref(reference) => state
+                .content
+                .abilities
+                .get(&reference.reference)
+                .is_some_and(|ability| {
+                    ability.triggers.iter().any(|trigger| trigger.on == when)
+                }),
         };
-        if ability.triggers.iter().any(|trigger| trigger.on == when) {
-            return true;
+        if matches {
+            if let Ok(ability) = state.content.resolve_ability(entry) {
+                resolved.push(ability);
+            }
         }
     }
-    false
+    resolved
 }
 
 fn try_hit_reactions(
@@ -2949,10 +2977,10 @@ fn try_hit_reactions(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<Option<(i32, Vec<(i32, String)>)>> {
-    if !has_owned_trigger(state, target, TriggerWhen::OnHitTaken) {
+    let abilities = trigger_abilities(state, target, TriggerWhen::OnHitTaken);
+    if abilities.is_empty() {
         return Ok(None);
     }
-    let abilities = state.combatants[target].owned_abilities(&state.content)?;
     let mut converted = None;
     let mut new_ac = current_ac;
     for resolved in abilities {
@@ -3285,10 +3313,10 @@ fn run_owned_triggers_for(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
-    if !has_owned_trigger(state, owner, when) {
+    let abilities = trigger_abilities(state, owner, when);
+    if abilities.is_empty() {
         return Ok(());
     }
-    let abilities = state.combatants[owner].owned_abilities(&state.content)?;
     for resolved in abilities {
         for (index, trigger) in resolved.ability.triggers.iter().enumerate() {
             if trigger.on != when {
@@ -3344,12 +3372,10 @@ fn run_owned_triggers(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) {
-    if !has_owned_trigger(state, owner, when) {
+    let abilities = trigger_abilities(state, owner, when);
+    if abilities.is_empty() {
         return;
     }
-    let Ok(abilities) = state.combatants[owner].owned_abilities(&state.content) else {
-        return;
-    };
     for resolved in abilities {
         for (index, trigger) in resolved.ability.triggers.iter().enumerate() {
             if trigger.on != when {
@@ -4471,15 +4497,7 @@ fn apply_condition_internal(
         state.combatants[target].conditions.push(active);
         log.log(format_args!("{target_name} is now {condition_id}"));
     }
-    let incapacitated = active_condition_ids(&state.content, &state.combatants[target])
-        .iter()
-        .any(|id| {
-            state
-                .content
-                .conditions
-                .get(id)
-                .is_some_and(|def| def.flags.contains(&ConditionFlag::Incapacitated))
-        });
+    let incapacitated = has_flag(state, target, ConditionFlag::Incapacitated);
     if incapacitated && state.concentration.contains_key(&target_name) {
         break_concentration(state, target, log);
     }
@@ -5358,12 +5376,10 @@ fn run_damage_taken_triggers(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) {
-    if !has_owned_trigger(state, target, TriggerWhen::OnDamageTaken) {
+    let abilities = trigger_abilities(state, target, TriggerWhen::OnDamageTaken);
+    if abilities.is_empty() {
         return;
     }
-    let Ok(abilities) = state.combatants[target].owned_abilities(&state.content) else {
-        return;
-    };
     for resolved in abilities {
         for (index, trigger) in resolved.ability.triggers.iter().enumerate() {
             if trigger.on != TriggerWhen::OnDamageTaken {
@@ -5980,7 +5996,10 @@ fn opportunity_attacks(
                 && !has_flag(state, *index, ConditionFlag::NoReactions)
                 && !has_flag(state, *index, ConditionFlag::NoOpportunityAttacks)
                 && !is_incapacitated(state, *index)
-                && space.opportunity_threat(&combatant.position(), departure)
+                && {
+                    let position = combatant.position_ref();
+                    space.opportunity_threat(position.as_ref(), departure)
+                }
         })
         .map(|(index, _)| index)
         .collect();
