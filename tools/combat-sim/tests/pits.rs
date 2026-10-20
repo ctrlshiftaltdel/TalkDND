@@ -372,3 +372,21 @@ fn new_concentration_spell_ends_the_previous_one() {
     let conds = mook1["conditions"].to_string();
     assert!(!conds.contains("marked-test"), "{conds}");
 }
+
+#[test]
+fn roll_grammar_through_the_cli() {
+    let a = ok(&["roll", "4d6dl1", "--seed", "3"]);
+    let b = ok(&["roll", "4d6dl1", "--seed", "3"]);
+    assert_eq!(a, b, "seeded rolls repeat");
+    assert!(
+        a.starts_with("4d6dl1(") && a.matches('[').count() == 1,
+        "{a}"
+    );
+    let out = ok(&["roll", "2d8+1d6+3", "--crit", "--seed", "1"]);
+    assert!(out.starts_with("4d8(") && out.contains("+2d6("), "{out}");
+    let json = ok(&["roll", "d%", "--json", "--seed", "2"]);
+    let value: Value = serde_json::from_str(&json).expect("json");
+    assert_eq!(value["terms"][0]["sides"], 100);
+    assert!(!run(&["roll", "1d7"]).status.success());
+    assert!(!run(&["roll", "2d6", "--adv"]).status.success());
+}
