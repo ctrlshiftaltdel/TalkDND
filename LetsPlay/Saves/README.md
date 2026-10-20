@@ -23,4 +23,4 @@ state_dir: .
 party: [角色id, ...]
 ```
 
-规则书与冒险书在项目根目录的 `Rules/<版本>/`、`Adventures/`，不随存档复制。
+规则书与冒险书在同级的 `../Rules/<版本>/`、`../Adventures/`（仓库路径 `LetsPlay/Rules`、`LetsPlay/Adventures`），不随存档复制。清单里的 `../../../Rules/combat` 相对于清单文件本身：`Saves`、`Rules`、`Adventures` 一起放在 `LetsPlay/` 下，所以这条相对路径仍然指向 `LetsPlay/Rules/combat`。

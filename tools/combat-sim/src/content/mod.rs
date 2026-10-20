@@ -2,7 +2,7 @@
 //!
 //! The engine and assets stay generic; everything campaign-specific (conditions,
 //! masteries, abilities, creatures, AI templates, scenes and encounters) is data
-//! loaded from `Rules/combat`, adventure `combat/` directories, character sheets
+//! loaded from `LetsPlay/Rules/combat`, adventure `combat/` directories, character sheets
 //! and a campaign manifest.
 
 pub mod check;

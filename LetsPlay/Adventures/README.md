@@ -1,4 +1,4 @@
-# Adventures — 冒险书（玩家自备）
+# LetsPlay/Adventures — 冒险书（玩家自备）
 
 把你自己合法拥有的冒险书放在这里，每本冒险一个文件或文件夹：
 
@@ -12,6 +12,6 @@ Adventures/
       creatures.yaml                   # 冒险特有的怪物/NPC
 ```
 
-- 存档的 `Saves/<存档>/combat/campaign.yaml` 用 `adventures: [../../../Adventures/<slug>/combat]` 指向战斗数据。
+- 存档的 `Saves/<存档>/combat/campaign.yaml` 用 `adventures: [../../../Adventures/<slug>/combat]` 指向战斗数据。路径相对于清单文件；存档与本目录同在 `LetsPlay/` 下，所以这条相对路径仍然有效。
 - 冒险书本身不区分版本；用 2024 规则跑 2014 冒险也可以（反之亦然），由存档的 `ruleset` 决定按哪版结算。
 - 本目录除本 README 外全部被 `.gitignore` 排除，不会被提交。

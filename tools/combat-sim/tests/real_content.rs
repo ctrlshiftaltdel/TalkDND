@@ -13,12 +13,19 @@ use combat_sim::engine::NullSink;
 use combat_sim::sim;
 use combat_sim::state::{EncounterState, NewEncounter};
 
-const MANIFEST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Saves/2026-10-19-01/combat/campaign.yaml");
+const MANIFEST: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../LetsPlay/Saves/2026-10-19-01/combat/campaign.yaml"
+);
 const PARTY: &[&str] = &["will", "rina", "milo", "sera"];
 
 #[test]
 fn real_campaign_loads_checks_and_simulates_once() {
     if !Path::new(MANIFEST).exists() {
+        eprintln!(
+            "skipping real_campaign_loads_checks_and_simulates_once: \
+             LetsPlay/Saves/2026-10-19-01/combat/campaign.yaml is absent"
+        );
         return;
     }
     let sources = ContentSources {

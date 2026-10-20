@@ -93,4 +93,4 @@ conditions:
     implies: [restrained]
     manual: "Weighted net: action + DC 10 STR check frees self or a creature within reach; net AC 10, 12 HP."
   # Not an official condition: TalkDND bookkeeping marker. 2024 PHB: carrying,
-  # dragging or pushing a creature/heavy load halves Speed (see Rules/rulings.md).
+  # dragging or pushing a creature/heavy load halves Speed (see LetsPlay/Rules/rulings.md).

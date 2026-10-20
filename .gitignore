@@ -1,24 +1,38 @@
 # --- Copyrighted material: players supply their own legally owned copies ---
+# Play content lives under LetsPlay/. The old root patterns stay so an
+# unmigrated checkout does not show local books as untracked files.
+LetsPlay/Rules/2014/*
+!LetsPlay/Rules/2014/README.md
+LetsPlay/Rules/2024/*
+!LetsPlay/Rules/2024/README.md
 Rules/2014/*
 !Rules/2014/README.md
 Rules/2024/*
 !Rules/2024/README.md
-# loose rulebook files directly under Rules/ (only our own docs are tracked)
+# loose rulebook files directly under Rules/ (only our own rulings are tracked)
+LetsPlay/Rules/*.md
+LetsPlay/Rules/*.pdf
+!LetsPlay/Rules/rulings*.md
 Rules/*.md
 Rules/*.pdf
-!Rules/rulings.md
-!Rules/rulings-2014.md
-!Rules/rulings-2024.md
+!Rules/rulings*.md
+LetsPlay/Adventures/*
+!LetsPlay/Adventures/README.md
 Adventures/*
 !Adventures/README.md
 # Non-SRD monster stat blocks (Monster Manual only)
+LetsPlay/Rules/combat/2024/monsters/scarecrow.yaml
 Rules/combat/2024/monsters/scarecrow.yaml
+LetsPlay/Rules/combat/local/
 Rules/combat/local/
+# any PDF, anywhere
+*.pdf
 
 # --- Personal play data (saves, session logs, DM secrets) ---
+LetsPlay/Saves/*
+!LetsPlay/Saves/README.md
 Saves/*
 !Saves/README.md
-Saves/**/dm-secrets.md
 **/dm-secrets.md
 
 # --- Build artifacts / tool state ---
@@ -28,3 +42,14 @@ target/
 *.state.json
 combat-state.json
 .opencode/
+
+# Agent-Orchestration single-user machine-local state
+.orchestration/
+# Worktree root: one execution instance per worktree, at a fixed path
+.worktrees/
+# Private machine-local files (never committed): .env, host info, release-scan rules
+.local/*
+!.local/README.md
+# Python caches from local helper scripts
+__pycache__/
+*.py[cod]
