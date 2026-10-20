@@ -5849,32 +5849,14 @@ pub fn roll_expression(
     expression: &str,
     mode: RollMode,
     dc: Option<i32>,
+    crit: bool,
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
-) -> Result<()> {
-    let parsed = expression
-        .parse::<DiceExpr>()
+) -> Result<crate::roll::RollOutcome> {
+    let outcome = crate::roll::roll_command(expression, mode, dc, crit, rng)
         .with_context(|| format!("invalid dice expression `{expression}`"))?;
-    if mode != RollMode::Normal && parsed.terms.len() == 1 && parsed.terms[0] == (1, 20) {
-        let roll = D20Roll::roll(parsed.modifier, mode, rng);
-        let text = match dc {
-            Some(dc) => roll.vs_dc(dc),
-            None => roll.text(),
-        };
-        log.emit(&text);
-    } else {
-        let record = parsed.roll(rng);
-        let text = match dc {
-            Some(dc) => format!(
-                "{} vs DC {dc} {}",
-                record.text,
-                if record.total >= dc { "PASS" } else { "FAIL" }
-            ),
-            None => record.text,
-        };
-        log.emit(&text);
-    }
-    Ok(())
+    log.emit(&outcome.text);
+    Ok(outcome)
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,10 @@
 //! levels down (`LetsPlay/<a>/<b>/combat/campaign.yaml`) may use
 //! `../../../Rules` and still stay inside `LetsPlay/`. Root development paths
 //! (`tools/`, `scripts/`) and `/workspace` are always escapes.
+//!
+//! It also fails when a tracked play file names a dice source other than
+//! `combat-sim roll` (Python `random`, `$RANDOM`, `shuf`, `Get-Random` ...).
+//! All dice in play go through `bin/combat-sim roll`.
 
 use std::path::Path;
 
@@ -19,6 +23,7 @@ pub fn scan(root: &Path) -> Result<Vec<String>, String> {
         let text =
             std::fs::read_to_string(root.join(&rel)).map_err(|err| format!("read {rel}: {err}"))?;
         hits.extend(escapes_in(&rel, &text));
+        hits.extend(other_dice_in(&rel, &text));
     }
     Ok(hits)
 }
@@ -32,6 +37,36 @@ pub fn escapes_in(rel: &str, text: &str) -> Vec<String> {
         }
     });
     hits
+}
+
+/// Text that would tell the DM to roll with something other than combat-sim.
+pub const OTHER_DICE_SOURCES: &[&str] = &[
+    "systemrandom",
+    "import random",
+    "random.randint",
+    "random.choice",
+    "secrets.randbelow",
+    "$random",
+    "%random%",
+    "get-random",
+    "math.random",
+    "/dev/urandom",
+    "shuf ",
+    "rand::",
+];
+
+pub fn other_dice_in(rel: &str, text: &str) -> Vec<String> {
+    let lower = text.to_lowercase();
+    OTHER_DICE_SOURCES
+        .iter()
+        .filter(|needle| lower.contains(*needle))
+        .map(|needle| {
+            format!(
+                "{rel}: dice source other than combat-sim roll: `{}`",
+                needle.trim()
+            )
+        })
+        .collect()
 }
 
 pub fn is_letsplay_text(rel: &str) -> bool {
@@ -271,6 +306,18 @@ bin/combat-sim
                 .any(|hit| hit.contains("..\\..\\tools\\bin\\combat-sim.exe")),
             "{hits:?}"
         );
+    }
+
+    #[test]
+    fn other_dice_sources_are_reported() {
+        let text = "Roll with python3 -c \"import random;r=random.SystemRandom()\"";
+        let hits = other_dice_in("LetsPlay/AGENTS.md", text);
+        assert!(hits.iter().any(|h| h.contains("systemrandom")), "{hits:?}");
+        assert!(hits.iter().any(|h| h.contains("import random")), "{hits:?}");
+        assert!(other_dice_in("LetsPlay/x.md", "echo $RANDOM").len() == 1);
+        assert!(other_dice_in("LetsPlay/x.md", "Get-Random -Max 20").len() == 1);
+        assert!(other_dice_in("LetsPlay/x.md", "bin/combat-sim roll 1d20+5 --adv").is_empty());
+        assert!(other_dice_in("LetsPlay/x.md", "true random dice; randomly chosen").is_empty());
     }
 
     #[test]
