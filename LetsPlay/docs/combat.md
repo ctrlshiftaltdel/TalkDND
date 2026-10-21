@@ -72,6 +72,13 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 
 账本在 `Saves/<存档>/progress.yaml`（XP、每人钱袋与物品、公共 `party` 钱袋），每次变动都记一行到会话日志。
 
-- `talkdnd xp add 450 --to all --reason "博物馆守卫"`：平分（余数报告）；`talkdnd xp show` 看等级与下一级门槛。
-- `talkdnd level-up <角色> [--hp avg|roll|<玩家掷出的数>] [--class rogue] [--milestone]`：改角色卡 combat 块（等级、HP、熟练加值、生命骰、熟练豁免/技能/命中），追加 `## 升级记录`，列出新职业特性、子职与属性提升提示。正文（特性、法术）和玩家一起改；之后 `combat-sim party sync`，再 `talkdnd sheet export <角色>` 重新导出 PDF 给玩家。
+**升级方式固定为混合制**（没有开关）：小任务、事件给 XP；重大剧情节点或篇章结束由 DM 直接给一级（里程碑）。
+
+- `talkdnd xp add 450 --category combat --reason "博物馆守卫"`：平分（余数报告）。类别：`combat`、`noncombat`、`quest`、`discovery`、`roleplay`、`milestone-minor`。`--reason` 必填；同一理由不会给第二次（真的发生两次加 `--again`）。
+- `talkdnd xp add --difficulty hard --category noncombat --reason "与男爵谈判"`：按存档版本的表算（2014 DMG p.82 easy/medium/hard/deadly；2024 DMG 第 4 章 low/moderate/high），按每人等级相加后平分。非战斗挑战只有真有失败风险才给；小里程碑按 easy/low。
+- 上限：XP 最多让角色领先卡面一级，多出的记为 `capped` 不发；越过门槛时会提示——在下次长休或本节结束时 `level-up`，或留给即将到来的里程碑。
+- `talkdnd level-up <角色|all> --milestone --reason "泥沼石已被中和"`：重大剧情节点直接升级，并把 XP 提到新等级门槛；同一事件同一角色只能升一次。黄金宝库：每个劫案结束、下一个劫案等级更高时用它。
+- `talkdnd xp show`：每人等级/XP/下一门槛、冒险进度轨（黄金宝库各劫案等级，标出队伍当前等级）、最近一次奖励。账本 `xp_log` 记每笔（日期、类别、理由、每人、难度、被扣上限）。
+- 时机：在长休或本节结束时升级；如果在长休之外升级，当前与最大 HP 一起增加，但已用的法术位和资源不恢复（2024 DMG 第 2 章）。
+- `talkdnd level-up <角色> [--hp avg|roll|<玩家掷出的数>] [--class rogue]`（XP 够时，不加 `--milestone`）：改角色卡 combat 块（等级、HP、熟练加值、生命骰、熟练豁免/技能/命中），追加 `## 升级记录`，列出新职业特性、子职与属性提升提示。正文（特性、法术）和玩家一起改；之后 `combat-sim party sync`，再 `talkdnd sheet export <角色>` 重新导出 PDF 给玩家。
 - `talkdnd loot add --gp 50 "治疗药水" --to party`、`loot give --from party --to yier --gp 10 钥匙`、`loot split`（公共钱平分）、`loot spend --from yier --gp 5`、`loot show`。钱统一按铜币记，显示为 gp/sp/cp。

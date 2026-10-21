@@ -17,6 +17,8 @@ agent can start a scene after reading one short digest. Players run it as
 | `data status [--ruleset R]` / `data import [--ruleset R]` | Local book data: show loaded files; build `Rules/chargen/local/imported-R.yaml` (gitignored) from converted Markdown |
 | `npc random [--count N] [--level L]` | Random SRD species/class/background/abilities for companions (drafts in `npc-drafts/`) |
 | `npc sheet <draft> --name X` | Write `NPCs/X.md` after the player confirms |
+| `xp add [N] --category C --reason R [--difficulty D] [--again]` / `xp show` | Hybrid advancement ledger (`progress.yaml` `xp`, `xp_log`): small awards, ruleset difficulty tables, one-level-ahead cap, no double awards; `show` prints the adventure track (Golden Vault heist levels) |
+| `level-up <who\|all> [--milestone --reason R]` | Level from XP, or a milestone level for a major story beat (XP raised to the threshold; once per event) |
 | `sheet export <who\|all> [--format pdf\|html]` | One A4 page per character next to its sheet (`Characters/<name>.pdf`): printed stats plus fillable AcroForm boxes/tick grids for HP, hit dice, death saves, slots, resources, conditions, coins, XP, notes. See "Sheet export" below |
 | `checkpoint <text>` (or stdin) | Append `## 存档点（time）` to the newest session log |
 | `log <text>` | Append one timestamped line |
