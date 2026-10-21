@@ -51,7 +51,7 @@
    - 都来不及：建卡照常进行，缺的特性先由 DM 按 PDF 手写到 `Rules/chargen/local/manual-<版本>.yaml`（格式见下），并告诉玩家“这几项暂按书人工记录”。
 4. 导入是**尽力而为**：只抓 `Level N: 特性名` 这类标题，OCR 噪声会产生错名或漏项（2014 PHB 的写法基本抓不到）。导入后对照 PDF 检查所用子职；要修改就写进 `manual-<版本>.yaml`（`imported-*.yaml` 每次导入会被覆盖）。
 
-手写格式（与 `tools/talkdnd/data/classes-*.yaml` 相同，可只写需要的部分）：
+手写格式（与程序内置的 SRD 职业数据相同，可只写需要的部分）：
 
 ```yaml
 ruleset: "2024"
