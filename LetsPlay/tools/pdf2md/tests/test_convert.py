@@ -107,8 +107,10 @@ def test_reader_and_pages_editions_are_equal_without_anchors(letsplay):
     assert cli.verify(str(letsplay), "Core Rules") == 1
 
 
-def test_upgrade_from_031_keeps_chunks_and_backs_up_fixes(letsplay):
+def test_upgrade_from_031_keeps_chunks_and_backs_up_fixes(letsplay, monkeypatch):
     from pdf2md import fixes
+
+    monkeypatch.setattr(convert, "VERSION", "0.4.1")  # an assemble-only upgrade
 
     worker.run(str(letsplay), book="Core Rules", chunk_size=5, nice=False)
     d = letsplay / "Rules/2024/.md/Core Rules 2024"
@@ -117,7 +119,7 @@ def test_upgrade_from_031_keeps_chunks_and_backs_up_fixes(letsplay):
     m["tool"] = "0.3.1"
     (d / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
     b = convert.Book(str(letsplay / "Rules/2024/Core Rules 2024.pdf"), chunk_size=5)
-    assert len(b.m["chunks"]) == 3 and not b.m.get("stale"), "0.4.0 redoes no chunk"
+    assert len(b.m["chunks"]) == 3 and not b.m.get("stale"), "0.4.1 redoes no chunk"
     b.close()
     # a real reconversion (older tool) backs up fixes first
     m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))

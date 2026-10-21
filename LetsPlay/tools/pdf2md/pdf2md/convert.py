@@ -10,6 +10,7 @@ Layout for ``<dir>/<Stem>.pdf``::
         manifest.json    hash, chunk + page status, quality flags
         pages/p0001-0010.md
         img/p0012.webp   page images for maps and figures (linked, not embedded)
+        img/p0012-a1.webp  art cut out of a scanned page
 """
 
 import hashlib
@@ -27,6 +28,7 @@ FIGURE_MAX_CHARS = 600       # figure page: little text ...
 FIGURE_MIN_COVER = 0.45      # ... and a large picture
 OCR_DPI = 200
 IMG_DPI = 150
+SCAN_COVER = 0.90            # one bitmap over (almost) the whole page -> scanned page
 LOW_CONF = 0.80
 MAX_PIXELS = 40_000_000      # render cap: poster-size pages are drawn at a lower dpi
 MIN_ORDER = 0.55             # bigram agreement with column order below this -> interleaved
@@ -54,6 +56,8 @@ SELECTIVE_UPGRADES = {
     # 0.4.1 only adds stat-block checks at assemble time: no chunk is redone
     ("0.4.0", "0.4.1"): lambda info: False,
     ("0.3.1", "0.4.1"): lambda info: False,
+    # 0.5.0 adds the image stage (art cut out of scanned pages, maps at ~1600 px):
+    # every chunk is redone; fixes/ are backed up first and keep their text.
 }
 
 ANCHOR_LINE_RE = re.compile(r'^<a id="p\d+"></a>\n?|^<!-- PDF p\.\d+ -->', re.M)
@@ -228,6 +232,8 @@ class Book:
                 text_pages.append(p)
             if chars < FIGURE_MAX_CHARS and cover >= FIGURE_MIN_COVER:
                 info[p]["flags"].append("figure")
+            elif cover >= SCAN_COVER and len(page.get_images()) <= 1:
+                info[p]["flags"].append("scan")  # art is inside the page bitmap: image stage
         md_by_page = {}
         if text_pages:
             with _quiet():
@@ -271,6 +277,8 @@ class Book:
                     info[p]["spaced_headings"] = k
             if p in text_pages and self.adventure:
                 body = self.adventure_layout(p, body, info[p])
+            if "scan" in info[p]["flags"]:
+                body = self.scan_art(p, body, info[p])
             q = page_quality(body, info[p])
             info[p]["quality"] = q
             if "figure" in info[p]["flags"]:
@@ -414,29 +422,63 @@ class Book:
             except OSError:
                 pass
 
-    def render_page(self, p, dpi=IMG_DPI):
-        """Write img/pNNNN.webp and return its path relative to the book folder
-        (None when the page cannot be rendered)."""
+    def scan_art(self, p, body, info):
+        """Image stage for scanned pages: a mostly-picture page becomes a full-page
+        figure (~1600 px); clean art crops inside text pages become
+        img/pNNNN-aK.webp (~1000 px), placed after the paragraph above them."""
+        from . import figures
+
+        page = self.doc[p]
+        try:
+            an = figures.analyse(page)
+            if figures.full_page_art(page, an[0], an[1]):
+                info["flags"].append("figure")
+                return body
+            rects = figures.find_art(page, an)
+        except (RuntimeError, ValueError, MemoryError) as err:
+            print(f"warning: PDF p.{p + 1}: image stage skipped: {err}", file=sys.stderr)
+            return body
+        for k, rect in enumerate(rects, 1):
+            name = "p%04d-a%d.webp" % (p + 1, k)
+            try:
+                data = figures.render_webp(page, rect, figures.ART_SIDE)
+            except RuntimeError as err:
+                print(f"warning: PDF p.{p + 1}: art not rendered: {err}", file=sys.stderr)
+                continue
+            _write_atomic(os.path.join(self.dir, "img", name), data)
+            above, below = figures.anchors(an[1], rect)
+            body, where = figures.place(body, f"![Illustration, PDF p.{p + 1}](img/{name})", above, below)
+            info.setdefault("art", []).append({"img": "img/" + name, "rect": [round(v, 1) for v in rect],
+                                               "placed": where})
+        return body
+
+    def render_page(self, p, dpi=None):
+        """Write img/pNNNN.webp (longest side ~1600 px unless `dpi` is given) and
+        return its path relative to the book folder (None when it cannot be rendered)."""
+        from .figures import MAP_SIDE
+
         name = "p%04d.webp" % (p + 1)
         path = os.path.join(self.dir, "img", name)
-        if not os.path.exists(path):
-            try:
-                pix = safe_pixmap(self.doc[p], dpi)
-            except RuntimeError as err:
-                print(f"warning: PDF p.{p + 1}: cannot render: {err}", file=sys.stderr)
-                return None
-            try:
-                from PIL import Image
+        if dpi is None:
+            r = self.doc[p].rect
+            dpi = max(36, min(300, int(MAP_SIDE * 72 / max(r.width, r.height, 1))))
+        try:
+            pix = safe_pixmap(self.doc[p], dpi)
+        except RuntimeError as err:
+            print(f"warning: PDF p.{p + 1}: cannot render: {err}", file=sys.stderr)
+            return None
+        try:
+            from PIL import Image
 
-                img = Image.frombytes("RGB" if pix.n < 4 else "RGBA", (pix.width, pix.height), pix.samples)
-                buf = io.BytesIO()
-                img.save(buf, "WEBP", quality=80, method=2)
-                data = buf.getvalue()
-            except ImportError:  # pragma: no cover
-                name = name.replace(".webp", ".png")
-                path = path.replace(".webp", ".png")
-                data = pix.tobytes("png")
-            _write_atomic(path, data)
+            img = Image.frombytes("RGB" if pix.n < 4 else "RGBA", (pix.width, pix.height), pix.samples)
+            buf = io.BytesIO()
+            img.save(buf, "WEBP", quality=80, method=2)
+            data = buf.getvalue()
+        except ImportError:  # pragma: no cover
+            name = name.replace(".webp", ".png")
+            path = path.replace(".webp", ".png")
+            data = pix.tobytes("png")
+        _write_atomic(path, data)
         return "img/" + name
 
     # -------------------------------------------------------------- assemble
@@ -518,6 +560,8 @@ class Book:
                 idx["statblocks"].append(p)
             if "figure" in i["flags"]:
                 idx["figures"].append({"page": p, "img": "img/p%04d.webp" % p})
+            for a in i.get("art", []):
+                idx.setdefault("art", []).append(dict(a, page=p))
             for mp in i.get("maps", []):
                 idx.setdefault("maps", []).append(dict(mp, page=p))
             if i.get("quality") == "low":
@@ -551,6 +595,10 @@ class Book:
                   for mp in maps] or ["none found by caption; see the full-page images below"]
         lines += ["", "## Full-page maps and illustrations", ""]
         lines += [f"- p.{f['page']}: [image]({f['img']})" for f in idx["figures"]] or ["none"]
+        art = [a for p, i in sorted(self.m["pages"].items(), key=lambda kv: int(kv[0]))
+               for a in [dict(x, page=int(p)) for x in i.get("art", [])]]
+        lines += ["", "## Illustrations cut from scanned pages", ""]
+        lines += [f"- p.{a['page']}: [image](<{a['img']}>)" for a in art] or ["none"]
         lines += ["", "## Low-quality pages (read the PDF)", "",
                   ", ".join(str(p) for p in idx["low_quality_pages"]) or "none", ""]
         _write_atomic(os.path.join(self.dir, "index.md"), "\n".join(lines))
