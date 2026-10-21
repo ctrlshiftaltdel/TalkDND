@@ -48,6 +48,8 @@ pub fn content_check(root: &Path, save: &Path) -> (bool, String) {
                 .or_else(|| text.lines().find(|l| l.starts_with("Error")))
                 .unwrap_or_else(|| text.lines().last().unwrap_or(""))
                 .trim()
+                .trim_start_matches("content check:")
+                .trim()
                 .to_string();
             (out.status.success(), summary)
         }

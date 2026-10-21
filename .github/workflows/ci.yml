@@ -199,7 +199,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: LetsPlay/tools/pdf2md/uv.lock
 
-      # Same commands LetsPlay/AGENTS.md tells the DM agent to run.
+      # Same commands LetsPlay/docs/pdf2md.md tells the DM agent to run.
       # The optional PaddleOCR extra is not installed in CI (large); RapidOCR is tested.
       - name: Setup smoke test
         run: |
