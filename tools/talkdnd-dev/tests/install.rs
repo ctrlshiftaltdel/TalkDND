@@ -6,7 +6,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use common::{program, text};
-use talkdnd_dev::install::{dry_run_text, install_plan};
+use talkdnd_dev::install::{dry_run_text, install_plan, install_plan_for};
 
 #[test]
 fn dry_run_prints_plan_and_does_not_call_cargo() {
@@ -22,7 +22,8 @@ fn dry_run_prints_plan_and_does_not_call_cargo() {
         .output()
         .expect("run talkdnd-dev");
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
-    let expected = dry_run_text(&install_plan(cfg!(windows), cfg!(unix)));
+    let expected = dry_run_text(&install_plan(cfg!(windows), cfg!(unix)))
+        + &dry_run_text(&install_plan_for("talkdnd", cfg!(windows), cfg!(unix)));
     assert_eq!(text(&output.stdout), expected);
     assert!(!fake.marker.exists(), "dry-run invoked cargo");
 }

@@ -8,7 +8,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use common::{program, text};
-use talkdnd_dev::fetch::{dry_run_text, fetch_plan, host_target, PUBLISHED_TARGETS};
+use talkdnd_dev::fetch::{dry_run_text, fetch_plan_for, host_target, PUBLISHED_TARGETS, TOOLS};
 
 fn tick() -> u128 {
     SystemTime::now()
@@ -74,6 +74,13 @@ fn run(args: &[&str], path: &str) -> std::process::Output {
         .expect("run talkdnd-dev")
 }
 
+fn all_plans(target: &str) -> String {
+    TOOLS
+        .iter()
+        .map(|t| dry_run_text(&fetch_plan_for(t, target, cfg!(unix)).unwrap()))
+        .collect()
+}
+
 #[test]
 fn dry_run_prints_plan_and_does_not_call_gh() {
     let fake = FakeGh::new();
@@ -81,7 +88,7 @@ fn dry_run_prints_plan_and_does_not_call_gh() {
     for target in PUBLISHED_TARGETS {
         let output = run(&["fetch-binary", "--dry-run", "--target", target], &path);
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
-        let expected = dry_run_text(&fetch_plan(target, cfg!(unix)).unwrap());
+        let expected = all_plans(target);
         assert_eq!(text(&output.stdout), expected);
         assert!(!fake.marker.exists(), "dry-run invoked gh for {target}");
     }
@@ -104,7 +111,7 @@ fn flag_order_and_host_default_select_the_same_plan() {
             &path,
         ),
     ];
-    let expected = dry_run_text(&fetch_plan(target, cfg!(unix)).unwrap());
+    let expected = all_plans(target);
     for output in &variants {
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
         assert_eq!(text(&output.stdout), expected);
@@ -113,10 +120,7 @@ fn flag_order_and_host_default_select_the_same_plan() {
     let host = host_target(std::env::consts::OS, std::env::consts::ARCH).unwrap();
     let output = run(&["fetch-binary", "--dry-run"], &path);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
-    assert_eq!(
-        text(&output.stdout),
-        dry_run_text(&fetch_plan(host, cfg!(unix)).unwrap())
-    );
+    assert_eq!(text(&output.stdout), all_plans(host));
     assert!(!fake.marker.exists());
 }
 

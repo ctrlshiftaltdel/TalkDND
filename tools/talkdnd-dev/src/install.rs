@@ -1,4 +1,4 @@
-//! Copy a locally built release `combat-sim` into `LetsPlay/bin/`.
+//! Copy locally built release `combat-sim` and `talkdnd` into `LetsPlay/bin/`.
 //!
 //! `--dry-run` prints the cargo and copy commands and does not build.
 
@@ -25,12 +25,23 @@ pub fn run(args: &[String]) -> Result<u8, String> {
             return Ok(2);
         }
     };
-    let plan = install_plan(cfg!(windows), cfg!(unix));
+    let plans = vec![
+        install_plan(cfg!(windows), cfg!(unix)),
+        install_plan_for("talkdnd", cfg!(windows), cfg!(unix)),
+    ];
     if dry_run {
-        print!("{}", dry_run_text(&plan));
+        for plan in &plans {
+            print!("{}", dry_run_text(plan));
+        }
         return Ok(0);
     }
+    for plan in &plans {
+        install_one(plan)?;
+    }
+    Ok(0)
+}
 
+fn install_one(plan: &InstallPlan) -> Result<(), String> {
     let root = crate::repo_root()?;
     let mut cargo = Command::new("cargo");
     cargo
@@ -55,7 +66,7 @@ pub fn run(args: &[String]) -> Result<u8, String> {
     install_binary(&src, &dest, plan.chmod)?;
     println!("installed {}", plan.install_rel);
     println!("local file only; do not commit {}", plan.install_rel);
-    Ok(0)
+    Ok(())
 }
 
 pub fn parse_install_args(args: &[String]) -> Result<bool, String> {
@@ -78,10 +89,15 @@ pub fn parse_install_args(args: &[String]) -> Result<bool, String> {
 
 /// `host_windows` selects the binary name. `chmod` is the current host, not the name.
 pub fn install_plan(host_windows: bool, chmod: bool) -> InstallPlan {
+    install_plan_for("combat-sim", host_windows, chmod)
+}
+
+/// Plan for one program under `tools/<tool>/`.
+pub fn install_plan_for(tool: &str, host_windows: bool, chmod: bool) -> InstallPlan {
     let binary_name = if host_windows {
-        "combat-sim.exe"
+        format!("{tool}.exe")
     } else {
-        "combat-sim"
+        tool.to_string()
     };
     InstallPlan {
         build_args: vec![
@@ -89,9 +105,9 @@ pub fn install_plan(host_windows: bool, chmod: bool) -> InstallPlan {
             "build".to_string(),
             "--release".to_string(),
             "--manifest-path".to_string(),
-            "tools/combat-sim/Cargo.toml".to_string(),
+            format!("tools/{tool}/Cargo.toml"),
         ],
-        source_rel: format!("tools/combat-sim/target/release/{binary_name}"),
+        source_rel: format!("tools/{tool}/target/release/{binary_name}"),
         install_rel: format!("LetsPlay/bin/{binary_name}"),
         chmod,
     }
@@ -161,5 +177,20 @@ chmod u+x LetsPlay/bin/combat-sim
         ));
         assert!(!text.contains("chmod"));
         assert!(!text.contains('\r'));
+    }
+}
+
+#[cfg(test)]
+mod talkdnd_tests {
+    use super::*;
+
+    #[test]
+    fn talkdnd_plan() {
+        let p = install_plan_for("talkdnd", true, false);
+        assert_eq!(p.install_rel, "LetsPlay/bin/talkdnd.exe");
+        assert_eq!(p.source_rel, "tools/talkdnd/target/release/talkdnd.exe");
+        assert!(p
+            .build_args
+            .contains(&"tools/talkdnd/Cargo.toml".to_string()));
     }
 }

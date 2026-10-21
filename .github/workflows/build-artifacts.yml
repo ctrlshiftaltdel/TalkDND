@@ -2,8 +2,8 @@ name: build-artifacts
 
 # Bare release binaries for main. The target list matches release.yml.
 # Each artifact's root is the binary itself. Extract it into LetsPlay/bin/.
-# talkdnd-dev fetch-binary downloads artifact combat-sim-<target> and installs
-# that file at LetsPlay/bin/combat-sim (combat-sim.exe on Windows).
+# talkdnd-dev fetch-binary downloads artifacts combat-sim-<target> and
+# talkdnd-<target> and installs them in LetsPlay/bin/ (.exe on Windows).
 # Tag packaging and GitHub Releases stay in release.yml.
 
 on:
@@ -29,13 +29,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            bin_name: combat-sim
+            ext: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin_name: combat-sim.exe
+            ext: .exe
           - os: macos-14
             target: aarch64-apple-darwin
-            bin_name: combat-sim
+            ext: ""
     permissions:
       contents: read
       actions: write
@@ -54,14 +54,25 @@ jobs:
           workspaces: |
             tools/combat-sim
             tools/talkdnd-dev
+            tools/talkdnd
 
       - name: Build release
-        run: cargo build --release --manifest-path tools/combat-sim/Cargo.toml --target ${{ matrix.target }}
+        run: |
+          cargo build --release --manifest-path tools/combat-sim/Cargo.toml --target ${{ matrix.target }}
+          cargo build --release --manifest-path tools/talkdnd/Cargo.toml --target ${{ matrix.target }}
 
-      - name: Upload binary
+      - name: Upload combat-sim
         uses: actions/upload-artifact@v7
         with:
           name: combat-sim-${{ matrix.target }}
-          path: tools/combat-sim/target/${{ matrix.target }}/release/${{ matrix.bin_name }}
+          path: tools/combat-sim/target/${{ matrix.target }}/release/combat-sim${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload talkdnd
+        uses: actions/upload-artifact@v7
+        with:
+          name: talkdnd-${{ matrix.target }}
+          path: tools/talkdnd/target/${{ matrix.target }}/release/talkdnd${{ matrix.ext }}
           if-no-files-found: error
           retention-days: 30
