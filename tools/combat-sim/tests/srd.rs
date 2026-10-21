@@ -89,7 +89,7 @@ fn shipped_2014_library_with_srd_import_checks_clean() {
     let man = dir.join("campaign.yaml");
     std::fs::write(
         &man,
-        format!("name: t\nruleset: \"2014\"\nlibrary: [\"{lib}\"]\n"),
+        format!("name: t\nruleset: \"2014\"\nlibrary: ['{lib}']\n"),
     )
     .unwrap();
     let sources = combat_sim::content::ContentSources {
