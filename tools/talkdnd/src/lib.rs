@@ -3,6 +3,7 @@
 //! checkpoints and log entries. All dice go through combat-sim's engine.
 
 pub mod chargen;
+pub mod classdata;
 pub mod data;
 pub mod npc;
 pub mod save;
@@ -68,6 +69,11 @@ enum Cmd {
     Checkpoint { text: Vec<String> },
     /// Append one timestamped line to the newest session log
     Log { text: Vec<String> },
+    /// Local rulebook data (non-SRD classes, subclasses, weapons; gitignored)
+    Data {
+        #[command(subcommand)]
+        cmd: DataCmd,
+    },
     /// List SRD options for a ruleset
     Options {
         #[arg(long, default_value = "2024")]
@@ -89,7 +95,7 @@ enum ChargenCmd {
     Assign { scores: Vec<String> },
     /// Player-chosen increases: `str=2 con=1`, or `none`
     Asi { values: Vec<String> },
-    /// Record a choice: ruleset|adventure|species|class|background|skills|background-skills|armor|shield|equipment|spells|name|personality|level
+    /// Record a choice: ruleset|adventure|species|class|subclass|masteries|background|skills|background-skills|armor|shield|equipment|spells|name|personality|level
     Set { field: String, value: Vec<String> },
     /// Check the character against the ruleset
     Validate,
@@ -100,6 +106,20 @@ enum ChargenCmd {
     },
     /// Player confirmed the sheet: mark creation complete
     Confirm,
+}
+
+#[derive(Subcommand)]
+enum DataCmd {
+    /// Show which local data files are loaded and whether converted Markdown exists
+    Status {
+        #[arg(long, default_value = "2024")]
+        ruleset: String,
+    },
+    /// Build Rules/chargen/local/imported-<ruleset>.yaml from converted Markdown (.md/)
+    Import {
+        #[arg(long, default_value = "2024")]
+        ruleset: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -174,6 +194,7 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             println!("logged to {}", rel(&root, &log));
         }
         Cmd::Options { ruleset } => print_options(&ruleset),
+        Cmd::Data { cmd } => data_cmd(&root, cmd)?,
     }
     Ok(())
 }
@@ -414,6 +435,8 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                 }
                 "species" | "race" => c.species = Some(chargen::slug(&v)),
                 "class" => c.class = Some(chargen::slug(&v)),
+                "subclass" => c.subclass = Some(chargen::slug(&v)),
+                "masteries" => c.masteries = list().iter().map(|s| chargen::slug(s)).collect(),
                 "background" => c.background = Some(chargen::slug(&v)),
                 "skills" => c.skills = list(),
                 "background-skills" => c.background_skills = list(),
@@ -460,7 +483,12 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
             if !r.errors.is_empty() {
                 bail!("fix {} error(s) before writing the sheet", r.errors.len());
             }
-            let (id, md) = chargen::sheet(&c, &player)?;
+            let root = save.parent().and_then(|p| p.parent());
+            let book = classdata::Book::load(c.rs(), root)?;
+            let (id, md) = chargen::sheet_with(&c, &player, &book, root)?;
+            for w in classdata::generate(&c, &book, root).warnings {
+                println!("warning: {w}");
+            }
             let file = save
                 .join("Characters")
                 .join(format!("{}.md", c.name.as_deref().unwrap_or(&id)));
@@ -579,13 +607,65 @@ fn npc_cmd(
             c.name = Some(name.clone());
             c.personality = personality;
             c.adventure = chargen::load(&s).ok().and_then(|x| x.adventure);
-            let (id, md) = chargen::sheet(&c, "DM（同伴 NPC）")?;
+            let book = classdata::Book::load(c.rs(), Some(root))?;
+            let (id, md) = chargen::sheet_with(&c, "DM（同伴 NPC）", &book, Some(root))?;
             let md = md.replacen("kind: pc", "kind: npc", 1);
             fs::write(s.join("NPCs").join(format!("{name}.md")), md)?;
             add_to_party(&s, &id)?;
             println!(
                 "wrote NPCs/{name}.md (id {id}); add backstory and voice to it and NPCs/_party.md"
             );
+        }
+    }
+    Ok(())
+}
+
+fn data_cmd(root: &Path, cmd: DataCmd) -> Result<()> {
+    match cmd {
+        DataCmd::Status { ruleset } => {
+            check_ruleset(&ruleset)?;
+            let b = classdata::Book::load(&ruleset, Some(root))?;
+            let md = classdata::md_files(&root.join("Rules").join(&ruleset));
+            println!(
+                "ruleset {ruleset}: {} classes (SRD + local)",
+                b.classes.len()
+            );
+            println!("converted Markdown: {}", md.len());
+            for f in &md {
+                println!("  {}", rel(root, f));
+            }
+            println!("local data files: {}", b.local_files.len());
+            for f in &b.local_files {
+                println!("  {}", rel(root, f));
+            }
+            if !b.local_ids.is_empty() {
+                println!("local entries: {}", b.local_ids.join(", "));
+            }
+            if md.is_empty() {
+                println!("next: {}", classdata::import_hint(Some(root), &ruleset));
+            }
+        }
+        DataCmd::Import { ruleset } => {
+            check_ruleset(&ruleset)?;
+            let md = classdata::md_files(&root.join("Rules").join(&ruleset));
+            if md.is_empty() {
+                bail!("{}", classdata::import_hint(Some(root), &ruleset));
+            }
+            let srd = classdata::Book::srd(&ruleset);
+            let df = classdata::import_markdown(&ruleset, &srd, &md)?;
+            let dir = root.join(classdata::LOCAL_DIR);
+            fs::create_dir_all(&dir)?;
+            let out = dir.join(format!("imported-{ruleset}.yaml"));
+            let head = format!("# Generated by `talkdnd data import --ruleset {ruleset}` from your own books. LOCAL ONLY: never commit.\n# Feature names by level only; check them against the PDF. Hand edits belong in another file (e.g. manual-{ruleset}.yaml), this one is overwritten.\n");
+            fs::write(&out, head + &serde_norway::to_string(&df)?)?;
+            let mut n = 0;
+            for (cid, c) in &df.classes {
+                for (sid, s) in &c.subclasses {
+                    n += 1;
+                    println!("  {cid}/{sid}: {} feature(s)", s.features.len());
+                }
+            }
+            println!("wrote {} ({n} non-SRD subclass(es))", rel(root, &out));
         }
     }
     Ok(())

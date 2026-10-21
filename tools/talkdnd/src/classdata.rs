@@ -1,0 +1,1175 @@
+//! Class progression, weapons, and the attacks/features/resources they produce.
+//!
+//! Tracked data (`data/*.yaml`, embedded at build time) covers SRD 5.1 and SRD 5.2 only.
+//! Non-SRD content comes from local, gitignored files in `Rules/chargen/local/*.yaml`
+//! (written by `talkdnd data import` or by hand) and is merged over the SRD data at runtime.
+
+use crate::chargen::Creation;
+use crate::data;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const WEAPONS: &str = include_str!("../data/weapons.yaml");
+const CLASSES_2014: &str = include_str!("../data/classes-2014.yaml");
+const CLASSES_2024: &str = include_str!("../data/classes-2024.yaml");
+
+/// Local data folder, relative to the LetsPlay root.
+pub const LOCAL_DIR: &str = "Rules/chargen/local";
+
+/// `[level, name, summary]`
+pub type Feature = (i32, String, String);
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WeaponOverride {
+    #[serde(default)]
+    pub dice: Option<String>,
+    #[serde(default)]
+    pub v: Option<String>,
+    #[serde(default)]
+    pub properties: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Weapon {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    #[serde(default)]
+    pub ranged: bool,
+    pub dice: String,
+    #[serde(default)]
+    pub v: Option<String>,
+    #[serde(rename = "type")]
+    pub dtype: String,
+    #[serde(default)]
+    pub properties: Vec<String>,
+    #[serde(default)]
+    pub range: Option<[i32; 2]>,
+    #[serde(default)]
+    pub mastery: Option<String>,
+    #[serde(default)]
+    pub r2024: Option<WeaponOverride>,
+}
+
+impl Weapon {
+    fn for_ruleset(&self, rs: &str) -> Weapon {
+        let mut w = self.clone();
+        if rs == "2024" {
+            if let Some(o) = &self.r2024 {
+                if let Some(d) = &o.dice {
+                    w.dice = d.clone();
+                }
+                if o.v.is_some() {
+                    w.v = o.v.clone();
+                }
+                if let Some(p) = &o.properties {
+                    w.properties = p.clone();
+                }
+            }
+        } else {
+            w.mastery = None;
+        }
+        w
+    }
+    fn has(&self, p: &str) -> bool {
+        self.properties.iter().any(|x| x == p)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Count {
+    Table(Vec<i32>),
+    Formula(String),
+    #[default]
+    None,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Res {
+    pub id: String,
+    pub name: String,
+    pub recharge: String,
+    #[serde(default)]
+    pub from: Option<i32>,
+    #[serde(default)]
+    pub by_level: Option<Vec<i32>>,
+    #[serde(default)]
+    pub formula: Option<String>,
+    #[serde(default)]
+    pub short_regain: Option<i32>,
+    #[serde(default)]
+    pub short_from: Option<i32>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Sub {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub features: Vec<Feature>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClassDef {
+    /// Needed only for classes not in the built-in SRD list.
+    #[serde(default)]
+    pub hit_die: Option<i32>,
+    #[serde(default)]
+    pub caster: Option<String>,
+    #[serde(default)]
+    pub spell_ability: Option<String>,
+    #[serde(default)]
+    pub weapons: Vec<String>,
+    #[serde(default)]
+    pub mastery: Option<Vec<i32>>,
+    #[serde(default)]
+    pub asi: Option<Vec<i32>>,
+    #[serde(default)]
+    pub cantrips: Option<Vec<i32>>,
+    #[serde(default)]
+    pub known: Option<Vec<i32>>,
+    #[serde(default)]
+    pub prepared: Count,
+    #[serde(default)]
+    pub martial_arts: Option<Vec<i32>>,
+    #[serde(default)]
+    pub subclass_level: Option<i32>,
+    #[serde(default)]
+    pub features: Vec<Feature>,
+    #[serde(default)]
+    pub resources: Vec<Res>,
+    #[serde(default)]
+    pub subclasses: BTreeMap<String, Sub>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DataFile {
+    /// "2014", "2024" or "any".
+    #[serde(default)]
+    pub ruleset: Option<String>,
+    #[serde(default)]
+    pub classes: BTreeMap<String, ClassDef>,
+    #[serde(default)]
+    pub weapons: Vec<Weapon>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Book {
+    pub rs: String,
+    pub classes: BTreeMap<String, ClassDef>,
+    pub weapons: Vec<Weapon>,
+    pub local_files: Vec<PathBuf>,
+    /// Ids that came from local files (not SRD).
+    pub local_ids: Vec<String>,
+}
+
+fn at(v: &[i32], lvl: i32) -> i32 {
+    let i = (lvl.clamp(1, 20) - 1) as usize;
+    v.get(i).or(v.last()).copied().unwrap_or(0)
+}
+
+impl Book {
+    /// SRD data only.
+    pub fn srd(rs: &str) -> Book {
+        let classes: DataFile = serde_norway::from_str(if rs == "2014" {
+            CLASSES_2014
+        } else {
+            CLASSES_2024
+        })
+        .expect("embedded class data");
+        let weapons: DataFile = serde_norway::from_str(WEAPONS).expect("embedded weapon data");
+        Book {
+            rs: rs.to_string(),
+            classes: classes.classes,
+            weapons: weapons.weapons,
+            ..Default::default()
+        }
+    }
+
+    /// SRD data plus `<root>/Rules/chargen/local/*.yaml` for this ruleset.
+    pub fn load(rs: &str, root: Option<&Path>) -> Result<Book> {
+        let mut b = Book::srd(rs);
+        let Some(root) = root else { return Ok(b) };
+        let dir = root.join(LOCAL_DIR);
+        let Ok(rd) = fs::read_dir(&dir) else {
+            return Ok(b);
+        };
+        let mut files: Vec<PathBuf> = rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "yaml" || x == "yml"))
+            .collect();
+        files.sort();
+        for f in files {
+            let df: DataFile = serde_norway::from_str(&fs::read_to_string(&f)?)
+                .with_context(|| format!("{} is not valid local chargen data", f.display()))?;
+            let r = df.ruleset.as_deref().unwrap_or("any");
+            if r != "any" && r != rs {
+                continue;
+            }
+            b.merge(df);
+            b.local_files.push(f);
+        }
+        Ok(b)
+    }
+
+    pub fn merge(&mut self, df: DataFile) {
+        for (id, c) in df.classes {
+            match self.classes.get_mut(&id) {
+                Some(have) => {
+                    for (sid, s) in c.subclasses {
+                        self.local_ids.push(format!("{id}/{sid}"));
+                        let e = have.subclasses.entry(sid).or_default();
+                        if s.name.is_some() {
+                            e.name = s.name;
+                        }
+                        e.features.extend(s.features);
+                    }
+                    have.features.extend(c.features);
+                    have.resources.extend(c.resources);
+                }
+                None => {
+                    self.local_ids.push(id.clone());
+                    for sid in c.subclasses.keys() {
+                        self.local_ids.push(format!("{id}/{sid}"));
+                    }
+                    self.classes.insert(id, c);
+                }
+            }
+        }
+        for w in df.weapons {
+            self.local_ids.push(w.id.clone());
+            self.weapons.retain(|x| x.id != w.id);
+            self.weapons.push(w);
+        }
+    }
+
+    pub fn class(&self, id: &str) -> Option<&ClassDef> {
+        self.classes.get(id)
+    }
+}
+
+/// The exact command(s) a DM agent should run when local data is missing.
+pub fn import_hint(root: Option<&Path>, rs: &str) -> String {
+    let have_md = root
+        .map(|r| md_files(&r.join("Rules").join(rs)).is_empty())
+        .map(|empty| !empty)
+        .unwrap_or(false);
+    if have_md {
+        format!("run `talkdnd data import --ruleset {rs}`, then `talkdnd chargen sheet` again (see docs/chargen.md「本地规则书数据」)")
+    } else {
+        format!("no converted Markdown for Rules/{rs} yet: run `uv run --project tools/pdf2md python -m pdf2md run --book \"Players Handbook\" --budget 300`, then `talkdnd data import --ruleset {rs}`; until then keep SRD data and fill the gap by hand (see docs/chargen.md「本地规则书数据」)")
+    }
+}
+
+/// Converted Markdown books under `Rules/<rs>/.md/<book>/<book>.md`.
+pub fn md_files(rules: &Path) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if let Ok(rd) = fs::read_dir(rules.join(".md")) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                let name = e.file_name().to_string_lossy().to_string();
+                let f = p.join(format!("{name}.md"));
+                if f.is_file() {
+                    v.push(f);
+                }
+            }
+        }
+    }
+    v.sort();
+    v
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttackOut {
+    pub id: String,
+    pub name: String,
+    pub kind: &'static str,
+    pub ability: String,
+    pub to_hit: i32,
+    pub dice: String,
+    pub dtype: String,
+    pub reach: Option<i32>,
+    pub range: Option<[i32; 2]>,
+    pub properties: Vec<String>,
+    pub mastery: Option<String>,
+    pub note: String,
+    pub proficient: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResOut {
+    pub id: String,
+    pub name: String,
+    pub max: i32,
+    pub recharge: String,
+    pub short_regain: Option<i32>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Generated {
+    pub attacks: Vec<AttackOut>,
+    pub features: Vec<Feature>,
+    pub resources: Vec<ResOut>,
+    /// Slots by spell level 1..=9 (pact slots go into `pact`).
+    pub slots: Vec<i32>,
+    /// (count, slot level)
+    pub pact: Option<(i32, i32)>,
+    pub cantrips: Option<i32>,
+    pub spells: Option<(&'static str, i32)>,
+    pub mastery: Option<i32>,
+    /// Combat-library ability refs: (ref, params yaml, is_action)
+    pub refs: Vec<(String, Option<String>, bool)>,
+    pub warnings: Vec<String>,
+}
+
+const FULL: [[i32; 9]; 20] = [
+    [2, 0, 0, 0, 0, 0, 0, 0, 0],
+    [3, 0, 0, 0, 0, 0, 0, 0, 0],
+    [4, 2, 0, 0, 0, 0, 0, 0, 0],
+    [4, 3, 0, 0, 0, 0, 0, 0, 0],
+    [4, 3, 2, 0, 0, 0, 0, 0, 0],
+    [4, 3, 3, 0, 0, 0, 0, 0, 0],
+    [4, 3, 3, 1, 0, 0, 0, 0, 0],
+    [4, 3, 3, 2, 0, 0, 0, 0, 0],
+    [4, 3, 3, 3, 1, 0, 0, 0, 0],
+    [4, 3, 3, 3, 2, 0, 0, 0, 0],
+    [4, 3, 3, 3, 2, 1, 0, 0, 0],
+    [4, 3, 3, 3, 2, 1, 0, 0, 0],
+    [4, 3, 3, 3, 2, 1, 1, 0, 0],
+    [4, 3, 3, 3, 2, 1, 1, 0, 0],
+    [4, 3, 3, 3, 2, 1, 1, 1, 0],
+    [4, 3, 3, 3, 2, 1, 1, 1, 0],
+    [4, 3, 3, 3, 2, 1, 1, 1, 1],
+    [4, 3, 3, 3, 3, 1, 1, 1, 1],
+    [4, 3, 3, 3, 3, 2, 1, 1, 1],
+    [4, 3, 3, 3, 3, 2, 2, 1, 1],
+];
+
+/// Spell slots for a caster type at a class level.
+pub fn slots(caster: &str, rs: &str, lvl: i32) -> Vec<i32> {
+    let eff = match caster {
+        "full" => lvl,
+        "half" if rs == "2014" && lvl < 2 => 0,
+        "half" => (lvl + 1) / 2,
+        _ => 0,
+    };
+    if eff <= 0 {
+        return Vec::new();
+    }
+    let row = FULL[(eff.min(20) - 1) as usize];
+    let n = row.iter().rposition(|x| *x > 0).map(|i| i + 1).unwrap_or(0);
+    row[..n].to_vec()
+}
+
+pub fn pact(lvl: i32) -> (i32, i32) {
+    let count = match lvl {
+        ..=1 => 1,
+        2..=10 => 2,
+        11..=16 => 3,
+        _ => 4,
+    };
+    let level = ((lvl + 1) / 2).min(5);
+    (count, level)
+}
+
+fn formula(f: &str, lvl: i32, prof: i32, mods: &BTreeMap<String, i32>) -> i32 {
+    let f = f.replace(' ', "");
+    let m = |a: &str| mods.get(a).copied().unwrap_or(0);
+    match f.as_str() {
+        "level" => lvl,
+        "half" | "level/2" => lvl / 2,
+        "5*level" => 5 * lvl,
+        "prof" => prof,
+        _ => {
+            if let Some(a) = f.strip_prefix("1+") {
+                (1 + m(a)).max(1)
+            } else if let Some((a, b)) = f.split_once('+') {
+                let other = match b {
+                    "level" => lvl,
+                    "half" => lvl / 2,
+                    _ => b.parse().unwrap_or(0),
+                };
+                (m(a) + other).max(1)
+            } else {
+                m(&f).max(1)
+            }
+        }
+    }
+}
+
+const ZH: &[(&str, &str)] = &[
+    ("轻弩", "light-crossbow"),
+    ("手弩", "hand-crossbow"),
+    ("重弩", "heavy-crossbow"),
+    ("长剑", "longsword"),
+    ("短剑", "shortsword"),
+    ("巨剑", "greatsword"),
+    ("细剑", "rapier"),
+    ("刺剑", "rapier"),
+    ("弯刀", "scimitar"),
+    ("匕首", "dagger"),
+    ("巨斧", "greataxe"),
+    ("战斧", "battleaxe"),
+    ("手斧", "handaxe"),
+    ("标枪", "javelin"),
+    ("长棍", "quarterstaff"),
+    ("木棍", "quarterstaff"),
+    ("硬头锤", "mace"),
+    ("钉头锤", "mace"),
+    ("短弓", "shortbow"),
+    ("长弓", "longbow"),
+    ("战锤", "warhammer"),
+    ("轻锤", "light-hammer"),
+    ("巨锤", "maul"),
+    ("巨棒", "greatclub"),
+    ("木棒", "club"),
+    ("投石索", "sling"),
+    ("飞镖", "dart"),
+    ("长鞭", "whip"),
+    ("镰刀", "sickle"),
+    ("晨星", "morningstar"),
+    ("链枷", "flail"),
+    ("长柄刀", "glaive"),
+    ("长戟", "halberd"),
+    ("长枪", "pike"),
+    ("骑枪", "lance"),
+    ("三叉戟", "trident"),
+    ("战镐", "war-pick"),
+    ("吹箭筒", "blowgun"),
+    ("长矛", "spear"),
+    ("矛", "spear"),
+];
+
+/// Weapon ids found in free-text equipment lines (English slugs or common Chinese names).
+pub fn weapons_in(equipment: &[String], book: &Book) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in equipment {
+        let s = format!("-{}-", crate::chargen::slug(e));
+        let mut ids: Vec<&Weapon> = book.weapons.iter().collect();
+        ids.sort_by_key(|w| std::cmp::Reverse(w.id.len()));
+        let mut found = None;
+        for w in ids {
+            if s.contains(&format!("-{}-", w.id)) || s.contains(&format!("-{}s-", w.id)) {
+                found = Some(w.id.clone());
+                break;
+            }
+        }
+        if found.is_none() {
+            found = ZH
+                .iter()
+                .find(|(zh, _)| e.contains(zh))
+                .map(|(_, id)| id.to_string());
+        }
+        if let Some(id) = found {
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    out
+}
+
+fn proficient(class: Option<&ClassDef>, w: &Weapon) -> bool {
+    let Some(c) = class else { return false };
+    c.weapons.iter().any(|p| match p.as_str() {
+        "simple" => w.category == "simple",
+        "martial" => w.category == "martial",
+        "martial-light" => w.category == "martial" && w.has("light"),
+        "martial-finesse-or-light" => {
+            w.category == "martial" && (w.has("finesse") || w.has("light"))
+        }
+        id => id == w.id,
+    })
+}
+
+fn monk_weapon(rs: &str, w: &Weapon) -> bool {
+    if w.ranged {
+        return false;
+    }
+    if rs == "2014" {
+        w.id == "shortsword" || (w.category == "simple" && !w.has("heavy") && !w.has("two-handed"))
+    } else {
+        w.category == "simple" || (w.category == "martial" && w.has("light"))
+    }
+}
+
+fn dmg(dice: &str, m: i32) -> String {
+    if dice.contains('d') {
+        match m.cmp(&0) {
+            std::cmp::Ordering::Greater => format!("{dice}+{m}"),
+            std::cmp::Ordering::Less => format!("{dice}{m}"),
+            _ => dice.to_string(),
+        }
+    } else {
+        (dice.parse::<i32>().unwrap_or(1) + m).max(1).to_string()
+    }
+}
+
+/// Everything the sheet needs beyond scores, skills and AC.
+pub fn generate(c: &Creation, book: &Book, root: Option<&Path>) -> Generated {
+    let rs = c.rs();
+    let lvl = c.level.clamp(1, 20);
+    let prof = data::prof_bonus(lvl);
+    let mods = c.mods();
+    let m = |a: &str| mods.get(a).copied().unwrap_or(0);
+    let mut g = Generated::default();
+    let cid = c.class.clone().unwrap_or_default();
+    let cls = book.class(&cid);
+    if cls.is_none() && !cid.is_empty() {
+        g.warnings.push(format!(
+            "class `{cid}` has no progression data ({rs}): attacks use no weapon proficiency, features/resources are missing; {}",
+            import_hint(root, rs)
+        ));
+    }
+    let sub = c.subclass.as_deref().map(crate::chargen::slug);
+    if let (Some(cl), Some(s)) = (cls, sub.as_deref()) {
+        if !cl.subclasses.contains_key(s) {
+            g.warnings.push(format!(
+                "subclass `{s}` of `{cid}` has no feature data ({rs}); {}",
+                import_hint(root, rs)
+            ));
+        }
+    }
+    let ma = cls
+        .and_then(|x| x.martial_arts.as_ref())
+        .map(|t| at(t, lvl));
+    let mastery = cls
+        .and_then(|x| x.mastery.as_ref())
+        .filter(|_| rs == "2024")
+        .map(|t| at(t, lvl))
+        .filter(|n| *n > 0);
+    g.mastery = mastery;
+
+    // Attacks.
+    let owned = weapons_in(&c.equipment, book);
+    let chosen: Vec<String> = if !c.masteries.is_empty() {
+        c.masteries
+            .iter()
+            .map(|s| crate::chargen::slug(s))
+            .collect()
+    } else if mastery.is_some_and(|n| owned.len() as i32 <= n) {
+        owned.clone()
+    } else {
+        Vec::new()
+    };
+    if let Some(n) = mastery {
+        if c.masteries.is_empty() && owned.len() as i32 > n {
+            g.warnings.push(format!(
+                "weapon mastery: choose {n} weapon(s) with `talkdnd chargen set masteries <a>,<b>`; masteries are left off until then"
+            ));
+        }
+    }
+    for id in &owned {
+        let Some(w) = book.weapons.iter().find(|w| &w.id == id) else {
+            continue;
+        };
+        let w = w.for_ruleset(rs);
+        let is_prof = proficient(cls, &w);
+        let ability = if w.ranged {
+            "dex"
+        } else if w.has("finesse") || (ma.is_some() && monk_weapon(rs, &w)) {
+            if m("dex") > m("str") {
+                "dex"
+            } else {
+                "str"
+            }
+        } else {
+            "str"
+        };
+        let am = m(ability);
+        let mut dice = w.dice.clone();
+        if let Some(d) = ma {
+            if monk_weapon(rs, &w) {
+                let die: i32 = w
+                    .dice
+                    .split_once('d')
+                    .and_then(|(n, s)| (n == "1").then(|| s.parse().ok()).flatten())
+                    .unwrap_or(0);
+                if d > die {
+                    dice = format!("1d{d}");
+                }
+            }
+        }
+        let kind = if w.ranged {
+            "ranged"
+        } else if w.has("thrown") {
+            "melee_or_ranged"
+        } else {
+            "melee"
+        };
+        let mut note = String::new();
+        if let Some(v) = &w.v {
+            note += &format!("双手 {}", dmg(v, am));
+        }
+        if !is_prof {
+            if !note.is_empty() {
+                note += "；";
+            }
+            note += "不熟练（不加熟练加值）";
+        }
+        g.attacks.push(AttackOut {
+            id: w.id.clone(),
+            name: w.name.clone(),
+            kind,
+            ability: ability.into(),
+            to_hit: am + if is_prof { prof } else { 0 },
+            dice: dmg(&dice, am),
+            dtype: w.dtype.clone(),
+            reach: (!w.ranged).then_some(if w.has("reach") { 10 } else { 5 }),
+            range: w.range,
+            properties: w.properties.clone(),
+            mastery: w.mastery.clone().filter(|_| chosen.contains(&w.id)),
+            note,
+            proficient: is_prof,
+        });
+    }
+    // Unarmed strike.
+    let (ua_ab, ua_dice) = match ma {
+        Some(d) => {
+            let a = if m("dex") > m("str") { "dex" } else { "str" };
+            (a, dmg(&format!("1d{d}"), m(a)))
+        }
+        None => ("str", dmg("1", m("str"))),
+    };
+    g.attacks.push(AttackOut {
+        id: "unarmed".into(),
+        name: "Unarmed Strike".into(),
+        kind: "melee",
+        ability: ua_ab.into(),
+        to_hit: m(ua_ab) + prof,
+        dice: ua_dice,
+        dtype: "bludgeoning".into(),
+        reach: Some(5),
+        range: None,
+        properties: Vec::new(),
+        mastery: None,
+        note: String::new(),
+        proficient: true,
+    });
+
+    let Some(cl) = cls else { return g };
+
+    // Features.
+    let mut feats: Vec<Feature> = cl.features.iter().filter(|f| f.0 <= lvl).cloned().collect();
+    let asi = cl.asi.clone().unwrap_or_else(|| vec![4, 8, 12, 16, 19]);
+    for l in asi.into_iter().filter(|l| *l <= lvl) {
+        let (n, s) = if rs == "2024" {
+            (
+                "Ability Score Improvement",
+                "属性值提升专长或其他符合条件的专长",
+            )
+        } else {
+            (
+                "Ability Score Improvement",
+                "两项属性各 +1 或一项 +2（或选专长）",
+            )
+        };
+        feats.push((l, n.into(), s.into()));
+    }
+    if let Some(s) = sub.as_deref().and_then(|s| cl.subclasses.get(s)) {
+        feats.extend(s.features.iter().filter(|f| f.0 <= lvl).cloned());
+    } else {
+        let sl = cl.subclass_level.unwrap_or(3);
+        if lvl >= sl && sub.is_none() {
+            g.warnings.push(format!(
+                "level {lvl} {cid} needs a subclass (gained at level {sl}): `talkdnd chargen set subclass <id>`; SRD: {}",
+                cl.subclasses.keys().cloned().collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    feats.sort_by_key(|f| f.0);
+    if cid == "rogue" {
+        let n = (lvl + 1) / 2;
+        for f in feats.iter_mut().filter(|f| f.1 == "Sneak Attack") {
+            f.2 = format!("{}（当前 {n}d6）", f.2);
+        }
+        g.refs.push((
+            "sneak-attack".into(),
+            Some(format!("{{dice: \"{n}d6\"}}")),
+            false,
+        ));
+        if lvl >= 2 {
+            g.refs.push(("cunning-action".into(), None, true));
+        }
+    }
+    if cid == "fighter" {
+        g.refs.push(("second-wind".into(), None, true));
+    }
+    if cid == "cleric" && sub.as_deref() == Some("life") {
+        g.refs.push(("disciple-of-life".into(), None, false));
+    }
+    g.features = feats;
+
+    // Resources.
+    let hd = cl
+        .hit_die
+        .or_else(|| data::class(&cid).map(|x| x.hit_die))
+        .unwrap_or(8);
+    g.resources.push(ResOut {
+        id: "hit-dice".into(),
+        name: format!("Hit Dice (d{hd})"),
+        max: lvl,
+        recharge: "long".into(),
+        short_regain: None,
+        notes: Some(format!(
+            "短休花费 d{hd} + 体质恢复 HP；长休恢复一半（至少 1）"
+        )),
+    });
+    for r in &cl.resources {
+        if r.from.is_some_and(|f| lvl < f) {
+            continue;
+        }
+        let max = match (&r.by_level, &r.formula) {
+            (Some(t), _) => at(t, lvl),
+            (None, Some(f)) => formula(f, lvl, prof, &mods),
+            _ => 0,
+        };
+        if max <= 0 {
+            continue;
+        }
+        let recharge = if r.short_from.is_some_and(|f| lvl >= f) {
+            "short".to_string()
+        } else {
+            r.recharge.clone()
+        };
+        g.resources.push(ResOut {
+            id: r.id.clone(),
+            name: r.name.clone(),
+            max,
+            recharge,
+            short_regain: r.short_regain,
+            notes: r.notes.clone(),
+        });
+    }
+    match cl.caster.as_deref() {
+        Some("pact") => g.pact = Some(pact(lvl)),
+        Some(t) => g.slots = slots(t, rs, lvl),
+        None => {}
+    }
+    g.cantrips = cl.cantrips.as_ref().map(|t| at(t, lvl)).filter(|n| *n > 0);
+    let sa = data::class(&cid)
+        .and_then(|x| x.spell_ability)
+        .map(str::to_string)
+        .or_else(|| cl.spell_ability.clone())
+        .unwrap_or_else(|| "int".into());
+    g.spells = if let Some(k) = &cl.known {
+        Some(("已知法术", at(k, lvl))).filter(|x| x.1 > 0)
+    } else {
+        match &cl.prepared {
+            Count::Table(t) => Some(("可准备法术", at(t, lvl))),
+            Count::Formula(f) => {
+                let n = match f.split_once('+').map(|x| x.1) {
+                    Some("half") => (m(&sa) + lvl / 2).max(1),
+                    _ => (m(&sa) + lvl).max(1),
+                };
+                (!g.slots.is_empty()).then_some(("可准备法术", n))
+            }
+            Count::None => None,
+        }
+    };
+    g
+}
+
+/// Best-effort importer: subclass feature names by level from converted Markdown.
+///
+/// Looks for `<Class> Subclasses` headings, then subclass headings and
+/// `Level N: Feature` headings below them. Writes names only (no rules text) and
+/// marks every summary as "check the book".
+pub fn import_markdown(rs: &str, srd: &Book, files: &[PathBuf]) -> Result<DataFile> {
+    let mut out = DataFile {
+        ruleset: Some(rs.to_string()),
+        ..Default::default()
+    };
+    let class_ids: Vec<String> = srd.classes.keys().cloned().collect();
+    for f in files {
+        let text = fs::read_to_string(f)?;
+        let mut cur_class: Option<String> = None;
+        let mut cur_sub: Option<String> = None;
+        for line in text.lines() {
+            let t = line.trim();
+            if !t.starts_with('#') {
+                continue;
+            }
+            let h = t.trim_start_matches('#').trim();
+            let lower = h.to_lowercase();
+            if let Some(cname) = lower.strip_suffix(" subclasses") {
+                let id = crate::chargen::slug(cname);
+                cur_class = class_ids.contains(&id).then_some(id);
+                cur_sub = None;
+                continue;
+            }
+            let Some(cls) = cur_class.clone() else {
+                continue;
+            };
+            if let Some((lv, name)) = parse_level_heading(h) {
+                if let Some(s) = &cur_sub {
+                    let e = out
+                        .classes
+                        .entry(cls.clone())
+                        .or_default()
+                        .subclasses
+                        .entry(s.clone())
+                        .or_default();
+                    if !e.features.iter().any(|x| x.1 == name) {
+                        e.features.push((lv, name, "见规则书（导入）".into()));
+                    }
+                }
+                continue;
+            }
+            // A heading that names a class ends that class's subclass section.
+            if class_ids.contains(&crate::chargen::slug(&lower))
+                || lower.ends_with(" features")
+                || lower.starts_with("chapter")
+            {
+                cur_class = None;
+                cur_sub = None;
+                continue;
+            }
+            let words = h.split_whitespace().count();
+            let looks_like_name = (1..=6).contains(&words)
+                && h.chars().any(|c| c.is_alphabetic())
+                && !h.contains(':');
+            if looks_like_name {
+                let sid = crate::chargen::slug(h);
+                let is_srd = srd.classes.get(&cls).is_some_and(|c| {
+                    c.subclasses.iter().any(|(k, v)| {
+                        *k == sid
+                            || v.name.as_deref().map(crate::chargen::slug).as_deref()
+                                == Some(sid.as_str())
+                    })
+                });
+                let noise = ["spell", "level", "evel", "trait", "action"]
+                    .iter()
+                    .any(|n| sid.contains(n));
+                if is_srd || noise {
+                    cur_sub = None; // SRD subclass: tracked data already covers it
+                } else {
+                    cur_sub = Some(sid.clone());
+                    out.classes
+                        .entry(cls.clone())
+                        .or_default()
+                        .subclasses
+                        .entry(sid)
+                        .or_default()
+                        .name = Some(title(h));
+                }
+            }
+        }
+    }
+    // A real subclass starts with a feature at the level the class gains it.
+    for (cid, c) in out.classes.iter_mut() {
+        let first = srd
+            .classes
+            .get(cid)
+            .and_then(|x| x.subclass_level)
+            .filter(|_| rs == "2014")
+            .unwrap_or(3);
+        c.subclasses
+            .retain(|_, s| s.features.iter().map(|f| f.0).min() == Some(first));
+        for s in c.subclasses.values_mut() {
+            s.features.sort_by_key(|f| f.0);
+        }
+    }
+    out.classes.retain(|_, c| !c.subclasses.is_empty());
+    Ok(out)
+}
+
+fn title(h: &str) -> String {
+    h.split_whitespace()
+        .map(|w| {
+            let l = w.to_lowercase();
+            let mut cs = l.chars();
+            match cs.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + cs.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `Level 3: Primal Companion` (tolerates OCR noise like `EVEL7: NAME`).
+fn parse_level_heading(h: &str) -> Option<(i32, String)> {
+    let up = h.to_uppercase();
+    let i = up.find("EVEL")?;
+    if i > 2 {
+        return None;
+    }
+    let rest = &h[i + 4..];
+    let rest = rest.trim_start();
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let lv: i32 = digits.parse().ok()?;
+    if !(1..=20).contains(&lv) {
+        return None;
+    }
+    let after = rest[digits.len()..]
+        .trim_start_matches([' ', ':', '：'])
+        .trim();
+    let after = after.trim_start_matches(':').trim();
+    if after.is_empty() {
+        return None;
+    }
+    Some((lv, title(after)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pc(rs: &str, class: &str, lvl: i32, scores: [i32; 6], eq: &[&str]) -> Creation {
+        let mut c = Creation {
+            ruleset: Some(rs.into()),
+            class: Some(class.into()),
+            level: lvl,
+            equipment: eq.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        for (a, v) in data::ABILITIES.iter().zip(scores) {
+            c.scores.insert(a.to_string(), v);
+        }
+        c
+    }
+
+    fn atk<'a>(g: &'a Generated, id: &str) -> &'a AttackOut {
+        g.attacks.iter().find(|a| a.id == id).unwrap()
+    }
+
+    fn res<'a>(g: &'a Generated, id: &str) -> Option<&'a ResOut> {
+        g.resources.iter().find(|a| a.id == id)
+    }
+
+    #[test]
+    fn embedded_data_parses_for_all_classes() {
+        for rs in ["2014", "2024"] {
+            let b = Book::srd(rs);
+            assert_eq!(b.classes.len(), 12, "{rs}");
+            for (id, c) in &b.classes {
+                assert!(data::class(id).is_some(), "{id}");
+                assert_eq!(c.subclasses.len(), 1, "{rs} {id}");
+                for r in &c.resources {
+                    if let Some(t) = &r.by_level {
+                        assert_eq!(t.len(), 20, "{rs} {id} {}", r.id);
+                    }
+                }
+                for t in [&c.cantrips, &c.known, &c.mastery, &c.martial_arts]
+                    .into_iter()
+                    .flatten()
+                {
+                    assert_eq!(t.len(), 20, "{rs} {id}");
+                }
+            }
+            assert!(b.weapons.len() >= 36);
+        }
+    }
+
+    #[test]
+    fn fighter_longsword() {
+        let c = pc(
+            "2024",
+            "fighter",
+            1,
+            [16, 12, 14, 10, 10, 8],
+            &["Longsword", "Shield"],
+        );
+        let g = generate(&c, &Book::srd("2024"), None);
+        let a = atk(&g, "longsword");
+        assert_eq!(
+            (a.ability.as_str(), a.to_hit, a.dice.as_str()),
+            ("str", 5, "1d8+3")
+        );
+        assert_eq!(a.mastery.as_deref(), Some("sap"));
+        assert!(a.note.contains("1d10+3"));
+        assert_eq!(res(&g, "second-wind").unwrap().max, 2);
+        assert!(g.refs.iter().any(|r| r.0 == "second-wind"));
+        assert_eq!(atk(&g, "unarmed").dice, "4");
+    }
+
+    #[test]
+    fn rogue_rapier_finesse_and_ranged() {
+        let c = pc(
+            "2014",
+            "rogue",
+            3,
+            [8, 17, 12, 10, 12, 14],
+            &["rapier", "shortbow and 20 arrows", "2 daggers"],
+        );
+        let g = generate(&c, &Book::srd("2014"), None);
+        let r = atk(&g, "rapier");
+        assert_eq!(
+            (r.ability.as_str(), r.to_hit, r.dice.as_str()),
+            ("dex", 5, "1d8+3")
+        );
+        let b = atk(&g, "shortbow");
+        assert_eq!((b.kind, b.range), ("ranged", Some([80, 320])));
+        assert_eq!(atk(&g, "dagger").kind, "melee_or_ranged");
+        assert!(r.mastery.is_none(), "2014 has no mastery");
+        assert!(g
+            .features
+            .iter()
+            .any(|f| f.1 == "Sneak Attack" && f.2.contains("2d6")));
+        assert!(g.warnings.iter().any(|w| w.contains("subclass")));
+    }
+
+    #[test]
+    fn chinese_names_and_nonproficient() {
+        let c = pc(
+            "2014",
+            "wizard",
+            1,
+            [10, 14, 12, 16, 12, 8],
+            &["长剑", "匕首"],
+        );
+        let g = generate(&c, &Book::srd("2014"), None);
+        assert!(!atk(&g, "longsword").proficient);
+        assert_eq!(atk(&g, "longsword").to_hit, 0);
+        assert!(atk(&g, "dagger").proficient);
+    }
+
+    #[test]
+    fn wizard_slots() {
+        let b = Book::srd("2014");
+        let c = pc("2014", "wizard", 1, [8, 14, 12, 16, 12, 10], &[]);
+        let g = generate(&c, &b, None);
+        assert_eq!(g.slots, vec![2]);
+        assert_eq!(g.cantrips, Some(3));
+        assert_eq!(g.spells, Some(("可准备法术", 4)));
+        let c = pc("2014", "wizard", 5, [8, 14, 12, 16, 12, 10], &[]);
+        let g = generate(&c, &b, None);
+        assert_eq!(g.slots, vec![4, 3, 2]);
+        assert_eq!(g.spells, Some(("可准备法术", 8)));
+        assert_eq!(res(&g, "arcane-recovery").unwrap().max, 1);
+    }
+
+    #[test]
+    fn half_and_pact_casters() {
+        assert!(slots("half", "2014", 1).is_empty());
+        assert_eq!(slots("half", "2024", 1), vec![2]);
+        assert_eq!(slots("half", "2014", 5), vec![4, 2]);
+        assert_eq!(pact(1), (1, 1));
+        assert_eq!(pact(5), (2, 3));
+        assert_eq!(pact(11), (3, 5));
+        let c = pc("2024", "warlock", 3, [8, 14, 12, 10, 12, 16], &[]);
+        let g = generate(&c, &Book::srd("2024"), None);
+        assert_eq!(g.pact, Some((2, 2)));
+    }
+
+    #[test]
+    fn barbarian_rage_and_monk() {
+        let c = pc(
+            "2014",
+            "barbarian",
+            3,
+            [16, 14, 14, 8, 10, 10],
+            &["greataxe"],
+        );
+        let g = generate(&c, &Book::srd("2014"), None);
+        assert_eq!(res(&g, "rage").unwrap().max, 3);
+        assert_eq!(atk(&g, "greataxe").dice, "1d12+3");
+        let c = pc("2024", "barbarian", 1, [16, 14, 14, 8, 10, 10], &[]);
+        let g = generate(&c, &Book::srd("2024"), None);
+        let r = res(&g, "rage").unwrap();
+        assert_eq!((r.max, r.short_regain), (2, Some(1)));
+        let c = pc("2024", "monk", 1, [10, 16, 12, 10, 14, 8], &["spear"]);
+        let g = generate(&c, &Book::srd("2024"), None);
+        assert_eq!(atk(&g, "unarmed").dice, "1d6+3");
+        assert_eq!(atk(&g, "spear").ability, "dex");
+        assert!(res(&g, "focus").is_none());
+    }
+
+    #[test]
+    fn bard_inspiration_recharge() {
+        let c = pc("2014", "bard", 5, [8, 14, 12, 10, 12, 16], &[]);
+        let g = generate(&c, &Book::srd("2014"), None);
+        let r = res(&g, "bardic-inspiration").unwrap();
+        assert_eq!((r.max, r.recharge.as_str()), (3, "short"));
+        assert_eq!(g.spells, Some(("已知法术", 8)));
+    }
+
+    #[test]
+    fn local_override_merges() {
+        let dir = std::env::temp_dir().join(format!("talkdnd-local-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(LOCAL_DIR)).unwrap();
+        fs::write(
+            dir.join(LOCAL_DIR).join("mine.yaml"),
+            "ruleset: \"2024\"\nclasses:\n  fighter:\n    subclasses:\n      test-knight:\n        name: Test Knight\n        features:\n          - [3, Shiny Shield, synthetic]\n  tester:\n    hit_die: 10\n    weapons: [simple]\n    features:\n      - [1, Probe, synthetic]\n    resources:\n      - {id: probe, name: Probe, recharge: short, formula: prof}\nweapons:\n  - {id: test-blade, name: Test Blade, category: martial, dice: 1d10, type: slashing}\n",
+        )
+        .unwrap();
+        let b = Book::load("2024", Some(&dir)).unwrap();
+        assert_eq!(b.local_files.len(), 1);
+        let mut c = pc(
+            "2024",
+            "fighter",
+            3,
+            [16, 12, 14, 10, 10, 8],
+            &["test blade"],
+        );
+        c.subclass = Some("test-knight".into());
+        let g = generate(&c, &b, Some(&dir));
+        assert!(g.features.iter().any(|f| f.1 == "Shiny Shield"));
+        assert!(atk(&g, "test-blade").proficient);
+        assert!(g.warnings.iter().all(|w| !w.contains("subclass")));
+        let c = pc("2024", "tester", 1, [10; 6], &[]);
+        let g = generate(&c, &b, Some(&dir));
+        assert_eq!(res(&g, "probe").unwrap().max, 2);
+        assert_eq!(res(&g, "hit-dice").unwrap().name, "Hit Dice (d10)");
+        // Not loaded for the other ruleset.
+        assert!(Book::load("2014", Some(&dir))
+            .unwrap()
+            .class("tester")
+            .is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_data_prints_command() {
+        let dir = std::env::temp_dir().join(format!("talkdnd-miss-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("Rules/2024")).unwrap();
+        let mut c = pc("2024", "fighter", 3, [10; 6], &[]);
+        c.subclass = Some("nonesuch".into());
+        let g = generate(&c, &Book::srd("2024"), Some(&dir));
+        let w = g.warnings.join("\n");
+        assert!(w.contains("python -m pdf2md run"), "{w}");
+        assert!(w.contains("talkdnd data import --ruleset 2024"), "{w}");
+        let md = dir.join("Rules/2024/.md/Book/Book.md");
+        fs::create_dir_all(md.parent().unwrap()).unwrap();
+        fs::write(&md, "x").unwrap();
+        let g = generate(&c, &Book::srd("2024"), Some(&dir));
+        let w = g.warnings.join("\n");
+        assert!(
+            !w.contains("pdf2md run") && w.contains("talkdnd data import --ruleset 2024"),
+            "{w}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn importer_reads_synthetic_markdown() {
+        let dir = std::env::temp_dir().join(format!("talkdnd-imp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("b.md");
+        fs::write(
+            &f,
+            "## Fighter Subclasses\n### Champion\n### Level 3: Improved Critical\n### Gizmo Knight\nbody\n### Level 3: Cog Shield\n### EVEL7: :SPRING STEP\n## Monk\n### Level 1: Not A Subclass\n",
+        )
+        .unwrap();
+        let df = import_markdown("2024", &Book::srd("2024"), &[f]).unwrap();
+        let s = &df.classes["fighter"].subclasses["gizmo-knight"];
+        assert_eq!(s.name.as_deref(), Some("Gizmo Knight"));
+        let names: Vec<_> = s.features.iter().map(|f| (f.0, f.1.as_str())).collect();
+        assert_eq!(names, vec![(3, "Cog Shield"), (7, "Spring Step")]);
+        assert!(!df.classes["fighter"].subclasses.contains_key("champion"));
+        assert_eq!(df.classes.len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

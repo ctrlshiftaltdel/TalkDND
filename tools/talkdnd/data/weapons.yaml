@@ -1,0 +1,40 @@
+# SRD 5.1 / SRD 5.2 weapons (CC-BY-4.0). Facts only: dice, type, properties, range, 2024 mastery.
+# category: simple|martial; ranged: true for ranged weapons.
+# properties use combat-sim names. `v`: versatile die. `r2024`: per-ruleset overrides.
+weapons:
+  - {id: club, name: Club, category: simple, dice: 1d4, type: bludgeoning, properties: [light], mastery: slow}
+  - {id: dagger, name: Dagger, category: simple, dice: 1d4, type: piercing, properties: [finesse, light, thrown], range: [20, 60], mastery: nick}
+  - {id: greatclub, name: Greatclub, category: simple, dice: 1d8, type: bludgeoning, properties: [two-handed], mastery: push}
+  - {id: handaxe, name: Handaxe, category: simple, dice: 1d6, type: slashing, properties: [light, thrown], range: [20, 60], mastery: vex}
+  - {id: javelin, name: Javelin, category: simple, dice: 1d6, type: piercing, properties: [thrown], range: [30, 120], mastery: slow}
+  - {id: light-hammer, name: Light Hammer, category: simple, dice: 1d4, type: bludgeoning, properties: [light, thrown], range: [20, 60], mastery: nick}
+  - {id: mace, name: Mace, category: simple, dice: 1d6, type: bludgeoning, properties: [], mastery: sap}
+  - {id: quarterstaff, name: Quarterstaff, category: simple, dice: 1d6, v: 1d8, type: bludgeoning, properties: [versatile], mastery: topple}
+  - {id: sickle, name: Sickle, category: simple, dice: 1d4, type: slashing, properties: [light], mastery: nick}
+  - {id: spear, name: Spear, category: simple, dice: 1d6, v: 1d8, type: piercing, properties: [thrown, versatile], range: [20, 60], mastery: sap}
+  - {id: light-crossbow, name: Light Crossbow, category: simple, ranged: true, dice: 1d8, type: piercing, properties: [ammunition, loading, two-handed], range: [80, 320], mastery: slow}
+  - {id: dart, name: Dart, category: simple, ranged: true, dice: 1d4, type: piercing, properties: [finesse, thrown], range: [20, 60], mastery: vex}
+  - {id: shortbow, name: Shortbow, category: simple, ranged: true, dice: 1d6, type: piercing, properties: [ammunition, two-handed], range: [80, 320], mastery: vex}
+  - {id: sling, name: Sling, category: simple, ranged: true, dice: 1d4, type: bludgeoning, properties: [ammunition], range: [30, 120], mastery: slow}
+  - {id: battleaxe, name: Battleaxe, category: martial, dice: 1d8, v: 1d10, type: slashing, properties: [versatile], mastery: topple}
+  - {id: flail, name: Flail, category: martial, dice: 1d8, type: bludgeoning, properties: [], mastery: sap}
+  - {id: glaive, name: Glaive, category: martial, dice: 1d10, type: slashing, properties: [heavy, reach, two-handed], mastery: graze}
+  - {id: greataxe, name: Greataxe, category: martial, dice: 1d12, type: slashing, properties: [heavy, two-handed], mastery: cleave}
+  - {id: greatsword, name: Greatsword, category: martial, dice: 2d6, type: slashing, properties: [heavy, two-handed], mastery: graze}
+  - {id: halberd, name: Halberd, category: martial, dice: 1d10, type: slashing, properties: [heavy, reach, two-handed], mastery: cleave}
+  - {id: lance, name: Lance, category: martial, dice: 1d12, type: piercing, properties: [reach, special], mastery: topple, r2024: {properties: [heavy, reach, two-handed]}}
+  - {id: longsword, name: Longsword, category: martial, dice: 1d8, v: 1d10, type: slashing, properties: [versatile], mastery: sap}
+  - {id: maul, name: Maul, category: martial, dice: 2d6, type: bludgeoning, properties: [heavy, two-handed], mastery: topple}
+  - {id: morningstar, name: Morningstar, category: martial, dice: 1d8, type: piercing, properties: [], mastery: sap}
+  - {id: pike, name: Pike, category: martial, dice: 1d10, type: piercing, properties: [heavy, reach, two-handed], mastery: push}
+  - {id: rapier, name: Rapier, category: martial, dice: 1d8, type: piercing, properties: [finesse], mastery: vex}
+  - {id: scimitar, name: Scimitar, category: martial, dice: 1d6, type: slashing, properties: [finesse, light], mastery: nick}
+  - {id: shortsword, name: Shortsword, category: martial, dice: 1d6, type: piercing, properties: [finesse, light], mastery: vex}
+  - {id: trident, name: Trident, category: martial, dice: 1d6, v: 1d8, type: piercing, properties: [thrown, versatile], range: [20, 60], mastery: topple, r2024: {dice: 1d8, v: 1d10}}
+  - {id: war-pick, name: War Pick, category: martial, dice: 1d8, type: piercing, properties: [], mastery: sap, r2024: {v: 1d10, properties: [versatile]}}
+  - {id: warhammer, name: Warhammer, category: martial, dice: 1d8, v: 1d10, type: bludgeoning, properties: [versatile], mastery: push}
+  - {id: whip, name: Whip, category: martial, dice: 1d4, type: slashing, properties: [finesse, reach], mastery: slow}
+  - {id: blowgun, name: Blowgun, category: martial, ranged: true, dice: "1", type: piercing, properties: [ammunition, loading], range: [25, 100], mastery: vex}
+  - {id: hand-crossbow, name: Hand Crossbow, category: martial, ranged: true, dice: 1d6, type: piercing, properties: [ammunition, light, loading], range: [30, 120], mastery: vex}
+  - {id: heavy-crossbow, name: Heavy Crossbow, category: martial, ranged: true, dice: 1d10, type: piercing, properties: [ammunition, heavy, loading, two-handed], range: [100, 400], mastery: push}
+  - {id: longbow, name: Longbow, category: martial, ranged: true, dice: 1d8, type: piercing, properties: [ammunition, heavy, two-handed], range: [150, 600], mastery: slow}
