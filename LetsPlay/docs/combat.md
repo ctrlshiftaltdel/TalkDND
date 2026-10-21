@@ -80,5 +80,5 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 - `talkdnd level-up <角色|all> --milestone --reason "泥沼石已被中和"`：重大剧情节点直接升级，并把 XP 提到新等级门槛；同一事件同一角色只能升一次。黄金宝库：每个劫案结束、下一个劫案等级更高时用它。
 - `talkdnd xp show`：每人等级/XP/下一门槛、冒险进度轨（黄金宝库各劫案等级，标出队伍当前等级）、最近一次奖励。账本 `xp_log` 记每笔（日期、类别、理由、每人、难度、被扣上限）。
 - 时机：在长休或本节结束时升级；如果在长休之外升级，当前与最大 HP 一起增加，但已用的法术位和资源不恢复（2024 DMG 第 2 章）。
-- `talkdnd level-up <角色> [--hp avg|roll|<玩家掷出的数>] [--class rogue]`（XP 够时，不加 `--milestone`）：改角色卡 combat 块（等级、HP、熟练加值、生命骰、熟练豁免/技能/命中），追加 `## 升级记录`，列出新职业特性、子职与属性提升提示。正文（特性、法术）和玩家一起改；之后 `combat-sim party sync`，再 `talkdnd sheet export <角色>` 重新导出 PDF 给玩家。
+- `talkdnd level-up <角色> [--hp avg|roll|<玩家掷出的数>] [--class rogue]`（XP 够时，不加 `--milestone`）：改角色卡 combat 块（等级、HP、熟练加值、生命骰、熟练豁免/技能/命中），追加 `## 升级记录`，列出新职业特性、子职与属性提升提示。正文（特性、法术）和玩家一起改；之后 `combat-sim party sync`。
 - `talkdnd loot add --gp 50 "治疗药水" --to party`、`loot give --from party --to yier --gp 10 钥匙`、`loot split`（公共钱平分）、`loot spend --from yier --gp 5`、`loot show`。钱统一按铜币记，显示为 gp/sp/cp。

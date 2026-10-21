@@ -19,8 +19,6 @@ agent can start a scene after reading one short digest. Players run it as
 | `npc sheet <draft> --name X` | Write `NPCs/X.md` after the player confirms |
 | `xp add [N] --category C --reason R [--difficulty D] [--again]` / `xp show` | Hybrid advancement ledger (`progress.yaml` `xp`, `xp_log`): small awards, ruleset difficulty tables, one-level-ahead cap, no double awards; `show` prints the adventure track (Golden Vault heist levels) |
 | `level-up <who\|all> [--milestone --reason R]` | Level from XP, or a milestone level for a major story beat (XP raised to the threshold; once per event) |
-| `sheet blank [--ruleset 2014\|2024] [--out path]` | Empty fillable template: page 1 sheet, page 2 spell table + backstory/notes. Default path `Characters/blank-sheet-<ruleset>.pdf` in the current save, else `./` |
-| `sheet export <who\|all> [--format pdf\|html]` | One A4 page per character next to its sheet (`Characters/<name>.pdf`): printed stats plus fillable AcroForm boxes/tick grids for HP, hit dice, death saves, slots, resources, conditions, coins, XP, notes. See "Sheet export" below |
 | `checkpoint <text>` (or stdin) | Append `## 存档点（time）` to the newest session log |
 | `log <text>` | Append one timestamped line |
 | `options [--ruleset R]` | SRD options |
@@ -34,24 +32,3 @@ only. Options from other books are accepted with a warning. The hidden
 `--seed` flag exists for tests; never use it in play.
 
 Tests: `cargo test --manifest-path tools/talkdnd/Cargo.toml`.
-
-## Sheet export
-
-`talkdnd sheet export` reads the sheet Markdown (title, header bullets,
-sections such as 特性/装备/法术/个性/熟练) and the `combat yaml` block (all
-numbers), plus XP and coins from `progress.yaml`. The PDF is drawn with
-[krilla](https://crates.io/crates/krilla) and a **system CJK font** that is
-subset-embedded (nothing font-related is committed). Lookup order:
-`TALKDND_CJK_FONT=path[#face-index]`, common Noto CJK / WenQuanYi paths on
-Linux, PingFang / Hiragino / STHeiti on macOS, Microsoft YaHei / SimHei /
-SimSun on Windows, then `fc-match`. Fillable fields are then added with
-[lopdf](https://crates.io/crates/lopdf) (AcroForm text fields and check boxes;
-`NeedAppearances` is set so readers draw typed values). Typed values use the
-reader's Helvetica: digits and Latin always work, CJK typing depends on the
-reader, so CJK values are printed and ASCII values (numbers, English
-names) are prefilled form fields the player can overwrite. Layout v2:
-resources get one row each (name, max, recharge, tick boxes) plus blank rows;
-spells are compact (slot ticks per level, a cantrips/prepared list sized to
-the character); casters with more than 10 spells get page 2 (full spell
-table, backstory, notes); notes have two areas. `--format html` writes the same page as HTML with `<input>`s
-(`@page A4`, print from the browser) and needs no font file.

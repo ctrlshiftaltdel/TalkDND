@@ -788,8 +788,6 @@ pub fn level_up(
     } else {
         "timing: level up at a long rest or the end of a session; outside a long rest raise current and max HP, but do not restore spent slots or resources".into()
     });
-    r.lines
-        .push("then `talkdnd sheet export` and offer the PDF".into());
     r.lines.push("the sheet prose (header, features, spells) is not rewritten: update it with the player; then `combat-sim party sync` to refresh party HP".into());
     let tag = if seeded { "（测试种子）" } else { "" };
     log(

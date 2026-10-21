@@ -76,19 +76,6 @@ weapons: []                # 新武器：{id, name, category: simple|martial, ra
 3. DM 为每个草稿补名字、来历、性格、说话方式，**整体给玩家看，确认或要求调整**。
 4. 玩家确认后：`$T npc sheet <草稿号> --name <名字> --personality "..."`，再把声音和关系写进 `NPCs/_party.md`。
 
-## 纸质角色卡（开局时让玩家选）
-
-`chargen confirm` 之后问玩家一次：**空白模板、预填角色卡、还是两种都要**。
-
-| 选择 | 命令 | 文件 |
-|---|---|---|
-| 预填 | `$T sheet export <角色>`（`all` = 全队含同伴） | `Characters/<名字>.pdf`（同伴在 `NPCs/`） |
-| 空白 | `$T sheet blank --ruleset <2014\|2024>` | `Characters/blank-sheet-<规则>.pdf`（`--out` 可改） |
-| 都要 | 两条都跑 | 两个文件 |
-
-- 预填卡一般一页；法术超过 10 个的施法者自动多一页法术表。空白模板固定两页。
-- 升级、换装备、学新法术后重新跑 `sheet export`（选了空白的玩家不用重导）。
-
 ## 开新局之后
 
 建卡和同伴都确认后：写 `dm-secrets.md`（冒险书里与本局相关的秘密）、在会话日志写开场，然后进入第一个场景。
