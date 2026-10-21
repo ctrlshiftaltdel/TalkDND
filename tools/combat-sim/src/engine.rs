@@ -5190,7 +5190,10 @@ fn on_death(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
     let mut kept = Vec::new();
     for condition in state.combatants[target].conditions.drain(..) {
         if condition.concentration && condition.source.as_deref() != Some(name.as_str()) {
-            log.log(format_args!("{} is no longer {}", name, condition.condition));
+            log.log(format_args!(
+                "{} is no longer {}",
+                name, condition.condition
+            ));
         } else {
             kept.push(condition);
         }

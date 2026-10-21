@@ -893,9 +893,7 @@ fn death_ends_concentration_and_drops_concentration_conditions() {
     )
     .unwrap();
     assert!(state.concentration.contains_key("Caster C"));
-    assert!(
-        state.combatants[index(&state, "Brute A")].has_condition(&state.content, "marked-test")
-    );
+    assert!(state.combatants[index(&state, "Brute A")].has_condition(&state.content, "marked-test"));
 
     // The target dies: the condition granted by another's concentration is gone.
     engine::damage(

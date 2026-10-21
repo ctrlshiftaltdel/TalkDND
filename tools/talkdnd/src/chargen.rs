@@ -639,6 +639,10 @@ pub fn parse_abilities(args: &[String]) -> Result<BTreeMap<String, i32>> {
 pub fn slug(s: &str) -> String {
     let mut out = String::new();
     for ch in s.trim().chars() {
+        if matches!(ch, '\'' | '\u{2019}') {
+            // "King's" -> "kings", matching the adventure folder names.
+            continue;
+        }
         if ch.is_alphanumeric() {
             out.extend(ch.to_lowercase());
         } else if !out.ends_with('-') && !out.is_empty() {
@@ -1148,21 +1152,19 @@ mod tests {
         c.skills = vec!["insight".into(), "medicine".into()];
         let r = validate(&c);
         assert!(r.errors.is_empty());
-        assert!(
-            r.warnings
-                .iter()
-                .any(|w| w.contains("already granted by the background"))
-        );
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.contains("already granted by the background")));
         // High elf grants perception.
         c.species = Some("high-elf".into());
         c.skills = vec!["perception".into(), "medicine".into()];
         let r = validate(&c);
         assert!(r.errors.is_empty());
-        assert!(
-            r.warnings
-                .iter()
-                .any(|w| w.contains("already granted by the species"))
-        );
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.contains("already granted by the species")));
     }
 
     #[test]

@@ -248,10 +248,7 @@ fn collect_md(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
         let p = e.path();
         if p.is_dir() {
             collect_md(&p, out, depth + 1);
-        } else if p
-            .extension()
-            .is_some_and(|x| x == "md")
-        {
+        } else if p.extension().is_some_and(|x| x == "md") {
             out.push(p);
         }
     }
@@ -457,7 +454,10 @@ mod tests {
         fs::create_dir_all(&adv).unwrap();
         fs::write(adv.join("Storm King's Thunder.pdf"), "pdf").unwrap();
         let d = digest(&root, &save, &Options { pdf2md: false }).unwrap();
-        assert!(d.contains("冒险书：`Adventures/storm-kings-thunder/`"), "{d}");
+        assert!(
+            d.contains("冒险书：`Adventures/storm-kings-thunder/`"),
+            "{d}"
+        );
         assert!(d.contains("Markdown 还没转换"), "{d}");
         assert!(
             d.contains("PDF：`Adventures/storm-kings-thunder/Storm King's Thunder.pdf`"),

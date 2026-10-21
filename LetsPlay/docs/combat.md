@@ -57,3 +57,9 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
   - `combat-sim party set-hp <id> N`：战斗外治疗或 DM 修正。
   - `combat-sim party sync --from-state <名字>`：手动从某场战斗写回。
 - 升级或改角色卡后，maxHP 和资源上限以角色卡为准，当前值会被夹到新上限以内。
+
+## 怪物回合
+
+- 敌人的行动由 DM 执行：轮到敌人时，按怪物数据块用 `attack`、`cast`、`use`、`move` 下命令，然后 `next`。
+- 想让引擎按 AI 模板替敌人行动，可用 `combat-sim simulate --from-state <名字> --runs 1` 看一遍推演，再照着执行（推演不改原 state）。
+- 敌人做什么由 DM 根据性格和战况决定，AI 推演只是参考；玩家角色永远由玩家决定。
