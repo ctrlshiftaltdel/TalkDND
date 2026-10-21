@@ -2,12 +2,14 @@
 //! resume digest, new save skeleton, character creation, random companions,
 //! checkpoints and log entries. All dice go through combat-sim's engine.
 
+pub mod audit;
 pub mod chargen;
 pub mod check;
 pub mod classdata;
 pub mod data;
 pub mod npc;
 pub mod progress;
+pub mod reveal;
 pub mod save;
 pub mod start;
 
@@ -40,7 +42,7 @@ struct Cli {
     cmd: Cmd,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum Cmd {
     /// Resume: content check, background pdf2md, write and print Saves/<slot>/digest.md
     Start {
@@ -67,12 +69,14 @@ enum Cmd {
         #[command(subcommand)]
         cmd: NpcCmd,
     },
-    /// Ability/skill check or saving throw outside combat (modifier from the sheet; logged)
+    /// Ability/skill check or saving throw outside combat (modifier from the sheet; logged).
+    /// Without arguments: save audit (integrity manifest + log reconciliation)
     Check {
         /// Character id or name (Characters/ or NPCs/)
-        who: String,
+        #[arg(requires = "what")]
+        who: Option<String>,
         /// Skill id (perception), ability (wis), save:<ability> or init
-        what: String,
+        what: Option<String>,
         #[arg(long)]
         dc: Option<i32>,
         #[arg(long)]
@@ -119,6 +123,16 @@ enum Cmd {
         #[command(subcommand)]
         cmd: LootCmd,
     },
+    /// Save integrity manifest: status, or accept hand edits with a reason
+    Integrity {
+        #[command(subcommand)]
+        cmd: IntegrityCmd,
+    },
+    /// Revealed-knowledge ledger (what the party has actually learned)
+    Reveal {
+        #[command(subcommand)]
+        cmd: RevealCmd,
+    },
     /// List SRD options for a ruleset
     Options {
         #[arg(long, default_value = "2024")]
@@ -126,7 +140,39 @@ enum Cmd {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
+enum IntegrityCmd {
+    /// Files changed outside the tools and unexplained value changes
+    Status,
+    /// Accept the current files and values (logged with the reason)
+    Accept {
+        #[arg(long)]
+        reason: String,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum RevealCmd {
+    /// Record a fact the party has learned (also logged)
+    Add {
+        fact: Vec<String>,
+        /// How they learned it (check, NPC, document, rumour)
+        #[arg(long, default_value = "")]
+        source: String,
+        /// Tags such as npc:<id>, place:<id> (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
+    },
+    /// List revealed facts
+    List {
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    /// Is anything about <term> revealed? Run before naming it in narration
+    Check { term: Vec<String> },
+}
+
+#[derive(Subcommand, Clone)]
 enum XpCmd {
     /// Award XP for a small quest or event, split evenly:
     /// `xp add 450 --category combat --reason "museum guards"` or
@@ -154,7 +200,7 @@ enum XpCmd {
     Show,
 }
 
-#[derive(clap::Args)]
+#[derive(clap::Args, Clone)]
 struct Coins {
     #[arg(long, default_value_t = 0)]
     pp: i64,
@@ -181,7 +227,7 @@ impl Coins {
     }
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum LootCmd {
     /// Add coins/items: `loot add --gp 50 "potion of healing" --to party`
     Add {
@@ -220,7 +266,7 @@ enum LootCmd {
     Show,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum ChargenCmd {
     /// Show choices so far and the next step
     Status,
@@ -247,7 +293,7 @@ enum ChargenCmd {
     Confirm,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum DataCmd {
     /// Show which local data files are loaded and whether converted Markdown exists
     Status {
@@ -261,7 +307,7 @@ enum DataCmd {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum NpcCmd {
     /// Generate random SRD companions (rolls logged when a save exists); DM adds name/backstory
     Random {
@@ -292,7 +338,77 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         Some(r) => r,
         None => &mut os,
     };
-    match cli.cmd {
+    let tracked = match &cli.cmd {
+        Cmd::Start { .. }
+        | Cmd::New { .. }
+        | Cmd::Integrity { .. }
+        | Cmd::Options { .. }
+        | Cmd::Data { .. } => None,
+        _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
+    };
+    let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
+    let is_new = matches!(cli.cmd, Cmd::New { .. });
+    let result = dispatch(&root, &cli, rng);
+    if let (Some(s), Some(before)) = (tracked.as_deref(), before.as_ref()) {
+        if s.is_dir() {
+            audit::after_command(s, before)?;
+        }
+    }
+    if is_new && result.is_ok() {
+        if let Ok(s) = save::resolve_slot(&root, None) {
+            audit::audit(&s)?;
+        }
+    }
+    result
+}
+
+fn print_audit(s: &Path) -> Result<()> {
+    let r = audit::audit(s)?;
+    if r.created {
+        println!(
+            "integrity: no manifest yet — created a baseline from the current files (old save)"
+        );
+    }
+    if r.clean() {
+        println!("integrity: OK — files match the last tool writes; value changes are all logged");
+    } else {
+        for l in r.lines() {
+            println!("warning: {l}");
+        }
+    }
+    Ok(())
+}
+
+fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
+    let root = root.to_path_buf();
+    match cli.cmd.clone() {
+        Cmd::Integrity { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            match cmd {
+                IntegrityCmd::Status => print_audit(&s)?,
+                IntegrityCmd::Accept { reason } => {
+                    if reason.trim().is_empty() {
+                        bail!("--reason is required");
+                    }
+                    for l in audit::accept(&s, &reason)? {
+                        println!("{l}");
+                    }
+                }
+            }
+        }
+        Cmd::Reveal { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let lines = match cmd {
+                RevealCmd::Add { fact, source, tag } => {
+                    vec![reveal::add(&s, &fact.join(" "), &source, &tag)?]
+                }
+                RevealCmd::List { tag } => reveal::list(&s, tag.as_deref())?,
+                RevealCmd::Check { term } => reveal::check(&s, &term.join(" "))?,
+            };
+            for l in lines {
+                println!("{l}");
+            }
+        }
         Cmd::Start { no_pdf2md } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             let d = start::digest(&root, &s, &start::Options { pdf2md: !no_pdf2md })?;
@@ -317,6 +433,13 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             extra,
         } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let (Some(who), Some(what)) = (who, what) else {
+                return print_audit(&s);
+            };
+            let r = audit::audit(&s)?;
+            if !r.clean() {
+                eprintln!("warning: save audit found {} issue(s); run `talkdnd check` (no arguments) for details", r.changes.len() + r.unexplained.len());
+            }
             let line = check::run(
                 &s,
                 &who,

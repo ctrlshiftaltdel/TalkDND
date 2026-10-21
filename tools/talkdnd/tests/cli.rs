@@ -161,3 +161,44 @@ fn checkpoint_section_is_extracted() {
         "## 存档点（2）\nnew line\n- hp"
     );
 }
+
+#[test]
+fn integrity_reconcile_and_reveal() {
+    let r = root("integrity");
+    ok(&r, &["new", "--date", "2030-02-03", "--ruleset", "2014"]);
+    let save = r.join("Saves/2030-02-03-01");
+    assert!(save.join("integrity.yaml").is_file());
+    assert!(ok(&r, &["check"]).contains("integrity: OK"));
+    // tool writes stay clean
+    ok(&r, &["loot", "add", "--gp", "5", "rope", "--to", "party"]);
+    assert!(ok(&r, &["check"]).contains("integrity: OK"));
+    // a hand edit is flagged and reconciled against the log
+    let p = save.join("progress.yaml");
+    let t = fs::read_to_string(&p).unwrap();
+    fs::write(&p, t.replace("cp: 500", "cp: 900000")).unwrap();
+    let out = ok(&r, &["check"]);
+    assert!(
+        out.contains("progress.yaml: changed outside the tools"),
+        "{out}"
+    );
+    assert!(out.contains("coins of `party`"), "{out}");
+    // a later tool write does not launder it
+    ok(&r, &["loot", "add", "--gp", "1", "--to", "party"]);
+    assert!(ok(&r, &["integrity", "status"]).contains("progress.yaml"));
+    ok(&r, &["integrity", "accept", "--reason", "test fix"]);
+    assert!(ok(&r, &["check"]).contains("integrity: OK"));
+    // reveal ledger
+    ok(
+        &r,
+        &[
+            "reveal", "add", "the", "vault", "is", "below", "--source", "map",
+        ],
+    );
+    assert!(ok(&r, &["reveal", "check", "vault"]).contains("#1"));
+    assert!(ok(&r, &["reveal", "check", "dragon"]).contains("NOT REVEALED"));
+    assert!(ok(&r, &["check"]).contains("integrity: OK"));
+    // old save without a manifest keeps working
+    fs::remove_file(save.join("integrity.yaml")).unwrap();
+    assert!(ok(&r, &["check"]).contains("created a baseline"));
+    let _ = fs::remove_dir_all(&r);
+}

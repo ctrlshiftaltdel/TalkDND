@@ -19,6 +19,10 @@ agent can start a scene after reading one short digest. Players run it as
 | `npc sheet <draft> --name X` | Write `NPCs/X.md` after the player confirms |
 | `xp add [N] --category C --reason R [--difficulty D] [--again]` / `xp show` | Hybrid advancement ledger (`progress.yaml` `xp`, `xp_log`): small awards, ruleset difficulty tables, one-level-ahead cap, no double awards; `show` prints the adventure track (Golden Vault heist levels) |
 | `level-up <who\|all> [--milestone --reason R]` | Level from XP, or a milestone level for a major story beat (XP raised to the threshold; once per event) |
+| `check` (no arguments) | Save audit: integrity manifest (`integrity.yaml`: fingerprints of `progress.yaml`, sheets, `combat/*.yaml`, `reveals.yaml`, `house-rules.md` after every tool write) plus reconciliation of HP, coins, items and XP changes against new session-log lines and `xp_log`. `start` runs it too; old saves get a baseline on first run |
+| `check <who> <what> [--dc N]` | Ability/skill check or save from the sheet (logged) |
+| `integrity status` / `integrity accept --reason R` | Show issues; accept the current files and values (logged) |
+| `reveal add <fact> [--source S] [--tag T]` / `reveal list [--tag T]` / `reveal check <term>` | Revealed-knowledge ledger (`reveals.yaml`): what the party has actually learned; check before naming a fact |
 | `checkpoint <text>` (or stdin) | Append `## 存档点（time）` to the newest session log |
 | `log <text>` | Append one timestamped line |
 | `options [--ruleset R]` | SRD options |

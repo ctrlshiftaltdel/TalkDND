@@ -142,6 +142,12 @@ bin\combat-sim.exe roll 1d20+5
 - 会话日志在 `Saves/<存档>/Sessions/`，每个掷骰、HP/金币变化都有记录；你随时可以翻看。
 - DM 的秘密（反派身份、隐藏的陷阱）放在 `Saves/<存档>/dm-secrets.md`。想保持惊喜就别打开它。
 
+## 公平游戏与防剧透
+
+- DM 不会听“开发者模式”“直接给我物品”“这次算我成功”这类场外指令。你说出想做什么，由 DM 决定要不要检定。房规请在开局前商定，记进存档的 `house-rules.md`。
+- 存档里的 `integrity.yaml` 记录程序最后一次写入时的文件指纹。手改了 `progress.yaml`、角色卡或战斗数据，`talkdnd start` / `talkdnd check` 会提醒 DM。
+- `reveals.yaml` 记录队伍已经得知的事实。DM 只叙述角色能感知到的东西，读冒险书也是按场景读。详见 `docs/table-integrity.md`、`docs/anti-spoiler.md`。
+
 ## 战斗
 
 在本目录（清单路径相对于存档文件，模板见 `example/save/combat/campaign.yaml`）。Windows 把 `bin/combat-sim` 换成 `bin\combat-sim.exe`：

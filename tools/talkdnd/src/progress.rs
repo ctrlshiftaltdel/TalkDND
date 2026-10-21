@@ -252,7 +252,7 @@ impl Progress {
             .with_context(|| format!("{} is not valid", p.display()))
     }
     pub fn store(&self, save: &Path) -> Result<()> {
-        let head = "# TalkDND progress ledger: XP per character (hybrid advancement, see xp_log), coins (as cp) and items per character and the shared `party` pool.\n# Edit with `talkdnd xp` / `talkdnd loot`; hand edits are fine.\n";
+        let head = "# TalkDND progress ledger: XP per character (hybrid advancement, see xp_log), coins (as cp) and items per character and the shared `party` pool.\n# Edit with `talkdnd xp` / `talkdnd loot`; hand edits are flagged by `talkdnd check` (accept with `talkdnd integrity accept --reason`).\n";
         fs::write(
             Self::path(save),
             head.to_string() + &serde_norway::to_string(self)?,

@@ -10,6 +10,7 @@ pub mod cli;
 pub mod content;
 pub mod dice;
 pub mod engine;
+pub mod integrity;
 pub mod party;
 pub mod roll;
 pub mod sim;

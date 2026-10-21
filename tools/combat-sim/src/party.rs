@@ -65,7 +65,13 @@ impl PartyState {
             "# TalkDND party state (written by combat-sim; edit with care)\n{}",
             serde_norway::to_string(self)?
         );
-        fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))
+        let save = crate::integrity::save_of_combat_file(path);
+        let before = save.as_deref().map(crate::integrity::snapshot);
+        fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))?;
+        if let (Some(save), Some(before)) = (save, before) {
+            crate::integrity::after_write(&save, &before)?;
+        }
+        Ok(())
     }
 
     /// Copy the party-side combatants' current values into the file data.
