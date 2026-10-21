@@ -389,6 +389,32 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     d += "\n## 开场前再读（按需）\n\n";
     d += "- `dm-secrets.md`（只给 DM）、`canon.md`、`NPCs/_party.md`（同伴声音）\n";
     d += &adventure_lines(root, save);
+    if save.join("house-rules.md").is_file() {
+        d += "- `house-rules.md`：本存档开局前商定的房规（局中不改）\n";
+    }
+    let recent = crate::reveal::recent(save, 8);
+    d += "\n## 已揭示（reveals.yaml 最近几条；提到专名或剧情事实前先 `talkdnd reveal check`）\n\n";
+    if recent.is_empty() {
+        d += "- （还没有记录：角色得知新事实时 `talkdnd reveal add`）\n";
+    }
+    for r in recent {
+        d += &format!("- {}\n", truncate(&r, 200));
+    }
+    match crate::audit::audit(save) {
+        Ok(r) => {
+            d += "\n## 存档校验\n\n";
+            if r.created {
+                d += "- 旧存档：已按当前文件建立校验基准（integrity.yaml）\n";
+            }
+            if r.clean() {
+                d += "- OK：文件与上次程序写入一致，数值变化都有日志\n";
+            }
+            for l in r.lines() {
+                warnings.push(l);
+            }
+        }
+        Err(e) => warnings.push(format!("存档校验失败：{e}")),
+    }
     if !warnings.is_empty() {
         d += "\n## 警告\n\n";
         for w in &warnings {
