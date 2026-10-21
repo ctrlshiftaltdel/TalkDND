@@ -210,6 +210,7 @@ def run(root, budget_seconds=None, budget_pages=None, book=None, pages=None, chu
                 log(root, f"{b.stem}: pages {a + 1}-{z} done ({b.done_pages()}/{b.m['page_count']})")
             if changed or not os.path.exists(os.path.join(b.dir, b.stem + ".md")):
                 b.assemble()
+            b.close()
             if (budget_seconds is not None and time.time() - start >= budget_seconds) or \
                     (budget_pages is not None and done_pages >= budget_pages):
                 log(root, "budget used; stopping (run again to continue)")

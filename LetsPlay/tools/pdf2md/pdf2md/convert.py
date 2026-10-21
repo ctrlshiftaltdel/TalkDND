@@ -279,6 +279,19 @@ class Book:
             info["headings_ocr"] = n
         return body
 
+    def close(self):
+        """Release the PDF (Windows cannot replace an open file) and temp images."""
+        doc = getattr(self, "doc", None)
+        if doc is not None:
+            doc.close()
+            self.doc = None
+        raw = getattr(self, "_raw", None)
+        if raw:
+            import shutil
+
+            shutil.rmtree(raw, ignore_errors=True)
+            self._raw = None
+
     def _raw_dir(self):
         # pymupdf4llm rewrites spaces in image paths, so stage images in a
         # space-free temp folder; each image is moved into img/ right away.
