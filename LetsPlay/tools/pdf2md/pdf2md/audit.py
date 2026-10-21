@@ -101,7 +101,7 @@ def needs_review(s, threshold=25):
 
 def audit_book(book, threshold=25):
     """book: convert.Book. Writes audit.json and returns the list of page rows."""
-    md_path = os.path.join(book.dir, book.stem + ".md")
+    md_path = os.path.join(book.dir, book.stem + ".pages.md")
     with open(md_path, encoding="utf-8") as f:
         pages = split_pages(f.read())
     rows = []

@@ -4,4 +4,4 @@ The PDF stays authoritative. Output goes to a hidden ``.md/<PDF stem>/`` folder
 next to each PDF and is never committed.
 """
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"

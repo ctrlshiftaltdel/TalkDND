@@ -89,7 +89,7 @@ def reference_books(book):
     refs = []
     for pdf in worker.scan(root):
         d, stem = out_dir(pdf)
-        md = os.path.join(d, stem + ".md")
+        md = os.path.join(d, stem + ".pages.md")
         if os.path.exists(md) and d != book.dir:
             refs.append(md)
     refs.sort(key=lambda x: 0 if "srd" in os.path.basename(x).lower() else 1)
@@ -195,7 +195,7 @@ def prepare(book, p, workroot, short=False):
 
     wd = os.path.join(workroot, "p%04d" % p)
     os.makedirs(wd, exist_ok=True)
-    with open(os.path.join(book.dir, book.stem + ".md"), encoding="utf-8") as f:
+    with open(os.path.join(book.dir, book.stem + ".pages.md"), encoding="utf-8") as f:
         pages = audit.split_pages(f.read())
     cur = page_text(pages, p).strip()
     pdf_text = book.doc[p - 1].get_text()
@@ -206,7 +206,7 @@ def prepare(book, p, workroot, short=False):
     safe_pixmap(book.doc[p - 1], 110).save(os.path.join(wd, "page.png"))
     refs_list = reference_books(book)
     refs = "\n".join("- " + r for r in refs_list) or "- (none)"
-    book_md = os.path.join(book.dir, book.stem + ".md")
+    book_md = os.path.join(book.dir, book.stem + ".pages.md")
     if short:
         body = SHORT_PROMPT.format(page=p)
     else:
@@ -355,7 +355,7 @@ def rejudge_page(book, p, engine="rejudge"):
     rej = os.path.join(book.dir, "fixes", "rejected", "p%04d.md" % p)
     if not os.path.exists(rej):
         return {"page": p, "status": "skipped", "reasons": ["no rejected file"]}
-    with open(os.path.join(book.dir, book.stem + ".md"), encoding="utf-8") as f:
+    with open(os.path.join(book.dir, book.stem + ".pages.md"), encoding="utf-8") as f:
         pages = audit.split_pages(f.read())
     cur = page_text(pages, p).strip()
     pdf_text = book.doc[p - 1].get_text()
