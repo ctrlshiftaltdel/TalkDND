@@ -10,21 +10,24 @@
 | 冒险 | `Adventures/` 里有哪些书 | `$T chargen set adventure "Keys from the Golden Vault"` |
 | 种族 / 物种 | 列出该版可选项，各一句特点 | `$T chargen set species hill-dwarf` |
 | 职业 | 同上 | `$T chargen set class cleric` |
-| 子职 | 等级达到子职等级时（2024 全部 3 级；2014 牧师/术士/邪术师 1 级，德鲁伊/法师 2 级，其他 3 级） | `$T chargen set subclass life` |
+| 起始等级 | 按冒险建议范围（`$T chargen status` 的下一步会显示该范围）；必须在 1..20 | `$T chargen set level 1` |
+| 子职 | 等级达到子职等级时**必须**选（2024 全部 3 级；2014 牧师/术士/邪术师 1 级，德鲁伊/法师 2 级，其他 3 级），否则 `validate` 报错 | `$T chargen set subclass life` |
 | 背景 | 同上（2024 背景决定属性加值和起源专长） | `$T chargen set background acolyte`；非 SRD 背景再 `$T chargen set background-skills a,b` |
 | 属性生成方式 | 4d6 去最低 / 标准数组 / 购点 | `$T chargen roll` / `$T chargen array` / `$T chargen pointbuy` |
 | 分配 | 把掷出的 6 个数（或数组）告诉玩家，**由玩家决定**放到哪项；购点由玩家报六项数值 | `$T chargen assign str=15 dex=14 con=13 int=8 wis=12 cha=10` |
 | 属性加值 | 2024：背景三项里 +2/+1 或 +1/+1/+1；2014：种族固定加值自动生效，半精灵另选两项 +1；没有可选加值时写 none | `$T chargen asi wis=2 con=1` / `$T chargen asi none` |
 | 技能 | 职业列表里选够数量（背景和种族给的自动计入） | `$T chargen set skills insight,medicine` |
-| 装备 | 起始装备包或金币购买；护甲和盾牌单列；武器用英文 id 或常见中文名（长剑、匕首…） | `$T chargen set armor chain-mail`、`$T chargen set shield yes`、`$T chargen set equipment "mace; holy symbol"` |
+| 装备 | 起始装备包或金币购买；护甲和盾牌单列；武器用英文 id 或常见中文名（长剑、匕首…）。**职业（含子职）不熟练的护甲或盾牌会让 `validate` 报错** | `$T chargen set armor chain-mail`、`$T chargen set shield yes`、`$T chargen set equipment "mace; holy symbol"` |
 | 武器精通（仅 2024，野蛮人/战士/圣武士/游侠/盗贼） | 持有武器多于可选数量时由玩家选 | `$T chargen set masteries longsword,javelin` |
-| 法术 | 施法职业按书选戏法和法术；非施法职业写 none | `$T chargen set spells "sacred flame, cure wounds"` |
+| 法术 | 施法职业按书选戏法和法术；非施法职业写 none。程序按职业数据核对**戏法数**与**已知/可准备法术数**（2014 准备施法者 = 施法属性调整值 + 等级，至少 1；2024 用表格）：过多报错，过少只警告 | `$T chargen set spells "sacred flame, cure wounds"` |
 | 名字与性格 | 名字、外貌、性格、理想、牵绊、缺点 | `$T chargen set name Bruni`、`$T chargen set personality "..."` |
 | 确认 | 生成角色卡给玩家看，玩家说可以再确认 | `$T chargen validate` → `$T chargen sheet --player <玩家名>` → `$T chargen confirm` |
 
 - `$T chargen status` 随时查看进度和下一步；中途断了，下次 `talkdnd start` 的摘要会提示从哪一步接着做。
 - `chargen roll` 用 combat-sim 的骰子引擎掷 6 次 4d6dl1，结果自动写入会话日志。**掷过就不能重掷，也不能改用数组或购点**。
 - `validate` 有 error 必须改到 0；warning（例如非 SRD 选项）向玩家说明后可以保留。
+- 起始等级范围内置于程序（仓库跟踪的冒险数据，只有事实没有书文）；冒险不在表里时只警告，不报错。
+- **种族特性**：黑暗视觉、伤害抗性、速度、种族特性概括会自动写进角色卡，并同步到 `combat yaml` 的 `senses` / `resistances`。
 - `sheet` 写 `Characters/<名字>.md`，人类可读部分和 `combat yaml` 数据块用同一组数值生成，并把角色加进 `combat/campaign.yaml` 的 `party`。程序生成：
   - **攻击**：装备里的武器（命中 = 属性调整值 + 熟练（熟练时）；灵巧取力量/敏捷较高者；远程用敏捷；武僧武器用武术骰），外加徒手打击；2024 带武器精通。
   - **资源**：生命骰、法术位（全/半施法者、契约魔法）、戏法数、已知/可准备法术数，以及狂暴、吟游激励、引导神力、荒野变形、回气、动作如潮、不屈、气/功力、术法点、圣疗、奥术回复等次数与恢复方式。

@@ -41,6 +41,7 @@ fn full_creation_flow() {
     assert!(r.join("Adventures/test-adventure/combat").is_dir());
     ok(&r, &["chargen", "set", "species", "human"]);
     ok(&r, &["chargen", "set", "class", "fighter"]);
+    ok(&r, &["chargen", "set", "level", "1"]);
     ok(&r, &["chargen", "set", "background", "soldier"]);
     let rolled = ok(&r, &["--seed", "5", "chargen", "roll"]);
     assert_eq!(rolled.matches("4d6dl1(").count(), 6);

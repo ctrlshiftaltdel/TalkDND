@@ -1,0 +1,31 @@
+# Starting levels per adventure (facts only; no book text). Keys are adventure
+# slugs as used by `talkdnd chargen set adventure "<title>"`.
+adventures:
+  keys-from-the-golden-vault:
+    start_level_min: 1
+    start_level_max: 11
+    note: "每个劫案建议等级不同"
+  curse-of-strahd:
+    start_level_min: 1
+    start_level_max: 3
+    note: "死亡之屋 1 级起，主线战役 3 级起"
+  waterdeep-dragon-heist:
+    start_level_min: 1
+    start_level_max: 1
+    note: ""
+  storm-kings-thunder:
+    start_level_min: 1
+    start_level_max: 1
+    note: ""
+  candlekeep-mysteries:
+    start_level_min: 1
+    start_level_max: 16
+    note: "各篇起点不同，以书为准"
+  wild-beyond-the-witchlight:
+    start_level_min: 1
+    start_level_max: 1
+    note: ""
+  journeys-through-the-radiant-citadel:
+    start_level_min: 1
+    start_level_max: 14
+    note: "各篇起点不同，以书为准"

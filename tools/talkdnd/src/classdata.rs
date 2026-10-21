@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 const WEAPONS: &str = include_str!("../data/weapons.yaml");
 const CLASSES_2014: &str = include_str!("../data/classes-2014.yaml");
 const CLASSES_2024: &str = include_str!("../data/classes-2024.yaml");
+const ADVENTURES_YAML: &str = include_str!("../data/adventures.yaml");
 
 /// Local data folder, relative to the LetsPlay root.
 pub const LOCAL_DIR: &str = "Rules/chargen/local";
@@ -113,6 +114,9 @@ pub struct Sub {
     pub name: Option<String>,
     #[serde(default)]
     pub features: Vec<Feature>,
+    /// Armor proficiencies granted by this subclass (e.g. 2014 Life: heavy).
+    #[serde(default)]
+    pub armor_proficiency: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -157,6 +161,35 @@ pub struct DataFile {
     pub classes: BTreeMap<String, ClassDef>,
     #[serde(default)]
     pub weapons: Vec<Weapon>,
+}
+
+/// Suggested starting level range for an adventure (facts only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Adventure {
+    pub start_level_min: i32,
+    pub start_level_max: i32,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct AdventuresData {
+    #[serde(default)]
+    adventures: BTreeMap<String, Adventure>,
+}
+
+/// Adventure start-level facts for a slug, from embedded `data/adventures.yaml`.
+static ADVENTURES_CACHE: std::sync::OnceLock<BTreeMap<String, Adventure>> =
+    std::sync::OnceLock::new();
+
+/// Adventure start-level facts for a slug, from embedded `data/adventures.yaml`.
+pub fn adventure(id: &str) -> Option<&'static Adventure> {
+    let map = ADVENTURES_CACHE.get_or_init(|| {
+        let data: AdventuresData =
+            serde_norway::from_str(ADVENTURES_YAML).expect("embedded adventure data");
+        data.adventures
+    });
+    map.get(id)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -227,6 +260,9 @@ impl Book {
                         let e = have.subclasses.entry(sid).or_default();
                         if s.name.is_some() {
                             e.name = s.name;
+                        }
+                        if !s.armor_proficiency.is_empty() {
+                            e.armor_proficiency = s.armor_proficiency;
                         }
                         e.features.extend(s.features);
                     }
@@ -968,6 +1004,22 @@ mod tests {
             }
             assert!(b.weapons.len() >= 36);
         }
+    }
+
+    #[test]
+    fn adventure_data_parses() {
+        let a = adventure("keys-from-the-golden-vault").unwrap();
+        assert_eq!((a.start_level_min, a.start_level_max), (1, 11));
+        let c = adventure("curse-of-strahd").unwrap();
+        assert_eq!((c.start_level_min, c.start_level_max), (1, 3));
+        assert!(adventure("nonesuch").is_none());
+    }
+
+    #[test]
+    fn life_domain_grants_heavy_armor() {
+        let b = Book::srd("2014");
+        let life = &b.classes["cleric"].subclasses["life"];
+        assert_eq!(life.armor_proficiency, vec!["heavy".to_string()]);
     }
 
     #[test]
