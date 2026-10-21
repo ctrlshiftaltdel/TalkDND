@@ -194,6 +194,10 @@ combat-sim --campaign campaign.yaml new \
   --encounter v12-satyr-and-guards --party will,rina,milo,sera --state v12
 combat-sim --campaign campaign.yaml --state v12 init
 
+# 临时遭遇（不写场景/遭遇 YAML）：5 行网格，队伍在 near，敌人在 far，相距 --distance 尺
+combat-sim --campaign campaign.yaml --state q quick --foe goblin:4 --foe wolf:2@near --distance 40 --light dim
+combat-sim --campaign campaign.yaml simulate --from-state q --runs 1000
+
 # 查看
 combat-sim --campaign campaign.yaml --state v12 status [--json]
 combat-sim --campaign campaign.yaml --state v12 scene
@@ -225,6 +229,10 @@ combat-sim --state v12 rest long all
 combat-sim --campaign campaign.yaml content list --kind creature
 combat-sim --campaign campaign.yaml content show guard
 combat-sim --campaign campaign.yaml content check
+
+# 从 5e-database JSON（SRD 5.1）批量生成怪物/法术库；手写的同 id 条目优先
+combat-sim content import-srd --monsters 5e-SRD-Monsters.json --spells 5e-SRD-Spells.json \
+  --out LetsPlay/Rules/combat/2014/srd --skip-ids-from LetsPlay/Rules/combat/2014 --skip-ids-from LetsPlay/Rules/combat/common
 ```
 
 ### 实战补丁（2026-10-20，来自第一次实战踩坑）

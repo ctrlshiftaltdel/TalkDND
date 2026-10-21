@@ -14,4 +14,5 @@ pub mod party;
 pub mod roll;
 pub mod sim;
 pub mod space;
+pub mod srd;
 pub mod state;
