@@ -235,6 +235,14 @@ enum SheetCmd {
         #[arg(long, value_enum, default_value_t = SheetFormat::Pdf)]
         format: SheetFormat,
     },
+    /// Empty fillable A4 template (sheet + spells/notes page): `sheet blank --ruleset 2014`
+    Blank {
+        #[arg(long, default_value = "2024")]
+        ruleset: String,
+        /// Default: Saves/<save>/Characters/blank-sheet-<ruleset>.pdf, else ./blank-sheet-<ruleset>.pdf
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -421,6 +429,22 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             for p in sheet::export(&s, &who, f)? {
                 println!("{}", p.display());
             }
+        }
+        Cmd::Sheet {
+            cmd: SheetCmd::Blank { ruleset, out },
+        } => {
+            if ruleset != "2014" && ruleset != "2024" {
+                bail!("--ruleset must be 2014 or 2024");
+            }
+            let name = format!("blank-sheet-{ruleset}.pdf");
+            let out = match out {
+                Some(p) => p,
+                None => match save::resolve_slot(&root, cli.save.as_deref()) {
+                    Ok(s) => s.join("Characters").join(name),
+                    Err(_) => PathBuf::from(name),
+                },
+            };
+            println!("{}", sheet::blank(&ruleset, &out)?.display());
         }
         Cmd::Loot { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
