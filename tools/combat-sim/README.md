@@ -246,7 +246,9 @@ combat-sim --state v13 condition add "Will" carrying --permanent   # 放下时 c
 ```
 
 - 攀爬：区域/格子之间有高度差、且生物没有攀爬速度时，每上/下 1 尺多花 1 尺移动（日志会写 `climbs N ft`）。
-- 越回合行动：`attack/cast/use/move/interact` 的执行者不是当前回合者时打印 `WARNING ... acting out of turn`（反应/准备动作可忽略）。
+- 越回合行动：`cast/use` 非反应能力报错（`--force` 越过并警告）；`attack/move/interact` 只打印 `WARNING ... acting out of turn`。
+- `rest short <who|all> --hd N` 花生命骰（资源 `hit-dice`，`die: N` 指定骰面）；长休恢复一半生命骰并结束专注；`all` 只算活着的 party。
+- `kind: npc` 且 `side: party` 的同伴做死亡豁免。
 - 专注：施放新的专注法术会自动结束旧的（日志 `concentration ends`）。
 - `simulate --encounter` / `new` 省略 `--party` 时使用战役清单里的 `party: [...]`；`simulate` 若只有一方会直接报错，不再静默给出「敌方 100% 胜」。
 - `status --json` 新增 `dead`、`knocked_out`、`speed_left`。

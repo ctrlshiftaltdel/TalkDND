@@ -501,3 +501,121 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         std::process::id()
     ))
 }
+
+#[test]
+fn casting_out_of_turn_needs_a_reaction_or_force() {
+    let temp = TempState::new("outofturn");
+    create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
+    assert_success(&run(temp.path(), &["init", "--seed", "42"]), "init");
+    while status_json(temp.path())["active"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Caster")
+    {
+        assert_success(&run(temp.path(), &["next", "--seed", "1"]), "next");
+    }
+    let output = run(
+        temp.path(),
+        &["cast", "Caster", "focus-spell", "Brute", "--seed", "1"],
+    );
+    assert!(!output.status.success(), "out-of-turn cast must fail");
+    assert!(stderr(&output).contains("Only reactions work out of turn"));
+    let output = run(
+        temp.path(),
+        &[
+            "cast",
+            "Caster",
+            "focus-spell",
+            "Brute",
+            "--force",
+            "--seed",
+            "1",
+        ],
+    );
+    assert_success(&output, "forced cast");
+    assert!(stdout(&output).contains("WARNING"));
+}
+
+#[test]
+fn party_state_carries_hp_between_encounters_and_rests() {
+    let root = unique_temp_dir("party-state");
+    std::fs::create_dir_all(&root).unwrap();
+    let manifest = root.join("campaign.yaml");
+    let library = yaml_path(&fixture("library"));
+    std::fs::write(
+        &manifest,
+        format!("name: Party Test\nlibrary: [\"{library}\"]\nstate_dir: .\nparty: [striker-a]\n"),
+    )
+    .unwrap();
+    let m = manifest.to_str().unwrap();
+    let cs = |args: &[&str]| {
+        let mut all = vec!["--campaign", m];
+        all.extend_from_slice(args);
+        run_raw(&all)
+    };
+    assert_success(
+        &cs(&["--state", "f1", "new", "--encounter", "test-fight"]),
+        "new f1",
+    );
+    assert_success(&cs(&["--state", "f1", "damage", "Striker", "5"]), "damage");
+    let party_file = root.join("party-state.yaml");
+    assert!(party_file.exists());
+    let show = cs(&["party", "show"]);
+    assert_success(&show, "party show");
+    let max: i32 = {
+        let text = stdout(&show);
+        let hp = text
+            .split("HP ")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_string();
+        let (cur, max) = hp.split_once('/').unwrap();
+        let (cur, max): (i32, i32) = (
+            cur.parse().unwrap(),
+            max.trim_end_matches(|c: char| !c.is_ascii_digit())
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(cur, max - 5, "{text}");
+        max
+    };
+    let out = cs(&["--state", "f2", "new", "--encounter", "test-fight"]);
+    assert_success(&out, "new f2");
+    assert!(
+        stdout(&out).contains("Party state loaded"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(stdout(&out).contains(&format!("HP {}/{max}", max - 5)));
+    let out = cs(&["party", "rest", "long", "all"]);
+    assert_success(&out, "party rest long");
+    assert!(
+        stdout(&out).contains(&format!("HP {max}/{max}")),
+        "{}",
+        stdout(&out)
+    );
+    // Scratch states outside state_dir never touch the party file.
+    let before = std::fs::read_to_string(&party_file).unwrap();
+    let scratch = root.join("elsewhere");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let sp = scratch.join("x.state.json");
+    assert_success(
+        &cs(&[
+            "--state",
+            sp.to_str().unwrap(),
+            "new",
+            "--encounter",
+            "test-fight",
+        ]),
+        "scratch new",
+    );
+    assert_success(
+        &cs(&["--state", sp.to_str().unwrap(), "damage", "Striker", "3"]),
+        "scratch damage",
+    );
+    assert_eq!(before, std::fs::read_to_string(&party_file).unwrap());
+    let _ = std::fs::remove_dir_all(&root);
+}

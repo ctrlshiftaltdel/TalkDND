@@ -114,7 +114,7 @@ struct Member {
     file: String,
 }
 
-fn combat_block(text: &str) -> Option<serde_norway::Value> {
+pub(crate) fn combat_block(text: &str) -> Option<serde_norway::Value> {
     let start = text.find("```combat yaml")?;
     let rest = &text[start..];
     let body_start = rest.find('\n')? + 1;
@@ -254,7 +254,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
             d += "（日志里还没有 `## 存档点`，从日志末尾接着读）";
         }
     }
-    d += "\n\n## 队伍（角色卡数据块，HP 为最大值，当前值看存档点）\n\n";
+    d += "\n\n## 队伍（角色卡数据块，maxHP / AC）\n\n";
     let party = party_ids(save);
     let ms = members(save);
     for m in &ms {
@@ -272,6 +272,17 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         if !ms.iter().any(|m| &m.id == p) {
             warnings.push(format!("party 里的 `{p}` 没有角色卡数据块"));
         }
+    }
+    let ps_path = save.join("combat").join(combat_sim::party::FILE_NAME);
+    d += "\n## 当前状态（combat/party-state.yaml，战斗命令自动更新）\n\n";
+    match combat_sim::party::PartyState::load(&ps_path) {
+        Ok(ps) if !ps.members.is_empty() => {
+            for line in ps.summary_lines() {
+                d += &format!("- {line}\n");
+            }
+        }
+        Ok(_) => d += "- 还没有记录：第一场战斗或 `combat-sim party show` 后生成；之前满血满资源\n",
+        Err(e) => warnings.push(format!("party-state.yaml 读不了：{e}")),
     }
     d += "\n## 开场前再读（按需）\n\n";
     d += "- `dm-secrets.md`（只给 DM）、`canon.md`、`NPCs/_party.md`（同伴声音）\n";

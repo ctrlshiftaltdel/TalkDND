@@ -921,6 +921,16 @@ fn gen_yaml(g: &crate::classdata::Generated) -> String {
         if let Some(n) = r.short_regain {
             e += &format!(", short_rest_regain: {n}");
         }
+        if r.id == "hit-dice" {
+            if let Some(d) = r
+                .name
+                .split("(d")
+                .nth(1)
+                .and_then(|x| x.trim_end_matches(')').parse::<u32>().ok())
+            {
+                e += &format!(", die: {d}");
+            }
+        }
         e += "}";
         res.push(format!("  {}: {e}\n", r.id));
     }

@@ -64,6 +64,9 @@ pub struct EncounterState {
     /// Once a side has won or the fight is a draw, the recorded outcome.
     #[serde(default)]
     pub outcome: Option<CombatOutcome>,
+    /// Save's `party-state.yaml`; party values are written back after each command.
+    #[serde(default)]
+    pub party_state: Option<std::path::PathBuf>,
     /// Spatial indices derived from `scene`. Shared by every clone of the
     /// state; rebuilt after loading a state file.
     #[serde(skip)]
@@ -98,6 +101,7 @@ impl PartialEq for EncounterState {
             && self.concentration == other.concentration
             && self.triggers == other.triggers
             && self.outcome == other.outcome
+            && self.party_state == other.party_state
     }
 }
 
@@ -269,6 +273,11 @@ impl CombatantState {
         self.kind() == CreatureKind::Pc
     }
 
+    /// PCs and party-side companion NPCs fall unconscious and make death saves.
+    pub fn makes_death_saves(&self) -> bool {
+        self.is_pc() || (self.kind() == CreatureKind::Npc && self.side.as_str() == "party")
+    }
+
     pub fn is_dead(&self) -> bool {
         self.dead || self.death_saves.dead
     }
@@ -279,7 +288,7 @@ impl CombatantState {
     }
 
     pub fn is_dying(&self) -> bool {
-        self.is_pc() && self.hp <= 0 && !self.is_dead() && !self.death_saves.stable
+        self.makes_death_saves() && self.hp <= 0 && !self.is_dead() && !self.death_saves.stable
     }
 
     pub fn has_condition(&self, content: &ContentRegistry, condition: &str) -> bool {
@@ -919,6 +928,7 @@ impl EncounterState {
             concentration: BTreeMap::new(),
             triggers: scene_trigger_runtime(&scene),
             outcome: None,
+            party_state: None,
             space_cache,
             name_index,
             static_modifier_sources,

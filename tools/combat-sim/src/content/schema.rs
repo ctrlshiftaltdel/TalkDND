@@ -48,6 +48,8 @@ impl Default for Side {
 #[serde(rename_all = "snake_case")]
 pub enum CreatureKind {
     Pc,
+    /// Companion NPC built like a character: makes death saves on the party side.
+    Npc,
     #[default]
     Monster,
     #[serde(other)]
@@ -724,6 +726,9 @@ pub struct ResourceDef {
     pub short_rest_regain: Option<i32>,
     #[serde(default)]
     pub notes: Option<String>,
+    /// Die size for a `hit-dice` pool (d6..d12); spent on short rests.
+    #[serde(default)]
+    pub die: Option<u32>,
 }
 
 /// A weapon or natural attack on a creature.
