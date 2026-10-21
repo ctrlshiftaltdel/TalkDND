@@ -133,7 +133,7 @@ impl Member {
                 .filter(|x| lasting(x))
                 .cloned()
                 .collect(),
-            death_saves: c.death_saves.clone(),
+            death_saves: c.death_saves,
             dead: c.is_dead(),
             hit_die: hit_die_of(&c.creature),
             con_mod: c.creature.ability_modifier(AbilityName::Con),
@@ -158,7 +158,7 @@ impl Member {
                 c.conditions.push(condition.clone());
             }
         }
-        c.death_saves = self.death_saves.clone();
+        c.death_saves = self.death_saves;
         c.dead = self.dead;
     }
 
