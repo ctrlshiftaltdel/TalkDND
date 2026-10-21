@@ -7,9 +7,11 @@
 
 ```
 Rules/2024/Player's Handbook 2024.pdf
-Rules/2024/.md/Player's Handbook 2024/Player's Handbook 2024.md   # 全书，<a id="pN"></a> = PDF 第 N 页
-Rules/2024/.md/Player's Handbook 2024/index.md                    # 标题 → 页码、数据块页、地图页、低质量页
-Rules/2024/.md/Player's Handbook 2024/img/p0123.webp              # 地图/插图页面图（链接，不嵌入）
+Rules/2024/.md/Player's Handbook 2024/Player's Handbook 2024.md        # 阅读版：连续正文，无页锚点
+Rules/2024/.md/Player's Handbook 2024/Player's Handbook 2024.pages.md  # 页码版：同一内容，<a id="pN"></a> = PDF 第 N 页
+Rules/2024/.md/Player's Handbook 2024/index.md                         # 标题 → 页码、数据块检查、地图、插图、低质量页
+Rules/2024/.md/Player's Handbook 2024/img/p0123.webp                   # 整页地图/插图（最长边约 1600 px）
+Rules/2024/.md/Player's Handbook 2024/img/p0123-a1.webp                # 从扫描页裁出的插图（最长边约 1000 px）
 ```
 
 **首次使用（每台机器一次）**。所有 Python 都通过 [uv](https://docs.astral.sh/uv/) 运行：
@@ -39,8 +41,8 @@ Rules/2024/.md/Player's Handbook 2024/img/p0123.webp              # 地图/插�
 
 **查书顺序**：
 
-1. 先查该书的 `index.md`，或用关键词搜 `<书名>.md`，按 `<a id="pN">` 得到 PDF 页码。
-2. 以下情况一律打开 PDF 对应页核对：`index.md` 列为低质量的页、**怪物/NPC 数据块**（转换不重建数据块，数值以 PDF 为准）、表格看起来错位、文字明显缺漏，以及所有**地图**（用 PDF 或 `img/` 下的页面图）。
+1. 先查该书的 `index.md`（链接都指向 `.pages.md#pN`）。连续阅读、给玩家念用 `<书名>.md`（阅读版）；要页码时搜 `<书名>.pages.md`（页码版），按 `<a id="pN">` 得到 PDF 页码。两版正文逐行相同，只差锚点行。
+2. 以下情况一律打开 PDF 对应页核对：`index.md` 列为低质量的页、正文里带 `> ⚠ Stat block check` 的**数据块**（`index.md` 的 Stat blocks 一节标 ✓ 的数据块数值自洽，可直接用 Markdown）、表格看起来错位、文字明显缺漏，以及所有**地图**（用 PDF 或 `img/` 下的图片）。
 3. 书还没转到那一页：直接查 PDF。**PDF 永远是权威来源**；Markdown 只是便于检索的副本。
 
 ## 0.3.0：校对、原位图片、房间与地图索引
@@ -56,3 +58,11 @@ Rules/2024/.md/Player's Handbook 2024/img/p0123.webp              # 地图/插�
 - **index.md 的「Maps」一节**：按图注列出每张地图，链接到所在页和图片，并标出 DM 图或玩家图。整页图仍列在「Full-page maps and illustrations」。
 - **房间编号**：`V1: GRAND ENTRANCE` 这类房间行会提升为标题，OCR 把 1 认成 l/I 的情况（`Vl`、`Vl4`）会改正，所以房间都能在索引里找到。
 - 升级到 0.3.0 后，已转好的书会在后台逐块重做。
+
+## 0.4–0.5：阅读版/页码版、数据块检查、图片
+
+- **两种输出，一次生成**：`<书名>.pages.md`（页码版，带 `<a id="pN">` 和 `<!-- PDF p.N -->`）供查页码、审核和修正；`<书名>.md`（阅读版）去掉这两种行，其余逐行相同。`pdf2md verify` 会检查两版是否一致。审核、`audit`、`fixes/` 都按页码版工作；`talkdnd start` 的摘要列阅读版和 `index.md`。
+- **数据块检查**：组装时解析每个数据块（AC、HP 与骰子、六项属性、CR/XP/PB），核对 HP 平均值与体质加值、属性调整值、CR→XP、熟练加值，并与本地 combat-sim 数据交叉核对。有问题时在数据块前插入 `> ⚠ Stat block check: …; check PDF p.N.`，结果也写进 `index.json` 的 `statblock_checks`。
+- **图片（移植自 ConvertPDF）**：扫描页（整页一张位图）上，图多字少的页（墨迹 ≥20%、长行文字 ≤3%）存为整页图；文字页里的插图按「去掉文字格后的最大无字矩形」裁出，向外扩到碰到文字为止，含文字、过长过窄或画面被截断的裁剪直接丢弃。图片一律 WebP，插在图片上方那段文字之后（找不到就放在下方那段之前，再不行放页末），并列在 `index.md`「Illustrations cut from scanned pages」。
+- **图片总览**：`uv run --project tools/pdf2md python -m pdf2md contact-sheet [--book 名称]` 在 `review/contact-NN.webp` 生成每张 16 格的缩略图总览，方便审核裁剪是否合适。
+- **已有修正的安全**：PDF 变了或升级要求重做时，转换前会把 `fixes/` 复制到 `backups/<时间>-<原因>/fixes`。升级到 0.5.0 会在后台重做全部分块；`fixes/` 中的修正保留并重新应用。
