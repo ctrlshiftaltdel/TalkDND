@@ -236,24 +236,6 @@ fn rel_root(root: &Path, p: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// Collect `.md` files under `dir` (recursively, bounded depth).
-fn collect_md(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
-    if depth > 3 {
-        return;
-    }
-    let Ok(rd) = fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect_md(&p, out, depth + 1);
-        } else if p.extension().is_some_and(|x| x == "md") {
-            out.push(p);
-        }
-    }
-}
-
 /// The digest's adventure-book lines: the slug's folder, its PDFs, and its
 /// converted Markdown index when it exists.
 fn adventure_lines(root: &Path, save: &Path) -> String {
@@ -276,9 +258,7 @@ fn adventure_lines(root: &Path, save: &Path) -> String {
         }
     }
     pdfs.sort();
-    let mut mds = Vec::new();
-    collect_md(&dir.join(".md"), &mut mds, 0);
-    mds.sort();
+    let mds = book_mds(&dir.join(".md"));
     for p in &mds {
         out += &format!("  - Markdown：`{}`\n", rel_root(root, p));
     }
@@ -290,6 +270,30 @@ fn adventure_lines(root: &Path, save: &Path) -> String {
             out += "  - 这里还没有 PDF；把冒险书 PDF 放进这个目录\n";
         } else {
             out += "  - Markdown 还没转换：先查上面的 PDF（转换后索引在 `.md/<书名>/index.md`）\n";
+        }
+    }
+    out
+}
+
+/// Each converted book's main Markdown (`.md/<book>/<book>.md`) and its
+/// `index.md` (headings, maps, stat blocks). Pages, fixes and review files
+/// are working files and stay out of the digest.
+fn book_mds(md_root: &Path) -> Vec<PathBuf> {
+    let mut books: Vec<PathBuf> = fs::read_dir(md_root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    books.sort();
+    let mut out = Vec::new();
+    for b in books {
+        let name = b.file_name().unwrap_or_default().to_string_lossy().to_string();
+        for f in [b.join(format!("{name}.md")), b.join("index.md")] {
+            if f.is_file() {
+                out.push(f);
+            }
         }
     }
     out
@@ -428,6 +432,12 @@ mod tests {
         fs::create_dir_all(adv.join(".md/Curse of Strahd")).unwrap();
         fs::write(adv.join("Curse of Strahd.pdf"), "pdf").unwrap();
         fs::write(adv.join(".md/Curse of Strahd/index.md"), "# index").unwrap();
+        fs::write(adv.join(".md/Curse of Strahd/Curse of Strahd.md"), "# book").unwrap();
+        for f in ["fixes/p0001.md", "review/p0002.md", "pages/p0001-0010.md", "proofread-report.md"] {
+            let p = adv.join(".md/Curse of Strahd").join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, "x").unwrap();
+        }
         let d = digest(&root, &save, &Options { pdf2md: false }).unwrap();
         assert!(d.contains("冒险书：`Adventures/curse-of-strahd/`"), "{d}");
         assert!(
@@ -438,6 +448,10 @@ mod tests {
             d.contains("Markdown：`Adventures/curse-of-strahd/.md/Curse of Strahd/index.md`"),
             "{d}"
         );
+        assert!(d.contains("Curse of Strahd/Curse of Strahd.md`"), "{d}");
+        for bad in ["fixes/", "review/", "pages/", "proofread-report"] {
+            assert!(!d.contains(bad), "{bad} listed:\n{d}");
+        }
         let _ = fs::remove_dir_all(&root);
     }
 

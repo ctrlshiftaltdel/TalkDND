@@ -442,3 +442,47 @@ fn items_are_available_by_kind() {
     );
     assert!(registry.find_any("does-not-exist").is_none());
 }
+
+#[test]
+fn directory_scan_skips_hidden_dirs_non_content_and_nested_layers() {
+    use combat_sim::content::ContentSources;
+    let root = std::env::temp_dir().join(format!("cs-scan-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let adv = root.join("Adventures/book");
+    std::fs::create_dir_all(adv.join(".md/Book/fixes")).unwrap();
+    std::fs::create_dir_all(adv.join("combat/extra/common")).unwrap();
+    std::fs::create_dir_all(adv.join("combat/extra/2014")).unwrap();
+    std::fs::write(adv.join(".md/Book/fixes/review.log.jsonl"), "{}\n").unwrap();
+    std::fs::write(
+        adv.join(".md/Book/Book.md"),
+        "```combat yaml\nnot: [valid\n```\n",
+    )
+    .unwrap();
+    std::fs::write(adv.join("combat/tool.py"), "print(1)\n").unwrap();
+    std::fs::write(
+        adv.join("combat/extra/2014/broken.yaml"),
+        "encounters: [{id: x, scene: missing}]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        adv.join("combat/creatures.yaml"),
+        "creatures:\n  - {id: cog, name: Cog, ac: 10, hp: 5, abilities: {str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10}}\n",
+    )
+    .unwrap();
+    for src in [adv.clone(), adv.join("combat")] {
+        let sources = ContentSources {
+            adventures: vec![src],
+            ..Default::default()
+        };
+        let reg = sources.load().expect("scan should skip non-content files");
+        assert!(reg.creatures.ids().any(|i| i == "cog"));
+        assert_eq!(reg.encounters.ids().count(), 0);
+    }
+    // A file named explicitly must still be content.
+    let sources = ContentSources {
+        adventures: vec![adv.join("combat/tool.py")],
+        ..Default::default()
+    };
+    assert!(sources.load().is_err());
+    let _ = std::fs::remove_dir_all(&root);
+}
