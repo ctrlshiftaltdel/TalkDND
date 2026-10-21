@@ -80,6 +80,26 @@ pub struct Card {
     pub xp: Option<i64>,
     /// pp gp ep sp cp
     pub coins: [i64; 5],
+    /// (name, to-hit, damage + range) for the attack table
+    pub attack_rows: Vec<(String, String, String)>,
+    /// Spell rows for the spell list (filled by `export` from combat refs + spell data).
+    pub spell_rows: Vec<SpellRow>,
+    /// Empty template (`sheet blank`): no printed values, every box fillable.
+    pub blank: bool,
+    pub ruleset: String,
+    pub size: String,
+    pub senses: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SpellRow {
+    /// 0 = cantrip; None = unknown
+    pub level: Option<i64>,
+    pub name: String,
+    pub time: String,
+    pub range: String,
+    pub concentration: bool,
+    pub ritual: bool,
 }
 
 fn int(v: Option<&Value>) -> Option<i64> {
@@ -229,6 +249,20 @@ pub fn card(sheet: &Sheet, progress: &Progress) -> Result<Card> {
         ));
     }
     c.hit_dice = c.level;
+    let sz = b.get("size").and_then(|v| v.as_str()).unwrap_or("");
+    c.size = match sz {
+        "tiny" => "微型",
+        "small" => "小型",
+        "medium" => "中型",
+        "large" => "大型",
+        _ => sz,
+    }
+    .to_string();
+    c.senses = b
+        .get("senses")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if let Some(Value::Mapping(res)) = b.get("resources") {
         for (k, v) in res {
             let Some(k) = k.as_str() else { continue };
@@ -278,6 +312,8 @@ pub fn card(sheet: &Sheet, progress: &Progress) -> Result<Card> {
                 _ => String::new(),
             };
             c.attacks.push(format!("{name}  {hit}  {dmg}{range}"));
+            c.attack_rows
+                .push((name.to_string(), hit, format!("{dmg}{range}")));
         }
     }
 
@@ -680,13 +716,21 @@ pub const PAGE_H: f32 = 842.0;
 
 #[derive(Debug, Clone)]
 pub enum FieldKind {
-    Text { value: String, multiline: bool },
-    Check,
+    Text {
+        value: String,
+        multiline: bool,
+        size: f32,
+    },
+    Check {
+        on: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub struct Field {
     pub name: String,
+    /// 0-based page index
+    pub page: usize,
     /// top-left origin, points
     pub x: f32,
     pub y: f32,
@@ -725,6 +769,7 @@ struct Lay<'a> {
     m: &'a Metrics,
     ops: Vec<Op>,
     fields: Vec<Field>,
+    page: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -768,44 +813,40 @@ impl Lay<'_> {
         });
         self.text(x + 3.0, y + 8.5, 7.5, t);
     }
-    fn centered(&mut self, x: f32, w: f32, y: f32, size: f32, t: &str) {
-        let tw = self.m.width(t, size);
-        self.text(x + (w - tw) / 2.0, y, size, t);
-    }
-    /// Labelled stat box with a printed value.
-    fn stat(&mut self, x: f32, y: f32, w: f32, h: f32, label: &str, value: &str) {
-        self.rect(x, y, w, h);
-        self.centered(x, w, y + 8.0, 6.5, label);
-        let size = if self.m.width(value, 13.0) > w - 4.0 {
-            8.0
-        } else {
-            13.0
-        };
-        self.centered(x, w, y + h - 6.0, size, value);
-    }
     fn field(&mut self, name: &str, x: f32, y: f32, w: f32, h: f32, value: &str, multi: bool) {
         self.rect(x, y, w, h);
+        let size = if multi {
+            7.5
+        } else {
+            (h * 0.62).clamp(6.0, 11.0)
+        };
         self.fields.push(Field {
             name: name.to_string(),
+            page: self.page,
             x,
             y,
             w,
             h,
             kind: FieldKind::Text {
-                value: value.to_string(),
+                value: value.replace('−', "-"),
                 multiline: multi,
+                size,
             },
         });
     }
     fn check(&mut self, name: &str, x: f32, y: f32, s: f32) {
+        self.check_on(name, x, y, s, false);
+    }
+    fn check_on(&mut self, name: &str, x: f32, y: f32, s: f32, on: bool) {
         self.rect(x, y, s, s);
         self.fields.push(Field {
             name: name.to_string(),
+            page: self.page,
             x,
             y,
             w: s,
             h: s,
-            kind: FieldKind::Check,
+            kind: FieldKind::Check { on },
         });
     }
     /// Row of tick boxes; wraps after `per_row`. Returns the height used.
@@ -823,15 +864,6 @@ impl Lay<'_> {
         }
         let rows = ((n.max(1) - 1) / per_row + 1) as f32;
         rows * (s + gap)
-    }
-    /// Printed list in a box, or a writable field when there is nothing to print.
-    fn list(&mut self, name: &str, x: f32, y: f32, w: f32, h: f32, items: &[String], size: f32) {
-        if items.is_empty() {
-            self.field(name, x, y, w, h, "", true);
-        } else {
-            self.rect(x, y, w, h);
-            self.block(x, y, w, h, items, size);
-        }
     }
     /// Wrapped text inside a box; shrinks the font to fit, truncates last resort.
     fn block(&mut self, x: f32, y: f32, w: f32, h: f32, items: &[String], start: f32) {
@@ -868,241 +900,771 @@ impl Lay<'_> {
 
 pub struct Page {
     pub ops: Vec<Op>,
-    pub fields: Vec<Field>,
 }
 
-fn layout(c: &Card, m: &Metrics) -> Page {
+/// Spell rows that fit in the compact page-1 list; more go to page 2.
+pub const P1_SPELL_ROWS: usize = 10;
+
+fn rech_label(r: &str) -> &'static str {
+    match r {
+        "short" => "短休",
+        "long" => "长休",
+        "dawn" => "黎明",
+        _ => "",
+    }
+}
+
+/// Slot maxima per level (1..=9) as printed tick counts for a blank row.
+const BLANK_SLOTS: [i64; 9] = [4, 3, 3, 3, 3, 2, 2, 1, 1];
+
+#[allow(clippy::too_many_arguments)]
+impl Lay<'_> {
+    fn label_s(&mut self, x: f32, y: f32, size: f32, t: &str) {
+        self.ops.push(Op::Text {
+            x,
+            y,
+            size,
+            text: t.to_string(),
+            gray: 0.35,
+        });
+    }
+    /// Printed text shrunk to fit `w`.
+    fn fit(&mut self, x: f32, y: f32, w: f32, size: f32, t: &str) {
+        let mut s = size;
+        while self.m.width(t, s) > w && s > 5.0 {
+            s -= 0.25;
+        }
+        self.text(x, y, s, t);
+    }
+    /// A value cell: ASCII values (and blanks) become editable form fields;
+    /// CJK text is printed (form fonts carry no CJK glyphs).
+    fn val(&mut self, name: &str, x: f32, y: f32, w: f32, h: f32, value: &str) {
+        if value.is_empty() || value.replace('−', "-").is_ascii() {
+            self.field(name, x, y, w, h, value, false);
+        } else {
+            self.rect(x, y, w, h);
+            self.fit(
+                x + 2.0,
+                y + h * 0.5 + 3.0,
+                w - 4.0,
+                (h * 0.6).min(10.0),
+                value,
+            );
+        }
+    }
+    /// Labelled box: small label at top, value cell below.
+    fn lbox(&mut self, name: &str, x: f32, y: f32, w: f32, h: f32, label: &str, value: &str) {
+        self.rect(x, y, w, h);
+        self.label_s(x + 2.0, y + 6.0, 5.5, label);
+        if value.is_empty() || value.replace('−', "-").is_ascii() {
+            // field without its own border
+            let size = ((h - 8.0) * 0.7).clamp(6.0, 12.0);
+            self.fields.push(Field {
+                name: name.to_string(),
+                page: self.page,
+                x: x + 1.0,
+                y: y + 7.0,
+                w: w - 2.0,
+                h: h - 8.0,
+                kind: FieldKind::Text {
+                    value: value.replace('−', "-"),
+                    multiline: false,
+                    size,
+                },
+            });
+        } else {
+            self.fit(
+                x + 2.0,
+                y + h - 4.0,
+                w - 4.0,
+                ((h - 8.0) * 0.7).min(9.0),
+                value,
+            );
+        }
+    }
+    /// Printed bullets on top, the rest of the box a multiline field for additions.
+    fn list_plus(
+        &mut self,
+        name: &str,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        items: &[String],
+        size: f32,
+        keep: f32,
+    ) {
+        if items.is_empty() {
+            self.field(name, x, y, w, h, "", true);
+            return;
+        }
+        self.rect(x, y, w, h);
+        let used = self.block_used(x, y, w, h - keep, items, size);
+        let rest = h - used - 2.0;
+        if rest > 14.0 {
+            self.ops.push(Op::Line {
+                x1: x + 3.0,
+                y1: y + used + 1.0,
+                x2: x + w - 3.0,
+                y2: y + used + 1.0,
+            });
+            self.fields.push(Field {
+                name: name.to_string(),
+                page: self.page,
+                x: x + 1.0,
+                y: y + used + 2.0,
+                w: w - 2.0,
+                h: rest - 1.0,
+                kind: FieldKind::Text {
+                    value: String::new(),
+                    multiline: true,
+                    size: 7.5,
+                },
+            });
+        }
+    }
+    /// Like `block`, returns the height actually used.
+    fn block_used(&mut self, x: f32, y: f32, w: f32, h: f32, items: &[String], start: f32) -> f32 {
+        let mut size = start;
+        let lines = loop {
+            let mut lines = Vec::new();
+            for it in items {
+                lines.extend(self.m.wrap(&format!("• {it}"), size, w - 6.0));
+            }
+            if lines.len() as f32 * size * 1.3 <= h - 4.0 || size <= 5.0 {
+                break lines;
+            }
+            size -= 0.25;
+        };
+        let lh = size * 1.3;
+        let n = lines.len().min(((h - 4.0) / lh).floor() as usize);
+        self.block(x, y, w, h, items, size);
+        4.0 + n as f32 * lh
+    }
+}
+
+fn spell_cap(c: &Card) -> usize {
+    if c.blank {
+        6
+    } else if c.casting.is_none() && c.spell_rows.is_empty() {
+        3
+    } else {
+        (c.spell_rows.len() + 2).clamp(4, P1_SPELL_ROWS)
+    }
+}
+
+/// Does this character need the optional page 2 (full spell table + extra notes)?
+pub fn needs_page2(c: &Card) -> bool {
+    c.blank || c.spell_rows.len() > P1_SPELL_ROWS
+}
+
+fn layout(c: &Card, m: &Metrics) -> (Vec<Page>, Vec<Field>) {
     let mut l = Lay {
         m,
         ops: Vec::new(),
         fields: Vec::new(),
+        page: 0,
     };
+    let b = c.blank;
+    let n = |v: i64| if b { String::new() } else { v.to_string() };
+    let sg = |v: i64| if b { String::new() } else { signed(v) };
     let (ax, aw) = (22.0, 150.0);
     let (bx, bw) = (180.0, 200.0);
     let (cx, cw) = (388.0, 185.0);
+    let bottom = 818.0;
 
-    // Header
-    l.text(22.0, 42.0, 18.0, &c.name);
-    let sub = c.subtitle();
-    let mut size = 8.0;
-    while m.width(&sub, size) > 360.0 && size > 5.5 {
-        size -= 0.25;
-    }
-    l.text(22.0, 58.0, size, &sub);
-    l.label(cx, 30.0, "经验值 XP");
-    l.field(
-        "xp",
-        cx,
-        33.0,
-        120.0,
-        18.0,
-        &c.xp.map(|x| x.to_string()).unwrap_or_default(),
-        false,
+    // ---------- header
+    let hv = |k: &str| {
+        if b {
+            String::new()
+        } else {
+            c.get(k).unwrap_or("").to_string()
+        }
+    };
+    l.lbox(
+        "name",
+        22.0,
+        20.0,
+        210.0,
+        28.0,
+        "角色名 Character Name",
+        if b { "" } else { &c.name },
     );
-    l.label(cx + 128.0, 30.0, "激励 Inspiration");
-    l.check("inspiration", cx + 140.0, 35.0, 13.0);
-    l.ops.push(Op::Line {
-        x1: 22.0,
-        y1: 68.0,
-        x2: 573.0,
-        y2: 68.0,
+    let cls = if b {
+        String::new()
+    } else {
+        c.get("等级")
+            .map(String::from)
+            .or_else(|| c.info.first().cloned())
+            .unwrap_or_else(|| format!("{}", c.level))
+    };
+    l.lbox(
+        "class_level",
+        236.0,
+        20.0,
+        144.0,
+        28.0,
+        "职业与等级 Class & Level",
+        &cls,
+    );
+    let species = {
+        let s = hv("种族");
+        if s.is_empty() {
+            hv("物种")
+        } else {
+            s
+        }
+    };
+    let row = [
+        ("species", "种族/物种 Species", species),
+        ("background", "背景 Background", hv("背景")),
+        ("alignment", "阵营 Alignment", hv("阵营")),
+        ("player", "玩家 Player", hv("玩家")),
+    ];
+    let rw = (358.0 - 3.0 * 4.0) / 4.0;
+    for (i, (id, lab, v)) in row.iter().enumerate() {
+        l.lbox(id, 22.0 + i as f32 * (rw + 4.0), 51.0, rw, 20.0, lab, v);
+    }
+    l.lbox("level", cx, 20.0, 40.0, 28.0, "等级 Level", &n(c.level));
+    l.lbox(
+        "xp",
+        cx + 44.0,
+        20.0,
+        90.0,
+        28.0,
+        "经验值 XP",
+        &if b {
+            String::new()
+        } else {
+            c.xp.map(|x| x.to_string()).unwrap_or_default()
+        },
+    );
+    l.rect(cx + 138.0, 20.0, cw - 138.0, 28.0);
+    l.label_s(cx + 140.0, 26.0, 5.5, "激励 Inspiration");
+    l.check("inspiration", cx + 155.0, 31.0, 13.0);
+    l.lbox("ruleset", cx, 51.0, 70.0, 20.0, "规则 Rules", &{
+        let r = hv("规则");
+        if r.is_empty() {
+            c.ruleset.clone()
+        } else {
+            r
+        }
     });
+    l.lbox(
+        "size",
+        cx + 74.0,
+        51.0,
+        50.0,
+        20.0,
+        "体型 Size",
+        if b { "" } else { &c.size },
+    );
+    l.lbox(
+        "senses",
+        cx + 128.0,
+        51.0,
+        cw - 128.0,
+        20.0,
+        "感官 Senses",
+        if b { "" } else { &c.senses },
+    );
 
-    // Column A: abilities, saves, skills, proficiencies
-    let mut y = 76.0;
+    // ---------- column A: abilities, saves, skills, proficiencies
+    let mut y = 78.0;
     for (ab, cn) in ABILITIES {
         let score = c.scores.get(ab).copied().unwrap_or(10);
-        l.rect(ax, y, aw, 30.0);
-        l.text(ax + 5.0, y + 12.0, 8.0, cn);
-        l.label(ax + 5.0, y + 23.0, &ab.to_uppercase());
-        l.centered(ax + 60.0, 45.0, y + 21.0, 15.0, &signed(modifier(score)));
-        l.rect(ax + 112.0, y + 6.0, 32.0, 18.0);
-        l.centered(ax + 112.0, 32.0, y + 19.0, 10.0, &score.to_string());
-        y += 33.0;
+        l.rect(ax, y, aw, 27.0);
+        l.text(ax + 4.0, y + 11.0, 8.0, cn);
+        l.label(ax + 4.0, y + 21.0, &ab.to_uppercase());
+        l.label_s(ax + 50.0, y + 6.0, 5.0, "调整值");
+        l.field(
+            &format!("{ab}_mod"),
+            ax + 50.0,
+            y + 7.0,
+            48.0,
+            17.0,
+            &sg(modifier(score)),
+            false,
+        );
+        l.label_s(ax + 106.0, y + 6.0, 5.0, "属性值");
+        l.field(
+            &format!("{ab}_score"),
+            ax + 106.0,
+            y + 7.0,
+            38.0,
+            17.0,
+            &n(score),
+            false,
+        );
+        y += 29.0;
     }
-    y += 2.0;
-    l.title(ax, y, aw, "豁免 Saving Throws（● 熟练）");
+    y += 1.0;
+    l.title(ax, y, aw, "豁免 Saving Throws（勾 = 熟练）");
     y += 13.0;
     for (i, (ab, cn)) in ABILITIES.iter().enumerate() {
         let (v, p) = c.save(ab);
-        let xx = ax + 3.0 + (i % 2) as f32 * 75.0;
-        let yy = y + 9.0 + (i / 2) as f32 * 11.0;
-        l.text(
-            xx,
+        let xx = ax + (i % 2) as f32 * 76.0;
+        let yy = y + (i / 2) as f32 * 11.0;
+        l.check_on(&format!("save_{ab}_prof"), xx + 1.0, yy + 1.0, 7.0, p && !b);
+        l.field(
+            &format!("save_{ab}"),
+            xx + 10.0,
             yy,
-            7.5,
-            &format!("{} {} {}", if p { "●" } else { "○" }, cn, signed(v)),
+            22.0,
+            9.5,
+            &sg(v),
+            false,
         );
+        l.text(xx + 35.0, yy + 7.5, 7.0, cn);
     }
-    y += 38.0;
-    l.title(ax, y, aw, "技能 Skills（● 熟练/专精）");
+    y += 36.0;
+    l.title(ax, y, aw, "技能 Skills（勾 = 熟练）");
     y += 13.0;
     for (i, (id, cn, ab)) in SKILLS.iter().enumerate() {
         let (v, p) = c.skill(id, ab);
-        let xx = ax + 3.0 + (i % 2) as f32 * 75.0;
-        let yy = y + 9.0 + (i / 2) as f32 * 11.0;
-        l.text(
-            xx,
-            yy,
-            7.5,
-            &format!("{} {} {}", if p { "●" } else { "○" }, cn, signed(v)),
+        let xx = ax + (i % 2) as f32 * 76.0;
+        let yy = y + (i / 2) as f32 * 11.0;
+        l.check_on(
+            &format!("skill_{id}_prof"),
+            xx + 1.0,
+            yy + 1.0,
+            7.0,
+            p && !b,
         );
+        l.field(
+            &format!("skill_{id}"),
+            xx + 10.0,
+            yy,
+            22.0,
+            9.5,
+            &sg(v),
+            false,
+        );
+        l.text(xx + 35.0, yy + 7.5, 7.0, cn);
     }
-    y += 104.0;
-    l.title(ax, y, aw, "熟练与语言 Proficiencies");
+    y += 101.0;
+    l.title(ax, y, aw, "熟练与语言 Proficiencies & Languages");
     y += 12.0;
-    l.list("proficiencies", ax, y, aw, 820.0 - y, &c.proficiencies, 7.0);
+    let profs: Vec<String> = if b { vec![] } else { c.proficiencies.clone() };
+    l.list_plus("proficiencies", ax, y, aw, bottom - y, &profs, 6.8, 30.0);
 
-    // Column B: combat, HP, attacks, resources, spells
-    let mut y = 76.0;
+    // ---------- column B: combat, HP, attacks, resources, spells
+    let mut y = 78.0;
     let w4 = (bw - 3.0 * 4.0) / 4.0;
-    for (i, (lab, val)) in [
-        ("护甲 AC", c.ac.to_string()),
-        ("先攻 Init", signed(c.init)),
-        ("速度 Speed", c.speed.clone()),
-        ("熟练 Prof", signed(c.prof)),
+    for (i, (id, lab, val)) in [
+        ("ac", "护甲 AC", n(c.ac)),
+        ("init", "先攻 Initiative", sg(c.init)),
+        (
+            "speed",
+            "速度 Speed",
+            if b { String::new() } else { c.speed.clone() },
+        ),
+        ("prof", "熟练 Proficiency", sg(c.prof)),
     ]
     .iter()
     .enumerate()
     {
-        l.stat(bx + i as f32 * (w4 + 4.0), y, w4, 34.0, lab, val);
+        l.lbox(id, bx + i as f32 * (w4 + 4.0), y, w4, 30.0, lab, val);
     }
+    y += 33.0;
+    let w3 = (bw - 8.0) / 3.0;
+    for (i, (id, lab, val)) in [
+        ("hp_max", "最大生命 Max HP", n(c.hp)),
+        (
+            "passive",
+            "被动察觉 Passive Perc.",
+            n(c.passive_perception()),
+        ),
+        (
+            "hit_dice",
+            "生命骰 Hit Dice",
+            if b { String::new() } else { c.hit_die_label() },
+        ),
+    ]
+    .iter()
+    .enumerate()
+    {
+        l.lbox(id, bx + i as f32 * (w3 + 4.0), y, w3, 30.0, lab, val);
+    }
+    y += 33.0;
+    l.lbox("hp_current", bx, y, 122.0, 34.0, "当前生命 Current HP", "");
+    l.lbox(
+        "hp_temp",
+        bx + 126.0,
+        y,
+        bw - 126.0,
+        34.0,
+        "临时生命 Temp HP",
+        "",
+    );
     y += 38.0;
-    for (i, (lab, val)) in [
-        ("最大生命 Max HP", c.hp.to_string()),
-        ("被动察觉 Passive", c.passive_perception().to_string()),
-        ("生命骰 Hit Dice", c.hit_die_label()),
-    ]
-    .iter()
-    .enumerate()
-    {
-        let w3 = (bw - 8.0) / 3.0;
-        l.stat(bx + i as f32 * (w3 + 4.0), y, w3, 34.0, lab, val);
-    }
-    y += 42.0;
-    l.label(bx, y, "当前生命 Current HP");
-    l.label(bx + 128.0, y, "临时生命 Temp HP");
-    l.field("hp_current", bx, y + 3.0, 122.0, 34.0, "", false);
-    l.field("hp_temp", bx + 128.0, y + 3.0, bw - 128.0, 34.0, "", false);
-    y += 44.0;
     l.label(bx, y + 7.0, "已用生命骰");
-    let used = l.ticks("hit_dice_used", bx + 42.0, y, c.hit_dice.clamp(1, 20), 10);
-    y += used.max(11.0) + 2.0;
+    let used = l.ticks(
+        "hit_dice_used",
+        bx + 42.0,
+        y,
+        if b { 20 } else { c.hit_dice.clamp(1, 20) },
+        10,
+    );
+    y += used.max(11.0) + 1.0;
     l.label(bx, y + 7.0, "死亡豁免 成功");
     l.ticks("death_success", bx + 50.0, y, 3, 3);
-    l.label(bx + 95.0, y + 7.0, "失败");
-    l.ticks("death_fail", bx + 115.0, y, 3, 3);
-    y += 14.0;
-    l.label(bx, y + 6.0, "状态 / 力竭 Conditions / Exhaustion");
-    l.field("conditions", bx, y + 9.0, bw, 26.0, "", true);
-    y += 40.0;
-    l.title(bx, y, bw, "攻击 Attacks（命中 · 伤害）");
+    l.label(bx + 92.0, y + 7.0, "失败");
+    l.ticks("death_fail", bx + 110.0, y, 3, 3);
+    l.label(bx + 150.0, y + 7.0, "力竭");
+    l.ticks("exhaustion", bx + 166.0, y, 3, 3);
     y += 12.0;
-    let ah = 14.0 + 10.0 * c.attacks.len().clamp(2, 7) as f32;
-    l.rect(bx, y, bw, ah);
-    l.block(bx, y, bw, ah, &c.attacks, 7.5);
-    y += ah + 5.0;
-    l.title(bx, y, bw, "资源 Resources（用掉打勾）");
-    y += 14.0;
-    for (i, (name, max, rech)) in c.resources.iter().enumerate().take(6) {
-        let lab = format!(
-            "{name}{}",
-            match rech.as_str() {
-                "short" => "（短休）",
-                "long" => "（长休）",
-                "" => "",
-                _ => "",
-            }
-        );
-        l.text(bx + 2.0, y + 7.0, 7.0, &lab);
-        let h = l.ticks(
-            &format!("res{}", i + 1),
-            bx + 110.0,
-            y,
-            (*max).clamp(1, 16),
-            8,
-        );
-        y += h.max(11.0);
-    }
-    for i in c.resources.len()..2 {
-        l.field(&format!("res_extra{}", i + 1), bx, y, bw, 11.0, "", false);
-        y += 13.0;
-    }
-    y += 4.0;
-    let head = match &c.casting {
-        Some((ab, atk, dc)) => format!(
-            "法术 Spells　{} · DC {dc} · 攻击 {}",
-            ab.to_uppercase(),
-            signed(*atk)
-        ),
-        None => "法术 Spells".to_string(),
-    };
-    l.title(bx, y, bw, &head);
-    y += 14.0;
-    for (lvl, max) in &c.slots {
-        l.text(bx + 2.0, y + 7.0, 7.0, &format!("{lvl} 环法术位"));
-        let h = l.ticks(&format!("slot{lvl}"), bx + 50.0, y, (*max).clamp(1, 9), 9);
-        y += h.max(11.0);
-    }
-    let sh = 820.0 - y;
-    l.list("spells", bx, y, bw, sh, &c.spells, 7.0);
+    l.lbox("conditions", bx, y, bw, 22.0, "状态 Conditions", "");
+    y += 26.0;
 
-    // Column C: features, equipment, coins, personality, notes
-    let mut y = 76.0;
-    l.title(cx, y, cw, "特性 Features & Traits");
+    // attacks table
+    l.title(bx, y, bw, "攻击 Weapons & Attacks");
+    y += 13.0;
+    let (c1, c2) = (bx + 78.0, bx + 106.0);
+    l.label_s(bx + 1.0, y + 5.0, 5.5, "名称 Name");
+    l.label_s(c1, y + 5.0, 5.5, "命中/DC");
+    l.label_s(c2, y + 5.0, 5.5, "伤害与类型 · 射程 Damage · Range");
+    y += 7.0;
+    let arows = if b {
+        5
+    } else {
+        (c.attack_rows.len() + 1).clamp(4, 7)
+    };
+    for i in 0..arows {
+        let (nm, hit, dmg) = if b {
+            Default::default()
+        } else {
+            c.attack_rows.get(i).cloned().unwrap_or_default()
+        };
+        let k = i + 1;
+        l.val(&format!("atk{k}_name"), bx, y, 76.0, 11.0, &nm);
+        l.val(&format!("atk{k}_hit"), c1, y, 26.0, 11.0, &hit);
+        l.val(&format!("atk{k}_dmg"), c2, y, bw - 106.0, 11.0, &dmg);
+        y += 12.0;
+    }
+    y += 3.0;
+
+    // resources: name | max | recharge | ticks
+    l.title(bx, y, bw, "资源与限次能力 Resources（用掉打勾）");
+    y += 13.0;
+    let (r1, r2, r3) = (bx + 84.0, bx + 104.0, bx + 128.0);
+    l.label_s(bx + 1.0, y + 5.0, 5.5, "名称");
+    l.label_s(r1, y + 5.0, 5.5, "上限");
+    l.label_s(r2, y + 5.0, 5.5, "恢复");
+    l.label_s(r3, y + 5.0, 5.5, "已用");
+    y += 7.0;
+    let res: Vec<(String, i64, String)> = if b { vec![] } else { c.resources.clone() };
+    let rrows = if b { 8 } else { (res.len() + 3).clamp(6, 10) };
+    for i in 0..rrows {
+        let k = i + 1;
+        let (nm, max, rech) = res.get(i).cloned().unwrap_or_default();
+        let have = i < res.len();
+        l.val(&format!("res{k}_name"), bx, y, 82.0, 11.0, &nm);
+        l.val(
+            &format!("res{k}_max"),
+            r1,
+            y,
+            18.0,
+            11.0,
+            &if have { max.to_string() } else { String::new() },
+        );
+        l.val(
+            &format!("res{k}_recharge"),
+            r2,
+            y,
+            22.0,
+            11.0,
+            if have { rech_label(&rech) } else { "" },
+        );
+        let ticks = if have { max.clamp(1, 12) } else { 6 };
+        let per = if ticks > 6 { (ticks + 1) / 2 } else { 6 };
+        let ht = if ticks > 6 {
+            // two rows of smaller ticks inside one row height
+            for t in 0..ticks {
+                let (rr, cc) = (t / per, t % per);
+                l.check(
+                    &format!("res{k}_{}", t + 1),
+                    r3 + 1.0 + cc as f32 * 7.5,
+                    y + rr as f32 * 5.5,
+                    5.5,
+                );
+            }
+            11.0
+        } else {
+            l.ticks(&format!("res{k}"), r3 + 1.0, y + 1.5, ticks, 6)
+        };
+        let _ = ht;
+        y += 12.0;
+    }
+    y += 3.0;
+
+    // spells: casting stats, slot grid, compact list
+    l.title(bx, y, bw, "法术 Spellcasting");
+    y += 13.0;
+    let (ab, atk, dc) = match (&c.casting, b) {
+        (Some((a, atk, dc)), false) => (a.to_uppercase(), signed(*atk), dc.to_string()),
+        _ => Default::default(),
+    };
+    let w3s = (bw - 8.0) / 3.0;
+    l.lbox("spell_ability", bx, y, w3s, 20.0, "施法属性 Ability", &ab);
+    l.lbox("spell_dc", bx + w3s + 4.0, y, w3s, 20.0, "豁免 DC", &dc);
+    l.lbox(
+        "spell_attack",
+        bx + 2.0 * (w3s + 4.0),
+        y,
+        w3s,
+        20.0,
+        "法术攻击 Attack",
+        &atk,
+    );
+    y += 23.0;
+    let caster = b || c.casting.is_some() || !c.slots.is_empty();
+    let levels: Vec<(i64, i64)> = if b || (caster && c.slots.is_empty()) {
+        (1..=9)
+            .map(|lv| (lv, BLANK_SLOTS[lv as usize - 1]))
+            .collect()
+    } else if caster {
+        // known slots plus the next two levels blank for growth
+        let top = c.slots.iter().map(|s| s.0).max().unwrap_or(0);
+        let mut v = c.slots.clone();
+        for lv in top + 1..=(top + 2).min(9) {
+            v.push((lv, BLANK_SLOTS[lv as usize - 1]));
+        }
+        v
+    } else {
+        vec![]
+    };
+    if !levels.is_empty() {
+        let cw3 = bw / 3.0;
+        for (i, (lv, max)) in levels.iter().enumerate() {
+            let (rr, cc) = (i / 3, i % 3);
+            let xx = bx + cc as f32 * cw3;
+            let yy = y + rr as f32 * 11.0;
+            l.text(xx + 1.0, yy + 7.5, 6.5, &format!("{lv}环"));
+            l.ticks(&format!("slot{lv}"), xx + 16.0, yy, (*max).clamp(1, 4), 4);
+        }
+        y += levels.len().div_ceil(3) as f32 * 11.0 + 2.0;
+    }
+    let cap = spell_cap(c);
+    let p2 = needs_page2(c);
+    l.label_s(bx + 1.0, y + 5.0, 5.5, "环");
+    l.label_s(
+        bx + 16.0,
+        y + 5.0,
+        5.5,
+        if p2 && !b {
+            "戏法与准备法术（全部见第 2 页）"
+        } else {
+            "戏法与准备法术 Cantrips & Prepared"
+        },
+    );
+    l.label_s(bx + bw - 14.0, y + 5.0, 5.5, "专注");
+    y += 7.0;
+    for i in 0..cap {
+        let k = i + 1;
+        let r = if b { None } else { c.spell_rows.get(i) };
+        let lv = r
+            .and_then(|r| r.level)
+            .map(|v| {
+                if v == 0 {
+                    "0".to_string()
+                } else {
+                    v.to_string()
+                }
+            })
+            .unwrap_or_default();
+        l.val(&format!("sp{k}_level"), bx, y, 14.0, 10.5, &lv);
+        l.val(
+            &format!("sp{k}_name"),
+            bx + 16.0,
+            y,
+            bw - 30.0,
+            10.5,
+            r.map(|r| r.name.as_str()).unwrap_or(""),
+        );
+        l.check_on(
+            &format!("sp{k}_conc"),
+            bx + bw - 11.0,
+            y + 1.5,
+            7.5,
+            r.is_some_and(|r| r.concentration),
+        );
+        y += 11.5;
+    }
+    y += 3.0;
+    if bottom - y > 30.0 {
+        l.title(bx, y, bw, "笔记（续）Notes");
+        y += 12.0;
+        l.field("notes_b", bx, y, bw, bottom - y, "", true);
+    }
+
+    // ---------- column C: features, equipment, coins, personality, notes
+    let mut y = 78.0;
+    l.title(cx, y, cw, "职业特性与种族特质 Features & Traits");
     y += 12.0;
-    l.list("features", cx, y, cw, 300.0, &c.feature_lines(), 7.0);
-    y += 305.0;
+    let feats = if b { vec![] } else { c.feature_lines() };
+    l.list_plus("features", cx, y, cw, 236.0, &feats, 6.8, 24.0);
+    y += 240.0;
     l.title(cx, y, cw, "装备 Equipment");
     y += 12.0;
-    l.list("equipment", cx, y, cw, 170.0, &c.equipment, 6.8);
-    y += 175.0;
+    let eq = if b { vec![] } else { c.equipment.clone() };
+    l.list_plus("equipment", cx, y, cw, 150.0, &eq, 6.5, 24.0);
+    y += 153.0;
     let wc = (cw - 4.0 * 3.0) / 5.0;
     for (i, lab) in ["PP 铂", "GP 金", "EP 银金", "SP 银", "CP 铜"]
         .iter()
         .enumerate()
     {
         let xx = cx + i as f32 * (wc + 3.0);
-        l.label(xx, y + 6.0, lab);
-        let v = if c.coins[i] == 0 {
+        let v = if b || c.coins[i] == 0 {
             String::new()
         } else {
             c.coins[i].to_string()
         };
-        l.field(
+        l.lbox(
             &format!("coin_{}", ["pp", "gp", "ep", "sp", "cp"][i]),
             xx,
-            y + 9.0,
+            y,
             wc,
-            18.0,
+            24.0,
+            lab,
             &v,
-            false,
         );
     }
-    y += 32.0;
+    y += 27.0;
     l.title(cx, y, cw, "个性 Personality");
     y += 12.0;
-    l.list("personality", cx, y, cw, 62.0, &c.personality, 6.8);
-    y += 66.0;
+    let pers = if b { vec![] } else { c.personality.clone() };
+    l.list_plus("personality", cx, y, cw, 52.0, &pers, 6.5, 0.0);
+    y += 55.0;
     l.title(cx, y, cw, "笔记 Notes");
     y += 12.0;
-    l.field("notes", cx, y, cw, 820.0 - y, "", true);
+    l.field("notes", cx, y, cw, bottom - y, "", true);
 
-    l.label(
-        22.0,
-        832.0,
-        &format!(
-            "TalkDND · {} · 由 talkdnd sheet export 生成；以角色卡 Markdown 为准",
-            c.file
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default()
-        ),
-    );
-    Page {
-        ops: l.ops,
-        fields: l.fields,
+    let file = c
+        .file
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let foot = if b {
+        "TalkDND · 空白角色卡 · talkdnd sheet blank".to_string()
+    } else {
+        format!("TalkDND · {file} · 由 talkdnd sheet export 生成；以角色卡 Markdown 为准")
+    };
+    l.label(22.0, 832.0, &foot);
+    let mut pages = vec![Page {
+        ops: std::mem::take(&mut l.ops),
+    }];
+
+    // ---------- optional page 2: full spell table + backstory / notes
+    if p2 {
+        l.page = 1;
+        let name = if b { String::new() } else { c.name.clone() };
+        l.lbox(
+            "p2_name",
+            22.0,
+            20.0,
+            260.0,
+            26.0,
+            "角色名 Character Name",
+            &name,
+        );
+        l.text(300.0, 38.0, 11.0, "法术与笔记 Spells & Notes");
+        let mut y = 54.0;
+        let tw = 551.0;
+        l.title(
+            22.0,
+            y,
+            tw,
+            "法术表 Spells（环 0 = 戏法；勾：专注 / 仪式 / 材料 / 已准备）",
+        );
+        y += 13.0;
+        let cols = [
+            (22.0, "环"),
+            (40.0, "名称 Name"),
+            (230.0, "施法时间"),
+            (290.0, "射程"),
+            (340.0, "专"),
+            (354.0, "仪"),
+            (368.0, "材"),
+            (382.0, "备"),
+            (398.0, "备注 Notes"),
+        ];
+        for (x, t) in cols {
+            l.label_s(x + 1.0, y + 5.0, 5.5, t);
+        }
+        y += 7.0;
+        let rows = 42usize.max(c.spell_rows.len() + 4).min(50);
+        for i in 0..rows {
+            let k = i + 1;
+            let r = if b { None } else { c.spell_rows.get(i) };
+            let lv = r
+                .and_then(|r| r.level)
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            l.val(&format!("p2_sp{k}_level"), 22.0, y, 16.0, 10.5, &lv);
+            l.val(
+                &format!("p2_sp{k}_name"),
+                40.0,
+                y,
+                188.0,
+                10.5,
+                r.map(|r| r.name.as_str()).unwrap_or(""),
+            );
+            l.val(
+                &format!("p2_sp{k}_time"),
+                230.0,
+                y,
+                58.0,
+                10.5,
+                r.map(|r| r.time.as_str()).unwrap_or(""),
+            );
+            l.val(
+                &format!("p2_sp{k}_range"),
+                290.0,
+                y,
+                48.0,
+                10.5,
+                r.map(|r| r.range.as_str()).unwrap_or(""),
+            );
+            l.check_on(
+                &format!("p2_sp{k}_conc"),
+                341.5,
+                y + 1.5,
+                7.5,
+                r.is_some_and(|r| r.concentration),
+            );
+            l.check_on(
+                &format!("p2_sp{k}_ritual"),
+                355.5,
+                y + 1.5,
+                7.5,
+                r.is_some_and(|r| r.ritual),
+            );
+            l.check(&format!("p2_sp{k}_material"), 369.5, y + 1.5, 7.5);
+            l.check_on(
+                &format!("p2_sp{k}_prepared"),
+                383.5,
+                y + 1.5,
+                7.5,
+                r.is_some(),
+            );
+            l.field(&format!("p2_sp{k}_notes"), 398.0, y, 175.0, 10.5, "", false);
+            y += 11.5;
+        }
+        y += 4.0;
+        let half = (tw - 6.0) / 2.0;
+        l.title(22.0, y, half, "背景故事与外貌 Backstory & Appearance");
+        l.title(22.0 + half + 6.0, y, half, "笔记 Notes");
+        y += 12.0;
+        l.field("p2_backstory", 22.0, y, half, bottom - y, "", true);
+        l.field("p2_notes", 22.0 + half + 6.0, y, half, bottom - y, "", true);
+        l.label(22.0, 832.0, &format!("{foot} · 第 2 页"));
+        pages.push(Page {
+            ops: std::mem::take(&mut l.ops),
+        });
     }
+    (pages, l.fields)
 }
 
 // ---------------------------------------------------------------- PDF
@@ -1120,96 +1682,97 @@ pub fn render_pdf(c: &Card, font: &CjkFont) -> Result<Vec<u8>> {
         index: font.index,
         cache: Default::default(),
     };
-    let page = layout(c, &m);
+    let (pages, fields) = layout(c, &m);
     let kfont = Font::new(font.data.clone().into(), font.index)
         .ok_or_else(|| anyhow!("unusable font {}", font.path.display()))?;
     let gray = |g: f32| luma::Color::new((g * 255.0) as u8);
     let mut doc = krilla::Document::new();
-    let mut p = doc.start_page_with(
-        PageSettings::from_wh(PAGE_W, PAGE_H).ok_or_else(|| anyhow!("page size"))?,
-    );
-    let mut s = p.surface();
-    for op in &page.ops {
-        match op {
-            Op::Text {
-                x,
-                y,
-                size,
-                text,
-                gray: g,
-            } => {
-                s.set_stroke(None);
-                s.set_fill(Some(Fill {
-                    paint: gray(*g).into(),
-                    opacity: NormalizedF32::ONE,
-                    rule: Default::default(),
-                }));
-                s.draw_text(
-                    Point::from_xy(*x, *y),
-                    kfont.clone(),
-                    *size,
+    for page in &pages {
+        let mut p = doc.start_page_with(
+            PageSettings::from_wh(PAGE_W, PAGE_H).ok_or_else(|| anyhow!("page size"))?,
+        );
+        let mut s = p.surface();
+        for op in &page.ops {
+            match op {
+                Op::Text {
+                    x,
+                    y,
+                    size,
                     text,
-                    false,
-                    TextDirection::Auto,
-                );
-            }
-            Op::Rect {
-                x,
-                y,
-                w,
-                h,
-                stroke,
-                fill,
-            } => {
-                let mut pb = PathBuilder::new();
-                if let Some(r) = Rect::from_xywh(*x, *y, *w, *h) {
-                    pb.push_rect(r);
+                    gray: g,
+                } => {
+                    s.set_stroke(None);
+                    s.set_fill(Some(Fill {
+                        paint: gray(*g).into(),
+                        opacity: NormalizedF32::ONE,
+                        rule: Default::default(),
+                    }));
+                    s.draw_text(
+                        Point::from_xy(*x, *y),
+                        kfont.clone(),
+                        *size,
+                        text,
+                        false,
+                        TextDirection::Auto,
+                    );
                 }
-                let Some(path) = pb.finish() else { continue };
-                s.set_fill(fill.map(|g| Fill {
-                    paint: gray(g).into(),
-                    opacity: NormalizedF32::ONE,
-                    rule: Default::default(),
-                }));
-                s.set_stroke((*stroke > 0.0).then(|| Stroke {
-                    paint: gray(0.25).into(),
-                    width: *stroke,
-                    ..Default::default()
-                }));
-                s.draw_path(&path);
-            }
-            Op::Line { x1, y1, x2, y2 } => {
-                let mut pb = PathBuilder::new();
-                pb.move_to(*x1, *y1);
-                pb.line_to(*x2, *y2);
-                let Some(path) = pb.finish() else { continue };
-                s.set_fill(None);
-                s.set_stroke(Some(Stroke {
-                    paint: gray(0.2).into(),
-                    width: 1.0,
-                    ..Default::default()
-                }));
-                s.draw_path(&path);
+                Op::Rect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    stroke,
+                    fill,
+                } => {
+                    let mut pb = PathBuilder::new();
+                    if let Some(r) = Rect::from_xywh(*x, *y, *w, *h) {
+                        pb.push_rect(r);
+                    }
+                    let Some(path) = pb.finish() else { continue };
+                    s.set_fill(fill.map(|g| Fill {
+                        paint: gray(g).into(),
+                        opacity: NormalizedF32::ONE,
+                        rule: Default::default(),
+                    }));
+                    s.set_stroke((*stroke > 0.0).then(|| Stroke {
+                        paint: gray(0.25).into(),
+                        width: *stroke,
+                        ..Default::default()
+                    }));
+                    s.draw_path(&path);
+                }
+                Op::Line { x1, y1, x2, y2 } => {
+                    let mut pb = PathBuilder::new();
+                    pb.move_to(*x1, *y1);
+                    pb.line_to(*x2, *y2);
+                    let Some(path) = pb.finish() else { continue };
+                    s.set_fill(None);
+                    s.set_stroke(Some(Stroke {
+                        paint: gray(0.55).into(),
+                        width: 0.4,
+                        ..Default::default()
+                    }));
+                    s.draw_path(&path);
+                }
             }
         }
+        s.finish();
+        p.finish();
     }
-    s.finish();
-    p.finish();
     let bytes = doc
         .finish()
         .map_err(|e| anyhow!("PDF generation failed: {e:?}"))?;
-    add_form(&bytes, &page.fields)
+    add_form(&bytes, &fields)
 }
 
-/// Add AcroForm widgets (text fields, check boxes) to page 1.
+/// Add AcroForm widgets (text fields, check boxes) to their pages.
 fn add_form(pdf: &[u8], fields: &[Field]) -> Result<Vec<u8>> {
     use lopdf::{dictionary, Object, Stream};
     let mut doc = lopdf::Document::load_mem(pdf).context("reload PDF for form fields")?;
-    let page_id = *doc
-        .get_pages()
-        .values()
-        .next()
-        .ok_or_else(|| anyhow!("no page"))?;
+    let page_ids: Vec<lopdf::ObjectId> = doc.get_pages().values().copied().collect();
+    if page_ids.is_empty() {
+        bail!("no page");
+    }
     let helv = doc.add_object(dictionary! {
         "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
         "Encoding" => "WinAnsiEncoding",
@@ -1217,8 +1780,11 @@ fn add_form(pdf: &[u8], fields: &[Field]) -> Result<Vec<u8>> {
     let zadb = doc.add_object(dictionary! {
         "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "ZapfDingbats",
     });
-    let mut annots = Vec::new();
+    let mut annots: Vec<Vec<Object>> = vec![Vec::new(); page_ids.len()];
+    let mut all = Vec::new();
     for f in fields {
+        let pi = f.page.min(page_ids.len() - 1);
+        let page_id = page_ids[pi];
         let rect = vec![
             f.x.into(),
             (PAGE_H - f.y - f.h).into(),
@@ -1226,12 +1792,16 @@ fn add_form(pdf: &[u8], fields: &[Field]) -> Result<Vec<u8>> {
             (PAGE_H - f.y).into(),
         ];
         let id = match &f.kind {
-            FieldKind::Text { value, multiline } => {
+            FieldKind::Text {
+                value,
+                multiline,
+                size,
+            } => {
                 let mut d = dictionary! {
                     "Type" => "Annot", "Subtype" => "Widget", "FT" => "Tx",
                     "T" => Object::string_literal(f.name.as_str()),
                     "Rect" => rect, "F" => 4, "P" => page_id,
-                    "DA" => Object::string_literal(if *multiline { "/Helv 8 Tf 0 g" } else { "/Helv 10 Tf 0 g" }),
+                    "DA" => Object::string_literal(format!("/Helv {size:.1} Tf 0 g")),
                     "MK" => dictionary! {},
                 };
                 if *multiline {
@@ -1242,10 +1812,10 @@ fn add_form(pdf: &[u8], fields: &[Field]) -> Result<Vec<u8>> {
                 }
                 doc.add_object(d)
             }
-            FieldKind::Check => {
+            FieldKind::Check { on } => {
                 let (w, h) = (f.w, f.h);
                 let size = h * 0.8;
-                let on = format!(
+                let tick = format!(
                     "q BT 0 g /ZaDb {size:.2} Tf {:.2} {:.2} Td (4) Tj ET Q",
                     w * 0.15,
                     h * 0.2
@@ -1257,7 +1827,7 @@ fn add_form(pdf: &[u8], fields: &[Field]) -> Result<Vec<u8>> {
                         "BBox" => vec![0.into(), 0.into(), w.into(), h.into()],
                         "Resources" => res.clone(),
                     },
-                    on.into_bytes(),
+                    tick.into_bytes(),
                 ));
                 let off = doc.add_object(Stream::new(
                     dictionary! {
@@ -1266,23 +1836,27 @@ fn add_form(pdf: &[u8], fields: &[Field]) -> Result<Vec<u8>> {
                     },
                     Vec::new(),
                 ));
+                let st = if *on { "Yes" } else { "Off" };
                 doc.add_object(dictionary! {
                     "Type" => "Annot", "Subtype" => "Widget", "FT" => "Btn",
                     "T" => Object::string_literal(f.name.as_str()),
                     "Rect" => rect, "F" => 4, "P" => page_id,
-                    "V" => "Off", "AS" => "Off",
+                    "V" => st, "AS" => st,
                     "DA" => Object::string_literal("/ZaDb 0 Tf 0 g"),
                     "MK" => dictionary! { "CA" => Object::string_literal("4") },
                     "AP" => dictionary! { "N" => dictionary! { "Yes" => yes, "Off" => off } },
                 })
             }
         };
-        annots.push(id);
+        annots[pi].push(Object::Reference(id));
+        all.push(Object::Reference(id));
     }
-    let refs: Vec<Object> = annots.iter().map(|i| Object::Reference(*i)).collect();
-    doc.get_dictionary_mut(page_id)?.set("Annots", refs.clone());
+    for (pi, pid) in page_ids.iter().enumerate() {
+        doc.get_dictionary_mut(*pid)?
+            .set("Annots", annots[pi].clone());
+    }
     let form = dictionary! {
-        "Fields" => refs,
+        "Fields" => all,
         "NeedAppearances" => true,
         "DA" => Object::string_literal("/Helv 0 Tf 0 g"),
         "DR" => dictionary! { "Font" => dictionary! { "Helv" => helv, "ZaDb" => zadb } },
@@ -1446,8 +2020,121 @@ pub enum Format {
     Html,
 }
 
+/// Spell metadata from the combat library: id -> row.
+fn spell_index(save_dir: &Path, ruleset: &str) -> HashMap<String, SpellRow> {
+    let mut out = HashMap::new();
+    let Some(lib) = save_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("Rules/combat"))
+    else {
+        return out;
+    };
+    // SRD first, hand-tuned spells.yaml wins.
+    for f in [
+        lib.join(ruleset).join("srd/srd-spells.yaml"),
+        lib.join(ruleset).join("spells.yaml"),
+    ] {
+        let Ok(t) = fs::read_to_string(&f) else {
+            continue;
+        };
+        let Ok(v) = serde_norway::from_str::<Value>(&t) else {
+            continue;
+        };
+        let Some(Value::Sequence(list)) = v.get("abilities") else {
+            continue;
+        };
+        for a in list {
+            let Some(id) = a.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let tags: Vec<&str> = match a.get("tags") {
+                Some(Value::Sequence(t)) => t.iter().filter_map(|x| x.as_str()).collect(),
+                _ => vec![],
+            };
+            if !tags.contains(&"spell") {
+                continue;
+            }
+            let level = if tags.contains(&"cantrip") {
+                Some(0)
+            } else {
+                int(a.get("slot_level"))
+            };
+            let time = match a.get("activation").and_then(|v| v.as_str()) {
+                Some("action") => "动作",
+                Some("bonus_action") | Some("bonus") => "附赠",
+                Some("reaction") => "反应",
+                Some(_) => "其他",
+                None => "",
+            };
+            let range = match int(a.get("range")) {
+                Some(0) | None => a
+                    .get("range")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                Some(r) => format!("{r} ft"),
+            };
+            out.insert(
+                id.to_string(),
+                SpellRow {
+                    level,
+                    name: a
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(id)
+                        .to_string(),
+                    time: time.into(),
+                    range,
+                    concentration: a
+                        .get("concentration")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    ritual: tags.contains(&"ritual"),
+                },
+            );
+        }
+    }
+    out
+}
+
+fn campaign_ruleset(save_dir: &Path) -> String {
+    fs::read_to_string(save_dir.join("combat/campaign.yaml"))
+        .ok()
+        .and_then(|t| serde_norway::from_str::<Value>(&t).ok())
+        .and_then(|v| v.get("ruleset").and_then(|r| r.as_str()).map(String::from))
+        .unwrap_or_else(|| "2024".into())
+}
+
+/// Spell rows: combat-block spell refs (with library data), else the sheet's spell lines.
+fn spell_rows(sheet: &Sheet, c: &Card, idx: &HashMap<String, SpellRow>) -> Vec<SpellRow> {
+    let mut rows: Vec<SpellRow> = Vec::new();
+    if let Some(Value::Sequence(acts)) = sheet.block.get("actions") {
+        for a in acts {
+            if let Some(r) = a.get("ref").and_then(|v| v.as_str()) {
+                if let Some(row) = idx.get(r) {
+                    rows.push(row.clone());
+                }
+            }
+        }
+    }
+    if rows.is_empty() {
+        rows = c
+            .spells
+            .iter()
+            .filter(|s| !s.starts_with("（combat 引用）"))
+            .map(|s| SpellRow {
+                name: s.clone(),
+                ..Default::default()
+            })
+            .collect();
+    }
+    rows.sort_by_key(|r| r.level.unwrap_or(99));
+    rows
+}
+
 /// Export `who` (`all`, an id or a name). Writes next to each sheet:
-/// `Characters/<name>.pdf` (or `.html`). Returns the written paths.
+/// `Characters/<name>.pdf` (or `.html`), prefilled. Returns the written paths.
 pub fn export(save_dir: &Path, who: &str, format: Format) -> Result<Vec<PathBuf>> {
     let sheets = crate::check::sheets(save_dir);
     if sheets.is_empty() {
@@ -1468,9 +2155,13 @@ pub fn export(save_dir: &Path, who: &str, format: Format) -> Result<Vec<PathBuf>
         Format::Pdf => Some(find_font()?),
         Format::Html => None,
     };
+    let ruleset = campaign_ruleset(save_dir);
+    let idx = spell_index(save_dir, &ruleset);
     let mut out = Vec::new();
     for s in chosen {
-        let c = card(s, &progress)?;
+        let mut c = card(s, &progress)?;
+        c.ruleset = ruleset.clone();
+        c.spell_rows = spell_rows(s, &c, &idx);
         let ext = match format {
             Format::Pdf => "pdf",
             Format::Html => "html",
@@ -1483,6 +2174,24 @@ pub fn export(save_dir: &Path, who: &str, format: Format) -> Result<Vec<PathBuf>
         out.push(path);
     }
     Ok(out)
+}
+
+/// Empty fillable template (two pages: sheet + spells/notes).
+pub fn blank(ruleset: &str, out: &Path) -> Result<PathBuf> {
+    let font = find_font()?;
+    let c = Card {
+        blank: true,
+        ruleset: ruleset.to_string(),
+        name: String::new(),
+        ..Default::default()
+    };
+    if let Some(d) = out.parent() {
+        if !d.as_os_str().is_empty() {
+            fs::create_dir_all(d)?;
+        }
+    }
+    fs::write(out, render_pdf(&c, &font)?)?;
+    Ok(out.to_path_buf())
 }
 
 #[cfg(test)]
@@ -1616,7 +2325,13 @@ mod tests {
             "coin_gp",
             "conditions",
             "notes",
-            "spells",
+            "notes_b",
+            "res1_name",
+            "res1_max",
+            "atk1_name",
+            "sp1_name",
+            "str_score",
+            "skill_stealth_prof",
         ] {
             assert!(names.iter().any(|x| x == n), "missing field {n}");
         }
@@ -1628,5 +2343,79 @@ mod tests {
         assert_eq!(mb[3].as_float().unwrap().round(), PAGE_H);
         let out = export(&dir, "Example Fighter", Format::Pdf).unwrap();
         assert!(out[0].ends_with("Characters/Example Fighter.pdf"));
+    }
+
+    fn field_names(bytes: &[u8]) -> (usize, Vec<String>) {
+        let doc = lopdf::Document::load_mem(bytes).unwrap();
+        let form = doc.catalog().unwrap().get(b"AcroForm").unwrap();
+        let form = doc.dereference(form).unwrap().1.as_dict().unwrap();
+        let names = form
+            .get(b"Fields")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                let d = doc.get_dictionary(r.as_reference().unwrap()).unwrap();
+                String::from_utf8_lossy(d.get(b"T").unwrap().as_str().unwrap()).to_string()
+            })
+            .collect();
+        (doc.get_pages().len(), names)
+    }
+
+    #[test]
+    fn blank_template_has_two_fillable_pages() {
+        let Ok(_) = find_font() else { return };
+        let out = std::env::temp_dir().join(format!("talkdnd-blank-{}.pdf", std::process::id()));
+        blank("2014", &out).unwrap();
+        let (pages, names) = field_names(&fs::read(&out).unwrap());
+        assert_eq!(pages, 2);
+        for n in [
+            "name",
+            "class_level",
+            "str_score",
+            "hp_current",
+            "slot9_1",
+            "res8_name",
+            "sp6_name",
+            "p2_sp42_name",
+            "p2_notes",
+            "notes",
+        ] {
+            assert!(names.iter().any(|x| x == n), "missing {n}");
+        }
+        let uniq: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(uniq.len(), names.len(), "field names must be unique");
+    }
+
+    #[test]
+    fn many_spells_overflow_to_page_two() {
+        let Ok(font) = find_font() else { return };
+        let dir = example_save("spells");
+        let sheets = crate::check::sheets(&dir);
+        let mut c = card(&sheets[0], &Progress::default()).unwrap();
+        c.casting = Some(("int".into(), 5, 13));
+        c.slots = vec![(1, 4), (2, 2)];
+        c.spell_rows = (0..6)
+            .map(|i| SpellRow {
+                level: Some(1),
+                name: format!("S{i}"),
+                ..Default::default()
+            })
+            .collect();
+        let (pages, _) = field_names(&render_pdf(&c, &font).unwrap());
+        assert_eq!(pages, 1, "a few spells fit on page 1");
+        c.spell_rows = (0..14)
+            .map(|i| SpellRow {
+                level: Some(i % 3),
+                name: format!("S{i}"),
+                ..Default::default()
+            })
+            .collect();
+        let (pages, names) = field_names(&render_pdf(&c, &font).unwrap());
+        assert_eq!(pages, 2);
+        assert!(names.iter().any(|n| n == "p2_sp14_name"));
+        let uniq: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(uniq.len(), names.len());
     }
 }

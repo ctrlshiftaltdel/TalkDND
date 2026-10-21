@@ -30,7 +30,7 @@
 8. **属性加值**（2024 背景 / 2014 半精灵可选项）→ `$T chargen asi wis=2 con=1` 或 `none`
 9. **技能** → **装备**（含护甲、盾牌；职业/子职不熟练会报错）→ **法术**（非施法职业 none；戏法与已知/可准备法术数量按职业数据核对），每项单独问
 10. **名字与性格**
-11. **确认**：`$T chargen validate`（error 必须为 0）→ `$T chargen sheet` → 把角色卡给玩家看 → 玩家同意后 `$T chargen confirm` → `$T sheet export <角色>`，告诉玩家可下载 `Saves/<存档>/Characters/<名字>.pdf`（A4 可填写、可打印）
+11. **确认**：`$T chargen validate`（error 必须为 0）→ `$T chargen sheet` → 把角色卡给玩家看 → 玩家同意后 `$T chargen confirm` → **问玩家要哪种纸质角色卡：① 空白模板（自己填）② 预填好的 ③ 两种都要**（一问一停）→ 预填：`$T sheet export <角色>` → `Characters/<名字>.pdf`；空白：`$T sheet blank --ruleset <2014|2024>` → `Characters/blank-sheet-<规则>.pdf`；告诉玩家文件位置（A4 可填写、可打印）
 12. **同伴 NPC**：问玩家要几个、有没有要求 → `$T npc random --count N` 随机 → DM 补名字、来历、性格 → **给玩家确认** → `$T npc sheet <号> --name <名字>`
 13. 写 `dm-secrets.md`，在会话日志写开场，进入第一个场景
 
@@ -70,7 +70,10 @@
 ## 角色卡打印（PDF）
 
 - **开局**（`chargen confirm` 之后）和**每次 `level-up` 之后**：`$T sheet export <角色>`（`all` = 全队含同伴），把生成的 `Saves/<存档>/Characters/<名字>.pdf` 发给/告诉玩家可以下载打印。角色卡 Markdown 改动较大时（换装备、学新法术）也重新导出。
-- PDF 是一页 A4：固定数值印好；当前/临时 HP、已用生命骰、死亡豁免、法术位、资源次数、状态、激励、钱币、XP、笔记是可填写的框或勾选格，玩家可在 PDF 阅读器里填或打印后手写。**以 Markdown 角色卡为准**，PDF 只是导出。
+- 开局时三选一（见上：空白 / 预填 / 都要），玩家选过后升级时沿用同一选择。
+- 预填 PDF 通常一页 A4：数字和英文值是可改的表单框，中文内容印好，每个列表区下方留空行；资源区每项一行（名称、上限、恢复、勾选格）外加空行；法术区紧凑（各环法术位勾选格 + 按角色大小的戏法/准备法术列表）；笔记区两块。施法者法术超过 10 个时自动加第 2 页（完整法术表 + 背景/笔记）。
+- 空白模板 `$T sheet blank [--ruleset 2014|2024] [--out 路径]` 固定两页（第 1 页同上全空，第 2 页法术表与笔记），每格都可填。
+- **以 Markdown 角色卡为准**，PDF 只是导出。
 - 找不到中文字体时报错：装 Noto Sans CJK（`apt install fonts-noto-cjk`）或设 `TALKDND_CJK_FONT=/路径/字体.ttc`；或用 `--format html`（浏览器打开，可填写，「打印 → 另存为 PDF」）。
 
 ## 按需参考
