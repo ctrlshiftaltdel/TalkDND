@@ -605,29 +605,55 @@ fn supported_content_file(path: &Path) -> bool {
     )
 }
 
-/// Deterministic recursive scan: entries are sorted by name.
+/// Deterministic recursive scan: entries are sorted by name. Inside a
+/// directory, hidden entries (`.md/` conversions, `.git`) are skipped and files
+/// that are not content (`.py`, `.jsonl`, images) are ignored with a warning.
+/// A file named explicitly must be a content file.
 fn collect_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    collect_inner(path, out, true)
+}
+
+fn collect_inner(path: &Path, out: &mut Vec<PathBuf>, explicit: bool) -> Result<()> {
     let metadata = std::fs::metadata(path)
         .with_context(|| format!("failed to read content source {}", path.display()))?;
     if metadata.is_dir() {
+        // An adventure folder (`Adventures/<book>`) keeps its combat data in
+        // `combat/`; the rest is the book and its conversions.
+        let combat = path.join("combat");
+        if explicit && combat.is_dir() {
+            return collect_inner(&combat, out, false);
+        }
+        // A nested layered library (`common/` + `2014/` …) is loaded only when
+        // listed under `library:`, which picks the save's ruleset layer.
+        if !explicit && path.join("common").is_dir() {
+            return Ok(());
+        }
         let mut entries = std::fs::read_dir(path)
             .with_context(|| format!("failed to read content directory {}", path.display()))?
             .collect::<std::io::Result<Vec<_>>>()
             .with_context(|| format!("failed to read content directory {}", path.display()))?;
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
-            collect_files(&entry.path(), out)?;
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            collect_inner(&entry.path(), out, false)?;
         }
     } else if metadata.is_file() {
         if supported_content_file(path) {
             out.push(path.to_path_buf());
-        } else {
+        } else if explicit {
             bail!(
                 "unsupported content file {} (expected .yaml, .yml, .json or .md)",
                 path.display()
             );
+        } else {
+            eprintln!(
+                "warning: skipping non-content file {} (expected .yaml, .yml, .json or .md)",
+                path.display()
+            );
         }
-    } else {
+    } else if explicit {
         bail!(
             "content source {} is not a file or directory",
             path.display()
