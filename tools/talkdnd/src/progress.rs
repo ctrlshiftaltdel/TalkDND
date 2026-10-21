@@ -199,7 +199,7 @@ fn block_bounds(text: &str) -> Option<(usize, usize)> {
     Some((body, end))
 }
 
-fn class_of(s: &Sheet, text: &str, book: &classdata::Book) -> Option<String> {
+pub(crate) fn class_of(s: &Sheet, text: &str, book: &classdata::Book) -> Option<String> {
     let notes = s
         .block
         .get("notes")
@@ -242,7 +242,7 @@ fn class_of(s: &Sheet, text: &str, book: &classdata::Book) -> Option<String> {
         })
 }
 
-fn hit_die(s: &Sheet, class: Option<&str>, book: &classdata::Book) -> Option<i32> {
+pub(crate) fn hit_die(s: &Sheet, class: Option<&str>, book: &classdata::Book) -> Option<i32> {
     s.block
         .get("resources")
         .and_then(|r| r.get("hit-dice"))

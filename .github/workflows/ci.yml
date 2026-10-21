@@ -76,6 +76,10 @@ jobs:
       - name: Test talkdnd-dev
         run: cargo test --manifest-path tools/talkdnd-dev/Cargo.toml
 
+      - name: CJK font for the sheet PDF test (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q fonts-noto-cjk
+
       - name: Test talkdnd
         run: cargo test --manifest-path tools/talkdnd/Cargo.toml
 
