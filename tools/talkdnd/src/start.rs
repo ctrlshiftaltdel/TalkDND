@@ -289,7 +289,11 @@ fn book_mds(md_root: &Path) -> Vec<PathBuf> {
     books.sort();
     let mut out = Vec::new();
     for b in books {
-        let name = b.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = b
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         for f in [b.join(format!("{name}.md")), b.join("index.md")] {
             if f.is_file() {
                 out.push(f);
@@ -433,7 +437,12 @@ mod tests {
         fs::write(adv.join("Curse of Strahd.pdf"), "pdf").unwrap();
         fs::write(adv.join(".md/Curse of Strahd/index.md"), "# index").unwrap();
         fs::write(adv.join(".md/Curse of Strahd/Curse of Strahd.md"), "# book").unwrap();
-        for f in ["fixes/p0001.md", "review/p0002.md", "pages/p0001-0010.md", "proofread-report.md"] {
+        for f in [
+            "fixes/p0001.md",
+            "review/p0002.md",
+            "pages/p0001-0010.md",
+            "proofread-report.md",
+        ] {
             let p = adv.join(".md/Curse of Strahd").join(f);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
             fs::write(p, "x").unwrap();
