@@ -63,3 +63,15 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 - 敌人的行动由 DM 执行：轮到敌人时，按怪物数据块用 `attack`、`cast`、`use`、`move` 下命令，然后 `next`。
 - 想让引擎按 AI 模板替敌人行动，可用 `combat-sim simulate --from-state <名字> --runs 1` 看一遍推演，再照着执行（推演不改原 state）。
 - 敌人做什么由 DM 根据性格和战况决定，AI 推演只是参考；玩家角色永远由玩家决定。
+
+## 临时遭遇：`combat-sim quick`
+
+没有现成遭遇时不用写 YAML：`combat-sim --campaign <存档>/combat/campaign.yaml --state q quick --foe goblin:4 --foe wolf:2@near --distance 40 --light dim`。5 行网格，队伍在 `near`，敌人默认在 `far`。2014 存档可直接用 `Rules/combat/2014/srd/` 里的全部 SRD 5.1 怪物和法术（`content list --kind creature`）。
+
+## 经验、升级与战利品
+
+账本在 `Saves/<存档>/progress.yaml`（XP、每人钱袋与物品、公共 `party` 钱袋），每次变动都记一行到会话日志。
+
+- `talkdnd xp add 450 --to all --reason "博物馆守卫"`：平分（余数报告）；`talkdnd xp show` 看等级与下一级门槛。
+- `talkdnd level-up <角色> [--hp avg|roll|<玩家掷出的数>] [--class rogue] [--milestone]`：改角色卡 combat 块（等级、HP、熟练加值、生命骰、熟练豁免/技能/命中），追加 `## 升级记录`，列出新职业特性、子职与属性提升提示。正文（特性、法术）和玩家一起改；之后 `combat-sim party sync`。
+- `talkdnd loot add --gp 50 "治疗药水" --to party`、`loot give --from party --to yier --gp 10 钥匙`、`loot split`（公共钱平分）、`loot spend --from yier --gp 5`、`loot show`。钱统一按铜币记，显示为 gp/sp/cp。

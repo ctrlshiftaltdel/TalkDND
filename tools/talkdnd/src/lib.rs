@@ -7,6 +7,7 @@ pub mod check;
 pub mod classdata;
 pub mod data;
 pub mod npc;
+pub mod progress;
 pub mod save;
 pub mod start;
 
@@ -91,11 +92,116 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DataCmd,
     },
+    /// Experience points (ledger in Saves/<slot>/progress.yaml)
+    Xp {
+        #[command(subcommand)]
+        cmd: XpCmd,
+    },
+    /// Level a character up: edits the sheet's combat block (level, HP, proficiency, hit dice)
+    LevelUp {
+        /// Character id or name
+        who: String,
+        /// HP gain: avg (default), roll, or the die result the player rolled
+        #[arg(long, default_value = "avg")]
+        hp: String,
+        /// Class id when the sheet does not say (e.g. rogue)
+        #[arg(long)]
+        class: Option<String>,
+        /// Milestone levelling: skip the XP check
+        #[arg(long)]
+        milestone: bool,
+    },
+    /// Coins and items per character and the shared `party` pool
+    Loot {
+        #[command(subcommand)]
+        cmd: LootCmd,
+    },
     /// List SRD options for a ruleset
     Options {
         #[arg(long, default_value = "2024")]
         ruleset: String,
     },
+}
+
+#[derive(Subcommand)]
+enum XpCmd {
+    /// Award XP, split evenly: `xp add 450 --to all --reason "museum guards"`
+    Add {
+        amount: i64,
+        /// `all` (campaign party) or comma-separated names/ids
+        #[arg(long, default_value = "all")]
+        to: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// XP, level and next threshold per character
+    Show,
+}
+
+#[derive(clap::Args)]
+struct Coins {
+    #[arg(long, default_value_t = 0)]
+    pp: i64,
+    #[arg(long, default_value_t = 0)]
+    gp: i64,
+    #[arg(long, default_value_t = 0)]
+    ep: i64,
+    #[arg(long, default_value_t = 0)]
+    sp: i64,
+    #[arg(long, default_value_t = 0)]
+    cp: i64,
+}
+
+impl Coins {
+    fn total(&self) -> Result<i64> {
+        let t = progress::to_cp(self.pp, self.gp, self.ep, self.sp, self.cp);
+        if [self.pp, self.gp, self.ep, self.sp, self.cp]
+            .iter()
+            .any(|v| *v < 0)
+        {
+            bail!("coin amounts must be 0 or more");
+        }
+        Ok(t)
+    }
+}
+
+#[derive(Subcommand)]
+enum LootCmd {
+    /// Add coins/items: `loot add --gp 50 "potion of healing" --to party`
+    Add {
+        items: Vec<String>,
+        #[command(flatten)]
+        coins: Coins,
+        /// `party` (shared pool) or a character
+        #[arg(long, default_value = "party")]
+        to: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Spend or lose coins/items
+    Spend {
+        items: Vec<String>,
+        #[command(flatten)]
+        coins: Coins,
+        #[arg(long, default_value = "party")]
+        from: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Move coins/items between purses
+    Give {
+        items: Vec<String>,
+        #[command(flatten)]
+        coins: Coins,
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+    },
+    /// Split the party pool's coins evenly among the party
+    Split,
+    /// Show every purse
+    Show,
 }
 
 #[derive(Subcommand)]
@@ -207,6 +313,95 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
                 cli.seed.is_some(),
             )?;
             println!("{line}");
+        }
+        Cmd::Xp { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let lines = match cmd {
+                XpCmd::Add { amount, to, reason } => {
+                    if amount <= 0 {
+                        bail!("XP amount must be positive");
+                    }
+                    progress::xp_add(&s, amount, &to, reason.as_deref())?
+                }
+                XpCmd::Show => progress::xp_show(&s)?,
+            };
+            for l in lines {
+                println!("{l}");
+            }
+        }
+        Cmd::LevelUp {
+            who,
+            hp,
+            class,
+            milestone,
+        } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let r = progress::level_up(
+                &s,
+                &root,
+                &who,
+                &hp,
+                class.as_deref(),
+                milestone,
+                rng,
+                cli.seed.is_some(),
+            )?;
+            for l in r.lines {
+                println!("{l}");
+            }
+        }
+        Cmd::Loot { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let lines = match &cmd {
+                LootCmd::Add {
+                    items,
+                    coins,
+                    to,
+                    reason,
+                } => progress::loot(
+                    &s,
+                    progress::LootOp::Add {
+                        to,
+                        cp: coins.total()?,
+                        items,
+                    },
+                    reason.as_deref(),
+                )?,
+                LootCmd::Spend {
+                    items,
+                    coins,
+                    from,
+                    reason,
+                } => progress::loot(
+                    &s,
+                    progress::LootOp::Spend {
+                        from,
+                        cp: coins.total()?,
+                        items,
+                    },
+                    reason.as_deref(),
+                )?,
+                LootCmd::Give {
+                    items,
+                    coins,
+                    from,
+                    to,
+                } => progress::loot(
+                    &s,
+                    progress::LootOp::Give {
+                        from,
+                        to,
+                        cp: coins.total()?,
+                        items,
+                    },
+                    None,
+                )?,
+                LootCmd::Split => progress::loot(&s, progress::LootOp::Split, None)?,
+                LootCmd::Show => progress::loot_show(&s)?,
+            };
+            for l in lines {
+                println!("{l}");
+            }
         }
         Cmd::Checkpoint { text } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
