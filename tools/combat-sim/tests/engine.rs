@@ -964,6 +964,8 @@ fn resources_recharge_per_turn_round_short_long_and_rolled() {
         &mut state,
         RestKind::Short,
         Some("Recharger R"),
+        None,
+        &mut combat_sim::dice::seeded_rng(1),
         &mut Vec::new(),
     )
     .unwrap();
@@ -975,6 +977,8 @@ fn resources_recharge_per_turn_round_short_long_and_rolled() {
         &mut state,
         RestKind::Long,
         Some("Recharger R"),
+        None,
+        &mut combat_sim::dice::seeded_rng(1),
         &mut Vec::new(),
     )
     .unwrap();
@@ -2026,4 +2030,136 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         "combat-sim-engine-{label}-{}-{nanos}-{count}",
         std::process::id()
     ))
+}
+
+fn give_hit_dice(state: &mut EncounterState, name: &str, die: u32, count: i32) {
+    use combat_sim::content::schema::{Recharge, ResourceDef};
+    let i = index(state, name);
+    let mut creature = (*state.combatants[i].creature).clone();
+    creature
+        .resources
+        .get_or_insert_with(Default::default)
+        .insert(
+            "hit-dice".into(),
+            ResourceDef {
+                max: count,
+                recharge: Recharge::Long,
+                short_rest_regain: None,
+                notes: None,
+                die: Some(die),
+            },
+        );
+    state.combatants[i].creature = std::sync::Arc::new(creature);
+    state.combatants[i].resources.insert(
+        "hit-dice".into(),
+        combat_sim::state::ResourceState {
+            current: count,
+            max: count,
+            recharge: Recharge::Long,
+            short_rest_regain: None,
+        },
+    );
+}
+
+#[test]
+fn short_rest_spends_hit_dice_and_long_rest_regains_half() {
+    let mut state = encounter_state("multi-side", &["striker-a"], &[]);
+    let name = state.combatants[0].name.clone();
+    give_hit_dice(&mut state, &name, 8, 4);
+    let i = index(&state, &name);
+    state.combatants[i].hp = 1;
+    let con = state.combatants[i].ability_modifier(AbilityName::Con);
+    let mut rng = ScriptedRng::new(&[5, 3]);
+    engine::rest(
+        &mut state,
+        RestKind::Short,
+        Some(&name),
+        Some(2),
+        &mut rng,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let expected = (1 + (5 + con).max(0) + (3 + con).max(0)).min(state.combatants[i].max_hp);
+    assert_eq!(state.combatants[i].hp, expected);
+    assert_eq!(state.combatants[i].resources["hit-dice"].current, 2);
+    assert!(engine::rest(
+        &mut state,
+        RestKind::Short,
+        Some(&name),
+        Some(3),
+        &mut rng,
+        &mut Vec::new()
+    )
+    .is_err());
+    state.combatants[i]
+        .resources
+        .get_mut("hit-dice")
+        .unwrap()
+        .current = 0;
+    engine::rest(
+        &mut state,
+        RestKind::Long,
+        Some(&name),
+        None,
+        &mut rng,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(state.combatants[i].resources["hit-dice"].current, 2);
+}
+
+#[test]
+fn rest_all_skips_enemies_and_the_dead() {
+    let mut state = encounter_state("multi-side", &["striker-a", "caster-c"], &[]);
+    let party: Vec<usize> = (0..state.combatants.len())
+        .filter(|&i| state.combatants[i].side.as_str() == "party")
+        .collect();
+    let enemy = (0..state.combatants.len())
+        .find(|&i| state.combatants[i].side.as_str() != "party")
+        .expect("fixture has a non-party combatant");
+    assert!(party.len() >= 2);
+    let (alive, dead) = (party[0], party[1]);
+    for i in 0..state.combatants.len() {
+        state.combatants[i].hp = 1;
+    }
+    state.combatants[dead].hp = 0;
+    state.combatants[dead].dead = true;
+    let mut rng = ScriptedRng::new(&[]);
+    engine::rest(
+        &mut state,
+        RestKind::Long,
+        Some("all"),
+        None,
+        &mut rng,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(state.combatants[alive].hp, state.combatants[alive].max_hp);
+    assert_eq!(state.combatants[dead].hp, 0);
+    assert!(state.combatants[dead].is_dead());
+    assert_eq!(state.combatants[enemy].hp, 1);
+}
+
+#[test]
+fn long_rest_ends_concentration() {
+    let mut state = encounter_state("multi-side", &["striker-a"], &[]);
+    let name = state.combatants[0].name.clone();
+    state.concentration.insert(
+        name.clone(),
+        combat_sim::state::ConcentrationState {
+            ability: None,
+            round: 1,
+        },
+    );
+    let mut rng = ScriptedRng::new(&[]);
+    engine::rest(
+        &mut state,
+        RestKind::Long,
+        Some(&name),
+        None,
+        &mut rng,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(!state.concentration.contains_key(&name));
 }

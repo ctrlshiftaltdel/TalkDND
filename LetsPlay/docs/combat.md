@@ -36,7 +36,9 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 
 - `simulate` 只有一方时会报错；清单里没写 `party:` 时必须传 `--party`。
 - 非致命：只有**近战**可以击昏；要击昏就加 `--nonlethal`（或生物数据带 `tags: [nonlethal]`）。不加就是致死。
-- 引擎对越回合行动只**警告不阻止**；看到 `WARNING ... acting out of turn` 时确认是不是反应，否则先 `next`。
+- 越回合的 `cast` / `use`：反应能力照常执行；其他能力**直接报错**，先 `next`。准备动作或 DM 裁定时加 `--force`（会打印 WARNING）。`attack`、`move`、`interact` 越回合仍只警告（借机攻击等）。
+- 休息：`rest short <名字|all> [--hd N]` 花 N 个生命骰（每个掷骰 + 体质调整值）恢复 HP；`rest long <名字|all>` 回满 HP 和资源、恢复一半生命骰（至少 1）并结束专注。`all` 只包括 party 一方活着的角色，敌人和死者不休息。
+- 同伴 NPC（`kind: npc`、`side: party`）和 PC 一样在 0 HP 时倒地并做死亡豁免（`deathsave`）。
 - 睡眠术（2024 第二次豁免；2014 的 HP 池整个是手动）、冒险书的特殊机关、增援到场时机等是**手动**的：用 `save`、`condition add`、`activate`。
 - 状态文件是自包含的快照；改了角色卡/怪物数据后，**正在进行的**战斗不会自动更新，需要新建 state。
 - 引擎结果 = 规则结算的建议，DM 仍要检查是否符合叙事与规则（例如潜行、视线、幻象遮挡是否允许借机攻击）。
