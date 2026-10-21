@@ -445,6 +445,8 @@ fn items_are_available_by_kind() {
 
 #[test]
 fn directory_scan_skips_hidden_dirs_non_content_and_nested_layers() {
+    // COMBAT_SIM_CAMPAIGN is set by another test; keep it out of this load.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use combat_sim::content::ContentSources;
     let root = std::env::temp_dir().join(format!("cs-scan-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -489,6 +491,8 @@ fn directory_scan_skips_hidden_dirs_non_content_and_nested_layers() {
 
 #[test]
 fn edition_folders_follow_the_campaign_ruleset() {
+    // COMBAT_SIM_CAMPAIGN is set by another test; keep it out of this load.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use combat_sim::content::ContentSources;
     let root = std::env::temp_dir().join(format!("cs-edition-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
