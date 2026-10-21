@@ -827,6 +827,10 @@ pub fn import_markdown(rs: &str, srd: &Book, files: &[PathBuf]) -> Result<DataFi
     let class_ids: Vec<String> = srd.classes.keys().cloned().collect();
     for f in files {
         let text = fs::read_to_string(f)?;
+        if rs == "2014" {
+            import_2014(&text, srd, &mut out);
+            continue;
+        }
         let mut cur_class: Option<String> = None;
         let mut cur_sub: Option<String> = None;
         for line in text.lines() {
@@ -916,6 +920,163 @@ pub fn import_markdown(rs: &str, srd: &Book, files: &[PathBuf]) -> Result<DataFi
     }
     out.classes.retain(|_, c| !c.subclasses.is_empty());
     Ok(out)
+}
+
+/// 2014 PHB group headings that open each class's subclass list.
+const GROUPS_2014: &[(&str, &str)] = &[
+    ("primal paths", "barbarian"),
+    ("bard colleges", "bard"),
+    ("divine domains", "cleric"),
+    ("druid circles", "druid"),
+    ("druid circle", "druid"),
+    ("martial archetypes", "fighter"),
+    ("monastic traditions", "monk"),
+    ("sacred oaths", "paladin"),
+    ("ranger archetypes", "ranger"),
+    ("roguish archetypes", "rogue"),
+    ("sorcerous origins", "sorcerer"),
+    ("otherworldly patrons", "warlock"),
+    ("arcane traditions", "wizard"),
+];
+
+/// First "Nth level" in a feature's text ("At 6th level", "Starting at 14th level").
+fn level_in_text(t: &str) -> Option<i32> {
+    let low = t.to_lowercase();
+    let i = low.find(" level")?;
+    let head = &low[..i];
+    let word = head
+        .rsplit(|c: char| c.is_whitespace() || c == '(')
+        .next()?;
+    let digits: String = word.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let lv: i32 = digits.parse().ok()?;
+    let suffix = &word[digits.len()..];
+    (matches!(suffix, "st" | "nd" | "rd" | "th") && (1..=20).contains(&lv)).then_some(lv)
+}
+
+/// 2014 layout: `### Divine Domains` → `### Life Domain` → `#### Feature` headings
+/// whose level is written in the text ("At 6th level ..."). Feature names only;
+/// summaries stay "see the rulebook".
+fn import_2014(text: &str, srd: &Book, out: &mut DataFile) {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut cls: Option<String> = None;
+    let mut sub: Option<(String, usize)> = None; // id, heading depth
+    let mut group_depth = 0usize;
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim();
+        i += 1;
+        if !t.starts_with('#') {
+            continue;
+        }
+        let depth = t.chars().take_while(|c| *c == '#').count();
+        let mut h = t.trim_start_matches('#').trim().to_string();
+        let lower = h.to_lowercase();
+        if let Some((_, c)) = GROUPS_2014.iter().find(|(g, _)| lower == *g) {
+            cls = Some(c.to_string());
+            sub = None;
+            group_depth = depth;
+            continue;
+        }
+        let Some(c) = cls.clone() else {
+            continue;
+        };
+        // Leaving the class: a shallower heading, a class name or a chapter.
+        if depth < group_depth
+            || srd.classes.contains_key(&crate::chargen::slug(&lower))
+            || lower.starts_with("chapter")
+            || lower.starts_with("creating a")
+            || lower == "class features"
+            || lower == "quick build"
+        {
+            cls = None;
+            sub = None;
+            continue;
+        }
+        // "Channel Divinity:" split over two headings.
+        if h.ends_with(':') && i < lines.len() && lines[i].trim().starts_with('#') {
+            h = format!("{} {}", h, lines[i].trim().trim_start_matches('#').trim());
+            i += 1;
+        }
+        // Base-class feature names of any class are never subclasses or
+        // subclass features (OCR moves them around the page).
+        let class_feature = srd.classes.values().any(|cd| {
+            cd.features
+                .iter()
+                .any(|f| crate::chargen::slug(&f.1) == crate::chargen::slug(&h))
+        });
+        const GENERIC: &[&str] = &[
+            "ability-score-improvement",
+            "extra-attack",
+            "spellcasting",
+            "proficiencies",
+            "hit-points",
+            "equipment",
+            "class-features",
+            "multiclassing",
+            "quick-build",
+        ];
+        if class_feature || GENERIC.contains(&crate::chargen::slug(&h).as_str()) {
+            continue; // OCR put a base-class feature heading here
+        }
+        if depth <= group_depth {
+            // A subclass name.
+            let sid = crate::chargen::slug(&h);
+            let words = h.split_whitespace().count();
+            let is_srd = srd.classes.get(&c).is_some_and(|cd| {
+                cd.subclasses.iter().any(|(k, v)| {
+                    *k == sid
+                        || v.name.as_deref().map(crate::chargen::slug).as_deref()
+                            == Some(sid.as_str())
+                })
+            });
+            if is_srd || !(1..=6).contains(&words) || h.contains(':') {
+                sub = None;
+                continue;
+            }
+            out.classes
+                .entry(c.clone())
+                .or_default()
+                .subclasses
+                .entry(sid.clone())
+                .or_default()
+                .name = Some(title(&h));
+            sub = Some((sid, depth));
+            continue;
+        }
+        let Some((sid, _)) = sub.clone() else {
+            continue;
+        };
+        let low = h.to_lowercase();
+        if low.ends_with("level spells") || low.chars().all(|c| !c.is_alphabetic()) {
+            continue; // table header
+        }
+        // Level from the first body paragraph.
+        let body: String = lines[i..]
+            .iter()
+            .take_while(|l| !l.trim().starts_with('#'))
+            .take(6)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let first = srd
+            .classes
+            .get(&c)
+            .and_then(|x| x.subclass_level)
+            .unwrap_or(3);
+        let e = out
+            .classes
+            .entry(c.clone())
+            .or_default()
+            .subclasses
+            .entry(sid)
+            .or_default();
+        let prev = e.features.last().map(|f| f.0).unwrap_or(first);
+        let lv = level_in_text(&body).unwrap_or(prev).max(first);
+        let name = title(&h);
+        if !e.features.iter().any(|x| x.1 == name) {
+            e.features.push((lv, name, "见规则书（导入）".into()));
+        }
+    }
 }
 
 fn title(h: &str) -> String {
@@ -1201,6 +1362,40 @@ mod tests {
             !w.contains("pdf2md run") && w.contains("talkdnd data import --ruleset 2024"),
             "{w}"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn importer_reads_2014_layout() {
+        let dir = std::env::temp_dir().join(format!("talkdnd-imp14-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("b.md");
+        fs::write(
+            &f,
+            "## Cleric\n### Divine Domains\nintro\n### Life Domain\n#### Bonus Proficiency\n### Gear Domain\n#### Gear Domain Spells\n#### Cleric Level Spells\n#### Cog Blessing\nAt 1st level, you tinker.\n#### Channel Divinity:\n#### Wind Up\nStarting at 2nd level, you wind.\n#### Spring Strike\nAt 8th level, you strike.\n### Martial Archetypes\n### Champion\n### Second Wind\n#### Improved Critical\nBeginning when you choose this archetype at 3rd level\n### Gizmo Knight\n#### Cog Shield\nWhen you choose this archetype at 3rd level, shield.\n## Monk\n### Way of Nothing\n",
+        )
+        .unwrap();
+        let df = import_markdown("2014", &Book::srd("2014"), &[f]).unwrap();
+        let g = &df.classes["cleric"].subclasses["gear-domain"];
+        let names: Vec<_> = g.features.iter().map(|f| (f.0, f.1.as_str())).collect();
+        assert_eq!(
+            names,
+            vec![
+                (1, "Gear Domain Spells"),
+                (1, "Cog Blessing"),
+                (2, "Channel Divinity: Wind Up"),
+                (8, "Spring Strike")
+            ]
+        );
+        assert!(!df.classes["cleric"].subclasses.contains_key("life-domain"));
+        assert!(!df.classes["cleric"].subclasses.contains_key("life"));
+        let k = &df.classes["fighter"].subclasses;
+        assert!(
+            k.contains_key("gizmo-knight") && !k.contains_key("second-wind"),
+            "{k:?}"
+        );
+        assert!(!df.classes.contains_key("monk"));
         let _ = fs::remove_dir_all(&dir);
     }
 
