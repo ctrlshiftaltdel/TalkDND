@@ -282,6 +282,12 @@ pub enum Command {
         hd: Option<u32>,
     },
 
+    /// Persistent party state between encounters (`party-state.yaml` in the save).
+    Party {
+        #[command(subcommand)]
+        command: PartyCommand,
+    },
+
     /// Wake dormant creatures matching a name, creature id or tag.
     Activate { name: String },
 
@@ -375,6 +381,29 @@ impl From<UntilArg> for crate::content::schema::DurationUntil {
             UntilArg::EndOfTargetNextTurn => Self::EndOfTargetNextTurn,
         }
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PartyCommand {
+    /// Print current HP, resources and conditions of every party member.
+    Show,
+    /// Rest outside combat (living members of the manifest party).
+    Rest {
+        #[arg(value_enum)]
+        kind: RestKindArg,
+        /// Party creature id or `all`.
+        who: String,
+        /// Short rest: spend this many Hit Dice.
+        #[arg(long)]
+        hd: Option<u32>,
+    },
+    /// Set a member's current HP (DM correction, healing outside combat).
+    SetHp { who: String, hp: i32 },
+    /// Copy the party from an encounter state into party-state.yaml.
+    Sync {
+        #[arg(long = "from-state", value_name = "NAME")]
+        from_state: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -852,6 +881,7 @@ pub fn run() -> Result<()> {
             })
         }
         Command::Content { command } => run_content(&sources, command),
+        Command::Party { command } => run_party(&sources, state.as_deref(), seed, command),
         Command::Simulate {
             encounter,
             party,
@@ -1100,6 +1130,7 @@ where
     state
         .save(state_path)
         .with_context(|| format!("failed to save state {}", state_path.display()))?;
+    write_party_state(&state)?;
     print_lines(&lines);
     Ok(())
 }
@@ -1117,7 +1148,135 @@ where
     state.log.extend(lines.iter().cloned());
     state
         .save(state_path)
-        .with_context(|| format!("failed to save state {}", state_path.display()))
+        .with_context(|| format!("failed to save state {}", state_path.display()))?;
+    write_party_state(&state)
+}
+
+fn write_party_state(state: &EncounterState) -> Result<()> {
+    let Some(path) = state.party_state.as_deref() else {
+        return Ok(());
+    };
+    let mut party = crate::party::PartyState::load(path)?;
+    party.record(state);
+    party.save(path)
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let a = if a.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        a
+    };
+    let b = if b.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        b
+    };
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+fn party_state_path(sources: &ContentSources) -> Option<PathBuf> {
+    manifest_state_dir(sources).map(|dir| dir.join(crate::party::FILE_NAME))
+}
+
+fn run_party(
+    sources: &ContentSources,
+    requested: Option<&Path>,
+    seed: Option<u64>,
+    command: PartyCommand,
+) -> Result<()> {
+    use crate::party::{Member, PartyState};
+    let path = party_state_path(sources).ok_or_else(|| {
+        anyhow!("party state needs a campaign manifest with `state_dir` (run inside a save or pass --campaign)")
+    })?;
+    let mut party = PartyState::load(&path)?;
+    // Members of the manifest party that are not recorded yet start fresh.
+    if let (Some(manifest), Ok(content)) = (read_manifest(sources), load_content(sources)) {
+        for id in &manifest.party {
+            if !party.members.contains_key(id) {
+                if let Ok(creature) = content.resolve_creature(id) {
+                    party
+                        .members
+                        .insert(id.clone(), Member::from_creature(&creature));
+                }
+            }
+        }
+    }
+    let mut lines = Vec::new();
+    let pick = |party: &PartyState, who: &str| -> Result<Vec<String>> {
+        if who.eq_ignore_ascii_case("all") {
+            return Ok(party.members.keys().cloned().collect());
+        }
+        party
+            .members
+            .iter()
+            .find(|(id, m)| id.eq_ignore_ascii_case(who) || m.name.eq_ignore_ascii_case(who))
+            .map(|(id, _)| vec![id.clone()])
+            .ok_or_else(|| {
+                anyhow!(
+                    "no party member `{who}`; known: {}",
+                    party.members.keys().cloned().collect::<Vec<_>>().join(", ")
+                )
+            })
+    };
+    match command {
+        PartyCommand::Show => {
+            if party.members.is_empty() {
+                println!("party state is empty (no `party:` in the manifest yet)");
+            }
+            for line in party.summary_lines() {
+                println!("{line}");
+            }
+            return Ok(());
+        }
+        PartyCommand::Rest { kind, who, hd } => {
+            let ids = pick(&party, &who)?;
+            let mut rng = make_rng(seed);
+            for id in ids {
+                let member = party.members.get_mut(&id).expect("picked");
+                match kind {
+                    RestKindArg::Short => {
+                        member.short_rest(hd.unwrap_or(0), rng.as_mut(), &mut lines)?
+                    }
+                    RestKindArg::Long => {
+                        if hd.is_some() {
+                            bail!("--hd is only for short rests");
+                        }
+                        member.long_rest(&mut lines)
+                    }
+                }
+            }
+        }
+        PartyCommand::SetHp { who, hp } => {
+            for id in pick(&party, &who)? {
+                let member = party.members.get_mut(&id).expect("picked");
+                member.hp = hp.clamp(0, member.max_hp);
+                if member.hp > 0 {
+                    member.death_saves = Default::default();
+                }
+                lines.push(format!(
+                    "{} HP set to {}/{}",
+                    member.name, member.hp, member.max_hp
+                ));
+            }
+        }
+        PartyCommand::Sync { from_state } => {
+            let state_file = state_path(sources, from_state.as_deref().or(requested));
+            let state = EncounterState::load(&state_file)
+                .with_context(|| format!("failed to load state {}", state_file.display()))?;
+            party.record(&state);
+            lines.push(format!("party state updated from {}", state_file.display()));
+        }
+    }
+    party.save(&path)?;
+    print_lines(&lines);
+    for line in party.summary_lines() {
+        println!("{line}");
+    }
+    Ok(())
 }
 
 fn new_state(
@@ -1143,9 +1302,44 @@ fn new_state(
         party_zone,
         adds,
     };
-    let state = EncounterState::from_encounter(content, &options)?;
+    let mut state = EncounterState::from_encounter(content, &options)?;
     let state_dir = manifest_state_dir(sources);
     let path = resolve_state_path(requested, state_dir.as_deref());
+    // Party state is used only for encounters saved in the save's state_dir,
+    // so scratch states elsewhere never touch it.
+    let in_state_dir = match (&state_dir, path.parent()) {
+        (Some(dir), Some(parent)) => same_dir(dir, parent),
+        _ => false,
+    };
+    if in_state_dir {
+        if let Some(party_path) = party_state_path(sources) {
+            let party = crate::party::PartyState::load(&party_path)?;
+            let mut applied = Vec::new();
+            for combatant in &mut state.combatants {
+                if combatant.side.as_str() != "party" {
+                    continue;
+                }
+                if let Some(member) = party.members.get(combatant.creature_id()) {
+                    member.apply(combatant);
+                    applied.push(format!(
+                        "{} HP {}/{}",
+                        combatant.name, combatant.hp, combatant.max_hp
+                    ));
+                }
+            }
+            if !applied.is_empty() {
+                state
+                    .log
+                    .push(format!("Party state loaded: {}", applied.join(", ")));
+            }
+            let absolute = party_path
+                .parent()
+                .and_then(|dir| dir.canonicalize().ok())
+                .map(|dir| dir.join(crate::party::FILE_NAME))
+                .unwrap_or(party_path);
+            state.party_state = Some(absolute);
+        }
+    }
     state
         .save(&path)
         .with_context(|| format!("failed to save state {}", path.display()))?;

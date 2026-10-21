@@ -64,6 +64,9 @@ pub struct EncounterState {
     /// Once a side has won or the fight is a draw, the recorded outcome.
     #[serde(default)]
     pub outcome: Option<CombatOutcome>,
+    /// Save's `party-state.yaml`; party values are written back after each command.
+    #[serde(default)]
+    pub party_state: Option<std::path::PathBuf>,
     /// Spatial indices derived from `scene`. Shared by every clone of the
     /// state; rebuilt after loading a state file.
     #[serde(skip)]
@@ -98,6 +101,7 @@ impl PartialEq for EncounterState {
             && self.concentration == other.concentration
             && self.triggers == other.triggers
             && self.outcome == other.outcome
+            && self.party_state == other.party_state
     }
 }
 
@@ -924,6 +928,7 @@ impl EncounterState {
             concentration: BTreeMap::new(),
             triggers: scene_trigger_runtime(&scene),
             outcome: None,
+            party_state: None,
             space_cache,
             name_index,
             static_modifier_sources,
