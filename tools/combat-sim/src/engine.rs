@@ -5179,6 +5179,28 @@ fn begin_concentration(
     ));
 }
 
+/// A creature that dies stops concentrating and loses the conditions that came
+/// from other creatures' concentration spells (e.g. a bless it was under), so
+/// `status` no longer lists them.
+fn on_death(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
+    let name = state.combatants[target].name.clone();
+    // End the dead creature's own concentration (and its conditions on others).
+    break_concentration(state, target, log);
+    // Drop conditions the dead creature got from other creatures' concentration.
+    let mut kept = Vec::new();
+    for condition in state.combatants[target].conditions.drain(..) {
+        if condition.concentration && condition.source.as_deref() != Some(name.as_str()) {
+            log.log(format_args!(
+                "{} is no longer {}",
+                name, condition.condition
+            ));
+        } else {
+            kept.push(condition);
+        }
+    }
+    state.combatants[target].conditions = kept;
+}
+
 fn break_concentration(state: &mut EncounterState, actor: usize, log: &mut dyn LogSink) {
     let name = state.combatants[actor].name.clone();
     if state.concentration.remove(&name).is_none() {
@@ -5364,6 +5386,7 @@ fn apply_damage_rolls(
         if state.combatants[target].makes_death_saves() {
             state.combatants[target].death_saves.dead = true;
         }
+        on_death(state, target, log);
     }
 
     if state.combatants[target].hp == 0 && !state.combatants[target].is_dead() {
@@ -5380,6 +5403,7 @@ fn apply_damage_rolls(
             }
         } else {
             state.combatants[target].dead = true;
+            on_death(state, target, log);
             if let Some(condition_id) = state.content.rules.dead_monster_condition.clone() {
                 let mut rng = seeded_rng(0);
                 let _ = apply_condition_internal(
@@ -5531,6 +5555,7 @@ fn add_death_save_failures(
     if total >= 3 {
         state.combatants[target].death_saves.dead = true;
         state.combatants[target].dead = true;
+        on_death(state, target, log);
         log.log(format_args!("{name} dies"));
     }
 }
@@ -6831,6 +6856,7 @@ fn death_save_at(
     if state.combatants[index].death_saves.failures >= 3 {
         state.combatants[index].death_saves.dead = true;
         state.combatants[index].dead = true;
+        on_death(state, index, log);
         log.log(format_args!("{name} dies"));
     } else if state.combatants[index].death_saves.successes >= 3 {
         state.combatants[index].death_saves.stable = true;

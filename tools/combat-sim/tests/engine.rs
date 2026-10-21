@@ -877,6 +877,60 @@ fn incapacitating_a_concentrator_ends_concentration() {
 }
 
 #[test]
+fn death_ends_concentration_and_drops_concentration_conditions() {
+    let mut state = encounter_state("test-fight", &["caster-c"], &[]);
+    let options = UseOptions {
+        targets: vec!["Brute A".to_string()],
+        ..UseOptions::default()
+    };
+    engine::use_ability(
+        &mut state,
+        "Caster C",
+        "focus-spell",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(state.concentration.contains_key("Caster C"));
+    assert!(state.combatants[index(&state, "Brute A")].has_condition(&state.content, "marked-test"));
+
+    // The target dies: the condition granted by another's concentration is gone.
+    engine::damage(
+        &mut state,
+        "Brute A",
+        "40",
+        None,
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(state.combatants[index(&state, "Brute A")].is_dead());
+    assert!(
+        !state.combatants[index(&state, "Brute A")].has_condition(&state.content, "marked-test")
+    );
+
+    // The caster dies from massive damage: its own concentration ends and the
+    // conditions it granted are removed.
+    engine::damage(
+        &mut state,
+        "Caster C",
+        "45",
+        None,
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(state.combatants[index(&state, "Caster C")].is_dead());
+    assert!(!state.concentration.contains_key("Caster C"));
+    assert!(
+        !state.combatants[index(&state, "Brute A")].has_condition(&state.content, "marked-test")
+    );
+}
+
+#[test]
 fn dormant_creatures_are_excluded_until_activated() {
     let mut state = encounter_state("dormant-fight", &["striker-a"], &[]);
     engine::init(

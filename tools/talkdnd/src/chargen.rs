@@ -432,6 +432,28 @@ pub fn validate(c: &Creation) -> Report {
                 e.push(format!("unknown skill `{s}`"));
             }
         }
+        // A chosen skill already granted by the background or species is a
+        // duplicate pick: say so explicitly.
+        let bg_skills: Vec<String> = c
+            .background
+            .as_deref()
+            .and_then(|b| data::background(&rs, b))
+            .map(|b| b.skills.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_else(|| c.background_skills.clone());
+        let sp_skills: Vec<String> = sp
+            .map(|s| s.skills.iter().map(|x| x.to_string()).collect())
+            .unwrap_or_default();
+        for s in &c.skills {
+            if bg_skills.contains(s) {
+                w.push(format!(
+                    "skill `{s}` is already granted by the background; pick another"
+                ));
+            } else if sp_skills.contains(s) {
+                w.push(format!(
+                    "skill `{s}` is already granted by the species; pick another"
+                ));
+            }
+        }
         let granted = c.granted_skills();
         let chosen: Vec<&String> = c.skills.iter().filter(|s| !granted.contains(s)).collect();
         let mut seen = std::collections::BTreeSet::new();
@@ -617,6 +639,10 @@ pub fn parse_abilities(args: &[String]) -> Result<BTreeMap<String, i32>> {
 pub fn slug(s: &str) -> String {
     let mut out = String::new();
     for ch in s.trim().chars() {
+        if matches!(ch, '\'' | '\u{2019}') {
+            // "King's" -> "kings", matching the adventure folder names.
+            continue;
+        }
         if ch.is_alphanumeric() {
             out.extend(ch.to_lowercase());
         } else if !out.ends_with('-') && !out.is_empty() {
@@ -1117,6 +1143,28 @@ mod tests {
             .errors
             .iter()
             .any(|e| e.contains("not on the cleric list")));
+    }
+
+    #[test]
+    fn duplicate_granted_skill_is_warning() {
+        let mut c = base("2014");
+        // Acolyte grants insight + religion.
+        c.skills = vec!["insight".into(), "medicine".into()];
+        let r = validate(&c);
+        assert!(r.errors.is_empty());
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.contains("already granted by the background")));
+        // High elf grants perception.
+        c.species = Some("high-elf".into());
+        c.skills = vec!["perception".into(), "medicine".into()];
+        let r = validate(&c);
+        assert!(r.errors.is_empty());
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.contains("already granted by the species")));
     }
 
     #[test]
