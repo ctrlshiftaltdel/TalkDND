@@ -28,6 +28,9 @@ Rules/combat/2014/monsters/allosaurus.yaml
 LetsPlay/Rules/combat/2014/monsters/scarecrow.yaml
 Rules/combat/2014/monsters/scarecrow.yaml
 LetsPlay/Rules/combat/local/
+# Local chargen data built from the user's own books (talkdnd data import)
+LetsPlay/Rules/chargen/local/
+Rules/chargen/local/
 Rules/combat/local/
 # any PDF, anywhere
 *.pdf

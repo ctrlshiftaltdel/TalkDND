@@ -23,7 +23,7 @@
 1. **规则版本**：看 `Rules/2014/`、`Rules/2024/` 里实际有哪版书，问玩家用哪版 → `$T new --ruleset <版本>`
 2. **冒险**：列出 `Adventures/` 里的书 → `$T chargen set adventure "<书名>"`
 3. **种族 / 物种** → `$T chargen set species <id>`
-4. **职业** → `$T chargen set class <id>`
+4. **职业** → `$T chargen set class <id>`；到子职等级时再问子职 → `$T chargen set subclass <id>`
 5. **背景** → `$T chargen set background <id>`
 6. **属性生成方式**：4d6 去最低 / 标准数组 / 购点，由玩家选
 7. **生成并分配**：掷骰只用 `$T chargen roll`（6 次 4d6dl1，自动记日志，不能重掷）；把 6 个数给玩家看，**由玩家决定每个数放哪项** → `$T chargen assign str=15 dex=14 con=13 int=8 wis=12 cha=10`（数值按玩家说的）；购点由玩家报数值 → `$T chargen pointbuy str=15 dex=14 con=13 int=8 wis=10 cha=10`
@@ -35,6 +35,8 @@
 13. 写 `dm-secrets.md`，在会话日志写开场，进入第一个场景
 
 中途断了：`$T chargen status` 看下一步，接着问。
+
+`chargen sheet` 自动生成攻击、职业特性和资源。它若打印 `warning: ... run \`...\``（缺非 SRD 数据），就照抄执行那条命令；何时、如何导入本地规则书数据见 `docs/chargen.md`「本地规则书数据」。
 
 ## 接档
 

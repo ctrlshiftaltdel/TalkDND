@@ -1,0 +1,314 @@
+# SRD 5.1 (2014) class progression, CC-BY-4.0. Feature names plus short summaries in our own words.
+# features: [level, name, summary]. asi: levels with Ability Score Improvement.
+# resources: by_level (20 values, index = level-1) or formula (level|5*level|prof|<ability>), from = first level.
+ruleset: "2014"
+classes:
+  barbarian:
+    caster: none
+    weapons: [simple, martial]
+    features:
+      - [1, Rage, 附赠动作进入狂暴：力量攻击伤害加值、钝击/穿刺/挥砍抗性、力量检定与豁免优势]
+      - [1, Unarmored Defense, 无甲时 AC = 10 + 敏捷 + 体质]
+      - [2, Reckless Attack, 本回合首次攻击可获优势，代价是敌人攻击你也有优势]
+      - [2, Danger Sense, 看得见的敏捷豁免（陷阱、法术等）优势]
+      - [3, Primal Path, 选择子职]
+      - [5, Extra Attack, 攻击动作可攻击两次]
+      - [5, Fast Movement, 不穿重甲时速度 +10 尺]
+      - [7, Feral Instinct, 先攻优势；狂暴后可在突袭轮行动]
+      - [9, Brutal Critical, 重击时额外掷一枚武器伤害骰（13 级 2 枚、17 级 3 枚）]
+      - [11, Relentless Rage, 狂暴中降到 0 HP 时体质豁免成功则留 1 HP]
+      - [15, Persistent Rage, 狂暴只在昏迷或主动结束时提前结束]
+      - [18, Indomitable Might, 力量检定结果低于力量值时按力量值计]
+      - [20, Primal Champion, 力量与体质 +4（上限 24）]
+    resources:
+      - {id: rage, name: Rage, recharge: long, by_level: [2,2,3,3,3,4,4,4,4,4,4,5,5,5,5,5,6,6,6,99], notes: "伤害加值 +2（9 级 +3，16 级 +4）；20 级无限"}
+    subclasses:
+      berserker:
+        name: Path of the Berserker
+        features:
+          - [3, Frenzy, 狂暴时可狂乱：每回合附赠动作近战攻击，结束后力竭 1 级]
+          - [6, Mindless Rage, 狂暴中免疫魅惑与恐慌]
+          - [10, Intimidating Presence, 动作恐吓一名生物（感知豁免）]
+          - [14, Retaliation, 被 5 尺内生物伤害时可用反应近战反击]
+  bard:
+    caster: full
+    weapons: [simple, hand-crossbow, longsword, rapier, shortsword]
+    cantrips: [2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4]
+    known: [4,5,6,7,8,9,10,11,12,14,15,15,16,18,19,19,20,22,22,22]
+    features:
+      - [1, Spellcasting, 魅力施法，已知法术]
+      - [1, Bardic Inspiration, 附赠动作给盟友一颗激励骰，可加到检定、攻击或豁免]
+      - [2, Jack of All Trades, 未熟练的属性检定加一半熟练]
+      - [2, Song of Rest, 短休时盟友额外恢复 1d6 HP（随等级提升）]
+      - [3, Bard College, 选择子职]
+      - [3, Expertise, 两项熟练技能加倍熟练（10 级再两项）]
+      - [5, Font of Inspiration, 吟游激励改为短休恢复]
+      - [6, Countercharm, 动作演奏，附近盟友对恐慌与魅惑豁免优势]
+      - [10, Magical Secrets, 从任意职业法术表学两个法术（14、18 级再学）]
+      - [20, Superior Inspiration, 投先攻时若无激励次数则恢复 1 次]
+    resources:
+      - {id: bardic-inspiration, name: Bardic Inspiration, recharge: long, formula: cha, notes: "d6（5 级 d8，10 级 d10，15 级 d12）；5 级起短休恢复", short_from: 5}
+    subclasses:
+      lore:
+        name: College of Lore
+        features:
+          - [3, Bonus Proficiencies, 额外三项技能熟练]
+          - [3, Cutting Words, 反应消耗激励骰，减去敌人的攻击、检定或伤害]
+          - [6, Additional Magical Secrets, 从任意职业学两个法术]
+          - [14, Peerless Skill, 自己的属性检定可用激励骰]
+  cleric:
+    caster: full
+    weapons: [simple]
+    cantrips: [3,3,3,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5,5]
+    prepared: wis+level
+    subclass_level: 1
+    features:
+      - [1, Spellcasting, 感知施法，每次长休准备法术]
+      - [1, Divine Domain, 选择子职（1 级）]
+      - [2, Channel Divinity, 引导神力：驱散亡灵及领域效果]
+      - [5, Destroy Undead, 驱散时低 CR 亡灵直接被摧毁]
+      - [10, Divine Intervention, 祈求神祇介入，成功率按等级]
+      - [20, Divine Intervention Improvement, 神祇介入自动成功]
+    resources:
+      - {id: channel-divinity, name: Channel Divinity, recharge: short, from: 2, by_level: [0,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3]}
+    subclasses:
+      life:
+        name: Life Domain
+        features:
+          - [1, Bonus Proficiency, 重甲熟练]
+          - [1, Disciple of Life, 治疗法术额外恢复 2 + 法术环级]
+          - [2, "Channel Divinity: Preserve Life", 引导神力分配治疗，最多到各自一半上限]
+          - [6, Blessed Healer, 为他人治疗时自己也恢复]
+          - [8, Divine Strike, 每回合一次武器命中额外光耀伤害]
+          - [17, Supreme Healing, 治疗骰取最大值]
+  druid:
+    caster: full
+    weapons: [club, dagger, dart, javelin, mace, quarterstaff, scimitar, sickle, sling, spear]
+    cantrips: [2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4]
+    prepared: wis+level
+    subclass_level: 2
+    features:
+      - [1, Druidic, 德鲁伊秘语]
+      - [1, Spellcasting, 感知施法，每次长休准备法术]
+      - [2, Wild Shape, 动作变成见过的野兽（CR 与形态受等级限制）]
+      - [2, Druid Circle, 选择子职]
+      - [18, Timeless Body, 衰老极慢]
+      - [18, Beast Spells, 野兽形态下可施法]
+      - [20, Archdruid, 荒野变形无限次]
+    resources:
+      - {id: wild-shape, name: Wild Shape, recharge: short, from: 2, by_level: [0,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,99]}
+    subclasses:
+      land:
+        name: Circle of the Land
+        features:
+          - [2, Bonus Cantrip, 额外一个德鲁伊戏法]
+          - [2, Natural Recovery, 短休恢复法术位（总环数 ≤ 等级一半），每长休一次]
+          - [3, Circle Spells, 按所选地形获得常备法术]
+          - [6, "Land's Stride", 非魔法困难地形不减速]
+          - [10, "Nature's Ward", 免疫毒与疾病，对元素与妖精魅惑/恐慌免疫]
+          - [14, "Nature's Sanctuary", 野兽与植物攻击你前需感知豁免]
+  fighter:
+    caster: none
+    weapons: [simple, martial]
+    asi: [4,6,8,12,14,16,19]
+    features:
+      - [1, Fighting Style, 选择一种战斗风格]
+      - [1, Second Wind, 附赠动作恢复 1d10 + 等级 HP]
+      - [2, Action Surge, 本回合额外一个动作]
+      - [3, Martial Archetype, 选择子职]
+      - [5, Extra Attack, 攻击动作攻击两次（11 级三次，20 级四次）]
+      - [9, Indomitable, 重骰一次失败的豁免]
+    resources:
+      - {id: second-wind, name: Second Wind, recharge: short, by_level: [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}
+      - {id: action-surge, name: Action Surge, recharge: short, from: 2, by_level: [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2]}
+      - {id: indomitable, name: Indomitable, recharge: long, from: 9, by_level: [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3]}
+    subclasses:
+      champion:
+        name: Champion
+        features:
+          - [3, Improved Critical, 19–20 重击]
+          - [7, Remarkable Athlete, 未熟练的力量/敏捷/体质检定加一半熟练]
+          - [10, Additional Fighting Style, 第二种战斗风格]
+          - [15, Superior Critical, 18–20 重击]
+          - [18, Survivor, HP 不足一半时每回合恢复 5 + 体质]
+  monk:
+    caster: none
+    weapons: [simple, shortsword]
+    martial_arts: [4,4,4,4,6,6,6,6,6,6,8,8,8,8,8,8,10,10,10,10]
+    features:
+      - [1, Unarmored Defense, 无甲无盾时 AC = 10 + 敏捷 + 感知]
+      - [1, Martial Arts, 武僧武器与徒手可用敏捷，武术骰，附赠动作徒手攻击]
+      - [2, Ki, 气点：疾风连击、坚强防御、疾步如风]
+      - [2, Unarmored Movement, 无甲速度提升]
+      - [3, Monastic Tradition, 选择子职]
+      - [3, Deflect Missiles, 反应减免远程武器伤害，可回掷]
+      - [4, Slow Fall, 反应减少坠落伤害]
+      - [5, Extra Attack, 攻击动作攻击两次]
+      - [5, Stunning Strike, 命中后花 1 气，目标体质豁免否则震慑]
+      - [6, Ki-Empowered Strikes, 徒手攻击视为魔法]
+      - [7, Evasion, 敏捷豁免成功无伤、失败减半]
+      - [7, Stillness of Mind, 动作结束自身魅惑或恐慌]
+      - [10, Purity of Body, 免疫疾病与毒]
+      - [13, Tongue of the Sun and Moon, 理解所有语言]
+      - [14, Diamond Soul, 所有豁免熟练，花 1 气重骰]
+      - [15, Timeless Body, 不再衰老，不需饮食]
+      - [18, Empty Body, 花气隐形并获得抗性]
+      - [20, Perfect Self, 投先攻时无气则恢复 4 点]
+    resources:
+      - {id: ki, name: Ki, recharge: short, from: 2, formula: level, notes: "豁免 DC = 8 + 熟练 + 感知"}
+    subclasses:
+      open-hand:
+        name: Way of the Open Hand
+        features:
+          - [3, Open Hand Technique, 疾风连击命中可附加击倒/推开/禁反应]
+          - [6, Wholeness of Body, 动作恢复 3 × 等级 HP，每长休一次]
+          - [11, Tranquility, 长休后获得庇护所效果]
+          - [17, Quivering Palm, 震颤掌：之后可令目标体质豁免，失败降到 0 HP]
+  paladin:
+    caster: half
+    weapons: [simple, martial]
+    prepared: cha+half
+    features:
+      - [1, Divine Sense, 感知附近天界、邪魔、亡灵]
+      - [1, Lay on Hands, 圣疗池（5 × 等级 HP），也可治疗疾病与毒]
+      - [2, Fighting Style, 选择一种战斗风格]
+      - [2, Spellcasting, 魅力施法（半施法者）]
+      - [2, Divine Smite, 近战命中时消耗法术位附加光耀伤害]
+      - [3, Divine Health, 免疫疾病]
+      - [3, Sacred Oath, 选择子职]
+      - [5, Extra Attack, 攻击动作攻击两次]
+      - [6, Aura of Protection, 10 尺内盟友豁免加你的魅力调整值（18 级 30 尺）]
+      - [10, Aura of Courage, 光环内盟友不会恐慌]
+      - [11, Improved Divine Smite, 近战武器命中额外 1d8 光耀]
+      - [14, Cleansing Touch, 动作结束法术效果，次数 = 魅力调整值]
+    resources:
+      - {id: lay-on-hands, name: Lay on Hands, recharge: long, formula: 5*level, notes: 治疗池（HP）}
+      - {id: divine-sense, name: Divine Sense, recharge: long, formula: 1+cha}
+      - {id: channel-divinity, name: Channel Divinity, recharge: short, from: 3, by_level: [0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}
+    subclasses:
+      devotion:
+        name: Oath of Devotion
+        features:
+          - [3, "Channel Divinity: Sacred Weapon", 武器攻击加魅力调整值并发光]
+          - [3, "Channel Divinity: Turn the Unholy", 驱散邪魔与亡灵]
+          - [7, Aura of Devotion, 光环内不会被魅惑]
+          - [15, Purity of Spirit, 常驻防护善恶效果]
+          - [20, Holy Nimbus, 圣光：灼烧敌人、豁免优势]
+  ranger:
+    caster: half
+    weapons: [simple, martial]
+    known: [0,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11]
+    features:
+      - [1, Favored Enemy, 选择宿敌类型：追踪与回忆知识优势]
+      - [1, Natural Explorer, 选择偏好地形：旅行与探索加成]
+      - [2, Fighting Style, 选择一种战斗风格]
+      - [2, Spellcasting, 感知施法（半施法者，已知法术）]
+      - [3, Ranger Archetype, 选择子职]
+      - [3, Primeval Awareness, 花法术位感知附近特定生物类型]
+      - [5, Extra Attack, 攻击动作攻击两次]
+      - [8, "Land's Stride", 非魔法困难地形不减速]
+      - [10, Hide in Plain Sight, 伪装后静止时隐匿加值]
+      - [14, Vanish, 附赠动作躲藏，不可被非魔法追踪]
+      - [18, Feral Senses, 感知看不见的生物]
+      - [20, Foe Slayer, 每回合一次对宿敌攻击或伤害加感知调整值]
+    subclasses:
+      hunter:
+        name: Hunter
+        features:
+          - [3, "Hunter's Prey", 选择巨人杀手/群体破坏者/猎杀巨物之一]
+          - [7, Defensive Tactics, 选择一种防御技巧]
+          - [11, Multiattack, 齐射或旋风斩]
+          - [15, "Superior Hunter's Defense", 选择一种高级防御]
+  rogue:
+    caster: none
+    weapons: [simple, hand-crossbow, longsword, rapier, shortsword]
+    asi: [4,8,10,12,16,19]
+    features:
+      - [1, Expertise, 两项技能加倍熟练（6 级再两项）]
+      - [1, Sneak Attack, 每回合一次，有优势或盟友相邻时灵巧/远程武器追加伤害]
+      - [1, "Thieves' Cant", 盗贼黑话]
+      - [2, Cunning Action, 附赠动作疾走、撤离或躲藏]
+      - [3, Roguish Archetype, 选择子职]
+      - [5, Uncanny Dodge, 反应把一次攻击伤害减半]
+      - [7, Evasion, 敏捷豁免成功无伤、失败减半]
+      - [11, Reliable Talent, 熟练检定 d20 低于 10 按 10 计]
+      - [14, Blindsense, 感知 10 尺内隐形或藏匿的生物]
+      - [15, Slippery Mind, 感知豁免熟练]
+      - [18, Elusive, 未失能时攻击你不能有优势]
+      - [20, Stroke of Luck, 未命中改为命中或检定按 20 计，每短休一次]
+    subclasses:
+      thief:
+        name: Thief
+        features:
+          - [3, Fast Hands, 巧手动作可用附赠动作完成]
+          - [3, Second-Story Work, 攀爬不减速，跳远加敏捷]
+          - [9, Supreme Sneak, 半速移动时隐匿优势]
+          - [13, Use Magic Device, 无视魔法物品的职业/种族/等级要求]
+          - [17, "Thief's Reflexes", 第一轮获得两个回合]
+  sorcerer:
+    caster: full
+    weapons: [dagger, dart, sling, quarterstaff, light-crossbow]
+    cantrips: [4,4,4,5,5,5,5,5,5,6,6,6,6,6,6,6,6,6,6,6]
+    known: [2,3,4,5,6,7,8,9,10,11,12,12,13,13,14,14,15,15,15,15]
+    subclass_level: 1
+    features:
+      - [1, Spellcasting, 魅力施法，已知法术]
+      - [1, Sorcerous Origin, 选择子职（1 级）]
+      - [2, Font of Magic, 术法点：与法术位互换]
+      - [3, Metamagic, 选择两种超魔（10、17 级再加）]
+      - [20, Sorcerous Restoration, 短休恢复 4 术法点]
+    resources:
+      - {id: sorcery-points, name: Sorcery Points, recharge: long, from: 2, formula: level}
+    subclasses:
+      draconic:
+        name: Draconic Bloodline
+        features:
+          - [1, Dragon Ancestor, 选择龙种，与龙交涉加倍熟练]
+          - [1, Draconic Resilience, HP 每级 +1；无甲 AC = 13 + 敏捷]
+          - [6, Elemental Affinity, 对应伤害类型法术加魅力，可花点获得抗性]
+          - [14, Dragon Wings, 长出龙翼获得飞行速度]
+          - [18, Draconic Presence, 花 5 点发出畏惧或敬畏光环]
+  warlock:
+    caster: pact
+    weapons: [simple]
+    cantrips: [2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4]
+    known: [2,3,4,5,6,7,8,9,10,10,11,11,12,12,13,13,14,14,15,15]
+    subclass_level: 1
+    features:
+      - [1, Otherworldly Patron, 选择子职（1 级）]
+      - [1, Pact Magic, 魅力施法，契约法术位短休恢复]
+      - [2, Eldritch Invocations, 选择魔能祈唤（数量随等级增加）]
+      - [3, Pact Boon, 选择契约恩赐]
+      - [11, Mystic Arcanum, 每长休施放一次高环法术（6 环；13/15/17 级 7/8/9 环）]
+      - [20, Eldritch Master, 花 1 分钟恢复全部契约法术位，每长休一次]
+    subclasses:
+      fiend:
+        name: The Fiend
+        features:
+          - [1, "Dark One's Blessing", 敌对生物降到 0 HP 时获得临时 HP（魅力 + 等级）]
+          - [6, "Dark One's Own Luck", 检定或豁免加 d10，每短休一次]
+          - [10, Fiendish Resilience, 短休后选择一种伤害类型获得抗性]
+          - [14, Hurl Through Hell, 命中后把目标扔进下层位面，每长休一次]
+  wizard:
+    caster: full
+    weapons: [dagger, dart, sling, quarterstaff, light-crossbow]
+    cantrips: [3,3,3,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5,5]
+    prepared: int+level
+    subclass_level: 2
+    features:
+      - [1, Spellcasting, 智力施法，法术书，每长休准备法术]
+      - [1, Arcane Recovery, 短休恢复法术位（总环数 ≤ 等级一半向上取整），每天一次]
+      - [2, Arcane Tradition, 选择子职]
+      - [18, Spell Mastery, 选一个 1 环与一个 2 环法术随意施放]
+      - [20, Signature Spells, 两个 3 环法术各可免费施放一次/短休]
+    resources:
+      - {id: arcane-recovery, name: Arcane Recovery, recharge: long, by_level: [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], notes: "恢复环数总和 ≤ 等级/2 向上取整，单个不超过 5 环"}
+    subclasses:
+      evocation:
+        name: School of Evocation
+        features:
+          - [2, Evocation Savant, 抄写塑能法术费用减半]
+          - [2, Sculpt Spells, 塑能法术可让若干盟友自动成功且不受伤]
+          - [6, Potent Cantrip, 豁免成功的戏法仍造成一半伤害]
+          - [10, Empowered Evocation, 塑能法术伤害加智力调整值]
+          - [14, Overchannel, 低环法术伤害取最大值，重复使用会伤自己]
