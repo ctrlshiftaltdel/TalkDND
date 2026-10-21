@@ -89,6 +89,8 @@ class Proofreader:
     def __init__(self, md, words=None):
         self.lex = words if words is not None else repair.WORDS
         self.freq = collections.Counter(w.lower() for w in TOKEN.findall(md))
+        self.hyph = collections.Counter(
+            h.lower() for h in re.findall(r"\b[A-Za-z]{2,}-[A-Za-z]{2,}\b", md))
         self.log = []
         self.no = 0
 
@@ -131,6 +133,51 @@ class Proofreader:
             return line
         return "".join(out) + line[pos:]
 
+    def segment(self, low, max_parts=4):
+        """Best split of `low` into 2..max_parts dictionary words: the score is the
+        rarest part's frequency in the book (short heads such as `of` count 4x),
+        ties go to fewer parts."""
+        memo = {}
+
+        def part_ok(x, first):
+            return x in self.lex and (len(x) >= 3 or x in GLUE_HEADS or (not first and len(x) == 2))
+
+        def part_score(x):
+            return self.f(x) * (4 if x in GLUE_HEADS else 1)
+
+        def go(i, left):
+            key = (i, left)
+            if key in memo:
+                return memo[key]
+            rest = low[i:]
+            best = (part_score(rest), (rest,)) if part_ok(rest, i == 0) else None
+            if left > 1:
+                for j in range(i + 2, len(low) - 1):
+                    x = low[i:j]
+                    if not part_ok(x, i == 0):
+                        continue
+                    sub = go(j, left - 1)
+                    if sub is None:
+                        continue
+                    cand = (min(part_score(x), sub[0]), (x,) + sub[1])
+                    if best is None or (cand[0], -len(cand[1])) > (best[0], -len(best[1])):
+                        best = cand
+            memo[key] = best
+            return best
+
+        best = None
+        for j in range(2, len(low) - 1):
+            x = low[:j]
+            if not part_ok(x, True):
+                continue
+            sub = go(j, max_parts - 1)
+            if sub is None:
+                continue
+            cand = (min(part_score(x), sub[0]), (x,) + sub[1])
+            if best is None or (cand[0], -len(cand[1])) > (best[0], -len(best[1])):
+                best = cand
+        return best
+
     def glue_fix(self, line):
         def sub(m):
             w = m.group(0)
@@ -141,23 +188,19 @@ class Proofreader:
             low = w.lower()
             if not w.islower() or len(low) < 5 or self.known(low) or not self.lex:
                 return w
-            best = None
-            for i in range(2, len(low) - 1):
-                x, y = low[:i], low[i:]
-                if x in self.lex and y in self.lex and len(y) >= 2 and (len(x) >= 3 or x in GLUE_HEADS):
-                    score = min(self.f(x), self.f(y)) * (4 if x in GLUE_HEADS else 1)
-                    if best is None or score > best[0]:
-                        best = (score, x, y)
+            best = self.segment(low)
             if best is None or best[0] < 20:
                 return w
-            self.add("GLUE", w, f"{best[1]} {best[2]}")
-            return f"{best[1]} {best[2]}"
+            self.add("GLUE", w, " ".join(best[1]))
+            return " ".join(best[1])
 
         return TOKEN.sub(sub, line)
 
     def space_fix(self, line):
         def sp(m):
             a, p, b = m.group(1), m.group(2), m.group(3)
+            if p != "." and self.hyph.get(f"{a}-{b}".lower(), 0) >= 1:
+                return f"{a}-{b}"  # OCR read the hyphen as punctuation
             if (a + b).lower() in self.lex or not (self.known(a) and self.known(b)):
                 return m.group(0)
             if a.isupper() or b.isupper() or (p == "." and len(b) <= 3):
@@ -165,6 +208,9 @@ class Proofreader:
             return a + p + " " + b
 
         s = re.sub(r"\b([A-Za-z]{2,})([,;:]|\.(?=[A-Z]))([A-Za-z]{3,})\b", sp, line)
+        s = re.sub(r"\b([A-Za-z]{2,})(?:- | -| - )([A-Za-z]{2,})\b",
+                   lambda m: (f"{m.group(1)}-{m.group(2)}"
+                              if self.hyph.get(f"{m.group(1)}-{m.group(2)}".lower(), 0) >= 1 else m.group(0)), s)
         s = re.sub(r"(?<=\w) +([.,;:!?])(?![.\w])", r"\1", s)
         s = re.sub(r"(?<=\S)[ \t]{2,}(?=\S)", " ", s)
         return s

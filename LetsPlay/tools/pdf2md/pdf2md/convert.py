@@ -34,7 +34,9 @@ STATBLOCK_RE = re.compile(
     r"(\bArmor Class\b|\*\*AC\*\*|\bAC \d+\b).{0,400}?(\bHit Points\b|\*\*HP\*\*|\bHP \d+)", re.S)
 IMG_LINK_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 MAP_CAPTION_RE = re.compile(r"^MAP\s+\d+\.\d+\s*:", re.I)
-MIN_IMAGE_SIDE = 120         # smaller embedded images are decorations
+MIN_IMAGE_SIDE = 120
+ROOM_REF_RE = re.compile(r"\b(?:areas?|room)\s+[A-Z]{1,2}[0-9lI]{1,3}\b|^#+ [A-Z]{1,2}\d{1,3}:", re.M)
+ROOM_OCR_DPI = 150         # smaller embedded images are decorations
 ABILITY_RE = re.compile(r"\bSTR\b.{0,80}\bDEX\b|\bStr\b.{0,80}\bDex\b", re.S | re.I)
 
 
@@ -233,6 +235,14 @@ class Book:
                 body = self.check_text_page(p, body, hmap, info[p])
             if p not in text_pages or info[p].get("fallback"):
                 body = fallback.demote_body_headings(body)
+            if p in text_pages:
+                from . import spaced
+
+                body, k = spaced.restore(body, self.doc[p])
+                if k:
+                    info[p]["spaced_headings"] = k
+            if p in text_pages and self.adventure:
+                body = self.adventure_layout(p, body, info[p])
             q = page_quality(body, info[p])
             info[p]["quality"] = q
             if "figure" in info[p]["flags"]:
@@ -277,6 +287,33 @@ class Book:
         body, n = fallback.repair_headings(body, page, self.ocr_engine)
         if n:
             info["headings_ocr"] = n
+        return body
+
+    @property
+    def adventure(self):
+        parts = os.path.normpath(self.pdf).split(os.sep)
+        return "Adventures" in parts
+
+    def adventure_layout(self, p, body, info):
+        """Read-aloud panels as `>` quotes; room-key headings the text layer lost."""
+        from . import rooms
+
+        page = self.doc[p]
+        try:
+            body, n = rooms.mark_readaloud(body, rooms.boxed_text(page))
+        except RuntimeError:
+            n = 0
+        if n:
+            info["readaloud"] = n
+        if ROOM_REF_RE.search(body):
+            try:
+                pix = safe_pixmap(page, ROOM_OCR_DPI)
+                lines = ocr.get_engine(self.ocr_engine).read(pix.tobytes("png"))
+                body, k = rooms.add_missing_rooms(body, rooms.ocr_rooms(lines, pix.width))
+                if k:
+                    info["rooms_ocr"] = k
+            except (RuntimeError, ocr.OcrUnavailable):
+                pass
         return body
 
     def close(self):
@@ -399,10 +436,14 @@ class Book:
         md = "\n".join(head) + "\n" + "\n".join(body)
         from . import fixes
 
-        md = fixes.apply_fixes(md, fixes.load_fixes(self.dir, self.m["sha256"]))
+        md = fixes.apply_fixes(md, fixes.load_fixes(self.dir, self.m["sha256"]), refresh=True)
         from . import proofread
 
         md, log = proofread.proofread(md)
+        if self.adventure:
+            from . import rooms
+
+            md = rooms.fix_area_refs(md)
         _write_atomic(os.path.join(self.dir, "proofread-report.md"),
                       proofread.report(self.stem, log).encode("utf-8"))
         _write_atomic(os.path.join(self.dir, self.stem + ".md"), md)
