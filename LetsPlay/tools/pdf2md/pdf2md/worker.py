@@ -208,7 +208,7 @@ def run(root, budget_seconds=None, budget_pages=None, book=None, pages=None, chu
                 changed = True
                 lock.touch()
                 log(root, f"{b.stem}: pages {a + 1}-{z} done ({b.done_pages()}/{b.m['page_count']})")
-            if changed or not os.path.exists(os.path.join(b.dir, b.stem + ".md")):
+            if changed or not os.path.exists(os.path.join(b.dir, b.stem + ".pages.md")):
                 b.assemble()
             b.close()
             if (budget_seconds is not None and time.time() - start >= budget_seconds) or \

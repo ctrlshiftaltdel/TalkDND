@@ -2,7 +2,6 @@
 //! layer. All fixtures use generic names.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use combat_sim::content::schema::{AbilityName, Effect, ExprValue, Predicate, SaveEndsAt};
 use combat_sim::content::{check, ContentRegistry, ContentSources, ItemKind};
@@ -208,8 +207,7 @@ fn markdown_blocks_load_and_other_fences_are_ignored() {
 
 #[test]
 fn manifest_paths_are_relative_and_env_falls_back() {
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let registry = load_campaign();
     assert_eq!(registry.scenes.get("hall-a").unwrap().id, "hall-a");
@@ -445,6 +443,8 @@ fn items_are_available_by_kind() {
 
 #[test]
 fn directory_scan_skips_hidden_dirs_non_content_and_nested_layers() {
+    // COMBAT_SIM_CAMPAIGN is set by another test; keep it out of this load.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use combat_sim::content::ContentSources;
     let root = std::env::temp_dir().join(format!("cs-scan-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -489,6 +489,8 @@ fn directory_scan_skips_hidden_dirs_non_content_and_nested_layers() {
 
 #[test]
 fn edition_folders_follow_the_campaign_ruleset() {
+    // COMBAT_SIM_CAMPAIGN is set by another test; keep it out of this load.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use combat_sim::content::ContentSources;
     let root = std::env::temp_dir().join(format!("cs-edition-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -536,3 +538,6 @@ fn edition_folders_follow_the_campaign_ruleset() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Serialises tests that set or depend on COMBAT_SIM_CAMPAIGN.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

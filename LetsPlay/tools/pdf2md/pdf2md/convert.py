@@ -3,7 +3,8 @@
 Layout for ``<dir>/<Stem>.pdf``::
 
     <dir>/.md/<Stem>/
-        <Stem>.md        assembled book, page anchors <a id="pN"></a>
+        <Stem>.md        reader edition: same text, no page anchors (play from this)
+        <Stem>.pages.md  lookup edition: page anchors <a id="pN"></a> (index, review, fixes)
         index.md         headings / stat blocks / figures -> pages
         index.json
         manifest.json    hash, chunk + page status, quality flags
@@ -48,7 +49,26 @@ SELECTIVE_UPGRADES = {
     ("0.2.0", "0.2.2"): lambda info: "fallback" in info,
     # 0.2.3 demotes sentence-like headings on OCR and fallback pages
     ("0.2.2", "0.2.3"): lambda info: "fallback" in info or "ocr" in info,
+    # 0.4.0 only changes assembly (reader + pages editions): no chunk is redone
+    ("0.3.1", "0.4.0"): lambda info: False,
 }
+
+ANCHOR_LINE_RE = re.compile(r'^<a id="p\d+"></a>\n?|^<!-- PDF p\.\d+ -->', re.M)
+ANCHOR_NOTE = "> Each page starts with `<a id=\"pN\"></a>` where N is the PDF page number."
+
+
+def pages_name(stem):
+    return stem + ".pages.md"
+
+
+def to_reader(pages_md, stem):
+    """Reader edition: the lookup edition without page anchors / page comments.
+    Everything else is identical (checked by tests)."""
+    md = pages_md.replace(
+        ANCHOR_NOTE,
+        f"> Reader edition (no page anchors). PDF page lookup: `{pages_name(stem)}` and `index.md`.")
+    md = ANCHOR_LINE_RE.sub("", md)
+    return re.sub(r"\n{3,}", "\n\n", md)
 
 
 def _chunk_pages(key):
@@ -112,6 +132,10 @@ class Book:
             m["stale"] = sorted(set(m.get("stale", [])) | redo)
             m["chunks"] = {c: v for c, v in m["chunks"].items() if c not in redo}
             m["tool"] = VERSION
+        if m and (m.get("sha256") != digest or m.get("stale")):
+            from . import fixes as _fixes
+
+            _fixes.backup(self.dir, "pdf-changed" if m.get("sha256") != digest else "reconvert")
         if not m or m.get("sha256") != digest:
             self._reset()
             self.doc = pymupdf.open(self.pdf)
@@ -145,7 +169,8 @@ class Book:
             if os.path.isdir(d):
                 for name in os.listdir(d):
                     os.remove(os.path.join(d, name))
-        for name in ("manifest.json", "index.json", "index.md", "headings.json", self.stem + ".md"):
+        for name in ("manifest.json", "index.json", "index.md", "headings.json", self.stem + ".md",
+                     pages_name(self.stem)):
             p = os.path.join(self.dir, name)
             if os.path.exists(p):
                 os.remove(p)
@@ -446,12 +471,14 @@ class Book:
             md = rooms.fix_area_refs(md)
         _write_atomic(os.path.join(self.dir, "proofread-report.md"),
                       proofread.report(self.stem, log).encode("utf-8"))
-        _write_atomic(os.path.join(self.dir, self.stem + ".md"), md)
+        _write_atomic(os.path.join(self.dir, pages_name(self.stem)), md)
+        _write_atomic(os.path.join(self.dir, self.stem + ".md"), to_reader(md, self.stem))
         self.write_index(md)
         return md
 
     def write_index(self, md):
-        idx = {"pdf": self.m["pdf"], "book": self.stem + ".md", "page_count": self.m["page_count"],
+        idx = {"pdf": self.m["pdf"], "book": self.stem + ".md", "pages": pages_name(self.stem),
+               "page_count": self.m["page_count"],
                "done_pages": self.done_pages(), "headings": [], "statblocks": [], "figures": [],
                "low_quality_pages": [], "ocr_pages": []}
         page = 0
@@ -476,9 +503,11 @@ class Book:
             if i.get("ocr"):
                 idx["ocr_pages"].append(p)
         _write_atomic(os.path.join(self.dir, "index.json"), json.dumps(idx, indent=1, ensure_ascii=False))
-        book = self.stem + ".md"
+        reader = self.stem + ".md"
+        book = pages_name(self.stem)
         lines = [f"# Index: {self.stem}", "",
-                 f"Book: [{book}](<{book}>). PDF: `{self.m['pdf']}` (authoritative). "
+                 f"Read: [{reader}](<{reader}>) (no page anchors). Page lookup: [{book}](<{book}>). "
+                 f"PDF: `{self.m['pdf']}` (authoritative). "
                  f"{idx['done_pages']}/{idx['page_count']} pages converted.", "", "## Headings", ""]
         for h in idx["headings"]:
             lines.append("  " * (h["level"] - 1) + f"- [{h['text']}](<{book}#p{h['page']}>) - p.{h['page']}")

@@ -98,7 +98,7 @@ def _books(root, name):
         if name and worker.repair_slug(name) not in worker.repair_slug(os.path.basename(pdf)):
             continue
         d, stem = out_dir(pdf)
-        if os.path.exists(os.path.join(d, "manifest.json")) and os.path.exists(os.path.join(d, stem + ".md")):
+        if os.path.exists(os.path.join(d, "manifest.json")) and os.path.exists(os.path.join(d, stem + ".pages.md")):
             yield pdf
 
 
@@ -192,7 +192,7 @@ def verify(root, book=None):
         if book and worker.repair_slug(book) not in worker.repair_slug(os.path.basename(pdf)):
             continue
         d, stem = out_dir(pdf)
-        md_path = os.path.join(d, stem + ".md")
+        md_path = os.path.join(d, stem + ".pages.md")
         if not os.path.exists(md_path):
             continue
         with open(md_path, encoding="utf-8") as f:
@@ -205,6 +205,11 @@ def verify(root, book=None):
             problems.append("page anchors out of order or duplicated")
         if set(anchors) != {int(p) for p in m["pages"]}:
             problems.append("anchors do not match converted pages")
+        from .convert import to_reader
+
+        reader = os.path.join(d, stem + ".md")
+        if not os.path.exists(reader) or open(reader, encoding="utf-8").read() != to_reader(md, stem):
+            problems.append("reader edition out of sync with the pages edition")
         bad = tables.check_tables(md)
         low = sum(1 for i in m["pages"].values() if i.get("quality") == "low")
         print(f"{stem}: {len(anchors)}/{m['page_count']} pages, {low} low-quality, "

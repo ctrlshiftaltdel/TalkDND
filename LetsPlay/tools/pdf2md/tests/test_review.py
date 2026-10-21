@@ -119,7 +119,7 @@ def test_rejudge_accepts_soft_improvement(tmp_path):
     b = make_book(tmp_path)
     # Corrupt page 1 in the assembled book so "before" scores poorly on unknown words,
     # then place a cleaned rejected fix that only dips recall slightly and has structure markers.
-    md_path = os.path.join(b.dir, b.stem + ".md")
+    md_path = os.path.join(b.dir, b.stem + ".pages.md")
     with open(md_path, encoding="utf-8") as f:
         md = f.read()
     pages = audit.split_pages(md)

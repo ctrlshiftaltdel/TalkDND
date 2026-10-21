@@ -14,6 +14,24 @@ from .audit import ANCHOR_RE, split_pages
 HEADER_RE = re.compile(r"^<!-- pdf2md-fix (.*?) -->\n?")
 
 
+def backup(book_dir, reason):
+    """Copy fixes/ (and review/ decisions) to backups/<time>-<reason>/ before a
+    reconversion or a PDF change. Returns the backup path or None."""
+    import shutil
+    import time
+
+    src = os.path.join(book_dir, "fixes")
+    if not os.path.isdir(src) or not os.listdir(src):
+        return None
+    dst = os.path.join(book_dir, "backups", time.strftime("%Y%m%d-%H%M%S") + "-" + reason)
+    n = 1
+    while os.path.exists(dst):
+        n += 1
+        dst = dst.rstrip("0123456789").rstrip("-") + f"-{n}"
+    shutil.copytree(src, os.path.join(dst, "fixes"))
+    return dst
+
+
 def header(sha256, tool, engine):
     return f"<!-- pdf2md-fix sha256={sha256} tool={tool} engine={engine} -->\n"
 
