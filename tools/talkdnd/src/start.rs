@@ -161,7 +161,7 @@ fn members(save: &Path) -> Vec<Member> {
     v
 }
 
-fn party_ids(save: &Path) -> Vec<String> {
+pub fn party_ids(save: &Path) -> Vec<String> {
     let text = fs::read_to_string(save.join("combat/campaign.yaml")).unwrap_or_default();
     for line in text.lines() {
         if let Some(rest) = line.trim_start().strip_prefix("party:") {
