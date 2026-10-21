@@ -9,7 +9,6 @@ pub mod data;
 pub mod npc;
 pub mod progress;
 pub mod save;
-pub mod sheet;
 pub mod start;
 
 use anyhow::{bail, Context, Result};
@@ -115,11 +114,6 @@ enum Cmd {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Printable character sheets (A4, fillable PDF or HTML)
-    Sheet {
-        #[command(subcommand)]
-        cmd: SheetCmd,
-    },
     /// Coins and items per character and the shared `party` pool
     Loot {
         #[command(subcommand)]
@@ -224,31 +218,6 @@ enum LootCmd {
     Split,
     /// Show every purse
     Show,
-}
-
-#[derive(Subcommand)]
-enum SheetCmd {
-    /// Write Characters/<name>.pdf (fillable A4) or .html next to each sheet: `sheet export all`
-    Export {
-        /// `all`, or comma-separated names/ids
-        who: String,
-        #[arg(long, value_enum, default_value_t = SheetFormat::Pdf)]
-        format: SheetFormat,
-    },
-    /// Empty fillable A4 template (sheet + spells/notes page): `sheet blank --ruleset 2014`
-    Blank {
-        #[arg(long, default_value = "2024")]
-        ruleset: String,
-        /// Default: Saves/<save>/Characters/blank-sheet-<ruleset>.pdf, else ./blank-sheet-<ruleset>.pdf
-        #[arg(long)]
-        out: Option<PathBuf>,
-    },
-}
-
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum SheetFormat {
-    Pdf,
-    Html,
 }
 
 #[derive(Subcommand)]
@@ -417,34 +386,6 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
                     println!("{l}");
                 }
             }
-        }
-        Cmd::Sheet {
-            cmd: SheetCmd::Export { who, format },
-        } => {
-            let s = save::resolve_slot(&root, cli.save.as_deref())?;
-            let f = match format {
-                SheetFormat::Pdf => sheet::Format::Pdf,
-                SheetFormat::Html => sheet::Format::Html,
-            };
-            for p in sheet::export(&s, &who, f)? {
-                println!("{}", p.display());
-            }
-        }
-        Cmd::Sheet {
-            cmd: SheetCmd::Blank { ruleset, out },
-        } => {
-            if ruleset != "2014" && ruleset != "2024" {
-                bail!("--ruleset must be 2014 or 2024");
-            }
-            let name = format!("blank-sheet-{ruleset}.pdf");
-            let out = match out {
-                Some(p) => p,
-                None => match save::resolve_slot(&root, cli.save.as_deref()) {
-                    Ok(s) => s.join("Characters").join(name),
-                    Err(_) => PathBuf::from(name),
-                },
-            };
-            println!("{}", sheet::blank(&ruleset, &out)?.display());
         }
         Cmd::Loot { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
