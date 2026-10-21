@@ -1,6 +1,6 @@
 [package]
 name = "talkdnd-dev"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "Std-only TalkDND helpers: check-leaks, check-letsplay, migrate-layout, fetch-binary, and install-local"
 license = "MIT"

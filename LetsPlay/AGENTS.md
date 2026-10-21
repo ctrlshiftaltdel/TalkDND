@@ -30,7 +30,7 @@
 8. **属性加值**（2024 背景 / 2014 半精灵可选项）→ `$T chargen asi wis=2 con=1` 或 `none`
 9. **技能** → **装备**（含护甲、盾牌；职业/子职不熟练会报错）→ **法术**（非施法职业 none；戏法与已知/可准备法术数量按职业数据核对），每项单独问
 10. **名字与性格**
-11. **确认**：`$T chargen validate`（error 必须为 0）→ `$T chargen sheet` → 把角色卡给玩家看 → 玩家同意后 `$T chargen confirm`
+11. **确认**：`$T chargen validate`（error 必须为 0）→ `$T chargen sheet` → 把角色卡给玩家看 → 玩家同意后 `$T chargen confirm` → `$T sheet export <角色>`，告诉玩家可下载 `Saves/<存档>/Characters/<名字>.pdf`（A4 可填写、可打印）
 12. **同伴 NPC**：问玩家要几个、有没有要求 → `$T npc random --count N` 随机 → DM 补名字、来历、性格 → **给玩家确认** → `$T npc sheet <号> --name <名字>`
 13. 写 `dm-secrets.md`，在会话日志写开场，进入第一个场景
 
@@ -60,6 +60,12 @@
 12. **战斗**用 combat-sim 结算：`export COMBAT_SIM_CAMPAIGN=$PWD/Saves/<存档>/combat/campaign.yaml`，命令与已知坑见 `docs/combat.md`。
 13. **查书**：先查 pdf2md 生成的 Markdown（`<书目录>/.md/<书名>/index.md`），数据块、低质量页、地图一律看 PDF；PDF 永远为准。详见 `docs/pdf2md.md`。
 14. **隐私**：不要把规则书、冒险书文本、存档或 `dm-secrets.md` 提交到 git 或贴到任何 issue、PR。
+
+## 角色卡打印（PDF）
+
+- **开局**（`chargen confirm` 之后）和**每次 `level-up` 之后**：`$T sheet export <角色>`（`all` = 全队含同伴），把生成的 `Saves/<存档>/Characters/<名字>.pdf` 发给/告诉玩家可以下载打印。角色卡 Markdown 改动较大时（换装备、学新法术）也重新导出。
+- PDF 是一页 A4：固定数值印好；当前/临时 HP、已用生命骰、死亡豁免、法术位、资源次数、状态、激励、钱币、XP、笔记是可填写的框或勾选格，玩家可在 PDF 阅读器里填或打印后手写。**以 Markdown 角色卡为准**，PDF 只是导出。
+- 找不到中文字体时报错：装 Noto Sans CJK（`apt install fonts-noto-cjk`）或设 `TALKDND_CJK_FONT=/路径/字体.ttc`；或用 `--format html`（浏览器打开，可填写，「打印 → 另存为 PDF」）。
 
 ## 按需参考
 

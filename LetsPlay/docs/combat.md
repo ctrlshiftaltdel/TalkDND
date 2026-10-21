@@ -73,5 +73,5 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 账本在 `Saves/<存档>/progress.yaml`（XP、每人钱袋与物品、公共 `party` 钱袋），每次变动都记一行到会话日志。
 
 - `talkdnd xp add 450 --to all --reason "博物馆守卫"`：平分（余数报告）；`talkdnd xp show` 看等级与下一级门槛。
-- `talkdnd level-up <角色> [--hp avg|roll|<玩家掷出的数>] [--class rogue] [--milestone]`：改角色卡 combat 块（等级、HP、熟练加值、生命骰、熟练豁免/技能/命中），追加 `## 升级记录`，列出新职业特性、子职与属性提升提示。正文（特性、法术）和玩家一起改；之后 `combat-sim party sync`。
+- `talkdnd level-up <角色> [--hp avg|roll|<玩家掷出的数>] [--class rogue] [--milestone]`：改角色卡 combat 块（等级、HP、熟练加值、生命骰、熟练豁免/技能/命中），追加 `## 升级记录`，列出新职业特性、子职与属性提升提示。正文（特性、法术）和玩家一起改；之后 `combat-sim party sync`，再 `talkdnd sheet export <角色>` 重新导出 PDF 给玩家。
 - `talkdnd loot add --gp 50 "治疗药水" --to party`、`loot give --from party --to yier --gp 10 钥匙`、`loot split`（公共钱平分）、`loot spend --from yier --gp 5`、`loot show`。钱统一按铜币记，显示为 gp/sp/cp。

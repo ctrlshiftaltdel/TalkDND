@@ -9,6 +9,7 @@ pub mod data;
 pub mod npc;
 pub mod progress;
 pub mod save;
+pub mod sheet;
 pub mod start;
 
 use anyhow::{bail, Context, Result};
@@ -111,6 +112,11 @@ enum Cmd {
         #[arg(long)]
         milestone: bool,
     },
+    /// Printable character sheets (A4, fillable PDF or HTML)
+    Sheet {
+        #[command(subcommand)]
+        cmd: SheetCmd,
+    },
     /// Coins and items per character and the shared `party` pool
     Loot {
         #[command(subcommand)]
@@ -202,6 +208,23 @@ enum LootCmd {
     Split,
     /// Show every purse
     Show,
+}
+
+#[derive(Subcommand)]
+enum SheetCmd {
+    /// Write Characters/<name>.pdf (fillable A4) or .html next to each sheet: `sheet export all`
+    Export {
+        /// `all`, or comma-separated names/ids
+        who: String,
+        #[arg(long, value_enum, default_value_t = SheetFormat::Pdf)]
+        format: SheetFormat,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum SheetFormat {
+    Pdf,
+    Html,
 }
 
 #[derive(Subcommand)]
@@ -348,6 +371,18 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             )?;
             for l in r.lines {
                 println!("{l}");
+            }
+        }
+        Cmd::Sheet {
+            cmd: SheetCmd::Export { who, format },
+        } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let f = match format {
+                SheetFormat::Pdf => sheet::Format::Pdf,
+                SheetFormat::Html => sheet::Format::Html,
+            };
+            for p in sheet::export(&s, &who, f)? {
+                println!("{}", p.display());
             }
         }
         Cmd::Loot { cmd } => {
