@@ -19,7 +19,7 @@ adventures:
     note: ""
   candlekeep-mysteries:
     start_level_min: 1
-    start_level_max: 20
+    start_level_max: 16
     note: "各篇起点不同，以书为准"
   wild-beyond-the-witchlight:
     start_level_min: 1
@@ -27,5 +27,5 @@ adventures:
     note: ""
   journeys-through-the-radiant-citadel:
     start_level_min: 1
-    start_level_max: 20
+    start_level_max: 14
     note: "各篇起点不同，以书为准"
