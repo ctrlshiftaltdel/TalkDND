@@ -42,3 +42,11 @@
 **记录**：每次掷骰都把程序输出原样抄进当次会话日志，写明是谁、为了什么、DC 或 AC、结果。不得因为结果不好重掷（见 `AGENTS.md` 桌规「预掷纪律」）。
 
 建卡掷属性用 `bin/talkdnd chargen roll`（内部是同一个骰子引擎，结果自动记日志，不能重掷）。
+
+## 战斗外的检定：`talkdnd check`
+
+不用自己算调整值：`talkdnd check <角色> <技能|属性|save:属性|init> [--dc N] [--adv|--dis] [--extra 1d4|+2]`。
+
+- 调整值从 `Characters/`、`NPCs/` 角色卡的战斗数据块读取（熟练技能用 `skills`，豁免用 `saves`，其余用属性调整值）。
+- 例：`talkdnd check Bruni perception --dc 15`、`talkdnd check bruni save:con --dis`、`talkdnd check Ilsa stealth --adv --extra 1d4`（神导术）。
+- 结果自动写进最新的会话日志。战斗中仍用 `combat-sim check/save`。

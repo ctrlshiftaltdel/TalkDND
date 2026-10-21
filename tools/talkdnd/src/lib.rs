@@ -3,6 +3,7 @@
 //! checkpoints and log entries. All dice go through combat-sim's engine.
 
 pub mod chargen;
+pub mod check;
 pub mod classdata;
 pub mod data;
 pub mod npc;
@@ -64,6 +65,22 @@ enum Cmd {
     Npc {
         #[command(subcommand)]
         cmd: NpcCmd,
+    },
+    /// Ability/skill check or saving throw outside combat (modifier from the sheet; logged)
+    Check {
+        /// Character id or name (Characters/ or NPCs/)
+        who: String,
+        /// Skill id (perception), ability (wis), save:<ability> or init
+        what: String,
+        #[arg(long)]
+        dc: Option<i32>,
+        #[arg(long)]
+        adv: bool,
+        #[arg(long)]
+        dis: bool,
+        /// Extra dice or bonus, e.g. 1d4 (guidance) or +2
+        #[arg(long, allow_hyphen_values = true)]
+        extra: Option<String>,
     },
     /// Append a `## 存档点` section to the newest session log (text from args or stdin)
     Checkpoint { text: Vec<String> },
@@ -169,6 +186,28 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             chargen_cmd(&s, cmd, rng, cli.seed.is_some())?
         }
         Cmd::Npc { cmd } => npc_cmd(&root, cli.save.as_deref(), cmd, rng, cli.seed.is_some())?,
+        Cmd::Check {
+            who,
+            what,
+            dc,
+            adv,
+            dis,
+            extra,
+        } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let line = check::run(
+                &s,
+                &who,
+                &what,
+                dc,
+                adv,
+                dis,
+                extra.as_deref(),
+                rng,
+                cli.seed.is_some(),
+            )?;
+            println!("{line}");
+        }
         Cmd::Checkpoint { text } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             let mut body = text.join(" ");
