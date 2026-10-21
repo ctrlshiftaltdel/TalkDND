@@ -269,6 +269,11 @@ impl CombatantState {
         self.kind() == CreatureKind::Pc
     }
 
+    /// PCs and party-side companion NPCs fall unconscious and make death saves.
+    pub fn makes_death_saves(&self) -> bool {
+        self.is_pc() || (self.kind() == CreatureKind::Npc && self.side.as_str() == "party")
+    }
+
     pub fn is_dead(&self) -> bool {
         self.dead || self.death_saves.dead
     }
@@ -279,7 +284,7 @@ impl CombatantState {
     }
 
     pub fn is_dying(&self) -> bool {
-        self.is_pc() && self.hp <= 0 && !self.is_dead() && !self.death_saves.stable
+        self.makes_death_saves() && self.hp <= 0 && !self.is_dead() && !self.death_saves.stable
     }
 
     pub fn has_condition(&self, content: &ContentRegistry, condition: &str) -> bool {

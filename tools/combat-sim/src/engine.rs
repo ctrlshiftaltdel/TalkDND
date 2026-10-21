@@ -5361,13 +5361,13 @@ fn apply_damage_rolls(
             log.log(format_args!("{name} dies from massive damage"));
         }
         state.combatants[target].dead = true;
-        if state.combatants[target].is_pc() {
+        if state.combatants[target].makes_death_saves() {
             state.combatants[target].death_saves.dead = true;
         }
     }
 
     if state.combatants[target].hp == 0 && !state.combatants[target].is_dead() {
-        if state.combatants[target].is_pc() {
+        if state.combatants[target].makes_death_saves() {
             if was_at_zero {
                 // Damage taken while already at 0 HP is a death-save failure;
                 // it never re-applies the dying state or repeats the drop log.
@@ -6785,8 +6785,8 @@ fn death_save_at(
     log: &mut dyn LogSink,
 ) -> Result<()> {
     let name = state.combatants[index].name.clone();
-    if !state.combatants[index].is_pc() {
-        bail!("`{name}` is not a player character");
+    if !state.combatants[index].makes_death_saves() {
+        bail!("`{name}` is not a player character or party companion");
     }
     if state.combatants[index].is_dead() {
         bail!("`{name}` is already dead");
@@ -6842,24 +6842,47 @@ fn death_save_at(
 }
 
 /// CLI `rest short|long`.
+///
+/// `all` means every living party-side combatant; enemies and the dead never
+/// rest. A short rest can spend `hit_dice` Hit Dice (die + Con each, min 0).
+/// A long rest restores HP and resources, regains half the Hit Dice (min 1)
+/// and ends the creature's concentration.
 pub fn rest(
     state: &mut EncounterState,
     kind: RestKind,
     who: Option<&str>,
+    hit_dice: Option<u32>,
+    rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
-    let targets: Vec<usize> = match who {
-        Some(name) if name.eq_ignore_ascii_case("all") => (0..state.combatants.len()).collect(),
-        Some(name) => vec![state
-            .find_index(name)
-            .map_err(|error| anyhow!(error.to_string()))?],
-        None => (0..state.combatants.len()).collect(),
+    let all = match who {
+        Some(name) => name.eq_ignore_ascii_case("all"),
+        None => true,
     };
+    let targets: Vec<usize> = if all {
+        (0..state.combatants.len())
+            .filter(|&i| state.combatants[i].side.as_str() == "party")
+            .collect()
+    } else {
+        vec![state
+            .find_index(who.unwrap_or_default())
+            .map_err(|error| anyhow!(error.to_string()))?]
+    };
+    if hit_dice.is_some() && kind == RestKind::Long {
+        bail!("--hd is only for short rests");
+    }
     for index in targets {
         let name = state.combatants[index].name.clone();
+        if state.combatants[index].is_dead() {
+            log.log(format_args!("{name} is dead and cannot rest"));
+            continue;
+        }
         match kind {
             RestKind::Short => {
-                for resource in state.combatants[index].resources.values_mut() {
+                for (id, resource) in state.combatants[index].resources.iter_mut() {
+                    if id == "hit-dice" {
+                        continue;
+                    }
                     if resource.recharge == Recharge::Short {
                         resource.current = resource.max;
                     } else if let Some(regain) = resource.short_rest_regain {
@@ -6867,21 +6890,26 @@ pub fn rest(
                     }
                 }
                 log.log(format_args!("{name} takes a short rest"));
+                if let Some(n) = hit_dice.filter(|n| *n > 0) {
+                    spend_hit_dice(state, index, n, rng, log)?;
+                }
             }
             RestKind::Long => {
-                for resource in state.combatants[index].resources.values_mut() {
-                    resource.current = resource.max;
+                if state.concentration.contains_key(&name) {
+                    break_concentration(state, index, log);
                 }
-                if state.combatants[index].death_saves.dead {
-                    log.log(format_args!(
-                        "{name} is dead and cannot benefit from a long rest"
-                    ));
-                    continue;
+                let combatant = &mut state.combatants[index];
+                for (id, resource) in combatant.resources.iter_mut() {
+                    if id == "hit-dice" {
+                        let regain = (resource.max / 2).max(1);
+                        resource.current = (resource.current + regain).min(resource.max);
+                    } else {
+                        resource.current = resource.max;
+                    }
                 }
-                state.combatants[index].hp = state.combatants[index].max_hp;
-                state.combatants[index].temp_hp = 0;
-                state.combatants[index].dead = false;
-                state.combatants[index].death_saves = DeathSaves::default();
+                combatant.hp = combatant.max_hp;
+                combatant.temp_hp = 0;
+                combatant.death_saves = DeathSaves::default();
                 let dying = state
                     .content
                     .rules
@@ -6898,6 +6926,67 @@ pub fn rest(
         }
     }
     log_outcome(state, log);
+    Ok(())
+}
+
+/// Hit-die size of a combatant's `hit-dice` pool, if it has one.
+pub fn hit_die_size(combatant: &CombatantState) -> Option<u32> {
+    combatant.creature.resources.as_ref().and_then(|defs| {
+        let def = defs.get("hit-dice")?;
+        def.die.or_else(|| {
+            let notes = def.notes.as_deref()?;
+            let at = notes.find('d')?;
+            let digits: String = notes[at + 1..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            digits.parse().ok()
+        })
+    })
+}
+
+fn spend_hit_dice(
+    state: &mut EncounterState,
+    index: usize,
+    count: u32,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let name = state.combatants[index].name.clone();
+    let die = hit_die_size(&state.combatants[index])
+        .ok_or_else(|| anyhow!("`{name}` has no hit-dice resource with a die size"))?;
+    let available = state.combatants[index]
+        .resources
+        .get("hit-dice")
+        .map_or(0, |r| r.current.max(0) as u32);
+    if count > available {
+        bail!("`{name}` has only {available} Hit Dice left");
+    }
+    let con = state.combatants[index].ability_modifier(AbilityName::Con);
+    let mut total = 0;
+    for _ in 0..count {
+        let roll = rng.roll_die(die) as i32;
+        let gain = (roll + con).max(0);
+        log.log(format_args!(
+            "{name} spends a Hit Die: d{die} {roll} {con:+} = {gain}"
+        ));
+        total += gain;
+    }
+    let combatant = &mut state.combatants[index];
+    if let Some(r) = combatant.resources.get_mut("hit-dice") {
+        r.current -= count as i32;
+    }
+    let before = combatant.hp;
+    combatant.hp = (combatant.hp + total).min(combatant.max_hp);
+    if before <= 0 && combatant.hp > 0 {
+        combatant.death_saves = DeathSaves::default();
+    }
+    log.log(format_args!(
+        "{name} regains {} HP ({}/{})",
+        combatant.hp - before,
+        combatant.hp,
+        combatant.max_hp
+    ));
     Ok(())
 }
 
@@ -6980,7 +7069,7 @@ fn combatant_status_line(state: &EncounterState, index: usize, current: bool) ->
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let saves = if !combatant.is_pc() {
+    let saves = if !combatant.makes_death_saves() {
         "-".to_string()
     } else if combatant.death_saves.dead {
         "dead".to_string()

@@ -128,8 +128,9 @@ enum NpcCmd {
     Random {
         #[arg(long)]
         ruleset: Option<String>,
-        #[arg(long, default_value_t = 1)]
-        level: i32,
+        /// Default: the PC's level from this save's character creation (else 1).
+        #[arg(long)]
+        level: Option<i32>,
         #[arg(long, default_value_t = 1)]
         count: usize,
     },
@@ -572,6 +573,16 @@ fn npc_cmd(
                 (None, None) => "2024".into(),
             };
             check_ruleset(&rs)?;
+            let level = level
+                .or_else(|| {
+                    save.as_ref()
+                        .and_then(|s| chargen::load(s).ok())
+                        .map(|c| c.level)
+                })
+                .unwrap_or(1);
+            if !(1..=20).contains(&level) {
+                bail!("level must be 1..20, got {level}");
+            }
             let drafts = save.as_ref().map(|s| s.join("npc-drafts"));
             let mut start_n = 1;
             if let Some(d) = &drafts {

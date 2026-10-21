@@ -501,3 +501,37 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         std::process::id()
     ))
 }
+
+#[test]
+fn casting_out_of_turn_needs_a_reaction_or_force() {
+    let temp = TempState::new("outofturn");
+    create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
+    assert_success(&run(temp.path(), &["init", "--seed", "42"]), "init");
+    while status_json(temp.path())["active"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Caster")
+    {
+        assert_success(&run(temp.path(), &["next", "--seed", "1"]), "next");
+    }
+    let output = run(
+        temp.path(),
+        &["cast", "Caster", "focus-spell", "Brute", "--seed", "1"],
+    );
+    assert!(!output.status.success(), "out-of-turn cast must fail");
+    assert!(stderr(&output).contains("Only reactions work out of turn"));
+    let output = run(
+        temp.path(),
+        &[
+            "cast",
+            "Caster",
+            "focus-spell",
+            "Brute",
+            "--force",
+            "--seed",
+            "1",
+        ],
+    );
+    assert_success(&output, "forced cast");
+    assert!(stdout(&output).contains("WARNING"));
+}
