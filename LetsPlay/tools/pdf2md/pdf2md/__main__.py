@@ -30,6 +30,8 @@ def main(argv=None):
     g = sub.add_parser("render", help="write a page image for a map or figure")
     g.add_argument("book")
     g.add_argument("page", type=int, help="PDF page number (1-based)")
+    cs = sub.add_parser("contact-sheet", help="review/contact-NN.webp: 4x4 thumbnails of a book's images")
+    cs.add_argument("--book")
     a = sub.add_parser("audit", help="score every converted page against the PDF text layer (audit.json)")
     a.add_argument("--book")
     a.add_argument("--threshold", type=float, default=25)
@@ -86,9 +88,33 @@ def main(argv=None):
         b = Book(pdf)
         print(os.path.join(b.dir, b.render_page(args.page - 1)))
         return 0
+    if args.cmd == "contact-sheet":
+        return contact_sheets(root, args.book)
     if args.cmd in ("audit", "fix-queue", "apply", "review"):
         return reviewcmd(root, args)
     return 2
+
+
+def contact_sheets(root, name=None):
+    """Write review/contact-NN.webp for each converted book (16 labelled thumbnails per sheet)."""
+    import glob
+
+    from . import figures
+    from .convert import out_dir
+
+    for pdf in _books(root, name):
+        d, stem = out_dir(pdf)
+        imgs = sorted(glob.glob(os.path.join(d, "img", "*.webp")))
+        rv = os.path.join(d, "review")
+        os.makedirs(rv, exist_ok=True)
+        for old in glob.glob(os.path.join(rv, "contact-*.webp")):
+            os.remove(old)
+        labels = ["p." + os.path.basename(p)[1:-5].lstrip("0") for p in imgs]
+        for n, data in enumerate(figures.contact_sheet(imgs, labels), 1):
+            with open(os.path.join(rv, "contact-%02d.webp" % n), "wb") as f:
+                f.write(data)
+            print(os.path.join(rv, "contact-%02d.webp" % n))
+    return 0
 
 
 def _books(root, name):
