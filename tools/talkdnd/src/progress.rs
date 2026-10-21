@@ -49,6 +49,194 @@ pub struct Progress {
     pub xp: BTreeMap<String, i64>,
     #[serde(default)]
     pub purses: BTreeMap<String, Purse>,
+    /// Every XP award and milestone level, oldest first (added in 0.1.7;
+    /// older ledgers simply start with an empty log).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xp_log: Vec<XpEntry>,
+    /// Optional custom adventure track (`[{name, level}]`); overrides the
+    /// built-in one for the save's adventure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub track: Vec<TrackStep>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct XpEntry {
+    pub date: String,
+    pub category: String,
+    pub reason: String,
+    /// XP each recipient actually received (after the cap).
+    pub each: i64,
+    pub to: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<String>,
+    /// Milestone level reached (category `milestone-major`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<i32>,
+    /// XP withheld by the hybrid cap, per recipient.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub capped: BTreeMap<String, i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TrackStep {
+    pub name: String,
+    pub level: i32,
+}
+
+/// Award categories. Levels for major story beats come from
+/// `level-up --milestone`, never from `xp add`.
+pub const CATEGORIES: [&str; 6] = [
+    "combat",
+    "noncombat",
+    "quest",
+    "discovery",
+    "roleplay",
+    "milestone-minor",
+];
+
+/// 2014 DMG p.82: XP thresholds per character (easy, medium, hard, deadly).
+pub const THRESHOLDS_2014: [[i64; 4]; 20] = [
+    [25, 50, 75, 100],
+    [50, 100, 150, 200],
+    [75, 150, 225, 400],
+    [125, 250, 375, 500],
+    [250, 500, 750, 1100],
+    [300, 600, 900, 1400],
+    [350, 750, 1100, 1700],
+    [450, 900, 1400, 2100],
+    [550, 1100, 1600, 2400],
+    [600, 1200, 1900, 2800],
+    [800, 1600, 2400, 3600],
+    [1000, 2000, 3000, 4500],
+    [1100, 2200, 3400, 5100],
+    [1250, 2500, 3800, 5700],
+    [1400, 2800, 4300, 6400],
+    [1600, 3200, 4800, 7200],
+    [2000, 3900, 5900, 8800],
+    [2100, 4200, 6300, 9500],
+    [2400, 4900, 7300, 10900],
+    [2800, 5700, 8500, 12700],
+];
+
+/// 2024 DMG ch.4: XP budget per character (low, moderate, high).
+pub const BUDGET_2024: [[i64; 3]; 20] = [
+    [50, 75, 100],
+    [100, 150, 200],
+    [150, 225, 400],
+    [250, 375, 500],
+    [500, 750, 1100],
+    [600, 1000, 1400],
+    [750, 1300, 1700],
+    [1000, 1700, 2100],
+    [1300, 2000, 2600],
+    [1600, 2300, 3100],
+    [1900, 2900, 4100],
+    [2200, 3700, 4700],
+    [2600, 4200, 5400],
+    [2900, 4900, 6200],
+    [3300, 5400, 7800],
+    [3800, 6100, 9800],
+    [4500, 7200, 11700],
+    [5000, 8700, 14200],
+    [5500, 10700, 17200],
+    [6400, 13200, 22000],
+];
+
+/// Per-character XP for a difficulty at a level, from the save's ruleset
+/// table. 2014 names easy/medium/hard/deadly, 2024 low/moderate/high; the
+/// other edition's names are mapped to the nearest step.
+pub fn difficulty_xp(ruleset: &str, difficulty: &str, level: i32) -> Result<i64> {
+    let i = (level.clamp(1, 20) - 1) as usize;
+    let d = difficulty.to_lowercase();
+    if ruleset == "2014" {
+        let k = match d.as_str() {
+            "easy" | "low" => 0,
+            "medium" | "moderate" => 1,
+            "hard" | "high" => 2,
+            "deadly" => 3,
+            _ => bail!("2014 difficulty is easy, medium, hard or deadly"),
+        };
+        Ok(THRESHOLDS_2014[i][k])
+    } else {
+        let k = match d.as_str() {
+            "low" | "easy" => 0,
+            "moderate" | "medium" => 1,
+            "high" | "hard" | "deadly" => 2,
+            _ => bail!("2024 difficulty is low, moderate or high"),
+        };
+        Ok(BUDGET_2024[i][k])
+    }
+}
+
+/// Built-in adventure tracks (expected party level per chapter).
+pub fn builtin_track(adventure: &str) -> Vec<TrackStep> {
+    let a = adventure.to_lowercase();
+    if a.contains("golden-vault") || a.contains("golden vault") {
+        // Keys from the Golden Vault p.5, Heist Adventures table.
+        [
+            ("The Murkmire Malevolence", 1),
+            ("The Stygian Gambit", 2),
+            ("Reach for the Stars", 3),
+            ("Prisoner 13", 4),
+            ("Tockworth's Clockworks", 5),
+            ("Masterpiece Imbroglio", 5),
+            ("Axe from the Grave", 6),
+            ("Vidorant's Vault", 7),
+            ("Shard of the Accursed", 8),
+            ("Heart of Ashes", 8),
+            ("Affair on the Concordant Express", 9),
+            ("Party at Paliset Hall", 10),
+            ("Fire and Darkness", 11),
+        ]
+        .iter()
+        .map(|(n, l)| TrackStep {
+            name: n.to_string(),
+            level: *l,
+        })
+        .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// The adventure named by the save (`campaign.yaml` adventures / name).
+pub fn save_adventure(save_dir: &Path) -> String {
+    let mut s = fs::read_to_string(save_dir.join("combat/campaign.yaml")).unwrap_or_default();
+    s += &fs::read_to_string(save_dir.join("chargen.json")).unwrap_or_default();
+    s
+}
+
+pub fn track(save_dir: &Path, p: &Progress) -> Vec<TrackStep> {
+    if !p.track.is_empty() {
+        return p.track.clone();
+    }
+    builtin_track(&save_adventure(save_dir))
+}
+
+fn norm_reason(r: &str) -> String {
+    r.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// An award with the same reason for one of the same characters already exists.
+fn duplicate<'a>(p: &'a Progress, reason: &str, ids: &[String]) -> Option<&'a XpEntry> {
+    let r = norm_reason(reason);
+    p.xp_log
+        .iter()
+        .find(|e| norm_reason(&e.reason) == r && e.to.iter().any(|t| ids.contains(t)))
+}
+
+/// What `xp add` should give.
+pub struct Award<'a> {
+    pub amount: Option<i64>,
+    pub difficulty: Option<&'a str>,
+    pub category: &'a str,
+    pub to: &'a str,
+    pub reason: &'a str,
+    /// Allow a second award with the same reason (a repeatable event).
+    pub again: bool,
 }
 
 impl Progress {
@@ -64,7 +252,7 @@ impl Progress {
             .with_context(|| format!("{} is not valid", p.display()))
     }
     pub fn store(&self, save: &Path) -> Result<()> {
-        let head = "# TalkDND progress ledger: XP per character, coins (as cp) and items per character and the shared `party` pool.\n# Edit with `talkdnd xp` / `talkdnd loot`; hand edits are fine.\n";
+        let head = "# TalkDND progress ledger: XP per character (hybrid advancement, see xp_log), coins (as cp) and items per character and the shared `party` pool.\n# Edit with `talkdnd xp` / `talkdnd loot`; hand edits are fine.\n";
         fs::write(
             Self::path(save),
             head.to_string() + &serde_norway::to_string(self)?,
@@ -125,40 +313,113 @@ fn sheet_level(s: &Sheet) -> i32 {
     s.block.get("level").and_then(|v| v.as_i64()).unwrap_or(1) as i32
 }
 
-pub fn xp_add(save_dir: &Path, amount: i64, to: &str, reason: Option<&str>) -> Result<Vec<String>> {
+/// Hybrid advancement: XP for small quests and events, levels for big story
+/// beats from `level-up --milestone`. XP can carry a character at most one
+/// level past their sheet level; the rest is withheld (logged as `capped`).
+pub fn xp_add(save_dir: &Path, aw: &Award) -> Result<Vec<String>> {
+    if !CATEGORIES.contains(&aw.category) {
+        bail!(
+            "unknown category `{}`; use one of {} (major story beats: `level-up --milestone`)",
+            aw.category,
+            CATEGORIES.join(", ")
+        );
+    }
+    if aw.reason.trim().is_empty() {
+        bail!("--reason is required (it also prevents double awards)");
+    }
     let sheets = check::sheets(save_dir);
-    let ids = recipients(save_dir, to, &sheets)?;
+    let ids = recipients(save_dir, aw.to, &sheets)?;
     let mut p = Progress::load(save_dir)?;
-    let each = amount / ids.len() as i64;
-    let mut out = Vec::new();
-    for id in &ids {
-        let e = p.xp.entry(id.clone()).or_insert(0);
-        *e += each;
-        let lv = sheets
+    if !aw.again {
+        if let Some(e) = duplicate(&p, aw.reason, &ids) {
+            bail!(
+                "already awarded on {} for \"{}\" ({} XP each to {}); pass --again if this really happened twice",
+                e.date,
+                e.reason,
+                e.each,
+                e.to.join(", ")
+            );
+        }
+    }
+    let rs = save::ruleset(save_dir);
+    let level_of = |id: &str| {
+        sheets
             .iter()
-            .find(|s| &s.id == id)
+            .find(|s| s.id == id)
             .map(sheet_level)
-            .unwrap_or(1);
-        let mut line = format!("{id}: {} XP (level {lv})", *e);
-        if level_for_xp(*e) > lv {
+            .unwrap_or(1)
+    };
+    let total = match (aw.amount, aw.difficulty) {
+        (Some(a), None) => a,
+        (None, Some(d)) => ids
+            .iter()
+            .map(|id| difficulty_xp(&rs, d, level_of(id)))
+            .sum::<Result<i64>>()?,
+        (Some(_), Some(_)) => bail!("give an amount or --difficulty, not both"),
+        (None, None) => bail!("give an amount or --difficulty"),
+    };
+    if total <= 0 {
+        bail!("XP amount must be positive");
+    }
+    let each = total / ids.len() as i64;
+    let mut out = Vec::new();
+    let mut capped = BTreeMap::new();
+    let mut given = Vec::new();
+    for id in &ids {
+        let lv = level_of(id);
+        let cur = p.xp.get(id).copied().unwrap_or(0);
+        // Cap: never more than one level ahead of the sheet.
+        let cap = XP_TABLE
+            .get(lv as usize + 1)
+            .map(|t| t - 1)
+            .unwrap_or(i64::MAX);
+        let new = (cur.max(0) + each).min(cap.max(cur));
+        if new - cur < each {
+            capped.insert(id.clone(), each - (new - cur));
+        }
+        given.push(new - cur);
+        p.xp.insert(id.clone(), new);
+        let mut line = format!("{id}: +{} → {new} XP (level {lv})", new - cur);
+        if let Some(c) = capped.get(id) {
+            line += &format!(" — {c} XP withheld: one level ahead is the most XP can carry; grant the next level with `level-up --milestone`");
+        }
+        if level_for_xp(new) > lv && level_for_xp(cur) <= lv {
             line += &format!(
-                " — can reach level {}: `talkdnd level-up {id}`",
-                level_for_xp(*e)
+                " — crossed the level {} threshold: level up at the next long rest or end of session (`talkdnd level-up {id}`), or hold it for the coming milestone",
+                lv + 1
             );
         }
         out.push(line);
     }
-    if amount % ids.len() as i64 != 0 {
+    if total % ids.len() as i64 != 0 {
         out.push(format!(
             "{} XP left over after the even split",
-            amount % ids.len() as i64
+            total % ids.len() as i64
         ));
     }
+    p.xp_log.push(XpEntry {
+        date: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        category: aw.category.to_string(),
+        reason: aw.reason.trim().to_string(),
+        each,
+        to: ids.clone(),
+        difficulty: aw.difficulty.map(str::to_string),
+        level: None,
+        capped,
+    });
     p.store(save_dir)?;
-    let why = reason.map(|r| format!("（{r}）")).unwrap_or_default();
+    let diff = aw
+        .difficulty
+        .map(|d| format!("，{d} 难度"))
+        .unwrap_or_default();
     log(
         save_dir,
-        &format!("经验{why}：{amount} XP，{} 人各 {each}", ids.len()),
+        &format!(
+            "经验（{}：{}{diff}）：{total} XP，{} 人各 {each}",
+            aw.category,
+            aw.reason.trim(),
+            ids.len()
+        ),
     )?;
     Ok(out)
 }
@@ -166,21 +427,47 @@ pub fn xp_add(save_dir: &Path, amount: i64, to: &str, reason: Option<&str>) -> R
 pub fn xp_show(save_dir: &Path) -> Result<Vec<String>> {
     let sheets = check::sheets(save_dir);
     let p = Progress::load(save_dir)?;
-    let mut out = Vec::new();
+    let mut out = vec!["advancement: hybrid — XP for small quests and events; levels for major story beats (`level-up --milestone --reason`)".to_string()];
+    let mut party_lv = i32::MAX;
     for s in &sheets {
         let xp = p.xp.get(&s.id).copied().unwrap_or(0);
         let lv = sheet_level(s);
+        party_lv = party_lv.min(lv);
         let next = XP_TABLE
             .get(lv as usize)
             .map_or("max".to_string(), |t| t.to_string());
         let ready = if level_for_xp(xp) > lv {
-            "  ← level-up ready"
+            "  ← level-up ready (long rest / end of session)"
         } else {
             ""
         };
         out.push(format!(
             "{} ({}): level {lv}, {xp} XP, next {next}{ready}",
             s.name, s.id
+        ));
+    }
+    let t = track(save_dir, &p);
+    if !t.is_empty() && party_lv != i32::MAX {
+        out.push("adventure track (expected party level):".into());
+        for st in &t {
+            let mark = if st.level == party_lv {
+                "  ← party level"
+            } else {
+                ""
+            };
+            out.push(format!("  L{:<2} {}{mark}", st.level, st.name));
+        }
+        if let Some(n) = t.iter().find(|st| st.level > party_lv) {
+            out.push(format!(
+                "next level-up by milestone: finishing the current level-{party_lv} chapter, before \"{}\" (level {})",
+                n.name, n.level
+            ));
+        }
+    }
+    if let Some(e) = p.xp_log.last() {
+        out.push(format!(
+            "last award: {} {} \"{}\" ({} each)",
+            e.date, e.category, e.reason, e.each
         ));
     }
     Ok(out)
@@ -298,11 +585,16 @@ pub fn level_up(
     who: &str,
     hp_mode: &str,
     class_arg: Option<&str>,
-    milestone: bool,
+    milestone: Option<&str>,
     rng: &mut dyn DiceRng,
     seeded: bool,
 ) -> Result<LevelUp> {
     let sheets = check::sheets(save_dir);
+    if let Some(r) = milestone {
+        if r.trim().is_empty() {
+            bail!("--milestone needs --reason \"<story event>\"");
+        }
+    }
     let s = check::find(&sheets, who)?;
     let text = fs::read_to_string(&s.file)?;
     let (b0, b1) = block_bounds(&text)
@@ -312,11 +604,26 @@ pub fn level_up(
         bail!("{} is already level 20", s.name);
     }
     let new = old + 1;
-    let p = Progress::load(save_dir)?;
+    let mut p = Progress::load(save_dir)?;
     let xp = p.xp.get(&s.id).copied().unwrap_or(0);
-    if !milestone && xp < XP_TABLE[old as usize] {
+    if let Some(r) = milestone {
+        let rn = norm_reason(r);
+        if let Some(e) = p
+            .xp_log
+            .iter()
+            .find(|e| e.level.is_some() && norm_reason(&e.reason) == rn && e.to.contains(&s.id))
+        {
+            bail!(
+                "{} already levelled for \"{}\" on {}",
+                s.name,
+                e.reason,
+                e.date
+            );
+        }
+    }
+    if milestone.is_none() && xp < XP_TABLE[old as usize] {
         bail!(
-            "{} has {xp} XP; level {new} needs {} (pass --milestone for milestone levelling)",
+            "{} has {xp} XP; level {new} needs {} (a major story beat: --milestone --reason \"…\")",
             s.name,
             XP_TABLE[old as usize]
         );
@@ -436,6 +743,26 @@ pub fn level_up(
     }
     fs::write(&s.file, out)?;
     let mut r = LevelUp::default();
+    if let Some(reason) = milestone {
+        let floor = XP_TABLE[(new - 1) as usize];
+        let after = xp.max(floor);
+        p.xp.insert(s.id.clone(), after);
+        p.xp_log.push(XpEntry {
+            date: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+            category: "milestone-major".into(),
+            reason: reason.trim().to_string(),
+            each: after - xp,
+            to: vec![s.id.clone()],
+            difficulty: None,
+            level: Some(new),
+            capped: BTreeMap::new(),
+        });
+        p.store(save_dir)?;
+        r.lines.push(format!(
+            "milestone \"{}\": XP {xp} → {after} (level {new} threshold)",
+            reason.trim()
+        ));
+    }
     r.lines.push(format!(
         "{} → level {new}: HP {hp} → {} (+{gain}: d{die} {how}, CON {con_mod:+}); proficiency +{new_prof}{}",
         s.name,
@@ -456,6 +783,13 @@ pub fn level_up(
             );
         }
     }
+    r.lines.push(if rs == "2024" {
+        "timing (2024 DMG ch.2): level up at a long rest or the end of a session; if it happens outside a long rest, current and max HP both rise but spent slots and resources are not restored".into()
+    } else {
+        "timing: level up at a long rest or the end of a session; outside a long rest raise current and max HP, but do not restore spent slots or resources".into()
+    });
+    r.lines
+        .push("then `talkdnd sheet export` and offer the PDF".into());
     r.lines.push("the sheet prose (header, features, spells) is not rewritten: update it with the player; then `combat-sim party sync` to refresh party HP".into());
     let tag = if seeded { "（测试种子）" } else { "" };
     log(
@@ -634,11 +968,24 @@ mod tests {
     #[test]
     fn xp_split_and_level_up_with_proficiency_bump() {
         let d = save_dir("lv");
-        let lines = xp_add(&d, 13001, "all", Some("test")).unwrap();
-        assert!(lines[0].starts_with("tess: 6500 XP"), "{lines:?}");
+        let aw = |amount, reason| Award {
+            amount: Some(amount),
+            difficulty: None,
+            category: "quest",
+            to: "all",
+            reason,
+            again: false,
+        };
+        let lines = xp_add(&d, &aw(13001, "test")).unwrap();
+        assert!(lines[0].starts_with("tess: +6500 → 6500 XP"), "{lines:?}");
+        assert!(lines[0].contains("crossed the level 5 threshold"));
+        // Quill (level 1) is capped one level ahead: level 2 at most (899).
+        assert!(lines[1].starts_with("quill: +899 → 899"), "{lines:?}");
+        assert!(lines[1].contains("5601 XP withheld"));
         assert!(lines.iter().any(|l| l.contains("1 XP left over")));
+        assert!(xp_add(&d, &aw(10, " TEST ")).is_err(), "double award");
         let mut rng = combat_sim::dice::seeded_rng(1);
-        let r = level_up(&d, &d, "Tess", "avg", None, false, &mut rng, true).unwrap();
+        let r = level_up(&d, &d, "Tess", "avg", None, None, &mut rng, true).unwrap();
         assert!(r.lines[0].contains("HP 30 → 38"), "{:?}", r.lines);
         let t = fs::read_to_string(d.join("Characters/Tess.md")).unwrap();
         for want in [
@@ -655,8 +1002,99 @@ mod tests {
             assert!(t.contains(want), "missing {want}:\n{t}");
         }
         // XP gate: Quill has 6500 too, Tess now needs 14000 for level 6.
-        assert!(level_up(&d, &d, "tess", "avg", None, false, &mut rng, true).is_err());
-        assert!(level_up(&d, &d, "tess", "11", None, true, &mut rng, true).is_err());
+        assert!(level_up(&d, &d, "tess", "avg", None, None, &mut rng, true).is_err());
+        assert!(level_up(&d, &d, "tess", "11", None, Some("x"), &mut rng, true).is_err());
+        // Milestone: level 6, XP raised to the 14000 threshold, logged once.
+        let r = level_up(
+            &d,
+            &d,
+            "tess",
+            "avg",
+            None,
+            Some("Vault opened"),
+            &mut rng,
+            true,
+        )
+        .unwrap();
+        assert!(
+            r.lines.iter().any(|l| l.contains("XP 6500 → 14000")),
+            "{:?}",
+            r.lines
+        );
+        assert!(r.lines.iter().any(|l| l.contains("long rest")));
+        let p = Progress::load(&d).unwrap();
+        assert_eq!(p.xp["tess"], 14000);
+        assert_eq!(p.xp_log.last().unwrap().level, Some(6));
+        assert!(level_up(
+            &d,
+            &d,
+            "tess",
+            "avg",
+            None,
+            Some("vault  opened"),
+            &mut rng,
+            true
+        )
+        .is_err());
+        assert!(level_up(&d, &d, "tess", "avg", None, Some(" "), &mut rng, true).is_err());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn difficulty_tables_track_and_old_ledger() {
+        assert_eq!(difficulty_xp("2014", "hard", 3).unwrap(), 225);
+        assert_eq!(difficulty_xp("2014", "deadly", 20).unwrap(), 12700);
+        assert_eq!(difficulty_xp("2014", "moderate", 1).unwrap(), 50);
+        assert_eq!(difficulty_xp("2024", "moderate", 3).unwrap(), 225);
+        assert_eq!(difficulty_xp("2024", "high", 20).unwrap(), 22000);
+        assert_eq!(difficulty_xp("2024", "deadly", 1).unwrap(), 100);
+        assert!(difficulty_xp("2024", "brutal", 1).is_err());
+        let t = builtin_track("../Adventures/keys-from-the-golden-vault/combat");
+        assert_eq!(t.len(), 13);
+        assert_eq!((t[1].name.as_str(), t[1].level), ("The Stygian Gambit", 2));
+        // 0.1.6 ledger (no xp_log) still loads.
+        let d = save_dir("old");
+        fs::write(d.join(FILE), "xp: {tess: 100}\npurses: {}\n").unwrap();
+        let p = Progress::load(&d).unwrap();
+        assert_eq!(p.xp["tess"], 100);
+        assert!(p.xp_log.is_empty());
+        // --difficulty: 2014 save, Tess L4 hard 375 + Quill L1 hard 75 = 450, 225 each.
+        let lines = xp_add(
+            &d,
+            &Award {
+                amount: None,
+                difficulty: Some("hard"),
+                category: "noncombat",
+                to: "all",
+                reason: "baron negotiation",
+                again: false,
+            },
+        )
+        .unwrap();
+        assert!(lines[0].starts_with("tess: +225 → 325"), "{lines:?}");
+        assert!(xp_add(
+            &d,
+            &Award {
+                amount: Some(5),
+                difficulty: None,
+                category: "milestone-major",
+                to: "all",
+                reason: "x",
+                again: false,
+            },
+        )
+        .is_err());
+        fs::write(
+            d.join("combat/campaign.yaml"),
+            "party: [tess, quill]\nruleset: \"2014\"\nadventures: [../../../Adventures/keys-from-the-golden-vault/combat]\n",
+        )
+        .unwrap();
+        let show = xp_show(&d).unwrap().join("\n");
+        assert!(show.contains("L2  The Stygian Gambit"), "{show}");
+        assert!(show.contains("L1  The Murkmire Malevolence  ← party level"));
+        assert!(show.contains("before \"The Stygian Gambit\""));
+        let p = Progress::load(&d).unwrap();
+        assert_eq!(p.xp_log[0].difficulty.as_deref(), Some("hard"));
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -108,9 +108,12 @@ enum Cmd {
         /// Class id when the sheet does not say (e.g. rogue)
         #[arg(long)]
         class: Option<String>,
-        /// Milestone levelling: skip the XP check
-        #[arg(long)]
+        /// Milestone level for a major story beat: no XP check; XP is raised to the new level's threshold
+        #[arg(long, requires = "reason")]
         milestone: bool,
+        /// The story event (required with --milestone; one level per event per character)
+        #[arg(long)]
+        reason: Option<String>,
     },
     /// Printable character sheets (A4, fillable PDF or HTML)
     Sheet {
@@ -131,14 +134,27 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum XpCmd {
-    /// Award XP, split evenly: `xp add 450 --to all --reason "museum guards"`
+    /// Award XP for a small quest or event, split evenly:
+    /// `xp add 450 --category combat --reason "museum guards"` or
+    /// `xp add --difficulty hard --category noncombat --reason "baron talks"`
     Add {
-        amount: i64,
+        /// Total XP (omit with --difficulty)
+        amount: Option<i64>,
+        /// Amount from the ruleset table: 2014 easy|medium|hard|deadly, 2024 low|moderate|high
+        #[arg(long)]
+        difficulty: Option<String>,
+        /// combat, noncombat, quest, discovery, roleplay, milestone-minor
+        #[arg(long, default_value = "combat")]
+        category: String,
         /// `all` (campaign party) or comma-separated names/ids
         #[arg(long, default_value = "all")]
         to: String,
+        /// What happened (required; the same reason is not awarded twice)
         #[arg(long)]
-        reason: Option<String>,
+        reason: String,
+        /// Allow a second award with the same reason
+        #[arg(long)]
+        again: bool,
     },
     /// XP, level and next threshold per character
     Show,
@@ -340,12 +356,24 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         Cmd::Xp { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             let lines = match cmd {
-                XpCmd::Add { amount, to, reason } => {
-                    if amount <= 0 {
-                        bail!("XP amount must be positive");
-                    }
-                    progress::xp_add(&s, amount, &to, reason.as_deref())?
-                }
+                XpCmd::Add {
+                    amount,
+                    difficulty,
+                    category,
+                    to,
+                    reason,
+                    again,
+                } => progress::xp_add(
+                    &s,
+                    &progress::Award {
+                        amount,
+                        difficulty: difficulty.as_deref(),
+                        category: &category,
+                        to: &to,
+                        reason: &reason,
+                        again,
+                    },
+                )?,
                 XpCmd::Show => progress::xp_show(&s)?,
             };
             for l in lines {
@@ -357,20 +385,29 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             hp,
             class,
             milestone,
+            reason,
         } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
-            let r = progress::level_up(
-                &s,
-                &root,
-                &who,
-                &hp,
-                class.as_deref(),
-                milestone,
-                rng,
-                cli.seed.is_some(),
-            )?;
-            for l in r.lines {
-                println!("{l}");
+            let ms = if milestone { reason.as_deref() } else { None };
+            let whos: Vec<String> = if who == "all" {
+                start::party_ids(&s)
+            } else {
+                who.split(',').map(|w| w.trim().to_string()).collect()
+            };
+            for w in whos {
+                let r = progress::level_up(
+                    &s,
+                    &root,
+                    &w,
+                    &hp,
+                    class.as_deref(),
+                    ms,
+                    rng,
+                    cli.seed.is_some(),
+                )?;
+                for l in r.lines {
+                    println!("{l}");
+                }
             }
         }
         Cmd::Sheet {

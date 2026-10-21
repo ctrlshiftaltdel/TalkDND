@@ -61,6 +61,12 @@
 13. **查书**：先查 pdf2md 生成的 Markdown（`<书目录>/.md/<书名>/index.md`），数据块、低质量页、地图一律看 PDF；PDF 永远为准。详见 `docs/pdf2md.md`。
 14. **隐私**：不要把规则书、冒险书文本、存档或 `dm-secrets.md` 提交到 git 或贴到任何 issue、PR。
 
+## 经验与升级（混合制）
+
+- 小任务、聪明的非战斗解法、发现、战斗：`$T xp add <数> --category <类> --reason "<事>"`，或 `--difficulty <难度>` 按规则表算。每件事只给一次。
+- 重大剧情节点、篇章/劫案结束：`$T level-up all --milestone --reason "<事件>"`，宣布升级，在长休或本节结束时让玩家选新能力；长休外升级时 HP 上升但已用资源不恢复。
+- 开局和升级后都 `$T sheet export`；随时 `$T xp show` 看进度轨。细节见 `docs/combat.md`「经验、升级与战利品」。
+
 ## 角色卡打印（PDF）
 
 - **开局**（`chargen confirm` 之后）和**每次 `level-up` 之后**：`$T sheet export <角色>`（`all` = 全队含同伴），把生成的 `Saves/<存档>/Characters/<名字>.pdf` 发给/告诉玩家可以下载打印。角色卡 Markdown 改动较大时（换装备、学新法术）也重新导出。
