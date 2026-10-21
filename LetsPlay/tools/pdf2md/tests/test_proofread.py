@@ -115,3 +115,21 @@ def test_glue_multiword_and_hyphen_space():
     assert pr.space_fix("an employee,only door") == "an employee-only door"
     assert pr.space_fix("an employee- only door") == "an employee-only door"
     assert pr.space_fix("staff,only") == "staff, only"
+
+
+def test_letter_spaced_headings():
+    import pymupdf
+
+    from pdf2md import repair, spaced
+
+    repair.WORDS.update({"domain", "ancients", "oath", "of", "the"})
+    assert spaced._join_fragments("Trickery D omain Spells") == "Trickery Domain Spells"
+    assert spaced._join_fragments("Oath of the A ncients") == "Oath of the Ancients"
+    assert spaced._is_spaced("G e a r   S t r i k e") and not spaced._is_spaced("Gear Strike now")
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((50, 100), "G e a r   S t r i k e", fontsize=8)
+    page.insert_text((50, 115), "Starting at 2nd level, you can strike with gears.", fontsize=8)
+    body = "Intro text here.\n\nStarting at 2nd level, you can strike with gears.\n"
+    out, n = spaced.restore(body, page)
+    assert n == 1 and "#### Gear Strike\n\nStarting at 2nd" in out

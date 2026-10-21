@@ -235,6 +235,12 @@ class Book:
                 body = self.check_text_page(p, body, hmap, info[p])
             if p not in text_pages or info[p].get("fallback"):
                 body = fallback.demote_body_headings(body)
+            if p in text_pages:
+                from . import spaced
+
+                body, k = spaced.restore(body, self.doc[p])
+                if k:
+                    info[p]["spaced_headings"] = k
             if p in text_pages and self.adventure:
                 body = self.adventure_layout(p, body, info[p])
             q = page_quality(body, info[p])
