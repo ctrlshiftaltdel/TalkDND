@@ -1136,6 +1136,7 @@ dependencies = [
     { name = "pymupdf" },
     { name = "pymupdf-layout" },
     { name = "pymupdf4llm" },
+    { name = "pyyaml" },
     { name = "rapidocr-onnxruntime" },
 ]
 
@@ -1158,6 +1159,7 @@ requires-dist = [
     { name = "pymupdf", specifier = "==2.0" },
     { name = "pymupdf-layout", specifier = "==2.0" },
     { name = "pymupdf4llm", specifier = "==2.0" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "rapidocr-onnxruntime", specifier = "==1.2.3" },
 ]
 provides-extras = ["paddle"]

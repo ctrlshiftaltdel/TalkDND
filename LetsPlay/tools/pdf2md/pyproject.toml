@@ -12,6 +12,7 @@ dependencies = [
     "pymupdf-layout==2.0",
     "rapidocr-onnxruntime==1.2.3",
     "pillow>=10",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
