@@ -1,4 +1,4 @@
-//! Download a release `combat-sim` from the latest successful `build-artifacts`
+//! Download release `combat-sim` and `talkdnd` from the latest successful `build-artifacts`
 //! run on `main` and install it at `LetsPlay/bin/`.
 //!
 //! The command shells out to `gh` (`run list`, then `run download`). `--dry-run`
@@ -62,12 +62,23 @@ pub fn run(args: &[String]) -> Result<u8, String> {
             return Ok(2);
         }
     };
-    let plan = fetch_plan(&target, cfg!(unix))?;
+    let mut plans = Vec::new();
+    for tool in TOOLS {
+        plans.push(fetch_plan_for(tool, &target, cfg!(unix))?);
+    }
     if parsed.dry_run {
-        print!("{}", dry_run_text(&plan));
+        for plan in &plans {
+            print!("{}", dry_run_text(plan));
+        }
         return Ok(0);
     }
+    for plan in &plans {
+        fetch_one(plan)?;
+    }
+    Ok(0)
+}
 
+fn fetch_one(plan: &FetchPlan) -> Result<(), String> {
     let root = crate::repo_root()?;
     let listed = run_gh(&root, &plan.list_args)?;
     if !listed.status.success() {
@@ -78,7 +89,7 @@ pub fn run(args: &[String]) -> Result<u8, String> {
     let run_id = parse_run_id(&listed_stdout)?;
 
     let temp = TempDownload::new()?;
-    let download_args = concrete_download_args(&plan, run_id, &temp.path);
+    let download_args = concrete_download_args(plan, run_id, &temp.path);
     let downloaded = run_gh(&root, &download_args)?;
     if !downloaded.status.success() {
         return Err(command_failure("gh run download", &downloaded));
@@ -92,7 +103,7 @@ pub fn run(args: &[String]) -> Result<u8, String> {
         plan.install_rel, plan.target
     );
     println!("local file only; do not commit {}", plan.install_rel);
-    Ok(0)
+    Ok(())
 }
 
 pub fn parse_fetch_args(args: &[String]) -> Result<FetchArgs, String> {
@@ -165,6 +176,9 @@ pub fn validate_target(target: &str) -> Result<(), String> {
     }
 }
 
+/// Programs installed into `LetsPlay/bin/`. Each has artifact `<tool>-<target>`.
+pub const TOOLS: &[&str] = &["combat-sim", "talkdnd"];
+
 pub fn binary_name(target: &str) -> &'static str {
     if target.contains("windows") {
         "combat-sim.exe"
@@ -174,9 +188,17 @@ pub fn binary_name(target: &str) -> &'static str {
 }
 
 pub fn fetch_plan(target: &str, host_unix: bool) -> Result<FetchPlan, String> {
+    fetch_plan_for("combat-sim", target, host_unix)
+}
+
+pub fn fetch_plan_for(tool: &str, target: &str, host_unix: bool) -> Result<FetchPlan, String> {
     validate_target(target)?;
-    let binary_name = binary_name(target).to_string();
-    let artifact = format!("combat-sim-{target}");
+    let binary_name = if target.contains("windows") {
+        format!("{tool}.exe")
+    } else {
+        tool.to_string()
+    };
+    let artifact = format!("{tool}-{target}");
     let install_rel = format!("LetsPlay/bin/{binary_name}");
     let list_args = vec![
         "gh".to_string(),
@@ -643,5 +665,18 @@ chmod u+x LetsPlay/bin/combat-sim
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
+    }
+}
+
+#[cfg(test)]
+mod talkdnd_tests {
+    use super::*;
+
+    #[test]
+    fn talkdnd_artifact() {
+        let p = fetch_plan_for("talkdnd", "x86_64-pc-windows-msvc", false).unwrap();
+        assert_eq!(p.artifact, "talkdnd-x86_64-pc-windows-msvc");
+        assert_eq!(p.install_rel, "LetsPlay/bin/talkdnd.exe");
+        assert!(TOOLS.contains(&"talkdnd"));
     }
 }

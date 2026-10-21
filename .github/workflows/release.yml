@@ -23,15 +23,18 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
-            bin_name: combat-sim
+            ext: ""
+            platform: linux-x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
-            bin_name: combat-sim.exe
+            ext: .exe
+            platform: windows-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
-            bin_name: combat-sim
+            ext: ""
+            platform: macos-arm64
     # Artifact upload needs actions: write. contents stays read-only here.
     permissions:
       contents: read
@@ -46,17 +49,22 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Test
-        run: cargo test --manifest-path tools/combat-sim/Cargo.toml --target ${{ matrix.target }}
+        run: |
+          cargo test --manifest-path tools/combat-sim/Cargo.toml --target ${{ matrix.target }}
+          cargo test --manifest-path tools/talkdnd/Cargo.toml --target ${{ matrix.target }}
 
       - name: Build release
-        run: cargo build --release --manifest-path tools/combat-sim/Cargo.toml --target ${{ matrix.target }}
+        run: |
+          cargo build --release --manifest-path tools/combat-sim/Cargo.toml --target ${{ matrix.target }}
+          cargo build --release --manifest-path tools/talkdnd/Cargo.toml --target ${{ matrix.target }}
 
       - name: Package LetsPlay bundle
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           ARCHIVE: ${{ matrix.archive }}
-          BIN_NAME: ${{ matrix.bin_name }}
+          EXT: ${{ matrix.ext }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
@@ -70,21 +78,24 @@ jobs:
               exit 1
               ;;
           esac
-          bin="tools/combat-sim/target/${TARGET}/release/${BIN_NAME}"
-          if [ ! -f "$bin" ]; then
-            echo "release binary not found" >&2
-            exit 1
-          fi
-          name="talkdnd-letsplay-${tag}-${TARGET}"
+          for tool in combat-sim talkdnd; do
+            if [ ! -f "tools/${tool}/target/${TARGET}/release/${tool}${EXT}" ]; then
+              echo "release binary ${tool} not found" >&2
+              exit 1
+            fi
+          done
+          name="talkdnd-letsplay-${tag}-${PLATFORM}"
           rm -rf dist
           mkdir -p dist/stage dist/out
           # Only git-tracked files: never copy the working tree.
           git archive --format=tar HEAD LetsPlay | tar -xf - -C dist/stage
           cp NOTICE LICENSE dist/stage/LetsPlay/
-          cp "$bin" "dist/stage/LetsPlay/bin/${BIN_NAME}"
-          chmod 755 "dist/stage/LetsPlay/bin/${BIN_NAME}"
-          # Allowed list = tracked LetsPlay files + NOTICE + LICENSE + binary.
-          { git ls-files -- LetsPlay; echo LetsPlay/NOTICE; echo LetsPlay/LICENSE; echo "LetsPlay/bin/${BIN_NAME}"; } \
+          for tool in combat-sim talkdnd; do
+            cp "tools/${tool}/target/${TARGET}/release/${tool}${EXT}" "dist/stage/LetsPlay/bin/${tool}${EXT}"
+            chmod 755 "dist/stage/LetsPlay/bin/${tool}${EXT}"
+          done
+          # Allowed list = tracked LetsPlay files + NOTICE + LICENSE + binaries.
+          { git ls-files -- LetsPlay; echo LetsPlay/NOTICE; echo LetsPlay/LICENSE; echo "LetsPlay/bin/combat-sim${EXT}"; echo "LetsPlay/bin/talkdnd${EXT}"; } \
             | LC_ALL=C sort -u > dist/allowed.txt
           if [ "$ARCHIVE" = "zip" ]; then
             archive="dist/out/${name}.zip"
@@ -134,7 +145,7 @@ jobs:
       - name: Upload package
         uses: actions/upload-artifact@v7
         with:
-          name: talkdnd-letsplay-${{ matrix.target }}
+          name: talkdnd-letsplay-${{ matrix.platform }}
           path: dist/out/
           if-no-files-found: error
 
@@ -161,14 +172,14 @@ jobs:
         with:
           fail_on_unmatched_files: true
           body: |
-            TalkDND ${{ github.ref_name }}: the play folder `LetsPlay/` with a prebuilt combat-sim.
+            TalkDND ${{ github.ref_name }}: the play folder `LetsPlay/` with prebuilt combat-sim and talkdnd.
 
-            - Linux x86_64: `talkdnd-letsplay-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz`
-            - Windows x86_64: `talkdnd-letsplay-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip`
-            - macOS Apple Silicon: `talkdnd-letsplay-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz`
+            - Linux x86_64: `talkdnd-letsplay-${{ github.ref_name }}-linux-x86_64.tar.gz`
+            - Windows x86_64: `talkdnd-letsplay-${{ github.ref_name }}-windows-x86_64.zip`
+            - macOS Apple Silicon: `talkdnd-letsplay-${{ github.ref_name }}-macos-arm64.tar.gz`
 
             Each archive holds the git-tracked `LetsPlay/` tree (DM guide, combat data,
-            rulings, README placeholders), `LICENSE`, `NOTICE`, and the binary at
+            rulings, README placeholders), `LICENSE`, `NOTICE`, and both binaries in
             `LetsPlay/bin/`. No rulebooks, adventures, or saves are included: put your
             own SRD / books into `LetsPlay/Rules/<edition>/` and `LetsPlay/Adventures/`.
             The matching `.sha256` file checksums that archive. macOS Intel builds are

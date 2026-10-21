@@ -46,8 +46,8 @@ Play and development are separate roots.
 
 | Tree | Role |
 |------|------|
-| `LetsPlay/` | Play. The DM agent starts here. `LetsPlay/README.md` is the player guide. `LetsPlay/AGENTS.md` is the DM guide. Players put books in `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/`, and `LetsPlay/Adventures/`. Those directories are local except their README files. Combat data the engine loads lives in `LetsPlay/Rules/combat/`. Saves live in `LetsPlay/Saves/` and are not committed. The program they run is the gitignored binary `LetsPlay/bin/combat-sim` (Windows: `LetsPlay/bin/combat-sim.exe`). |
-| Repository root | Development only. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine) and `tools/talkdnd-dev` (dev tools). AgentOrch files, CI, and this charter stay at the root. Nothing required to play lives here. |
+| `LetsPlay/` | Play. The DM agent starts here. `LetsPlay/README.md` is the player guide. `LetsPlay/AGENTS.md` is the DM guide. Players put books in `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/`, and `LetsPlay/Adventures/`. Those directories are local except their README files. Combat data the engine loads lives in `LetsPlay/Rules/combat/`. Saves live in `LetsPlay/Saves/` and are not committed. The programs they run are the gitignored binaries `LetsPlay/bin/combat-sim` and `LetsPlay/bin/talkdnd` (Windows: `.exe`). |
+| Repository root | Development only. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine), `tools/talkdnd` (play helper) and `tools/talkdnd-dev` (dev tools). AgentOrch files, CI, and this charter stay at the root. Nothing required to play lives here. |
 
 Release archives contain the whole git-tracked `LetsPlay/` tree plus the binary at `LetsPlay/bin/`; extracting one gives a ready play folder. `build-artifacts` artifacts contain only the binary at the archive root; extracting one into `LetsPlay/bin/` is the install. No launcher script points outside `LetsPlay/`.
 
@@ -69,6 +69,7 @@ Tracked combat data comes only from the SRD (CC-BY-4.0). Attribution is in `NOTI
 Project programs, tools, and scripts are Rust.
 
 - `tools/combat-sim` is the combat engine.
+- `tools/talkdnd` is the play helper: resume digest, new save, character creation checks, random companions, checkpoints. It rolls through the combat-sim dice engine (library dependency) so all dice stay unified.
 - `tools/talkdnd-dev` is the development tool (leak check, LetsPlay path check, layout migration, binary install) and uses only the Rust standard library.
 - Rules data is Markdown and YAML, not a third language runtime.
 
@@ -90,7 +91,7 @@ The same ban covers chat dumps of those materials, orchestration notes, and back
 
 ## Platform targets
 
-Prebuilt `combat-sim` packages are published for these three targets:
+Prebuilt packages (`combat-sim` and `talkdnd`) are published for these three targets:
 
 | System | Rust target |
 |--------|-------------|
@@ -267,7 +268,12 @@ Pilot rejects on cleaned-up stat-block pages were mostly tiny recall dips (about
 | 2026-10-21 | pdf2md audit + local page-fix layer + optional agent review (Grok Build on the box; agent-agnostic), accepted under the LESSONS soft/hard gate. |
 | 2026-10-21 | pdf2md review soft gate, max-turns retry, local SRD snippet injection, `--rejudge`. |
 | 2026-10-21 | 2014 `monsters/` (SRD Guard/Animated Armor/Mimic), local Allosaurus/Scarecrow gitignore, five SRD spells, `support` AI template. |
+| 2026-10-21 | `talkdnd` play helper (start digest, new save, chargen, npc, checkpoint, log) built and shipped with combat-sim; release assets use plain platform names (`linux-x86_64`, `windows-x86_64`, `macos-arm64`). |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 
 `pdf2md audit` ports the owner's evaluation method into the tool: each page is scored against the PDF text layer (word recall, extra words and unknown words per 1000 via the word list, body-like headings, table structure, empty/repeated/interleaved text, low-quality flags, and `inferred` / `check PDF` review markers), written worst-first to `.md/<stem>/audit.json`. Corrections live in `.md/<stem>/fixes/pNNNN.md` (header records the PDF SHA-256 and pdf2md version) and replace that page whenever the book is assembled, so they survive reconversion; a fix for a different PDF hash is ignored. `pdf2md review` hands an agent the page Markdown, the text layer and a rendered image with strict rules (fix OCR/spacing, restore missing text, rebuild tables and stat blocks, keep anchors, add nothing not on the page). For uncertain spots the agent first consults the page image, the converted SRDs and other local books, and cross-references in the same book; if still unresolved it infers from context and marks `<!-- inferred: reason -->`, using `<!-- check PDF -->` only for truly unreadable text. A fix is kept under the review gate in `docs/LESSONS.md` (hard reject on rising unknown/1k or heavy deletion; soft recall allowance on structured pages); rejections are kept under `fixes/rejected/` and logged. The review role is agent-agnostic (`--engine cmd:<command>`); Grok Build (`--engine grok`) is the choice on the owner's box. All of this stays local and gitignored; tests use synthetic PDFs and a fake engine. The step is optional for players.
+
+### 2026-10-21 — talkdnd play helper
+
+Agents were slow to start (they read the whole DM guide, logs and sheets) and one agent built a character for the player without asking. Mechanical steps that need no model now live in `tools/talkdnd`, a Rust program shipped next to combat-sim in `LetsPlay/bin/`. `talkdnd start` checks content, starts pdf2md in the background and writes a compact `digest.md`; `talkdnd new` and `talkdnd chargen` record each player decision in `chargen.json` and check it against SRD-only option data (2014 species increases, 2024 background increases, 27-point buy, pool assignment, HP, AC, skills); `chargen sheet` writes the sheet and its `combat yaml` block from one set of numbers. Ability rolls use the combat-sim dice engine as a library and are logged and final. `talkdnd npc random` drafts SRD companions; the DM adds personality after the player confirms. Options outside the SRD are allowed with a warning, because validation must not need the player's books. Release archives are now named by plain platform (`talkdnd-letsplay-<tag>-linux-x86_64.tar.gz`, `-windows-x86_64.zip`, `-macos-arm64.tar.gz`).

@@ -46,6 +46,8 @@ tools/talkdnd-dev/target/
 # The old tools/bin path stays ignored so a leftover file is not committed.
 LetsPlay/bin/combat-sim
 LetsPlay/bin/combat-sim.exe
+LetsPlay/bin/talkdnd
+LetsPlay/bin/talkdnd.exe
 tools/bin/combat-sim.exe
 target/
 .codegraph/
