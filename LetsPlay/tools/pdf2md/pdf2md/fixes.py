@@ -49,8 +49,33 @@ def load_fixes(book_dir, sha256):
     return out
 
 
-def apply_fixes(md, fixes):
-    """Replace fixed pages in assembled markdown (anchors are kept)."""
+IMG_RE = re.compile(r"!\[[^\]]*\]\(img/[^)]+\)")
+
+
+def refresh_fix(fix, generated):
+    """Carry newer converter output into a stored fix without losing the fix:
+    image links and room-key headings the fix does not have yet."""
+    from . import headings, rooms
+
+    fix = "\n".join(headings.promote_room_lines(fix.split("\n")))
+    gen_lines = generated.split("\n")
+    pairs = []
+    for i, ln in enumerate(gen_lines):
+        m = headings.HEADING_RE.match(ln)
+        if m and re.match(r"[A-Z]{1,2}\d{1,3}[a-z]?:", m.group(2)):
+            follow = next((x for x in gen_lines[i + 1:] if x.strip() and not x.startswith("#")), "")
+            pairs.append((m.group(2), follow))
+    fix, _ = rooms.add_missing_rooms(fix, pairs)
+    missing = [im for im in IMG_RE.findall(generated) if im.split("](")[1] not in fix]
+    if missing:
+        fix = fix.rstrip() + "\n\n" + "\n\n".join(missing)
+    return fix
+
+
+def apply_fixes(md, fixes, refresh=False):
+    """Replace fixed pages in assembled markdown (anchors are kept). With
+    `refresh`, image links and room headings from the new conversion are
+    merged into the fix (the stored fix file itself is not changed)."""
     if not fixes:
         return md
     first = ANCHOR_RE.search(md)
@@ -61,6 +86,8 @@ def apply_fixes(md, fixes):
     for p, text in pages.items():
         if p in fixes:
             fix = fixes[p].strip()
+            if refresh:
+                fix = refresh_fix(fix, text)
             if not fix.startswith(f'<a id="p{p}"></a>'):
                 fix = f'<a id="p{p}"></a>\n' + fix
             text = fix + "\n\n"

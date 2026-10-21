@@ -63,23 +63,34 @@ def normalize_heading(line, hmap):
 
 
 # Adventure room keys: "V1: GRAND ENTRANCE", "B12. Vault". OCR reads 1 as l/I.
-ROOM_CODE_RE = re.compile(r"^([A-Z]{1,2})([0-9lI|]{1,3}[a-z]?)([:.])\s+(?=\S)")
+ROOM_CODE_RE = re.compile(r"^([A-Z])([A-Z]?[0-9lIOS|]{1,3}[a-z]?)([:.])\s*(?=[A-Z])")
 ROOM_LINE_RE = re.compile(
     r"^(?:\*\*)?([A-Z]{1,2}[0-9]{1,3}[a-z]?)[:.]\s+([A-Z][A-Za-z'\u2019 ,&\-]{2,60}?)(?:\*\*)?\s*$")
 MAP_LINE_RE = re.compile(r"^(?:\*\*)?(MAP\s+\d+\.\d+\s*:\s*.{2,60}?)(?:\*\*)?\s*$", re.I)
 
 
 def fix_room_code(text):
-    """`Vl: GRAND ENTRANCE` -> `V1: GRAND ENTRANCE`, `Vl4` -> `V14` (needs a digit-like run)."""
+    """`Vl: GRAND ENTRANCE` -> `V1: GRAND ENTRANCE`; `Vl4`/`VI4` -> `V14`, `VlO` -> `V10`,
+    `V5:TITLE` -> `V5: TITLE`. Needs a digit-like run starting with a digit, l, I or |."""
     m = ROOM_CODE_RE.match(text)
     if not m:
         return text
     num = m.group(2)
-    digits = re.match(r"[0-9lI|]+", num).group(0)
-    if not any(c in "lI|" for c in digits) or digits.strip("lI|0123456789"):
+    run = re.match(r"[A-Z]?[0-9lI|][0-9lIOS|]*", num)
+    if not run:
         return text
-    fixed = digits.replace("l", "1").replace("I", "1").replace("|", "1") + num[len(digits):]
-    return m.group(1) + fixed + m.group(3) + " " + text[m.end():]
+    digits = run.group(0)
+    rest = num[len(digits):]
+    if rest and not re.fullmatch(r"[a-z]", rest):
+        return text
+    mapped = digits.translate(str.maketrans("lI|OS", "11105"))
+    if not mapped.isdigit():  # a real two-letter code such as `AB3`
+        if not (digits[0].isupper() and mapped[1:].isdigit()):
+            return text
+        return m.group(1) + digits[0] + mapped[1:] + rest + m.group(3) + " " + text[m.end():]
+    if mapped.startswith("0") or len(mapped) > 3:
+        return text
+    return m.group(1) + mapped + rest + m.group(3) + " " + text[m.end():]
 
 
 def promote_room_lines(lines, level=4):
