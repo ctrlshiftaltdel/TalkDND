@@ -80,6 +80,23 @@ pub enum Command {
         add: Vec<String>,
     },
 
+    /// Start an ad-hoc encounter without writing scene/encounter YAML:
+    /// a 5-row grid, the party in zone `near`, foes in zone `far`, `--distance` ft apart.
+    Quick {
+        /// Foes: `id[:count][@zone]` (repeatable; zone `near` or `far`, default far).
+        #[arg(long = "foe", value_name = "ID[:N][@ZONE]", required = true)]
+        foes: Vec<String>,
+        /// Comma-separated party creature ids (default: the campaign party).
+        #[arg(long, value_name = "A,B,C")]
+        party: Option<String>,
+        /// Feet between the two zones.
+        #[arg(long, default_value_t = 30)]
+        distance: i32,
+        /// Light: bright, dim or dark.
+        #[arg(long, default_value = "bright")]
+        light: String,
+    },
+
     /// Roll initiative.
     Init {
         /// Fixed initiative total for one combatant, repeatable.
@@ -331,6 +348,21 @@ pub enum ContentCommand {
     Show { id: String },
     /// Validate references, expressions and TODO notes.
     Check,
+    /// Convert SRD 5.1 JSON (5e-database) into library YAML.
+    ImportSrd {
+        /// `5e-SRD-Monsters.json`.
+        #[arg(long, value_name = "FILE")]
+        monsters: Option<PathBuf>,
+        /// `5e-SRD-Spells.json`.
+        #[arg(long, value_name = "FILE")]
+        spells: Option<PathBuf>,
+        /// Output directory (writes srd-monsters.yaml / srd-spells.yaml).
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// Library dirs whose hand-made ids win (repeatable).
+        #[arg(long = "skip-ids-from", value_name = "DIR")]
+        skip_ids_from: Vec<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -454,6 +486,12 @@ pub fn run() -> Result<()> {
             party_zone,
             add,
         ),
+        Command::Quick {
+            foes,
+            party,
+            distance,
+            light,
+        } => quick_state(&sources, state.as_deref(), &foes, party, distance, &light),
         Command::Init {
             set,
             surprised,
@@ -1000,6 +1038,43 @@ fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> 
             );
             Ok(())
         }
+        ContentCommand::ImportSrd {
+            monsters,
+            spells,
+            out,
+            skip_ids_from,
+        } => {
+            let skip = crate::srd::existing_ids(&skip_ids_from)?;
+            std::fs::create_dir_all(&out)?;
+            let read = |p: &PathBuf| -> Result<serde_json::Value> {
+                let t = std::fs::read_to_string(p).with_context(|| p.display().to_string())?;
+                serde_json::from_str(&t).with_context(|| p.display().to_string())
+            };
+            for (src, name, conv) in [
+                (
+                    monsters,
+                    "srd-monsters.yaml",
+                    crate::srd::convert_monsters
+                        as fn(
+                            &serde_json::Value,
+                            &std::collections::BTreeSet<String>,
+                        ) -> (serde_json::Value, usize),
+                ),
+                (spells, "srd-spells.yaml", crate::srd::convert_spells),
+            ] {
+                let Some(src) = src else { continue };
+                let (v, n) = conv(&read(&src)?, &skip);
+                let path = out.join(name);
+                let text = format!(
+                    "{}{}",
+                    crate::srd::ATTRIBUTION,
+                    serde_norway::to_string(&v)?
+                );
+                std::fs::write(&path, text).with_context(|| path.display().to_string())?;
+                println!("wrote {} ({n} item(s))", path.display());
+            }
+            Ok(())
+        }
         ContentCommand::Check => {
             let registry = load_content(sources)?;
             let report = content::check(&registry);
@@ -1277,6 +1352,75 @@ fn run_party(
         println!("{line}");
     }
     Ok(())
+}
+
+/// YAML for the ad-hoc `quick` scene and encounter.
+pub fn quick_yaml(foes: &[String], distance: i32, light: &str) -> Result<String> {
+    if !["bright", "dim", "dark"].contains(&light) {
+        bail!("--light must be bright, dim or dark");
+    }
+    if distance < 0 {
+        bail!("--distance must be 0 or more");
+    }
+    let mut members = String::new();
+    for spec in foes {
+        let (rest, zone) = match spec.split_once('@') {
+            Some((r, z)) => (r, z.trim()),
+            None => (spec.as_str(), "far"),
+        };
+        if zone != "near" && zone != "far" {
+            bail!("foe zone must be `near` or `far`, got `{zone}`");
+        }
+        let (id, count) = match rest.split_once(':') {
+            Some((i, n)) => (
+                i.trim(),
+                n.trim()
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| anyhow!("bad count in `{spec}`"))?,
+            ),
+            None => (rest.trim(), 1),
+        };
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            bail!("bad creature id in `{spec}`");
+        }
+        members.push_str(&format!(
+            "      - {{creature: {id}, count: {count}, zone: {zone}}}\n"
+        ));
+    }
+    // A grid so creatures really close the distance: 5 rows, the party in
+    // the left column (`n`), foes in the right one (`f`).
+    let cols = (distance / 5).max(1) as usize + 1;
+    let row = format!("n{}f", ".".repeat(cols - 1));
+    let rows: String = (0..5).map(|_| format!("        - \"{row}\"\n")).collect();
+    Ok(format!(
+        "scenes:\n  - id: quick-scene\n    name: Quick encounter\n    mode: grid\n    light: {light}\n    grid:\n      cell: 5\n      legend:\n        \".\": {{}}\n        \"n\": {{zone: near}}\n        \"f\": {{zone: far}}\n      rows:\n{rows}encounters:\n  - id: quick\n    name: Quick encounter\n    scene: quick-scene\n    party_zone: near\n    members:\n{members}"
+    ))
+}
+
+fn quick_state(
+    sources: &ContentSources,
+    requested: Option<&Path>,
+    foes: &[String],
+    party: Option<String>,
+    distance: i32,
+    light: &str,
+) -> Result<()> {
+    let yaml = quick_yaml(foes, distance, light)?;
+    let dir = std::env::temp_dir().join(format!("combat-sim-quick-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let file = dir.join("quick.yaml");
+    std::fs::write(&file, yaml)?;
+    let mut sources = sources.clone();
+    sources.adventures.push(file);
+    let result = new_state(&sources, requested, "quick".into(), party, None, Vec::new());
+    let _ = std::fs::remove_dir_all(&dir);
+    result
 }
 
 fn new_state(
