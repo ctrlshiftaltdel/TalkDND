@@ -825,10 +825,20 @@ pub fn import_markdown(rs: &str, srd: &Book, files: &[PathBuf]) -> Result<DataFi
         ..Default::default()
     };
     let class_ids: Vec<String> = srd.classes.keys().cloned().collect();
+    let mut known: BTreeMap<(String, String), Vec<(i32, String)>> = BTreeMap::new();
     for f in files {
         let text = fs::read_to_string(f)?;
         if rs == "2014" {
             import_2014(&text, srd, &mut out);
+            for (c, name, feats) in import_2014_known(&text, srd) {
+                let k = (c, name);
+                if known
+                    .get(&k)
+                    .is_none_or(|f: &Vec<(i32, String)>| f.len() < feats.len())
+                {
+                    known.insert(k, feats);
+                }
+            }
             continue;
         }
         let mut cur_class: Option<String> = None;
@@ -919,6 +929,22 @@ pub fn import_markdown(rs: &str, srd: &Book, files: &[PathBuf]) -> Result<DataFi
         }
     }
     out.classes.retain(|_, c| !c.subclasses.is_empty());
+    // Lore headings the layout pass took for subclasses have no features.
+    for c in out.classes.values_mut() {
+        c.subclasses.retain(|_, s| !s.features.is_empty());
+    }
+    out.classes.retain(|_, c| !c.subclasses.is_empty());
+    // Known 2014 subclasses replace what the layout pass guessed for them.
+    for ((c, name), feats) in known {
+        let sid = crate::chargen::slug(&name);
+        let entry = out.classes.entry(c).or_default();
+        let e = entry.subclasses.entry(sid).or_default();
+        e.name = Some(name);
+        e.features = feats
+            .into_iter()
+            .map(|(l, n)| (l, n, "见规则书（导入）".into()))
+            .collect();
+    }
     Ok(out)
 }
 
@@ -1050,6 +1076,12 @@ fn import_2014(text: &str, srd: &Book, out: &mut DataFile) {
         if low.ends_with("level spells") || low.chars().all(|c| !c.is_alphabetic()) {
             continue; // table header
         }
+        if srd
+            .classes
+            .contains_key(&crate::chargen::slug(low.trim_start_matches("the ")))
+        {
+            continue; // a class's lore sidebar ("The Cleric")
+        }
         // Level from the first body paragraph.
         let body: String = lines[i..]
             .iter()
@@ -1077,6 +1109,393 @@ fn import_2014(text: &str, srd: &Book, out: &mut DataFile) {
             e.features.push((lv, name, "见规则书（导入）".into()));
         }
     }
+}
+
+/// 2014 Player's Handbook subclasses by name, with the words that mark their
+/// own feature headings. OCR'd two-column pages interleave neighbouring
+/// subclasses (Nature/Tempest, Trickery/War), so headings are given to the
+/// subclass whose words they contain before falling back to page order.
+/// SRD subclasses are listed too: they only bound the others' sections.
+const KNOWN_2014: &[(&str, &str, &[&str])] = &[
+    (
+        "barbarian",
+        "Path of the Berserker",
+        &["berserker", "frenzy"],
+    ),
+    (
+        "barbarian",
+        "Path of the Totem Warrior",
+        &["totem", "spirit"],
+    ),
+    ("bard", "College of Lore", &["lore"]),
+    (
+        "bard",
+        "College of Valor",
+        &["valor", "battle magic", "combat inspiration"],
+    ),
+    ("cleric", "Knowledge Domain", &["knowledge"]),
+    ("cleric", "Life Domain", &["life"]),
+    ("cleric", "Light Domain", &["light"]),
+    ("cleric", "Nature Domain", &["nature", "charm animals"]),
+    (
+        "cleric",
+        "Tempest Domain",
+        &["tempest", "storm", "thunder", "wrath"],
+    ),
+    (
+        "cleric",
+        "Trickery Domain",
+        &["trickery", "trickster", "duplicity", "cloak of shadows"],
+    ),
+    ("cleric", "War Domain", &["war ", "battle", "guided strike"]),
+    ("druid", "Circle of the Land", &["land"]),
+    (
+        "druid",
+        "Circle of the Moon",
+        &[
+            "moon",
+            "combat wild shape",
+            "elemental wild shape",
+            "thousand forms",
+        ],
+    ),
+    ("fighter", "Champion", &["champion", "critical"]),
+    (
+        "fighter",
+        "Battle Master",
+        &["battle master", "superiority", "maneuver", "student of war"],
+    ),
+    (
+        "fighter",
+        "Eldritch Knight",
+        &["eldritch", "weapon bond", "war magic", "arcane charge"],
+    ),
+    (
+        "monk",
+        "Way of the Open Hand",
+        &["open hand", "wholeness", "tranquility", "quivering"],
+    ),
+    ("monk", "Way of Shadow", &["shadow"]),
+    (
+        "monk",
+        "Way of the Four Elements",
+        &["four elements", "elemental", "disciple of the elements"],
+    ),
+    ("paladin", "Oath of Devotion", &["devotion"]),
+    ("paladin", "Oath of the Ancients", &["ancients"]),
+    (
+        "paladin",
+        "Oath of Vengeance",
+        &["vengeance", "vengeful", "avenging"],
+    ),
+    ("ranger", "Hunter", &["hunter"]),
+    (
+        "ranger",
+        "Beast Master",
+        &["beast master", "companion", "bestial", "beast"],
+    ),
+    (
+        "rogue",
+        "Thief",
+        &["thief's", "thief\u{2019}s", "fast hands", "second-story"],
+    ),
+    (
+        "rogue",
+        "Assassin",
+        &["assassin", "infiltration", "impostor", "death strike"],
+    ),
+    (
+        "rogue",
+        "Arcane Trickster",
+        &[
+            "arcane trickster",
+            "mage hand",
+            "magical ambush",
+            "versatile trickster",
+            "spell thief",
+        ],
+    ),
+    ("sorcerer", "Draconic Bloodline", &["draconic", "dragon"]),
+    (
+        "sorcerer",
+        "Wild Magic",
+        &[
+            "wild magic",
+            "tides of chaos",
+            "bend luck",
+            "controlled chaos",
+            "spell bombardment",
+        ],
+    ),
+    (
+        "warlock",
+        "The Archfey",
+        &[
+            "archfey",
+            "fey presence",
+            "misty escape",
+            "beguiling",
+            "dark delirium",
+        ],
+    ),
+    ("warlock", "The Fiend", &["fiend", "dark one"]),
+    (
+        "warlock",
+        "The Great Old One",
+        &[
+            "great old one",
+            "awakened mind",
+            "entropic ward",
+            "thought shield",
+            "create thrall",
+        ],
+    ),
+    ("wizard", "School of Abjuration", &["abjur"]),
+    ("wizard", "School of Conjuration", &["conjur"]),
+    (
+        "wizard",
+        "School of Divination",
+        &[
+            "divination",
+            "portent",
+            "expert divination",
+            "the third eye",
+        ],
+    ),
+    (
+        "wizard",
+        "School of Enchantment",
+        &[
+            "enchant",
+            "hypnotic",
+            "split enchantment",
+            "alter memories",
+            "instinctive charm",
+        ],
+    ),
+    (
+        "wizard",
+        "School of Evocation",
+        &[
+            "evocation",
+            "sculpt",
+            "potent cantrip",
+            "empowered evocation",
+            "overchannel",
+        ],
+    ),
+    ("wizard", "School of Illusion", &["illusion", "illusory"]),
+    (
+        "wizard",
+        "School of Necromancy",
+        &["necromancy", "grim harvest", "undead", "inured"],
+    ),
+    (
+        "wizard",
+        "School of Transmutation",
+        &["transmut", "minor alchemy", "shapechanger"],
+    ),
+];
+
+fn squash(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .collect()
+}
+
+/// Known 2014 subclasses: anchored on their own name heading (or, when OCR lost
+/// it, on a heading naming one of their words plus "spells"/"tenets"), and fed
+/// every following heading that has a feature level, given to the sibling whose
+/// words it names. Replaces whatever the layout pass found for them.
+/// (class, subclass name, [(level, feature)]).
+type KnownSub = (String, String, Vec<(i32, String)>);
+
+fn import_2014_known(text: &str, srd: &Book) -> Vec<KnownSub> {
+    let mut res = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let heads: Vec<(usize, String)> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim_start().starts_with('#'))
+        .map(|(i, l)| (i, l.trim().trim_start_matches('#').trim().to_string()))
+        .collect();
+    // The book index at the end repeats every name; stop at it.
+    let end = heads
+        .iter()
+        .position(|(_, h)| h.eq_ignore_ascii_case("index"))
+        .unwrap_or(heads.len());
+    let heads = &heads[..end];
+    for (c, _) in GROUPS_2014
+        .iter()
+        .map(|(g, c)| (c, g))
+        .collect::<std::collections::BTreeMap<_, _>>()
+    {
+        let Some(gpos) = heads.iter().position(|(_, h)| {
+            GROUPS_2014
+                .iter()
+                .any(|(g, cc)| cc == c && h.eq_ignore_ascii_case(g))
+        }) else {
+            continue;
+        };
+        // The class's section: back to its own class heading (subclass
+        // descriptions often come before the group heading in the OCR order)
+        // and forward to the next class heading.
+        let is_class = |h: &str| srd.classes.contains_key(&crate::chargen::slug(h));
+        let start = heads[..gpos]
+            .iter()
+            .rposition(|(_, h)| crate::chargen::slug(h) == *c)
+            .unwrap_or(gpos);
+        let stop = heads[gpos + 1..]
+            .iter()
+            .position(|(_, h)| {
+                is_class(h)
+                    || h.to_lowercase().starts_with("chapter")
+                    || GROUPS_2014
+                        .iter()
+                        .any(|(g, cc)| cc != c && h.eq_ignore_ascii_case(g))
+            })
+            .map(|k| gpos + 1 + k)
+            .unwrap_or(heads.len());
+        let region = &heads[start..stop];
+        let subs: Vec<&(&str, &str, &[&str])> = KNOWN_2014.iter().filter(|k| k.0 == *c).collect();
+        // Anchors.
+        let mut anchors: Vec<(usize, usize)> = Vec::new(); // (region index, sub index)
+        for (si, (_, name, words)) in subs.iter().enumerate() {
+            let n = squash(name);
+            let short = squash(
+                name.trim_start_matches("The ")
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or(""),
+            );
+            let pos = region.iter().position(|(_, h)| squash(h) == n).or_else(|| {
+                region.iter().position(|(_, h)| {
+                    let l = h.to_lowercase();
+                    let s = squash(h);
+                    (s.starts_with(&n) && l.ends_with("spells"))
+                        || (l.starts_with("tenets of") && s.contains(&short))
+                        || (s == squash(words[0]))
+                })
+            });
+            if let Some(p) = pos {
+                anchors.push((p, si));
+            }
+        }
+        anchors.sort();
+        let owner_by_words = |h: &str| -> Option<usize> {
+            let l = format!("{} ", h.to_lowercase());
+            let hits: Vec<usize> = subs
+                .iter()
+                .enumerate()
+                .filter(|(_, k)| k.2.iter().any(|w| l.contains(w)))
+                .map(|(i, _)| i)
+                .collect();
+            (hits.len() == 1).then(|| hits[0])
+        };
+        let first = srd
+            .classes
+            .get(*c)
+            .and_then(|x| x.subclass_level)
+            .unwrap_or(3);
+        let mut feats: Vec<Vec<(i32, String)>> = vec![Vec::new(); subs.len()];
+        let mut found = vec![false; subs.len()];
+        for &(_, si) in &anchors {
+            found[si] = true;
+        }
+        let anchor_rows: Vec<usize> = anchors.iter().map(|a| a.0).collect();
+        for (ri, (li, h)) in region.iter().enumerate() {
+            if anchor_rows.contains(&ri) && subs.iter().any(|k| squash(k.1) == squash(h)) {
+                continue;
+            }
+            let Some(&(_, page_owner)) = anchors.iter().rev().find(|a| a.0 <= ri) else {
+                continue;
+            };
+            let mut h = h.clone();
+            let mut body_from = li + 1;
+            if h.ends_with(':') {
+                if let Some((nli, nh)) = region.get(ri + 1) {
+                    h = format!("{h} {nh}");
+                    body_from = nli + 1;
+                }
+            }
+            let low = h.to_lowercase();
+            let sl = crate::chargen::slug(&h);
+            let base = srd
+                .classes
+                .values()
+                .any(|cd| cd.features.iter().any(|f| crate::chargen::slug(&f.1) == sl));
+            if base
+                || low.ends_with("level spells")
+                || low.starts_with("tenets of")
+                || low.starts_with("cleric level")
+                || low == "channel divinity"
+                || is_class(&h)
+                || subs.iter().any(|k| squash(k.1) == squash(&h))
+                || GROUPS_2014.iter().any(|(g, _)| low == *g)
+                || [
+                    "cantrips",
+                    "preparing and casting spells",
+                    "domain spells",
+                    "spellcasting focus",
+                    "ritual casting",
+                    "spellcasting ability",
+                ]
+                .contains(&low.as_str())
+                || [
+                    "spellcasting",
+                    "ability score improvement",
+                    "extra attack",
+                    "proficiencies",
+                    "equipment",
+                    "hit points",
+                    "quick build",
+                    "class features",
+                    "multiclassing",
+                ]
+                .contains(&low.as_str())
+                || h.split_whitespace().count() > 7
+                || !h.chars().next().is_some_and(|ch| ch.is_uppercase())
+            {
+                continue;
+            }
+            let body: String = lines[body_from.min(lines.len())..]
+                .iter()
+                .take_while(|l| !l.trim().starts_with('#'))
+                .take(8)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let owner = owner_by_words(&h).unwrap_or(page_owner);
+            let lv = level_in_text(&body);
+            let spells = low.ends_with(" spells");
+            if lv.is_none() && !spells {
+                continue; // no level: lore or a table, not a feature
+            }
+            let lv = lv.unwrap_or(first).max(first.min(lv.unwrap_or(first)));
+            if !feats[owner].iter().any(|f| squash(&f.1) == squash(&h)) {
+                feats[owner].push((lv, title(&h)));
+            }
+        }
+        let srd_sub = |name: &str| {
+            srd.classes.get(*c).is_some_and(|cd| {
+                cd.subclasses.iter().any(|(k, v)| {
+                    squash(k) == squash(name)
+                        || v.name.as_deref().map(squash).as_deref() == Some(squash(name).as_str())
+                        || squash(name).contains(&squash(k))
+                })
+            })
+        };
+        for (si, (_, name, _)) in subs.iter().enumerate() {
+            if srd_sub(name) || feats[si].is_empty() {
+                continue;
+            }
+            let mut fs = std::mem::take(&mut feats[si]);
+            fs.sort_by_key(|f| f.0);
+            res.push((c.to_string(), name.to_string(), fs));
+        }
+    }
+    res
 }
 
 fn title(h: &str) -> String {
@@ -1417,6 +1836,63 @@ mod tests {
         assert_eq!(names, vec![(3, "Cog Shield"), (7, "Spring Step")]);
         assert!(!df.classes["fighter"].subclasses.contains_key("champion"));
         assert_eq!(df.classes.len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn importer_2014_known_subclasses_untangle_columns() {
+        let dir = std::env::temp_dir().join(format!("talkdnd-imp14k-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("b.md");
+        // Two OCR columns woven together: Tempest headings inside Nature's run,
+        // War features before the War Domain heading, one lost name heading.
+        fs::write(
+            &f,
+            "## Cleric\n### Divine Domains\n### Nature Domain\n#### Nature Domain Spells\nx\n#### Acolyte of Nature\nAt 1st level, you learn.\n#### Tempest Domain Spells\nx\n#### Wrath of the Storm\nAlso at 1st level, you rebuke.\n#### Master of Nature\nAt 17th level, you command.\n### Tempest Domain\n#### Thunderbolt Strike\nAt 6th level, you push.\n#### Trickery Domain Spells\n#### Blessing of the Trickster\nStarting at 1st level, you bless.\n#### War Priest\nFrom 1st level, you attack.\n#### Improved Duplicity\nAt 17th level, you copy.\n#### War Domain\nintro\n#### Avatar of Battle\nAt 17th level, you resist.\n#### Oath Lore\nNot a feature.\n## Druid\n### Druid Circles\n",
+        )
+        .unwrap();
+        let df = import_markdown("2014", &Book::srd("2014"), &[f]).unwrap();
+        let names = |s: &str| -> Vec<(i32, String)> {
+            df.classes["cleric"].subclasses[s]
+                .features
+                .iter()
+                .map(|f| (f.0, f.1.clone()))
+                .collect()
+        };
+        let n = |v: &[(i32, &str)]| {
+            v.iter()
+                .map(|(a, b)| (*a, b.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names("nature-domain"),
+            n(&[
+                (1, "Nature Domain Spells"),
+                (1, "Acolyte Of Nature"),
+                (17, "Master Of Nature")
+            ])
+        );
+        assert_eq!(
+            names("tempest-domain"),
+            n(&[
+                (1, "Tempest Domain Spells"),
+                (1, "Wrath Of The Storm"),
+                (6, "Thunderbolt Strike")
+            ])
+        );
+        assert_eq!(
+            names("trickery-domain"),
+            n(&[
+                (1, "Trickery Domain Spells"),
+                (1, "Blessing Of The Trickster"),
+                (17, "Improved Duplicity")
+            ])
+        );
+        assert_eq!(
+            names("war-domain"),
+            n(&[(1, "War Priest"), (17, "Avatar Of Battle")])
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }
