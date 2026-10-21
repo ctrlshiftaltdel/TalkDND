@@ -201,6 +201,103 @@ pub struct Options {
     pub pdf2md: bool,
 }
 
+/// Adventure slug from the save's chargen, else from the campaign manifest.
+fn adventure_slug(save: &Path) -> Option<String> {
+    if let Ok(c) = chargen::load(save) {
+        if let Some(s) = c.adventure_slug() {
+            return Some(s);
+        }
+    }
+    let text = fs::read_to_string(save.join("combat/campaign.yaml")).unwrap_or_default();
+    for line in text.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("adventures:") {
+            let rest = rest
+                .split('#')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches(['[', ']']);
+            if let Some(first) = rest.split(',').next() {
+                let p = first.trim().trim_matches(['"', '\'']);
+                // .../Adventures/<slug>/combat
+                if let Some(slug) = p.rsplit('/').nth(1) {
+                    return Some(slug.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn rel_root(root: &Path, p: &Path) -> String {
+    p.strip_prefix(root)
+        .unwrap_or(p)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Collect `.md` files under `dir` (recursively, bounded depth).
+fn collect_md(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+    if depth > 3 {
+        return;
+    }
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_md(&p, out, depth + 1);
+        } else if p
+            .extension()
+            .is_some_and(|x| x == "md")
+        {
+            out.push(p);
+        }
+    }
+}
+
+/// The digest's adventure-book lines: the slug's folder, its PDFs, and its
+/// converted Markdown index when it exists.
+fn adventure_lines(root: &Path, save: &Path) -> String {
+    let Some(slug) = adventure_slug(save) else {
+        return "- 冒险书：还没设置（`talkdnd chargen set adventure \"<书名>\"`）\n".into();
+    };
+    let dir = root.join("Adventures").join(&slug);
+    let mut out = format!("- 冒险书：`Adventures/{slug}/`\n");
+    let mut pdfs: Vec<PathBuf> = Vec::new();
+    if let Ok(rd) = fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            let is_pdf = p
+                .extension()
+                .map(|x| x.to_string_lossy().eq_ignore_ascii_case("pdf"))
+                .unwrap_or(false);
+            if is_pdf {
+                pdfs.push(p);
+            }
+        }
+    }
+    pdfs.sort();
+    let mut mds = Vec::new();
+    collect_md(&dir.join(".md"), &mut mds, 0);
+    mds.sort();
+    for p in &mds {
+        out += &format!("  - Markdown：`{}`\n", rel_root(root, p));
+    }
+    for p in &pdfs {
+        out += &format!("  - PDF：`{}`\n", rel_root(root, p));
+    }
+    if mds.is_empty() {
+        if pdfs.is_empty() {
+            out += "  - 这里还没有 PDF；把冒险书 PDF 放进这个目录\n";
+        } else {
+            out += "  - Markdown 还没转换：先查上面的 PDF（转换后索引在 `.md/<书名>/index.md`）\n";
+        }
+    }
+    out
+}
+
 pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     let slot = save
         .file_name()
@@ -286,7 +383,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     }
     d += "\n## 开场前再读（按需）\n\n";
     d += "- `dm-secrets.md`（只给 DM）、`canon.md`、`NPCs/_party.md`（同伴声音）\n";
-    d += "- 冒险书：从存档点定位章节，查 `Adventures/.md/<书名>/index.md`，地图看 PDF\n";
+    d += &adventure_lines(root, save);
     if !warnings.is_empty() {
         d += "\n## 警告\n\n";
         for w in &warnings {
@@ -295,4 +392,77 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     }
     fs::write(save.join("digest.md"), &d)?;
     Ok(d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("talkdnd-start-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        let save = p.join("Saves/2030-03-04-01");
+        fs::create_dir_all(save.join("Sessions")).unwrap();
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::write(
+            save.join("combat/campaign.yaml"),
+            "name: X\nruleset: \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            save.join("Sessions/2030-03-04-session-00-setup.md"),
+            "# log\n",
+        )
+        .unwrap();
+        fs::write(p.join("AGENTS.md"), "x").unwrap();
+        p
+    }
+
+    #[test]
+    fn digest_lists_adventure_pdf_and_markdown() {
+        let root = temp_root("adv");
+        let save = root.join("Saves/2030-03-04-01");
+        fs::write(
+            save.join("chargen.json"),
+            serde_json::json!({ "adventure": "Curse of Strahd" }).to_string(),
+        )
+        .unwrap();
+        let adv = root.join("Adventures/curse-of-strahd");
+        fs::create_dir_all(adv.join(".md/Curse of Strahd")).unwrap();
+        fs::write(adv.join("Curse of Strahd.pdf"), "pdf").unwrap();
+        fs::write(adv.join(".md/Curse of Strahd/index.md"), "# index").unwrap();
+        let d = digest(&root, &save, &Options { pdf2md: false }).unwrap();
+        assert!(d.contains("冒险书：`Adventures/curse-of-strahd/`"), "{d}");
+        assert!(
+            d.contains("PDF：`Adventures/curse-of-strahd/Curse of Strahd.pdf`"),
+            "{d}"
+        );
+        assert!(
+            d.contains("Markdown：`Adventures/curse-of-strahd/.md/Curse of Strahd/index.md`"),
+            "{d}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn digest_says_markdown_not_converted_yet() {
+        let root = temp_root("noadv");
+        let save = root.join("Saves/2030-03-04-01");
+        fs::write(
+            save.join("chargen.json"),
+            serde_json::json!({ "adventure": "Storm King's Thunder" }).to_string(),
+        )
+        .unwrap();
+        let adv = root.join("Adventures/storm-kings-thunder");
+        fs::create_dir_all(&adv).unwrap();
+        fs::write(adv.join("Storm King's Thunder.pdf"), "pdf").unwrap();
+        let d = digest(&root, &save, &Options { pdf2md: false }).unwrap();
+        assert!(d.contains("冒险书：`Adventures/storm-kings-thunder/`"), "{d}");
+        assert!(d.contains("Markdown 还没转换"), "{d}");
+        assert!(
+            d.contains("PDF：`Adventures/storm-kings-thunder/Storm King's Thunder.pdf`"),
+            "{d}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
 }
