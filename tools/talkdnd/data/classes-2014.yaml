@@ -74,6 +74,7 @@ classes:
     subclasses:
       life:
         name: Life Domain
+        armor_proficiency: [heavy]
         features:
           - [1, Bonus Proficiency, 重甲熟练]
           - [1, Disciple of Life, 治疗法术额外恢复 2 + 法术环级]

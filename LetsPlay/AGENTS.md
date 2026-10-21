@@ -23,12 +23,12 @@
 1. **规则版本**：看 `Rules/2014/`、`Rules/2024/` 里实际有哪版书，问玩家用哪版 → `$T new --ruleset <版本>`
 2. **冒险**：列出 `Adventures/` 里的书 → `$T chargen set adventure "<书名>"`
 3. **种族 / 物种** → `$T chargen set species <id>`
-4. **职业** → `$T chargen set class <id>`；到子职等级时再问子职 → `$T chargen set subclass <id>`
+4. **职业** → `$T chargen set class <id>`；**起始等级** → 按冒险建议范围问玩家 → `$T chargen set level <N>`；到子职等级时再问子职 → `$T chargen set subclass <id>`
 5. **背景** → `$T chargen set background <id>`
 6. **属性生成方式**：4d6 去最低 / 标准数组 / 购点，由玩家选
 7. **生成并分配**：掷骰只用 `$T chargen roll`（6 次 4d6dl1，自动记日志，不能重掷）；把 6 个数给玩家看，**由玩家决定每个数放哪项** → `$T chargen assign str=15 dex=14 con=13 int=8 wis=12 cha=10`（数值按玩家说的）；购点由玩家报数值 → `$T chargen pointbuy str=15 dex=14 con=13 int=8 wis=10 cha=10`
 8. **属性加值**（2024 背景 / 2014 半精灵可选项）→ `$T chargen asi wis=2 con=1` 或 `none`
-9. **技能** → **装备**（含护甲、盾牌）→ **法术**（非施法职业 none），每项单独问
+9. **技能** → **装备**（含护甲、盾牌；职业/子职不熟练会报错）→ **法术**（非施法职业 none；戏法与已知/可准备法术数量按职业数据核对），每项单独问
 10. **名字与性格**
 11. **确认**：`$T chargen validate`（error 必须为 0）→ `$T chargen sheet` → 把角色卡给玩家看 → 玩家同意后 `$T chargen confirm`
 12. **同伴 NPC**：问玩家要几个、有没有要求 → `$T npc random --count N` 随机 → DM 补名字、来历、性格 → **给玩家确认** → `$T npc sheet <号> --name <名字>`

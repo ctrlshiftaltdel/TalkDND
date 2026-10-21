@@ -465,7 +465,10 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                 }
                 "name" => c.name = Some(v),
                 "personality" => c.personality = Some(v),
-                "level" => c.level = v.parse().context("level must be a number")?,
+                "level" => {
+                    c.level = v.parse().context("level must be a number")?;
+                    c.level_done = true;
+                }
                 other => bail!("unknown field `{other}`"),
             }
         }

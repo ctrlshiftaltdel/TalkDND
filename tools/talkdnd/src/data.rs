@@ -45,6 +45,12 @@ pub struct Species {
     pub free_skill_list: &'static [&'static str],
     /// HP bonus per level (2014 hill dwarf; 2024 dwarf).
     pub hp_per_level: i32,
+    /// Darkvision range in feet (0 = none).
+    pub darkvision: i32,
+    /// Damage types the species resists.
+    pub resistances: &'static [&'static str],
+    /// Short own-words trait summaries: (name, summary).
+    pub traits: &'static [(&'static str, &'static str)],
 }
 
 const fn sp(id: &'static str, asi: &'static [(&'static str, i32)], speed: i32) -> Species {
@@ -59,78 +65,158 @@ const fn sp(id: &'static str, asi: &'static [(&'static str, i32)], speed: i32) -
         free_skills: 0,
         free_skill_list: &[],
         hp_per_level: 0,
+        darkvision: 0,
+        resistances: &[],
+        traits: &[],
     }
 }
 
 pub static SPECIES_2014: &[Species] = &[
     Species {
         hp_per_level: 1,
+        darkvision: 60,
+        resistances: &["poison"],
+        traits: &[
+            ("矮人体魄", "对抗毒素的优势，毒素伤害抗性"),
+            ("石工感知", "对石造建筑的智力（历史）检定有优势"),
+        ],
         ..sp("hill-dwarf", &[("con", 2), ("wis", 1)], 25)
     },
     Species {
         skills: &["perception"],
+        darkvision: 60,
+        traits: &[
+            ("精灵感知", "对抗魅惑的优势，魔法无法让你入睡"),
+            ("戏法", "会一个自选的法师戏法"),
+        ],
         ..sp("high-elf", &[("dex", 2), ("int", 1)], 30)
     },
     Species {
         size: "small",
+        traits: &[
+            ("幸运", "d20 掷出 1 时可重掷"),
+            ("勇敢", "对抗恐慌的优势"),
+            ("半身人灵巧", "可穿过更大生物占据的空间"),
+        ],
         ..sp("lightfoot-halfling", &[("dex", 2), ("cha", 1)], 25)
     },
-    sp(
-        "human",
-        &[
-            ("str", 1),
-            ("dex", 1),
-            ("con", 1),
-            ("int", 1),
-            ("wis", 1),
-            ("cha", 1),
+    Species {
+        traits: &[("额外语言", "额外一门自选语言")],
+        ..sp(
+            "human",
+            &[
+                ("str", 1),
+                ("dex", 1),
+                ("con", 1),
+                ("int", 1),
+                ("wis", 1),
+                ("cha", 1),
+            ],
+            30,
+        )
+    },
+    Species {
+        traits: &[
+            ("龙血传承", "按龙种获得吐息武器与一种伤害抗性"),
+            ("吐息武器", "动作喷吐对应伤害"),
         ],
-        30,
-    ),
-    sp("dragonborn", &[("str", 2), ("cha", 1)], 30),
+        ..sp("dragonborn", &[("str", 2), ("cha", 1)], 30)
+    },
     Species {
         size: "small",
+        darkvision: 60,
+        traits: &[
+            ("侏儒狡黠", "智力/感知/魅力豁免有优势"),
+            ("人工精美", "对魔法与机械装置的智力检定加双倍熟练"),
+        ],
         ..sp("rock-gnome", &[("int", 2), ("con", 1)], 25)
     },
     Species {
         free_asi: 2,
         free_asi_exclude: &["cha"],
         free_skills: 2,
+        darkvision: 60,
+        traits: &[
+            ("精灵感知", "对抗魅惑的优势，魔法无法让你入睡"),
+            ("技能多才", "两项自选技能熟练"),
+        ],
         ..sp("half-elf", &[("cha", 2)], 30)
     },
     Species {
         skills: &["intimidation"],
+        darkvision: 60,
+        traits: &[
+            ("凶蛮打击", "降到 0 HP 时改为 1 HP，每长休一次"),
+            ("野蛮攻击", "重击时额外一枚武器伤害骰"),
+        ],
         ..sp("half-orc", &[("str", 2), ("con", 1)], 30)
     },
-    sp("tiefling", &[("int", 1), ("cha", 2)], 30),
+    Species {
+        darkvision: 60,
+        resistances: &["fire"],
+        traits: &[
+            ("炼狱传承", "随等级学会戏法与法术"),
+            ("火焰抗性", "火焰伤害抗性"),
+        ],
+        ..sp("tiefling", &[("int", 1), ("cha", 2)], 30)
+    },
 ];
 
 pub static SPECIES_2024: &[Species] = &[
-    sp("dragonborn", &[], 30),
+    Species {
+        traits: &[("龙血传承", "按龙种获得吐息武器与一种伤害抗性")],
+        ..sp("dragonborn", &[], 30)
+    },
     Species {
         hp_per_level: 1,
+        darkvision: 60,
+        resistances: &["poison"],
+        traits: &[("矮人体魄", "对抗毒素的优势，毒素伤害抗性")],
         ..sp("dwarf", &[], 30)
     },
     Species {
         free_skills: 1,
         free_skill_list: &["insight", "perception", "survival"],
+        darkvision: 60,
+        traits: &[
+            ("精灵感官", "感知技能熟练"),
+            ("妖精步", "短休恢复，传送一小段距离"),
+        ],
         ..sp("elf", &[], 30)
     },
     Species {
         size: "small",
+        darkvision: 60,
+        traits: &[("侏儒狡黠", "智力/感知/魅力豁免有优势")],
         ..sp("gnome", &[], 30)
     },
-    sp("goliath", &[], 35),
+    Species {
+        traits: &[
+            ("巨石之力", "反应掷骰减少受到的伤害"),
+            ("伟岸", "搬运与推撞视为更大体型"),
+        ],
+        ..sp("goliath", &[], 35)
+    },
     Species {
         size: "small",
+        traits: &[("幸运", "d20 掷出 1 时可重掷"), ("勇敢", "对抗恐慌的优势")],
         ..sp("halfling", &[], 30)
     },
     Species {
         free_skills: 1,
+        traits: &[("资源", "每短休恢复一处职业资源")],
         ..sp("human", &[], 30)
     },
-    sp("orc", &[], 30),
-    sp("tiefling", &[], 30),
+    Species {
+        traits: &[("协力", "移动或攻击时获得加值")],
+        ..sp("orc", &[], 30)
+    },
+    Species {
+        darkvision: 60,
+        resistances: &["fire"],
+        traits: &[("炼狱传承", "随等级学会戏法与法术")],
+        ..sp("tiefling", &[], 30)
+    },
 ];
 
 pub struct Class {
@@ -341,6 +427,96 @@ pub static CLASSES: &[Class] = &[
 /// 2014 ranger SRD list differs from 2024 only by edition rules we don't model; same list used.
 pub fn class(id: &str) -> Option<&'static Class> {
     CLASSES.iter().find(|c| c.id == id)
+}
+
+/// Armor and shield proficiencies for a class (SRD facts, edition-shared).
+/// Values: "light", "medium", "heavy", "shield".
+pub fn armor(id: &str) -> &'static [&'static str] {
+    match id {
+        "barbarian" => &["light", "medium", "shield"],
+        "bard" => &["light"],
+        "cleric" => &["light", "medium", "shield"],
+        "druid" => &["light", "medium", "shield"],
+        "fighter" => &["light", "medium", "heavy", "shield"],
+        "monk" => &[],
+        "paladin" => &["light", "medium", "heavy", "shield"],
+        "ranger" => &["light", "medium", "shield"],
+        "rogue" => &["light"],
+        "sorcerer" => &[],
+        "warlock" => &["light"],
+        "wizard" => &[],
+        _ => &[],
+    }
+}
+
+/// Armor category (light/medium/heavy) for an armor id.
+pub fn armor_category(id: &str) -> Option<&'static str> {
+    match id {
+        "padded" | "leather" | "studded-leather" => Some("light"),
+        "hide" | "chain-shirt" | "scale-mail" | "breastplate" | "half-plate" => Some("medium"),
+        "ring-mail" | "chain-mail" | "splint" | "plate" => Some("heavy"),
+        _ => None,
+    }
+}
+
+/// SRD cantrip spell names (slugs). Used to split the chargen spell list into
+/// cantrips and leveled spells; anything else counts as a leveled spell.
+pub static CANTRIPS: &[&str] = &[
+    "acid-splash",
+    "blade-ward",
+    "chill-touch",
+    "control-flames",
+    "create-bonfire",
+    "dancing-lights",
+    "druidcraft",
+    "eldritch-blast",
+    "fire-bolt",
+    "frostbite",
+    "friends",
+    "green-flame-blade",
+    "guidance",
+    "light",
+    "lightning-lure",
+    "mage-hand",
+    "mending",
+    "message",
+    "mind-sliver",
+    "minor-illusion",
+    "mold-earth",
+    "poison-spray",
+    "prestidigitation",
+    "primal-savagery",
+    "produce-flame",
+    "ray-of-frost",
+    "resistance",
+    "sacred-flame",
+    "shape-water",
+    "shillelagh",
+    "shocking-grasp",
+    "spare-the-dying",
+    "starry-wisp",
+    "sword-burst",
+    "thorn-whip",
+    "thunderclap",
+    "toll-the-dead",
+    "true-strike",
+    "vicious-mockery",
+    "word-of-radiance",
+];
+
+/// Whether a free-text spell name is a known SRD cantrip.
+pub fn is_cantrip(name: &str) -> bool {
+    let n: String = name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    CANTRIPS.iter().any(|c| *c == n)
 }
 
 pub struct Background {

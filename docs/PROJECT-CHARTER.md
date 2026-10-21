@@ -270,6 +270,7 @@ Pilot rejects on cleaned-up stat-block pages were mostly tiny recall dips (about
 | 2026-10-21 | 2014 `monsters/` (SRD Guard/Animated Armor/Mimic), local Allosaurus/Scarecrow gitignore, five SRD spells, `support` AI template. |
 | 2026-10-21 | `talkdnd` play helper (start digest, new save, chargen, npc, checkpoint, log) built and shipped with combat-sim; release assets use plain platform names (`linux-x86_64`, `windows-x86_64`, `macos-arm64`). |
 | 2026-10-21 | DM guide split: short `LetsPlay/AGENTS.md` (player commands 开新局 / 继续游戏 / 存档, mandatory step-by-step character creation, core rules) plus `LetsPlay/docs/`. No CLAUDE.md / GEMINI.md pointers (current agents read AGENTS.md). |
+| 2026-10-21 | chargen validation: adventure start-level step, 2014 level-1 subclass rule, armor proficiency from class+subclass, cantrip/spell count checks, species traits in the sheet and combat yaml. |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 
@@ -282,3 +283,15 @@ Agents were slow to start (they read the whole DM guide, logs and sheets) and on
 ### 2026-10-21 — Short DM guide with player commands
 
 Agents auto-read `AGENTS.md`, some only its beginning, so it now opens with a player command table (`开新局`, `继续游戏 <存档>`, `存档`) and a mandatory character-creation flow: one decision per turn, the player chooses everything unless they say random, ability rolls via `talkdnd chargen roll` and assignment by the player, companions shown for confirmation. Core table rules follow; everything else moved to `LetsPlay/docs/` (chargen, dice, combat, narration, pdf2md, layout). Resuming reads the core guide plus `talkdnd start`'s digest instead of the whole manual, rulings, logs and every sheet. Separate CLAUDE.md / GEMINI.md pointer files were rejected by the owner because current Claude Code and Gemini read AGENTS.md.
+
+### 2026-10-21 — chargen validation: start level, subclass, armor, spells, species traits
+
+`talkdnd chargen` checks more of the character against SRD data before the sheet is written:
+
+- A tracked `tools/talkdnd/data/adventures.yaml` maps an adventure slug to a suggested start-level range (`start_level_min`, `start_level_max`, `note`; facts only). `chargen` adds a `level` step after `class` that prints that range; `validate` errors when the level is outside it (unknown adventure: warning only), and the level must be 1..20.
+- 2014 cleric/sorcerer/warlock must pick a subclass at level 1; other classes at their `subclass_level` from the class data. A missing subclass at or above that level is an error, and a `subclass` step appears in `next_step` when needed.
+- Armor and shield proficiency come from the class plus the subclass (a new `armor_proficiency` field on subclass data; 2014 Life Domain grants heavy armor). Wearing unproficient armor or a shield is an error.
+- Cantrip count and known/prepared spell count are checked against class data at the chosen level (2014 prepared = spellcasting modifier + level, minimum 1; 2024 uses the table): too many is an error, too few a warning.
+- Species data gains darkvision, resistances, and short own-words trait summaries (SRD species only), written to the sheet's new 种族特性 section and to the `combat yaml` `senses`/`resistances`.
+
+Alternative considered: require the player to split cantrips and leveled spells into two fields. Rejected: it adds a field and breaks existing saves; a built-in SRD cantrip list splits the one spell list.

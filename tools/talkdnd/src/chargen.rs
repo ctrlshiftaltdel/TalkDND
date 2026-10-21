@@ -16,6 +16,8 @@ pub const STEPS: &[(&str, &str)] = &[
     ("adventure", "冒险"),
     ("species", "种族/物种"),
     ("class", "职业"),
+    ("level", "起始等级（按冒险建议范围）"),
+    ("subclass", "子职（达到子职等级时）"),
     ("background", "背景"),
     (
         "method",
@@ -73,6 +75,9 @@ pub struct Creation {
     pub personality: Option<String>,
     #[serde(default = "one")]
     pub level: i32,
+    /// Whether the player has explicitly chosen the starting level.
+    #[serde(default)]
+    pub level_done: bool,
     #[serde(default)]
     pub confirmed: bool,
 }
@@ -112,6 +117,8 @@ impl Creation {
             "adventure" => self.adventure.is_some(),
             "species" => self.species.is_some(),
             "class" => self.class.is_some(),
+            "level" => self.level_done,
+            "subclass" => self.subclass.is_some() || !self.subclass_needed(),
             "background" => self.background.is_some(),
             "method" => {
                 self.method.is_some()
@@ -128,8 +135,72 @@ impl Creation {
         }
     }
 
-    pub fn next_step(&self) -> Option<(&'static str, &'static str)> {
-        STEPS.iter().copied().find(|(s, _)| !self.done(s))
+    /// Next unfinished step and its prompt. The level step shows the chosen
+    /// adventure's suggested start range.
+    pub fn next_step(&self) -> Option<(&'static str, String)> {
+        let (step, label) = STEPS.iter().copied().find(|(s, _)| !self.done(s))?;
+        let label = if step == "level" {
+            self.level_prompt()
+        } else {
+            (*label).to_string()
+        };
+        Some((step, label))
+    }
+
+    /// Slug of the chosen adventure (used for the start-level data lookup).
+    pub fn adventure_slug(&self) -> Option<String> {
+        self.adventure.as_deref().map(slug)
+    }
+
+    /// Level at which the chosen class grants its subclass (from class data).
+    pub fn subclass_level(&self) -> Option<i32> {
+        let cid = self.class.as_deref()?;
+        let book = crate::classdata::Book::srd(self.rs());
+        book.class(cid).map(|c| c.subclass_level.unwrap_or(3))
+    }
+
+    /// True when the chosen class needs a subclass at the current level.
+    pub fn subclass_needed(&self) -> bool {
+        self.subclass_level().is_some_and(|sl| self.level >= sl)
+    }
+
+    /// Prompt for the level step, including the adventure's suggested range.
+    pub fn level_prompt(&self) -> String {
+        match self
+            .adventure_slug()
+            .as_deref()
+            .and_then(crate::classdata::adventure)
+        {
+            Some(a) => format!(
+                "起始等级 {}-{}{}",
+                a.start_level_min,
+                a.start_level_max,
+                a.note
+                    .as_deref()
+                    .map(|n| format!("（{n}）"))
+                    .unwrap_or_default()
+            ),
+            None => "起始等级 1..20".to_string(),
+        }
+    }
+
+    /// Armor and shield proficiencies from the class plus the chosen subclass.
+    pub fn armor_proficiency(&self) -> Vec<String> {
+        let book = crate::classdata::Book::srd(self.rs());
+        let mut v: Vec<String> = self
+            .class
+            .as_deref()
+            .map(data::armor)
+            .unwrap_or(&[])
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        if let (Some(cid), Some(sid)) = (self.class.as_deref(), self.subclass.as_deref()) {
+            if let Some(sub) = book.class(cid).and_then(|c| c.subclasses.get(&slug(sid))) {
+                v.extend(sub.armor_proficiency.iter().cloned());
+            }
+        }
+        v
     }
 
     /// Increases that apply automatically (2014 species).
@@ -418,8 +489,85 @@ pub fn validate(c: &Creation) -> Report {
             ));
         }
     }
+
+    // Level: 1..20 and inside the adventure's suggested start range.
     if c.level < 1 || c.level > 20 {
         e.push("level must be 1..20".into());
+    } else if let Some(slug) = c.adventure_slug() {
+        match crate::classdata::adventure(&slug) {
+            Some(a) => {
+                if c.level < a.start_level_min || c.level > a.start_level_max {
+                    e.push(format!(
+                        "level {} is outside the suggested start range {}-{} for {}",
+                        c.level,
+                        a.start_level_min,
+                        a.start_level_max,
+                        c.adventure.as_deref().unwrap_or(&slug)
+                    ));
+                }
+            }
+            None => {
+                if let Some(adv) = c.adventure.as_deref() {
+                    w.push(format!(
+                        "adventure `{adv}` has no start-level data; confirm the level with the book"
+                    ));
+                }
+            }
+        }
+    }
+
+    // Subclass: required once the class level reaches its subclass level.
+    if c.subclass.is_none() && c.subclass_needed() {
+        let sl = c.subclass_level().unwrap_or(3);
+        e.push(format!(
+            "level {} {} needs a subclass (gained at level {}): `talkdnd chargen set subclass <id>`",
+            c.level,
+            c.class.as_deref().unwrap_or(""),
+            sl
+        ));
+    }
+
+    // Armor and shield proficiency (SRD classes; a subclass can add more).
+    if data::class(c.class.as_deref().unwrap_or("")).is_some() {
+        let prof = c.armor_proficiency();
+        if let Some(a) = c.armor.as_deref().filter(|a| *a != "none") {
+            if let Some(cat) = data::armor_category(a) {
+                if !prof.iter().any(|p| p == cat || p == "all") {
+                    e.push(format!(
+                        "{} is not proficient with {} armor (`{a}`)",
+                        c.class.as_deref().unwrap_or(""),
+                        cat
+                    ));
+                }
+            }
+        }
+        if c.shield && !prof.iter().any(|p| p == "shield" || p == "all") {
+            e.push(format!(
+                "{} is not proficient with shields",
+                c.class.as_deref().unwrap_or("")
+            ));
+        }
+    }
+
+    // Spell counts against class resources at the chosen level.
+    if c.spells_done {
+        let g = crate::classdata::generate(c, &crate::classdata::Book::srd(&rs), None);
+        let cantrips = c.spells.iter().filter(|s| data::is_cantrip(s)).count() as i32;
+        let leveled = c.spells.len() as i32 - cantrips;
+        if let Some(exp) = g.cantrips {
+            if cantrips > exp {
+                e.push(format!("too many cantrips: {cantrips} (allowed {exp})"));
+            } else if cantrips < exp {
+                w.push(format!("cantrips: {cantrips} of {exp}"));
+            }
+        }
+        if let Some((kind, exp)) = g.spells {
+            if leveled > exp {
+                e.push(format!("too many {kind}: {leveled} (allowed {exp})"));
+            } else if leveled < exp {
+                w.push(format!("{kind}: {leveled} of {exp}"));
+            }
+        }
     }
     Report {
         errors: e,
@@ -563,6 +711,7 @@ pub fn sheet_with(
             }
         }
     );
+    md += &species_traits_md(sp);
     md += &format!("\n## 战斗数据\n\n- **熟练加值**：+{prof}\n- **生命值**：{hp}\n- **护甲等级**：{ac}\n- **速度**：{speed} 尺\n- **先攻**：{:+}\n", mods["dex"]);
     md += &format!("- **豁免熟练**：{}\n", saves.join(", "));
     md += "\n## 技能（已含熟练加值）\n\n";
@@ -590,6 +739,12 @@ pub fn sheet_with(
 
     let mut y = String::new();
     y += &format!("id: {id}\nname: {}\nkind: pc\nside: party\nsize: {size}\ncreature_type: humanoid\nlevel: {lvl}\n", yaml_str(&name));
+    if sp.is_some_and(|s| s.darkvision > 0) {
+        y += &format!("senses: \"Darkvision {} 尺\"\n", sp.unwrap().darkvision);
+    }
+    if let Some(s) = sp.filter(|s| !s.resistances.is_empty()) {
+        y += &format!("resistances: [{}]\n", s.resistances.join(", "));
+    }
     y += &format!(
         "ac: {ac}\nhp: {hp}\nspeed: {{walk: {speed}}}\ninit_bonus: {}\nprof: {prof}\n",
         mods["dex"]
@@ -639,6 +794,36 @@ pub fn sheet_with(
     md += &y;
     md += "```\n";
     Ok((id, md))
+}
+
+/// Species traits section for the sheet (senses, speed, resistances, traits).
+fn species_traits_md(sp: Option<&data::Species>) -> String {
+    let Some(sp) = sp else {
+        return String::new();
+    };
+    let mut md = String::new();
+    md += "\n## 种族特性\n\n";
+    md += &format!(
+        "- **视觉**：{}\n",
+        if sp.darkvision > 0 {
+            format!("黑暗视觉 {} 尺", sp.darkvision)
+        } else {
+            "无黑暗视觉".to_string()
+        }
+    );
+    md += &format!("- **速度**：{} 尺\n", sp.speed);
+    md += &format!(
+        "- **伤害抗性**：{}\n",
+        if sp.resistances.is_empty() {
+            "无".to_string()
+        } else {
+            sp.resistances.join("、")
+        }
+    );
+    for (name, summary) in sp.traits {
+        md += &format!("- **{name}**：{summary}\n");
+    }
+    md
 }
 
 fn gen_md(g: &crate::classdata::Generated, _prof: i32) -> String {
@@ -808,10 +993,12 @@ mod tests {
             ruleset: Some(rs.into()),
             species: Some(if rs == "2014" { "hill-dwarf" } else { "dwarf" }.into()),
             class: Some("cleric".into()),
+            subclass: Some("life".into()),
             background: Some("acolyte".into()),
             method: Some("array".into()),
             pool: data::STANDARD_ARRAY.to_vec(),
             level: 1,
+            level_done: true,
             asi_done: true,
             ..Default::default()
         };
@@ -966,5 +1153,149 @@ mod tests {
         assert_eq!(v.len(), 6);
         assert!(v.iter().all(|x| (3..=18).contains(x)));
         assert!(t.iter().all(|x| x.starts_with("4d6dl1(")));
+    }
+
+    #[test]
+    fn level_step_uses_adventure_range() {
+        let mut c = base("2014");
+        c.adventure = Some("Keys from the Golden Vault".into());
+        assert!(c.level_prompt().contains("1-11"), "{}", c.level_prompt());
+        c.level = 12;
+        assert!(validate(&c).errors.iter().any(|e| e.contains("outside")));
+        c.level = 1;
+        assert!(validate(&c).errors.is_empty());
+    }
+
+    #[test]
+    fn unknown_adventure_is_warning() {
+        let mut c = base("2014");
+        c.adventure = Some("Homebrew Adventure".into());
+        c.level = 7;
+        let r = validate(&c);
+        assert!(r.errors.is_empty());
+        assert!(r.warnings.iter().any(|w| w.contains("no start-level data")));
+    }
+
+    #[test]
+    fn level_out_of_bounds() {
+        let mut c = base("2014");
+        c.level = 21;
+        assert!(validate(&c).errors.iter().any(|e| e.contains("1..20")));
+        c.level = 0;
+        assert!(validate(&c).errors.iter().any(|e| e.contains("1..20")));
+    }
+
+    #[test]
+    fn subclass_step_and_requirement() {
+        let mut c = base("2014");
+        c.adventure = Some("Storm King's Thunder".into());
+        c.subclass = None;
+        c.level_done = false;
+        assert_eq!(c.next_step().unwrap().0, "level");
+        c.level_done = true;
+        assert_eq!(c.next_step().unwrap().0, "subclass");
+        assert!(validate(&c)
+            .errors
+            .iter()
+            .any(|e| e.contains("needs a subclass")));
+        c.subclass = Some("life".into());
+        assert!(validate(&c).errors.is_empty());
+        // Other classes only need a subclass at level 3.
+        let mut f = base("2024");
+        f.class = Some("fighter".into());
+        f.subclass = None;
+        f.level = 1;
+        assert!(!f.subclass_needed());
+        f.level = 3;
+        assert!(f.subclass_needed());
+        assert!(validate(&f)
+            .errors
+            .iter()
+            .any(|e| e.contains("needs a subclass")));
+    }
+
+    #[test]
+    fn armor_proficiency_from_subclass() {
+        // 2014 Life domain grants heavy armor.
+        let mut c = base("2014");
+        c.armor = Some("chain-mail".into());
+        assert!(validate(&c).errors.is_empty(), "{:?}", validate(&c).errors);
+        // Rogue has no heavy armor.
+        let mut r = base("2014");
+        r.class = Some("rogue".into());
+        r.subclass = None;
+        r.armor = Some("chain-mail".into());
+        assert!(validate(&r)
+            .errors
+            .iter()
+            .any(|e| e.contains("not proficient with heavy")));
+        // Wizard has no shield.
+        let mut m = base("2014");
+        m.class = Some("wizard".into());
+        m.subclass = None;
+        m.shield = true;
+        assert!(validate(&m)
+            .errors
+            .iter()
+            .any(|e| e.contains("not proficient with shields")));
+    }
+
+    #[test]
+    fn spell_counts_against_class() {
+        // 2014 cleric: 3 cantrips, prepared = wis mod (+3) + level (1) = 4.
+        let mut c = base("2014");
+        c.spells = vec![
+            "sacred-flame".into(),
+            "guidance".into(),
+            "resistance".into(),
+            "cure-wounds".into(),
+            "shield-of-faith".into(),
+            "spiritual-weapon".into(),
+            "bless".into(),
+        ];
+        c.spells_done = true;
+        assert!(validate(&c).errors.is_empty(), "{:?}", validate(&c).errors);
+        c.spells.push("mending".into());
+        assert!(validate(&c)
+            .errors
+            .iter()
+            .any(|e| e.contains("too many cantrips")));
+        c.spells = vec![
+            "sacred-flame".into(),
+            "guidance".into(),
+            "resistance".into(),
+            "cure-wounds".into(),
+        ];
+        assert!(validate(&c)
+            .warnings
+            .iter()
+            .any(|w| w.contains("可准备法术")));
+        c.spells = vec![
+            "sacred-flame".into(),
+            "guidance".into(),
+            "resistance".into(),
+            "cure-wounds".into(),
+            "bless".into(),
+            "sanctuary".into(),
+            "shield-of-faith".into(),
+            "spiritual-weapon".into(),
+        ];
+        assert!(validate(&c)
+            .errors
+            .iter()
+            .any(|e| e.contains("too many 可准备法术")));
+    }
+
+    #[test]
+    fn species_traits_in_sheet() {
+        let mut c = base("2014"); // hill dwarf
+        c.name = Some("Bruni".into());
+        let (id, md) = sheet(&c, "p").unwrap();
+        assert_eq!(id, "bruni");
+        assert!(md.contains("## 种族特性"));
+        assert!(md.contains("黑暗视觉 60 尺"));
+        assert!(md.contains("**伤害抗性**：poison"));
+        assert!(md.contains("senses: \"Darkvision 60 尺\""));
+        assert!(md.contains("resistances: [poison]"));
     }
 }
