@@ -32,6 +32,9 @@ MIN_ORDER = 0.55             # bigram agreement with column order below this -> 
 MIN_RECALL = 0.6             # share of text-layer words kept below this -> fallback
 STATBLOCK_RE = re.compile(
     r"(\bArmor Class\b|\*\*AC\*\*|\bAC \d+\b).{0,400}?(\bHit Points\b|\*\*HP\*\*|\bHP \d+)", re.S)
+IMG_LINK_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+MAP_CAPTION_RE = re.compile(r"^MAP\s+\d+\.\d+\s*:", re.I)
+MIN_IMAGE_SIDE = 120         # smaller embedded images are decorations
 ABILITY_RE = re.compile(r"\bSTR\b.{0,80}\bDEX\b|\bStr\b.{0,80}\bDex\b", re.S | re.I)
 
 
@@ -199,10 +202,12 @@ class Book:
         if text_pages:
             with _quiet():
                 chunks = pymupdf4llm.to_markdown(
-                    self.doc, pages=text_pages, page_chunks=True, write_images=False,
-                    use_ocr=False, header=False, footer=False, show_progress=False)
+                    self.doc, pages=text_pages, page_chunks=True, write_images=True,
+                    image_path=self._raw_dir(), image_format="png", use_ocr=False,
+                    header=False, footer=False, show_progress=False)
             for ch in chunks:
-                md_by_page[ch["metadata"]["page_number"] - 1] = ch["text"]
+                pno = ch["metadata"]["page_number"] - 1
+                md_by_page[pno] = self.place_images(ch["text"], pno, info[pno])
         for p in ocr_pages:
             page = self.doc[p]
             try:
@@ -274,6 +279,76 @@ class Book:
             info["headings_ocr"] = n
         return body
 
+    def close(self):
+        """Release the PDF (Windows cannot replace an open file) and temp images."""
+        doc = getattr(self, "doc", None)
+        if doc is not None:
+            doc.close()
+            self.doc = None
+        raw = getattr(self, "_raw", None)
+        if raw:
+            import shutil
+
+            shutil.rmtree(raw, ignore_errors=True)
+            self._raw = None
+
+    def _raw_dir(self):
+        # pymupdf4llm rewrites spaces in image paths, so stage images in a
+        # space-free temp folder; each image is moved into img/ right away.
+        if not getattr(self, "_raw", None):
+            import tempfile
+
+            self._raw = tempfile.mkdtemp(prefix="pdf2md-img-")
+        return self._raw
+
+    def place_images(self, text, p, info):
+        """Keep embedded images where they sit on the page: convert each to
+        img/pNNNN-KK.webp, caption it with a nearby `MAP x.y: ...` line, drop tiny
+        decorations. The page's own text stays around it."""
+        lines = text.split("\n")
+        out, k = [], 0
+        for i, ln in enumerate(lines):
+            m = IMG_LINK_RE.fullmatch(ln.strip())
+            if not m:
+                out.append(ln)
+                continue
+            src = m.group(1)
+            rel = self._store_image(src, p, k)
+            if not rel:
+                continue
+            k += 1
+            near = [x.strip().strip("*").strip() for x in lines[max(0, i - 3):i + 4]]
+            cap = next((x for x in near if MAP_CAPTION_RE.match(x)), None)
+            alt = cap or f"Illustration, PDF p.{p + 1}"
+            if cap:
+                info.setdefault("maps", []).append({"caption": cap, "img": rel})
+            else:
+                info.setdefault("images", []).append(rel)
+            out.append(f"![{alt}]({rel})")
+        return "\n".join(out)
+
+    def _store_image(self, src, p, k):
+        try:
+            from PIL import Image
+
+            with Image.open(src) as img:
+                if min(img.size) < MIN_IMAGE_SIDE:
+                    return None
+                name = "p%04d-%02d.webp" % (p + 1, k)
+                buf = io.BytesIO()
+                img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB").save(
+                    buf, "WEBP", quality=80, method=2)
+            _write_atomic(os.path.join(self.dir, "img", name), buf.getvalue())
+            return "img/" + name
+        except (OSError, ImportError) as err:
+            print(f"warning: PDF p.{p + 1}: image skipped: {err}", file=sys.stderr)
+            return None
+        finally:
+            try:
+                os.remove(src)
+            except OSError:
+                pass
+
     def render_page(self, p, dpi=IMG_DPI):
         """Write img/pNNNN.webp and return its path relative to the book folder
         (None when the page cannot be rendered)."""
@@ -325,6 +400,11 @@ class Book:
         from . import fixes
 
         md = fixes.apply_fixes(md, fixes.load_fixes(self.dir, self.m["sha256"]))
+        from . import proofread
+
+        md, log = proofread.proofread(md)
+        _write_atomic(os.path.join(self.dir, "proofread-report.md"),
+                      proofread.report(self.stem, log).encode("utf-8"))
         _write_atomic(os.path.join(self.dir, self.stem + ".md"), md)
         self.write_index(md)
         return md
@@ -348,6 +428,8 @@ class Book:
                 idx["statblocks"].append(p)
             if "figure" in i["flags"]:
                 idx["figures"].append({"page": p, "img": "img/p%04d.webp" % p})
+            for mp in i.get("maps", []):
+                idx.setdefault("maps", []).append(dict(mp, page=p))
             if i.get("quality") == "low":
                 idx["low_quality_pages"].append(p)
             if i.get("ocr"):
@@ -361,7 +443,13 @@ class Book:
             lines.append("  " * (h["level"] - 1) + f"- [{h['text']}](<{book}#p{h['page']}>) - p.{h['page']}")
         lines += ["", "## Stat blocks (read the PDF)", "",
                   ", ".join(f"[p.{p}](<{book}#p{p}>)" for p in idx["statblocks"]) or "none", "",
-                  "## Maps and illustrations", ""]
+                  "## Maps", ""]
+        maps = idx.get("maps", [])
+        lines += [f"- [{mp['caption']}](<{book}#p{mp['page']}>) - p.{mp['page']}: [image](<{mp['img']}>)"
+                  + (" (DM map)" if re.search(r"\bDM", mp["caption"]) else
+                     " (player map)" if re.search(r"player", mp["caption"], re.I) else "")
+                  for mp in maps] or ["none found by caption; see the full-page images below"]
+        lines += ["", "## Full-page maps and illustrations", ""]
         lines += [f"- p.{f['page']}: [image]({f['img']})" for f in idx["figures"]] or ["none"]
         lines += ["", "## Low-quality pages (read the PDF)", "",
                   ", ".join(str(p) for p in idx["low_quality_pages"]) or "none", ""]
@@ -391,7 +479,7 @@ def postprocess(md, hmap):
         elif not ln.startswith("|"):
             ln = repair.fix_line_structure(repair.fix_dice_line(repair.repair_text(ln)))
         lines.append(ln)
-    md = "\n".join(repair.structural_pass(lines))
+    md = "\n".join(headings.promote_room_lines(repair.structural_pass(lines)))
     md = tables.fix_tables(md)
     md = repair.apply_glitch_rules(md)
     return re.sub(r"\n{3,}", "\n\n", md).strip()

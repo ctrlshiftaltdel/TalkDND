@@ -127,7 +127,9 @@ def reviewcmd(root, args):
                 print("worker running: fixes will be applied when it next assembles the book")
                 return 1
             try:
-                Book(pdf).assemble()
+                bk = Book(pdf)
+                bk.assemble()
+                bk.close()
             finally:
                 lock.release()
             print("rebuilt", os.path.basename(pdf))

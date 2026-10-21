@@ -57,5 +57,39 @@ def normalize_heading(line, hmap):
     else:
         body = repair.repair_text(body).strip()
     body = re.sub(r"[\s_]+$", "", body).strip()
+    body = fix_room_code(body)
     lvl = hmap.get(key) or hmap.get(norm_key(body)) or min(len(m.group(1)), 3)
     return "#" * (lvl + 1) + " " + body
+
+
+# Adventure room keys: "V1: GRAND ENTRANCE", "B12. Vault". OCR reads 1 as l/I.
+ROOM_CODE_RE = re.compile(r"^([A-Z]{1,2})([0-9lI|]{1,3}[a-z]?)([:.])\s+(?=\S)")
+ROOM_LINE_RE = re.compile(
+    r"^(?:\*\*)?([A-Z]{1,2}[0-9]{1,3}[a-z]?)[:.]\s+([A-Z][A-Za-z'\u2019 ,&\-]{2,60}?)(?:\*\*)?\s*$")
+MAP_LINE_RE = re.compile(r"^(?:\*\*)?(MAP\s+\d+\.\d+\s*:\s*.{2,60}?)(?:\*\*)?\s*$", re.I)
+
+
+def fix_room_code(text):
+    """`Vl: GRAND ENTRANCE` -> `V1: GRAND ENTRANCE`, `Vl4` -> `V14` (needs a digit-like run)."""
+    m = ROOM_CODE_RE.match(text)
+    if not m:
+        return text
+    num = m.group(2)
+    digits = re.match(r"[0-9lI|]+", num).group(0)
+    if not any(c in "lI|" for c in digits) or digits.strip("lI|0123456789"):
+        return text
+    fixed = digits.replace("l", "1").replace("I", "1").replace("|", "1") + num[len(digits):]
+    return m.group(1) + fixed + m.group(3) + " " + text[m.end():]
+
+
+def promote_room_lines(lines, level=4):
+    """Room keys and map captions on their own line become headings so the index lists them."""
+    out = []
+    for ln in lines:
+        s = ln.strip()
+        if s and not HEADING_RE.match(ln) and not s.startswith(("|", "!", "<", ">")):
+            s2 = fix_room_code(s.strip("*").strip())
+            if ROOM_LINE_RE.match(s2) or MAP_LINE_RE.match(s2):
+                ln = "#" * level + " " + s2.strip("*").strip()
+        out.append(ln)
+    return out
