@@ -114,7 +114,7 @@ struct Member {
     file: String,
 }
 
-fn combat_block(text: &str) -> Option<serde_norway::Value> {
+pub(crate) fn combat_block(text: &str) -> Option<serde_norway::Value> {
     let start = text.find("```combat yaml")?;
     let rest = &text[start..];
     let body_start = rest.find('\n')? + 1;
