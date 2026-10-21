@@ -13,11 +13,11 @@
   - CI YAML（`.github/workflows/`，含其中的 shell 步骤）；
   - `LetsPlay/tools/pdf2md/`：游玩所需的 Python PDF → Markdown 转换工具。
   所有 Python 一律经 uv 运行（`uv sync` / `uv run`），不用裸 `pip`、`venv` 或 `python3`。
-- 重要设计 / 需求文件：项目章程是 `docs/PROJECT-CHARTER.md`。AGENT-BOOTSTRAP 判断「章程缺失」时只看这一路径：文件存在且没有占位符，即章程已建立。玩家说明是 `LetsPlay/README.md`；DM 手册是 `LetsPlay/AGENTS.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。根目录 `README.md` 只给开发者。
+- 重要设计 / 需求文件：项目章程是 `docs/PROJECT-CHARTER.md`。AGENT-BOOTSTRAP 判断「章程缺失」时只看这一路径：文件存在且没有占位符，即章程已建立。玩家说明是 `LetsPlay/README.md`；DM 手册是 `LetsPlay/AGENTS.md`（核心，≤150 行，开头是玩家指令表）与按需读的 `LetsPlay/docs/*.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。根目录 `README.md` 只给开发者。
 
 ## 范围与安全
 
-- 允许改动路径：`tools/combat-sim/`、`tools/talkdnd/`、`tools/talkdnd-dev/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、根目录与各目录 `README.md`、`docs/PROJECT-CHARTER.md`、编排文件（`AGENTS.md`、`AGENT-*.md`、`ORCHESTRATION-PROJECT.md`、`editions/`、`prompts/`、`templates/`、`VERSION.txt`）、`.github/`、`scripts/`。具体任务可以再收窄。套件文件（含 `scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py`）已并入本项目，可按任务修改。
+- 允许改动路径：`tools/combat-sim/`、`tools/talkdnd/`、`tools/talkdnd-dev/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、`LetsPlay/docs/`、根目录与各目录 `README.md`、`docs/PROJECT-CHARTER.md`、编排文件（`AGENTS.md`、`AGENT-*.md`、`ORCHESTRATION-PROJECT.md`、`editions/`、`prompts/`、`templates/`、`VERSION.txt`）、`.github/`、`scripts/`。具体任务可以再收窄。套件文件（含 `scripts/orchestrator.py`、`scripts/validate_kit.py`、`tests/test_orchestrator.py`）已并入本项目，可按任务修改。
 - 永远禁止改动路径 / 文件：受版权保护的规则书与冒险书（`LetsPlay/Rules/2014/` 与 `LetsPlay/Rules/2024/` 除 `README.md` 外，`LetsPlay/Adventures/` 除 `README.md` 外，以及任何版权文本或其改编数据）；`LetsPlay/Saves/` 除 `README.md` 外；`**/dm-secrets.md`；`LetsPlay/Rules/combat/local/`；`LetsPlay/Rules/combat/2024/monsters/scarecrow.yaml`。
 - 秘密与隐私文件模式：`.local/`（除 `README.md`）、`**/dm-secrets.md`、`LetsPlay/Saves/`（除 `README.md`）、GitHub 凭据、玩家规则书与冒险书文本。
 - 破坏性操作和迁移政策：禁止改写 Git 历史、禁止强推。已有检出里的未跟踪本地书和存档用 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout`（默认 dry-run；真正移动时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout --apply`），不得覆盖已有文件。主持游戏写入 `LetsPlay/Saves/` 豁免开发流程，但那些文件仍然不得提交。

@@ -46,7 +46,7 @@ Play and development are separate roots.
 
 | Tree | Role |
 |------|------|
-| `LetsPlay/` | Play. The DM agent starts here. `LetsPlay/README.md` is the player guide. `LetsPlay/AGENTS.md` is the DM guide. Players put books in `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/`, and `LetsPlay/Adventures/`. Those directories are local except their README files. Combat data the engine loads lives in `LetsPlay/Rules/combat/`. Saves live in `LetsPlay/Saves/` and are not committed. The programs they run are the gitignored binaries `LetsPlay/bin/combat-sim` and `LetsPlay/bin/talkdnd` (Windows: `.exe`). |
+| `LetsPlay/` | Play. The DM agent starts here. `LetsPlay/README.md` is the player guide. `LetsPlay/AGENTS.md` is the core DM guide (command table first, under 150 lines); details live in `LetsPlay/docs/*.md`, read on demand. Players put books in `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/`, and `LetsPlay/Adventures/`. Those directories are local except their README files. Combat data the engine loads lives in `LetsPlay/Rules/combat/`. Saves live in `LetsPlay/Saves/` and are not committed. The programs they run are the gitignored binaries `LetsPlay/bin/combat-sim` and `LetsPlay/bin/talkdnd` (Windows: `.exe`). |
 | Repository root | Development only. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine), `tools/talkdnd` (play helper) and `tools/talkdnd-dev` (dev tools). AgentOrch files, CI, and this charter stay at the root. Nothing required to play lives here. |
 
 Release archives contain the whole git-tracked `LetsPlay/` tree plus the binary at `LetsPlay/bin/`; extracting one gives a ready play folder. `build-artifacts` artifacts contain only the binary at the archive root; extracting one into `LetsPlay/bin/` is the install. No launcher script points outside `LetsPlay/`.
@@ -269,6 +269,7 @@ Pilot rejects on cleaned-up stat-block pages were mostly tiny recall dips (about
 | 2026-10-21 | pdf2md review soft gate, max-turns retry, local SRD snippet injection, `--rejudge`. |
 | 2026-10-21 | 2014 `monsters/` (SRD Guard/Animated Armor/Mimic), local Allosaurus/Scarecrow gitignore, five SRD spells, `support` AI template. |
 | 2026-10-21 | `talkdnd` play helper (start digest, new save, chargen, npc, checkpoint, log) built and shipped with combat-sim; release assets use plain platform names (`linux-x86_64`, `windows-x86_64`, `macos-arm64`). |
+| 2026-10-21 | DM guide split: short `LetsPlay/AGENTS.md` (player commands 开新局 / 继续游戏 / 存档, mandatory step-by-step character creation, core rules) plus `LetsPlay/docs/`. No CLAUDE.md / GEMINI.md pointers (current agents read AGENTS.md). |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 
@@ -277,3 +278,7 @@ Pilot rejects on cleaned-up stat-block pages were mostly tiny recall dips (about
 ### 2026-10-21 — talkdnd play helper
 
 Agents were slow to start (they read the whole DM guide, logs and sheets) and one agent built a character for the player without asking. Mechanical steps that need no model now live in `tools/talkdnd`, a Rust program shipped next to combat-sim in `LetsPlay/bin/`. `talkdnd start` checks content, starts pdf2md in the background and writes a compact `digest.md`; `talkdnd new` and `talkdnd chargen` record each player decision in `chargen.json` and check it against SRD-only option data (2014 species increases, 2024 background increases, 27-point buy, pool assignment, HP, AC, skills); `chargen sheet` writes the sheet and its `combat yaml` block from one set of numbers. Ability rolls use the combat-sim dice engine as a library and are logged and final. `talkdnd npc random` drafts SRD companions; the DM adds personality after the player confirms. Options outside the SRD are allowed with a warning, because validation must not need the player's books. Release archives are now named by plain platform (`talkdnd-letsplay-<tag>-linux-x86_64.tar.gz`, `-windows-x86_64.zip`, `-macos-arm64.tar.gz`).
+
+### 2026-10-21 — Short DM guide with player commands
+
+Agents auto-read `AGENTS.md`, some only its beginning, so it now opens with a player command table (`开新局`, `继续游戏 <存档>`, `存档`) and a mandatory character-creation flow: one decision per turn, the player chooses everything unless they say random, ability rolls via `talkdnd chargen roll` and assignment by the player, companions shown for confirmation. Core table rules follow; everything else moved to `LetsPlay/docs/` (chargen, dice, combat, narration, pdf2md, layout). Resuming reads the core guide plus `talkdnd start`'s digest instead of the whole manual, rulings, logs and every sheet. Separate CLAUDE.md / GEMINI.md pointer files were rejected by the owner because current Claude Code and Gemini read AGENTS.md.

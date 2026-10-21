@@ -52,7 +52,7 @@ bin/
 
 你只需要放 PDF。AI DM 会用 `tools/pdf2md` 在后台把 PDF 逐步转成可搜索的 Markdown（放在 PDF 旁边的隐藏目录 `.md/<PDF 文件名>/`），先转当前冒险，再转规则书；不会打断游戏，PDF 始终是权威来源。扫描版里没有文字层的页面会自动 OCR。
 
-第一次需要安装 [uv](https://docs.astral.sh/uv/)（AI DM 会按 `AGENTS.md` 2.1 节自己装），并联网下载依赖（约 500 MB，含 PyMuPDF 与 RapidOCR，不随本项目分发）。
+第一次需要安装 [uv](https://docs.astral.sh/uv/)（AI DM 会按 `docs/pdf2md.md` 自己装），并联网下载依赖（约 500 MB，含 PyMuPDF 与 RapidOCR，不随本项目分发）。
 
 ## 获取 combat-sim
 
@@ -64,19 +64,19 @@ bin/
 
 | 系统 | 压缩包 |
 |------|--------|
-| Linux x86_64 | `talkdnd-letsplay-<标签>-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows x86_64 | `talkdnd-letsplay-<标签>-x86_64-pc-windows-msvc.zip` |
-| macOS（Apple 芯片，arm64） | `talkdnd-letsplay-<标签>-aarch64-apple-darwin.tar.gz` |
+| Linux x86_64 | `talkdnd-letsplay-<标签>-linux-x86_64.tar.gz`（v0.1.0 为 `-x86_64-unknown-linux-gnu`） |
+| Windows x86_64 | `talkdnd-letsplay-<标签>-windows-x86_64.zip`（v0.1.0 为 `-x86_64-pc-windows-msvc`） |
+| macOS（Apple 芯片，arm64） | `talkdnd-letsplay-<标签>-macos-arm64.tar.gz`（v0.1.0 为 `-aarch64-apple-darwin`） |
 
 没有 macOS Intel（x86_64）的预编译包。Intel Mac 需要开发者在本机编译后，把程序放进 `bin/`。
 
-压缩包里是完整的 `LetsPlay/` 文件夹（DM 手册、战斗数据、裁定、各目录的 README），程序已经放在 `LetsPlay/bin/combat-sim`（Windows：`LetsPlay/bin/combat-sim.exe`）。解压到任意位置，进入 `LetsPlay/` 即可。压缩包**不含**任何规则书、冒险书或存档，需要你自己放进 `Rules/2014/`、`Rules/2024/`、`Adventures/`。
+压缩包里是完整的 `LetsPlay/` 文件夹（DM 手册、战斗数据、裁定、各目录的 README），程序已经放在 `LetsPlay/bin/`：`combat-sim` 与 `talkdnd`（Windows 加 `.exe`；v0.1.0 只有 combat-sim）。解压到任意位置，进入 `LetsPlay/` 即可。压缩包**不含**任何规则书、冒险书或存档，需要你自己放进 `Rules/2014/`、`Rules/2024/`、`Adventures/`。
 
 Linux、macOS 解压后赋予执行权限，并在系统拦截未签名程序时去掉隔离属性：
 
 ```bash
-chmod +x bin/combat-sim
-xattr -d com.apple.quarantine bin/combat-sim
+chmod +x bin/combat-sim bin/talkdnd
+xattr -d com.apple.quarantine bin/combat-sim bin/talkdnd
 ```
 
 `xattr` 只在 macOS 需要。Linux 做完 `chmod` 即可。
@@ -99,7 +99,7 @@ Windows PowerShell 里对照 `.sha256` 文件中的哈希：
 Get-FileHash <文件名> -Algorithm SHA256
 ```
 
-`main` 分支上每次成功构建也会留下约 30 天的程序包（只有程序本身，根上就是这一个文件，解压到 `bin/`）。开发者可以用仓库根的开发工具把它直接装进 `bin/`。
+`main` 分支上每次成功构建也会留下约 30 天的程序包（`combat-sim-<平台>` 和 `talkdnd-<平台>` 两个，根上就是程序本身，解压到 `bin/`）。开发者可以用仓库根的开发工具把它直接装进 `bin/`。
 
 放好之后，在本目录试一次。Linux / macOS：
 
@@ -119,15 +119,20 @@ bin\combat-sim.exe roll 1d20+5
 
 1. 按上面把规则书放进 `Rules/<版本>/`，冒险书放进 `Adventures/`，程序放进 `bin/`。
 2. 在本目录执行 `bin/combat-sim roll 1d20+5`（Windows 用 `bin\combat-sim.exe roll 1d20+5`）。能出结果就可以继续。
-3. 在本目录打开你的 AI 助手，对它说：
-   > 请阅读 AGENTS.md，担任 DM，用 2024 规则和《(冒险名)》开一局新游戏。我的角色是……
+3. 在本目录打开你的 AI 助手（它会自动读取 `AGENTS.md`），直接说：
 
-   或者继续已有存档：
-   > 请阅读 AGENTS.md，从 Saves/<存档名> 最后的存档点继续。
-4. AI 会建立 `Saves/YYYY-MM-DD-NN/` 存档（结构见 `Saves/README.md`）。其中 `combat/campaign.yaml` 记录本存档用的规则版本。清单模板是 `example/save/combat/campaign.yaml`，复制过去后改名字和 `party`。
-5. 想结束时说「今天先到这，存档」，AI 会写好存档点。
+   | 你说 | 效果 |
+   |------|------|
+   | `开新局` | DM 一步步问你：规则版本、冒险、种族、职业、背景、属性生成方式（掷骰后由你分配）、技能、装备、法术、名字，最后给你确认角色卡；再生成同伴给你确认 |
+   | `继续游戏 2026-10-19-01` | 从该存档最后的存档点继续（程序先生成一页接档摘要，开场更快） |
+   | `继续游戏` | 继续最新的存档 |
+   | `存档` | 写好存档点 |
 
-`AGENTS.md` 是给 AI DM 的完整工作手册。`Rules/rulings.md`（通用）和 `Rules/rulings-2014.md` / `Rules/rulings-2024.md`（版本差异）是规则书没写清时的统一裁定。
+   想让 DM 替你决定某一项，就说“这项随机”或“你来定”。如果你的 AI 助手不会自动读 `AGENTS.md`，先说一句“请阅读 AGENTS.md”。
+4. 存档在 `Saves/YYYY-MM-DD-NN/`（结构见 `Saves/README.md`），`combat/campaign.yaml` 记录本存档用的规则版本。
+5. 想结束时说「今天先到这，存档」。
+
+`AGENTS.md` 是给 AI DM 的核心手册，细节在 `docs/`。`Rules/rulings.md`（通用）和 `Rules/rulings-2014.md` / `Rules/rulings-2024.md`（版本差异）是规则书没写清时的统一裁定。
 
 ## 骰子和日志
 
