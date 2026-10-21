@@ -40,7 +40,7 @@ cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- install-local
 3. `--chars PATH`：角色卡文件或目录（可重复）
 4. `--campaign FILE`：战役清单；也可用环境变量 `COMBAT_SIM_CAMPAIGN`
 
-目录扫描规则：给的是冒险书目录（含 `combat/` 子目录，如 `--adventure Adventures/keys-from-the-golden-vault`）时只读 `combat/`；隐藏目录/文件（`.md/` 转换结果、`.git`）跳过；目录里的非内容文件（`.py`、`.jsonl`、图片等）只警告不报错；嵌套的分层库（含 `common/` 的目录）只在 `library:` 里列出时按版本加载。直接点名的文件必须是 `.yaml/.yml/.json/.md`。脚本等工具不要放在内容目录里（本地生成器放仓库外或 `local-tools/`）。
+目录扫描规则：给的是冒险书目录（含 `combat/` 子目录，如 `--adventure Adventures/keys-from-the-golden-vault`）时只读 `combat/`；隐藏目录/文件（`.md/` 转换结果、`.git`）跳过；目录里的非内容文件（`.py`、`.jsonl`、图片等）只警告不报错；嵌套的分层库（含 `common/` 的目录）只在 `library:` 里列出时按版本加载。目录扫描中名字恰为 `2014` / `2024` 的子目录（任意深度，如 `combat/heists/2014/`）只在与存档 `ruleset` 相同时加载。直接点名的文件必须是 `.yaml/.yml/.json/.md`。脚本等工具不要放在内容目录里（本地生成器放仓库外或 `local-tools/`）。
 
 清单示例（TalkDND 存档 `LetsPlay/Saves/2026-10-19-01/combat/campaign.yaml`）：
 

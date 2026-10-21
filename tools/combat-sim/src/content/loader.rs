@@ -540,7 +540,7 @@ impl ContentSources {
         for source in [&libraries, &adventures, &characters] {
             for path in source {
                 let mut files = Vec::new();
-                collect_files(path, &mut files)?;
+                collect_files(path, &mut files, &ruleset)?;
                 for file in files {
                     load_file(&file, &mut registry)?;
                 }
@@ -608,12 +608,13 @@ fn supported_content_file(path: &Path) -> bool {
 /// Deterministic recursive scan: entries are sorted by name. Inside a
 /// directory, hidden entries (`.md/` conversions, `.git`) are skipped and files
 /// that are not content (`.py`, `.jsonl`, images) are ignored with a warning.
-/// A file named explicitly must be a content file.
-fn collect_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    collect_inner(path, out, true)
+/// A file named explicitly must be a content file. Sub-folders named exactly
+/// `2014` / `2024` load only when they match the campaign ruleset.
+fn collect_files(path: &Path, out: &mut Vec<PathBuf>, ruleset: &str) -> Result<()> {
+    collect_inner(path, out, true, ruleset)
 }
 
-fn collect_inner(path: &Path, out: &mut Vec<PathBuf>, explicit: bool) -> Result<()> {
+fn collect_inner(path: &Path, out: &mut Vec<PathBuf>, explicit: bool, ruleset: &str) -> Result<()> {
     let metadata = std::fs::metadata(path)
         .with_context(|| format!("failed to read content source {}", path.display()))?;
     if metadata.is_dir() {
@@ -621,7 +622,7 @@ fn collect_inner(path: &Path, out: &mut Vec<PathBuf>, explicit: bool) -> Result<
         // `combat/`; the rest is the book and its conversions.
         let combat = path.join("combat");
         if explicit && combat.is_dir() {
-            return collect_inner(&combat, out, false);
+            return collect_inner(&combat, out, false, ruleset);
         }
         // A nested layered library (`common/` + `2014/` …) is loaded only when
         // listed under `library:`, which picks the save's ruleset layer.
@@ -634,10 +635,18 @@ fn collect_inner(path: &Path, out: &mut Vec<PathBuf>, explicit: bool) -> Result<
             .with_context(|| format!("failed to read content directory {}", path.display()))?;
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
-            if entry.file_name().to_string_lossy().starts_with('.') {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
                 continue;
             }
-            collect_inner(&entry.path(), out, false)?;
+            // Edition folders (`heists/2014/`) follow the save's ruleset.
+            if SUPPORTED_RULESETS.contains(&name.as_str())
+                && name != ruleset
+                && entry.path().is_dir()
+            {
+                continue;
+            }
+            collect_inner(&entry.path(), out, false, ruleset)?;
         }
     } else if metadata.is_file() {
         if supported_content_file(path) {

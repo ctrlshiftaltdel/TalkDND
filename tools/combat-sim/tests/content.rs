@@ -486,3 +486,53 @@ fn directory_scan_skips_hidden_dirs_non_content_and_nested_layers() {
     assert!(sources.load().is_err());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn edition_folders_follow_the_campaign_ruleset() {
+    use combat_sim::content::ContentSources;
+    let root = std::env::temp_dir().join(format!("cs-edition-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let combat = root.join("Adventures/book/combat");
+    let cr = |id: &str| {
+        format!("creatures:\n  - {{id: {id}, name: {id}, ac: 10, hp: 5, abilities: {{str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10}}}}\n")
+    };
+    for (dir, id) in [
+        ("heists/2014", "old"),
+        ("heists/2024", "new"),
+        ("deep/x/2014", "deep-old"),
+    ] {
+        std::fs::create_dir_all(combat.join(dir)).unwrap();
+        std::fs::write(combat.join(dir).join("c.yaml"), cr(id)).unwrap();
+    }
+    std::fs::write(combat.join("shared.yaml"), cr("shared")).unwrap();
+    // A file (not folder) named 2014 is not an edition folder.
+    std::fs::create_dir_all(combat.join("misc")).unwrap();
+    std::fs::write(combat.join("misc/2024.yaml"), cr("file-2024")).unwrap();
+    std::fs::create_dir_all(root.join("save")).unwrap();
+    for (rs, want, not) in [
+        ("2014", ["old", "deep-old"], "new"),
+        ("2024", ["new", "shared"], "old"),
+    ] {
+        let manifest = root.join("save").join(format!("campaign-{rs}.yaml"));
+        std::fs::write(
+            &manifest,
+            format!("name: t\nadventures: [../Adventures/book]\nruleset: \"{rs}\"\n"),
+        )
+        .unwrap();
+        let reg = ContentSources {
+            campaign: Some(manifest),
+            ..Default::default()
+        }
+        .load()
+        .unwrap();
+        let ids: Vec<String> = reg.creatures.ids().map(|s| s.to_string()).collect();
+        for w in want.iter().chain(["shared", "file-2024"].iter()) {
+            assert!(ids.iter().any(|i| i == w), "{rs}: missing {w} in {ids:?}");
+        }
+        assert!(!ids.iter().any(|i| i == not), "{rs}: loaded {not}");
+        if rs == "2024" {
+            assert!(!ids.iter().any(|i| i == "deep-old"));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
