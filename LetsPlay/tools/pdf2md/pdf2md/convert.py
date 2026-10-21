@@ -51,6 +51,9 @@ SELECTIVE_UPGRADES = {
     ("0.2.2", "0.2.3"): lambda info: "fallback" in info or "ocr" in info,
     # 0.4.0 only changes assembly (reader + pages editions): no chunk is redone
     ("0.3.1", "0.4.0"): lambda info: False,
+    # 0.4.1 only adds stat-block checks at assemble time: no chunk is redone
+    ("0.4.0", "0.4.1"): lambda info: False,
+    ("0.3.1", "0.4.1"): lambda info: False,
 }
 
 ANCHOR_LINE_RE = re.compile(r'^<a id="p\d+"></a>\n?|^<!-- PDF p\.\d+ -->', re.M)
@@ -469,6 +472,9 @@ class Book:
             from . import rooms
 
             md = rooms.fix_area_refs(md)
+        from . import statblocks
+
+        md, self._checks = statblocks.annotate(md, statblocks.load_known(self.combat_data()))
         _write_atomic(os.path.join(self.dir, "proofread-report.md"),
                       proofread.report(self.stem, log).encode("utf-8"))
         _write_atomic(os.path.join(self.dir, pages_name(self.stem)), md)
@@ -476,11 +482,27 @@ class Book:
         self.write_index(md)
         return md
 
+    def combat_data(self):
+        """combat-sim data to cross-check stat blocks: Rules/combat/{common,<ruleset>}
+        for rulebooks, the adventure's combat/ for adventures."""
+        parts = os.path.normpath(self.pdf).split(os.sep)
+        for key in ("Rules", "Adventures"):
+            if key in parts:
+                i = len(parts) - 1 - parts[::-1].index(key)
+                base = os.sep.join(parts[:i + 1]) or os.sep
+                if key == "Rules" and i + 1 < len(parts) - 1:
+                    rs = parts[i + 1]
+                    return [os.path.join(base, "combat", "common"), os.path.join(base, "combat", rs)]
+                if key == "Adventures" and i + 1 < len(parts) - 1:
+                    return [os.path.join(base, parts[i + 1], "combat")]
+        return []
+
     def write_index(self, md):
         idx = {"pdf": self.m["pdf"], "book": self.stem + ".md", "pages": pages_name(self.stem),
                "page_count": self.m["page_count"],
                "done_pages": self.done_pages(), "headings": [], "statblocks": [], "figures": [],
-               "low_quality_pages": [], "ocr_pages": []}
+               "low_quality_pages": [], "ocr_pages": [],
+               "statblock_checks": getattr(self, "_checks", [])}
         page = 0
         for line in md.split("\n"):
             m = re.match(r'<a id="p(\d+)"></a>', line)
@@ -511,8 +533,16 @@ class Book:
                  f"{idx['done_pages']}/{idx['page_count']} pages converted.", "", "## Headings", ""]
         for h in idx["headings"]:
             lines.append("  " * (h["level"] - 1) + f"- [{h['text']}](<{book}#p{h['page']}>) - p.{h['page']}")
-        lines += ["", "## Stat blocks (read the PDF)", "",
-                  ", ".join(f"[p.{p}](<{book}#p{p}>)" for p in idx["statblocks"]) or "none", "",
+        checks = idx["statblock_checks"]
+        ok = sum(c["status"] == "ok" for c in checks)
+        lines += ["", "## Stat blocks", "",
+                  f"{ok}/{len(checks)} checked OK (numbers consistent; usable from Markdown). "
+                  "Marked ⚠ in the text: read the PDF.", ""]
+        lines += [f"- {'✓' if c['status'] == 'ok' else '⚠'} [{c['name'] or 'stat block'}](<{book}#p{c['page']}>)"
+                  f" - p.{c['page']}" + (f": {'; '.join(c['issues'])}" if c["issues"] else "")
+                  for c in checks] or ["none found"]
+        lines += ["", "Pages flagged as stat-block pages by the converter: "
+                  + (", ".join(f"[p.{p}](<{book}#p{p}>)" for p in idx["statblocks"]) or "none"), "",
                   "## Maps", ""]
         maps = idx.get("maps", [])
         lines += [f"- [{mp['caption']}](<{book}#p{mp['page']}>) - p.{mp['page']}: [image](<{mp['img']}>)"
