@@ -236,7 +236,7 @@ pub struct Options {
 }
 
 /// Adventure slug from the save's chargen, else from the campaign manifest.
-fn adventure_slug(save: &Path) -> Option<String> {
+pub(crate) fn adventure_slug(save: &Path) -> Option<String> {
     if let Ok(c) = chargen::load(save) {
         if let Some(s) = c.adventure_slug() {
             return Some(s);

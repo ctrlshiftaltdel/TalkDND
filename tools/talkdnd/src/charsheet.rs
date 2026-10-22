@@ -82,6 +82,10 @@ pub struct CharFile {
     /// The migrated AC already includes worn armor (Defense applies).
     #[serde(default)]
     pub ac_base_armored: bool,
+    /// The migrated AC already includes any fighting-style bonus (Defense
+    /// is not added again on top of `ac_base`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ac_base_has_style: bool,
     #[serde(default)]
     pub inspiration: bool,
     #[serde(default)]
@@ -420,7 +424,70 @@ pub fn migrate(save_dir: &Path, sheet: &check::Sheet, book: &Book) -> Result<Cha
             }
         }
     }
+    migrate_armor(&mut cf, &body);
     Ok(cf)
+}
+
+/// Lines of the old sheet that name worn gear (not proficiency lists or spells).
+fn gear_lines(body: &str) -> impl Iterator<Item = &str> {
+    body.lines().filter(|l| {
+        let low = l.to_lowercase();
+        !l.contains("熟练")
+            && !low.contains("proficien")
+            && !low.contains("spell")
+            && !l.contains("法术")
+            && !l.contains("护盾术")
+    })
+}
+
+/// Turn the armor and shield named on an old sheet into equipped items so AC
+/// is computed from items. If the items do not explain the sheet's AC, keep
+/// the sheet's AC as the base and mark it as already including the style.
+fn migrate_armor(cf: &mut CharFile, body: &str) {
+    let old_ac = cf.ac_base;
+    let armor = gear_lines(body).find_map(armor_of);
+    let shield = gear_lines(body).any(is_shield);
+    let dex = cf.m("dex");
+    if let Some((id, base, cap)) = armor {
+        let mut expect = base + cap.map_or(dex, |c| dex.min(c));
+        if shield {
+            expect += 2;
+        }
+        if old_ac == expect || old_ac == expect + 1 {
+            cf.inventory.push(Item {
+                name: id.replace('-', " "),
+                qty: 1,
+                equipped: true,
+                ..Default::default()
+            });
+            if shield {
+                cf.inventory.push(Item {
+                    name: "shield".into(),
+                    qty: 1,
+                    equipped: true,
+                    ..Default::default()
+                });
+            }
+            cf.ac_base = 10 + dex;
+            cf.ac_base_armored = false;
+            cf.ac_base_has_style = false;
+            cf.ac_base_has_style = false;
+            if old_ac == expect + 1 && sheet_mentions_defense(body) {
+                cf.fighting_style = Some("defense".into());
+            }
+            return;
+        }
+    }
+    // Could not explain the AC from items: it stays the base, style included.
+    cf.ac_base_has_style = true;
+}
+
+fn sheet_mentions_defense(body: &str) -> bool {
+    body.lines().any(|l| {
+        let low = l.to_lowercase();
+        (low.contains("defense") || l.contains("防御"))
+            && (low.contains("fighting style") || l.contains("战斗风格"))
+    })
 }
 
 pub fn store(save_dir: &Path, cf: &CharFile) -> Result<()> {
@@ -733,7 +800,7 @@ pub fn recompute(cf: &mut CharFile, book: &Book) {
         .filter(|i| i.equipped)
         .map(|i| i.ac_bonus)
         .sum::<i32>();
-    if style == "defense" && (armor.is_some() || cf.ac_base_armored) {
+    if style == "defense" && (armor.is_some() || (cf.ac_base_armored && !cf.ac_base_has_style)) {
         ac += 1;
     }
     cf.set("ac", Value::Number(ac.into()));
@@ -991,6 +1058,7 @@ pub fn from_chargen(
     }
     cf.ac_base = c.ac_unarmored();
     cf.ac_base_armored = false;
+    cf.ac_base_has_style = false;
     recompute(&mut cf, book);
     let ps = party(save_dir, &cf)?;
     commit(save_dir, &cf, &ps)?;
@@ -1910,6 +1978,34 @@ mod tests {
         });
         recompute(&mut d, &Book::srd("2024"));
         assert_eq!(atk(&d, "greatsword")["damage_die_min"].as_i64(), Some(3));
+    }
+
+    #[test]
+    fn migrated_ac_not_stacked_with_defense() {
+        let book = Book::srd("2014");
+        // Armor and shield named on the old sheet become equipped items.
+        let mut c = cf("2014");
+        c.ac_base = 19;
+        let body = "- 战斗风格：防御（Defense）\n- 装备：链甲（chain mail）、盾牌\n- 护甲熟练：所有护甲、盾牌\n";
+        migrate_armor(&mut c, body);
+        assert!(c
+            .inventory
+            .iter()
+            .any(|i| i.name == "chain mail" && i.equipped));
+        assert!(c.inventory.iter().any(|i| i.name == "shield" && i.equipped));
+        assert_eq!(c.fighting_style.as_deref(), Some("defense"));
+        c.fighting_style = Some("defense".into());
+        recompute(&mut c, &book);
+        assert_eq!(c.combat["ac"].as_i64(), Some(19));
+        // Items do not explain the AC: keep it, style already included.
+        let mut d = cf("2014");
+        d.ac_base = 19;
+        d.ac_base_armored = true;
+        migrate_armor(&mut d, "- 护甲：链甲（chain mail）\n");
+        assert!(d.inventory.is_empty() && d.ac_base_has_style);
+        d.fighting_style = Some("defense".into());
+        recompute(&mut d, &book);
+        assert_eq!(d.combat["ac"].as_i64(), Some(19), "no second +1");
     }
 
     #[test]
