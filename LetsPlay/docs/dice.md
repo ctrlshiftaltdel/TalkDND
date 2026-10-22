@@ -1,6 +1,6 @@
 # 掷骰
 
-> 本文件是 `AGENTS.md` 的参考章节，按需查阅。路径相对于 `LetsPlay/`。
+> 本文件是 `AGENTS.md` 的参考章节，按需查阅。路径都相对于游戏文件夹（解压出来的那个文件夹，名字随意）。
 
 
 所有骰子都走 `bin/combat-sim roll`（Windows：`bin\combat-sim.exe roll`）。输出是完整算式：每颗骰子、修正值和总和，例如 `1d20(9)+5=14`。

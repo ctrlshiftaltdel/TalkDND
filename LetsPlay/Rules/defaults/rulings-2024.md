@@ -1,6 +1,6 @@
 # TalkDND 版本裁定：2024（5.5e）
 
-> 存档 `ruleset: "2024"` 时使用。规则来源只看本目录旁的 `2024/`（仓库路径 `LetsPlay/Rules/2024/`：PHB / DMG 2024、MM 2025，或 SRD 5.2.1）。通用裁定见 `rulings.md`。
+> 存档 `ruleset: "2024"` 时使用。规则来源只看本目录旁的 `2024/`（游戏文件夹里的 `Rules/2024/`：PHB / DMG 2024、MM 2025，或 SRD 5.2.1）。通用裁定见 `rulings.md`。
 > 本文件为原创摘要，不含规则书原文；有出入时以你手上的规则书为准。
 
 ### V-01 突袭
@@ -8,7 +8,7 @@
 - 引擎：`init --surprised "名字"` 自动以劣势掷先攻。
 
 ### V-02 武器精通
-- 有 Weapon Mastery 的角色可用其武器的精通属性（劈砍、擦伤、迅击、推离、削弱、减速、掀翻、烦扰）。引擎数据在 `combat/2024/masteries.yaml`（仓库路径 `LetsPlay/Rules/combat/2024/masteries.yaml`），角色卡 `mastery` 字段生效。
+- 有 Weapon Mastery 的角色可用其武器的精通属性（劈砍、擦伤、迅击、推离、削弱、减速、掀翻、烦扰）。引擎数据在 `combat/2024/masteries.yaml`（游戏文件夹里的 `Rules/combat/2024/masteries.yaml`），角色卡 `mastery` 字段生效。
 
 ### V-03 睡眠术
 - 5 尺半径球（60 尺内），感知豁免；失败 = 失能到其下回合结束，届时再豁免，再失败 = 昏迷（持续期间，受伤或被摇醒结束）。**需要专注**。

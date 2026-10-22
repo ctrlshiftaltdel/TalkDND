@@ -70,7 +70,7 @@ bin/
 
 没有 macOS Intel（x86_64）的预编译包。Intel Mac 需要开发者在本机编译后，把程序放进 `bin/`。
 
-压缩包里是完整的 `LetsPlay/` 文件夹（DM 手册、战斗数据、裁定、各目录的 README），程序已经放在 `LetsPlay/bin/`：`combat-sim` 与 `talkdnd`（Windows 加 `.exe`；v0.1.0 只有 combat-sim）。解压到任意位置，进入 `LetsPlay/` 即可。压缩包**不含**任何规则书、冒险书或存档，需要你自己放进 `Rules/2014/`、`Rules/2024/`、`Adventures/`。
+压缩包里只有一个顶层文件夹 `TalkDND/`（v0.6.0 及以前叫 `LetsPlay/`），里面是完整的游戏文件夹：DM 手册、战斗数据、裁定、各目录的 README，程序在 `bin/`：`combat-sim` 与 `talkdnd`（Windows 加 `.exe`）。解压到任意位置都可以，文件夹也可以随意改名（路径里有空格或中文也没关系）。程序会通过自己所在的 `bin/` 找到游戏文件夹（文件夹根部的 `.talkdnd-root` 是标记文件，请勿删除），所以从哪个目录运行 `bin/talkdnd` 都行；需要时也可以用 `--root <文件夹>` 或环境变量 `TALKDND_ROOT` 指定。在这个文件夹里启动 Agent。压缩包**不含**任何规则书、冒险书或存档，需要你自己放进 `Rules/2014/`、`Rules/2024/`、`Adventures/`。
 
 Linux、macOS 解压后赋予执行权限，并在系统拦截未签名程序时去掉隔离属性：
 
@@ -173,7 +173,7 @@ $CS roll 1d20+5 --adv --dc 15
 
 1. 在游戏里先「存档」，然后关掉正在运行的 talkdnd / combat-sim（Windows 上运行中的 `.exe` 无法被覆盖）。
 2. 从 [Releases](https://github.com/ctrlshiftaltdel/TalkDND/releases) 下载对应平台的包，可用同名 `.sha256` 校验。
-3. 把包解压到 `LetsPlay/` 的**上一级**目录，遇到同名文件选择「全部覆盖」。
+3. 把包解压到任意临时位置，再把解压出来的 `TalkDND/` 文件夹**里面的全部内容**复制到你的游戏文件夹（不管它叫什么、放在哪），遇到同名文件选择「全部覆盖」。如果你的游戏文件夹本来就叫 `TalkDND` 且放在同一位置，直接在它的上一级解压覆盖也行。
 4. 照常「继续游戏」（`talkdnd start`）。第一次运行新版时程序会自动：
    - 检查存档结构版本（`Saves/<存档>/save-meta.yaml`），旧了就先把整个存档备份到 `Saves/_backups/`，再迁移到新结构，写进会话日志并更新完整性清单；
    - 书籍导入数据（`Rules/chargen/local/`）的导入器版本过旧时重新导入；

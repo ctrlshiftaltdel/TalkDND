@@ -2,7 +2,7 @@
 
 Incremental PDF → Markdown extraction for the books players put in `Rules/2014/`, `Rules/2024/` and `Adventures/`. The PDF stays authoritative; the Markdown is a searchable copy.
 
-Run everything from `LetsPlay/` through [uv](https://docs.astral.sh/uv/):
+Run everything from the play folder (the extracted package folder, any name) through [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv sync --project tools/pdf2md                              # first time; add --extra paddle for PaddleOCR

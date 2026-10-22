@@ -464,12 +464,15 @@ impl ContentSources {
     }
 
     pub fn campaign_path(&self) -> Option<PathBuf> {
-        self.campaign.clone().or_else(|| {
-            std::env::var("COMBAT_SIM_CAMPAIGN")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .map(PathBuf::from)
-        })
+        self.campaign
+            .clone()
+            .or_else(|| {
+                std::env::var("COMBAT_SIM_CAMPAIGN")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(PathBuf::from)
+            })
+            .map(|path| resolve_in_play_root(&path, play_root().as_deref()))
     }
 
     /// Loads the manifest (if any) plus explicit sources and returns a ready
@@ -861,5 +864,59 @@ impl<'a> ShownItem<'a> {
             source,
             item: item.to_json(),
         }
+    }
+}
+
+/// The play folder this binary belongs to: `TALKDND_ROOT`, else the parent of
+/// the executable's `bin/` when it carries the `.talkdnd-root` marker (or the
+/// classic `AGENTS.md` + `Saves/`). Folder names and locations do not matter.
+pub fn play_root() -> Option<PathBuf> {
+    let is_root = |p: &Path| {
+        p.join(".talkdnd-root").is_file()
+            || (p.join("AGENTS.md").is_file() && p.join("Saves").is_dir())
+    };
+    if let Some(p) = std::env::var_os("TALKDND_ROOT").filter(|v| !v.is_empty()) {
+        let p = PathBuf::from(p);
+        if is_root(&p) {
+            return Some(p);
+        }
+    }
+    let exe = std::env::current_exe().ok()?;
+    let exe = exe.canonicalize().unwrap_or(exe);
+    let root = exe.parent()?.parent()?.to_path_buf();
+    is_root(&root).then_some(root)
+}
+
+/// A relative campaign path that does not exist from the current directory
+/// is looked up inside the play folder, so `bin/combat-sim --campaign
+/// Saves/<slot>/combat/campaign.yaml` works from any working directory.
+pub fn resolve_in_play_root(path: &Path, root: Option<&Path>) -> PathBuf {
+    if path.is_absolute() || path.exists() {
+        return path.to_path_buf();
+    }
+    match root {
+        Some(root) if root.join(path).exists() => root.join(path),
+        _ => path.to_path_buf(),
+    }
+}
+
+#[cfg(test)]
+mod play_root_tests {
+    use super::*;
+
+    #[test]
+    fn relative_campaign_falls_back_to_the_play_root() {
+        let root =
+            std::env::temp_dir().join(format!("cs-root-{} odd name 冒险", std::process::id()));
+        let rel = Path::new("Saves/2030-01-01-01/combat/campaign.yaml");
+        std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
+        std::fs::write(root.join(rel), "name: x\n").unwrap();
+        assert_eq!(resolve_in_play_root(rel, Some(&root)), root.join(rel));
+        assert_eq!(
+            resolve_in_play_root(Path::new("nope.yaml"), Some(&root)),
+            PathBuf::from("nope.yaml")
+        );
+        assert_eq!(resolve_in_play_root(rel, None), rel.to_path_buf());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
