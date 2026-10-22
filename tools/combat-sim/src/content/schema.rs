@@ -754,6 +754,14 @@ pub struct Attack {
     pub properties: Vec<AttackProperty>,
     #[serde(default)]
     pub mastery: Option<String>,
+    /// Reroll damage dice showing this value or lower once, keeping the new
+    /// roll (Great Weapon Fighting: 2).
+    #[serde(default)]
+    pub reroll_damage_below: Option<u32>,
+    /// Treat damage dice below this value as this value (2024 Great Weapon
+    /// Fighting: 3).
+    #[serde(default)]
+    pub damage_die_min: Option<u32>,
     #[serde(default)]
     pub on_hit: Vec<Effect>,
     #[serde(default)]

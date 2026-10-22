@@ -43,6 +43,84 @@ impl DiceExpr {
         self.roll_terms(&doubled, rng)
     }
 
+    /// Rolls the expression, rerolling each die that shows `below` or less
+    /// once and keeping the new result (Great Weapon Fighting). `doubled`
+    /// doubles the dice for a critical hit. Rerolled dice show as `1→5`.
+    pub fn roll_rerolling<R: DiceRng + ?Sized>(
+        &self,
+        below: u32,
+        doubled: bool,
+        rng: &mut R,
+    ) -> RollRecord {
+        self.roll_adjusted(below, false, doubled, rng)
+    }
+
+    /// Rolls the expression treating any die below `min` as `min` (2024
+    /// Great Weapon Fighting). Adjusted dice show as `1→3`.
+    pub fn roll_floored<R: DiceRng + ?Sized>(
+        &self,
+        min: u32,
+        doubled: bool,
+        rng: &mut R,
+    ) -> RollRecord {
+        self.roll_adjusted(min, true, doubled, rng)
+    }
+
+    fn roll_adjusted<R: DiceRng + ?Sized>(
+        &self,
+        n: u32,
+        floor: bool,
+        doubled: bool,
+        rng: &mut R,
+    ) -> RollRecord {
+        let below = n;
+        let terms: Vec<(u32, u32)> = self
+            .terms
+            .iter()
+            .map(|&(c, s)| (if doubled { c * 2 } else { c }, s))
+            .collect();
+        let mut dice = Vec::new();
+        let mut shown = Vec::new();
+        let mut sum = i64::from(self.modifier);
+        for &(count, sides) in &terms {
+            for _ in 0..count {
+                let first = rng.roll_die(sides);
+                let value = if floor && first < below {
+                    shown.push(format!("{first}→{below}"));
+                    below
+                } else if !floor && first <= below {
+                    let second = rng.roll_die(sides);
+                    shown.push(format!("{first}→{second}"));
+                    second
+                } else {
+                    shown.push(first.to_string());
+                    first
+                };
+                let value = i32::try_from(value).expect("die result does not fit in i32");
+                dice.push(value);
+                sum += i64::from(value);
+            }
+        }
+        let total = i32::try_from(sum).expect("dice total overflowed i32");
+        let text = if dice.is_empty() {
+            total.to_string()
+        } else {
+            format!(
+                "{}({}){}={total}",
+                format_terms(&terms),
+                shown.join(","),
+                modifier_text(self.modifier)
+            )
+        };
+        RollRecord {
+            formula: format_formula(&terms, self.modifier),
+            dice,
+            modifier: self.modifier,
+            total,
+            text,
+        }
+    }
+
     /// Expected value of the expression, used by the simulation AI.
     pub fn average(&self) -> f64 {
         let dice: f64 = self

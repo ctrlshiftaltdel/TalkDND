@@ -18,6 +18,10 @@ pub const STEPS: &[(&str, &str)] = &[
     ("class", "职业"),
     ("level", "起始等级（按冒险建议范围）"),
     ("subclass", "子职（达到子职等级时）"),
+    (
+        "fighting-style",
+        "战斗风格（2014 战士 1 级、圣武士/游侠 2 级；2024 为战斗风格专长）",
+    ),
     ("background", "背景"),
     (
         "method",
@@ -26,9 +30,20 @@ pub const STEPS: &[(&str, &str)] = &[
     ("scores", "玩家把数值分配到六项属性"),
     ("asi", "属性加值（2014 种族 / 2024 背景）"),
     ("skills", "技能"),
-    ("equipment", "装备（含护甲、盾牌）"),
+    (
+        "proficiencies",
+        "语言与工具（背景/种族给的自选项：`set languages` / `set tools`）",
+    ),
+    (
+        "equipment",
+        "起始装备：`set class-equipment`（2014 每组选 a/b/c 或 gold；2024 选 A/B/C）+ 背景装备（2024 `set background-equipment A|B`）",
+    ),
     ("spells", "法术（非施法职业写 none）"),
-    ("name", "名字与性格"),
+    ("name", "名字"),
+    (
+        "traits",
+        "性格特点、理想、牵绊、缺点（`set traits/ideals/bonds/flaws`）与阵营",
+    ),
     ("confirm", "确认角色卡"),
 ];
 
@@ -72,7 +87,42 @@ pub struct Creation {
     #[serde(default)]
     pub spells_done: bool,
     pub name: Option<String>,
+    /// Personality traits.
     pub personality: Option<String>,
+    #[serde(default)]
+    pub ideals: Option<String>,
+    #[serde(default)]
+    pub bonds: Option<String>,
+    #[serde(default)]
+    pub flaws: Option<String>,
+    #[serde(default)]
+    pub alignment: Option<String>,
+    /// Fighting Style id (2014 class feature / 2024 feat).
+    #[serde(default)]
+    pub fighting_style: Option<String>,
+    #[serde(default)]
+    pub feats: Vec<String>,
+    #[serde(default)]
+    pub languages: Vec<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub proficiencies_done: bool,
+    /// Class starting-equipment choice (2014 `a,b,a` or `gold`; 2024 `A`).
+    #[serde(default)]
+    pub class_equipment: Option<String>,
+    /// Items from that choice (resolved when chosen).
+    #[serde(default)]
+    pub class_items: Vec<String>,
+    /// Gold from the class choice (gp), e.g. a 2014 starting-gold roll.
+    #[serde(default)]
+    pub class_gold: i64,
+    /// 2024 background equipment option (A/B).
+    #[serde(default)]
+    pub background_equipment: Option<String>,
+    /// Starting gold already put into the purse (`chargen confirm`).
+    #[serde(default)]
+    pub gold_granted: bool,
     #[serde(default = "one")]
     pub level: i32,
     /// Whether the player has explicitly chosen the starting level.
@@ -119,6 +169,14 @@ impl Creation {
             "class" => self.class.is_some(),
             "level" => self.level_done,
             "subclass" => self.subclass.is_some() || !self.subclass_needed(),
+            "fighting-style" => self.fighting_style.is_some() || self.style_level().is_none(),
+            "proficiencies" => self.proficiencies_done,
+            "traits" => {
+                self.personality.is_some()
+                    && self.ideals.is_some()
+                    && self.bonds.is_some()
+                    && self.flaws.is_some()
+            }
             "background" => self.background.is_some(),
             "method" => {
                 self.method.is_some()
@@ -127,7 +185,15 @@ impl Creation {
             "scores" => self.scores.len() == 6,
             "asi" => self.asi_done,
             "skills" => !self.skills.is_empty(),
-            "equipment" => self.armor.is_some() || !self.equipment.is_empty(),
+            "equipment" => {
+                (self.class_equipment.is_some()
+                    || self.armor.is_some()
+                    || !self.equipment.is_empty())
+                    && (self.background_equipment.is_some()
+                        || self
+                            .background_def(None)
+                            .is_none_or(|b| b.options.is_empty()))
+            }
             "spells" => self.spells_done,
             "name" => self.name.is_some(),
             "confirm" => self.confirmed,
@@ -145,6 +211,63 @@ impl Creation {
             (*label).to_string()
         };
         Some((step, label))
+    }
+
+    /// Level at which the class gains a Fighting Style, if it is needed now.
+    pub fn style_level(&self) -> Option<i32> {
+        let (l, _) = crate::options::style_for_class(self.rs(), self.class.as_deref()?)?;
+        (self.level >= l).then_some(l)
+    }
+
+    /// Background data: SRD, else the local book import.
+    pub fn background_def(
+        &self,
+        book: Option<&crate::classdata::Book>,
+    ) -> Option<crate::options::BackgroundDef> {
+        let b = self.background.as_deref()?;
+        crate::options::srd_background(self.rs(), b)
+            .cloned()
+            .or_else(|| book.and_then(|bk| bk.backgrounds.get(b).cloned()))
+    }
+
+    /// Background equipment and gold (empty when the background has no data).
+    pub fn background_pack(
+        &self,
+        book: Option<&crate::classdata::Book>,
+    ) -> crate::options::Resolved {
+        self.background_def(book)
+            .and_then(|b| {
+                crate::options::background_equipment(&b, self.background_equipment.as_deref()).ok()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Every starting item: class choice, background, then items the player named.
+    pub fn all_items(&self, book: Option<&crate::classdata::Book>) -> Vec<String> {
+        let mut v = self.class_items.clone();
+        v.extend(self.background_pack(book).items);
+        v.extend(self.equipment.iter().cloned());
+        v
+    }
+
+    /// Body armor worn: the `armor` choice, else the first armor item.
+    pub fn worn_armor(&self) -> Option<String> {
+        match self.armor.as_deref() {
+            Some(a) if a != "none" => Some(a.to_string()),
+            Some(_) => None,
+            None => self
+                .all_items(None)
+                .iter()
+                .find_map(|i| crate::charsheet::armor_of(i).map(|a| a.0.to_string())),
+        }
+    }
+
+    pub fn has_shield(&self) -> bool {
+        self.shield
+            || self
+                .all_items(None)
+                .iter()
+                .any(|i| crate::charsheet::is_shield(i))
     }
 
     /// Slug of the chosen adventure (used for the start-level data lookup).
@@ -255,17 +378,35 @@ impl Creation {
     }
 
     pub fn ac(&self) -> i32 {
+        let defense =
+            self.fighting_style.as_deref() == Some("defense") && self.worn_armor().is_some();
+        self.ac_unstyled() + i32::from(defense)
+    }
+
+    /// AC without a worn-armor-free override; `ac_unarmored` is the no-armor value.
+    pub fn ac_unarmored(&self) -> i32 {
+        let mut c = self.clone();
+        c.armor = Some("none".into());
+        c.shield = false;
+        c.class_items.clear();
+        c.equipment.clear();
+        c.background = None;
+        c.ac_unstyled()
+    }
+
+    fn ac_unstyled(&self) -> i32 {
         let m = self.mods();
         let dex = m["dex"];
-        let shield = if self.shield { 2 } else { 0 };
-        match self.armor.as_deref().filter(|a| *a != "none") {
+        let shield = if self.has_shield() { 2 } else { 0 };
+        let worn = self.worn_armor();
+        match worn.as_deref() {
             Some(a) => match data::ARMOR.iter().find(|(id, _, _)| *id == a) {
                 Some((_, base, cap)) => base + cap.map_or(dex, |c| dex.min(c)) + shield,
                 None => 10 + dex + shield,
             },
             None => match self.class.as_deref() {
                 Some("barbarian") => 10 + dex + m["con"] + shield,
-                Some("monk") if !self.shield => 10 + dex + m["wis"],
+                Some("monk") if !self.has_shield() => 10 + dex + m["wis"],
                 _ => 10 + dex + shield,
             },
         }
@@ -571,6 +712,36 @@ pub fn validate(c: &Creation) -> Report {
         }
     }
 
+    // Fighting Style.
+    if let Some(cl) = c.class.as_deref() {
+        match (crate::options::style_for_class(&rs, cl), c.fighting_style.as_deref()) {
+            (Some((l, _)), None) if c.level >= l => e.push(format!(
+                "{cl} {} needs a Fighting Style (gained at level {l}): `talkdnd chargen set fighting-style <id>`",
+                c.level
+            )),
+            (Some((_, allowed)), Some(fs)) if !allowed.iter().any(|a| a == fs) => w.push(format!(
+                "fighting style `{fs}` is not on the {rs} {cl} list ({}); allowed only if the player's book offers it",
+                allowed.join(", ")
+            )),
+            (None, Some(fs)) => w.push(format!("{cl} has no Fighting Style feature; `{fs}` needs a feat or a DM ruling")),
+            _ => {}
+        }
+    }
+    if let Some(fs) = c.fighting_style.as_deref() {
+        if crate::options::style(fs).is_none() {
+            w.push(format!(
+                "fighting style `{fs}` is not in the data; the DM rules its effect"
+            ));
+        }
+    }
+    for it in c.all_items(None) {
+        if crate::options::is_placeholder(&it) {
+            w.push(format!(
+                "starting equipment `{it}`: the player names the item (`chargen set equipment …`)"
+            ));
+        }
+    }
+
     // Spell counts against class resources at the chosen level.
     if c.spells_done {
         let g = crate::classdata::generate(c, &crate::classdata::Book::srd(&rs), None);
@@ -708,6 +879,15 @@ pub fn sheet_with(
     if let Some(p) = &c.personality {
         md += &format!("- **性格**：{p}\n");
     }
+    if let Some(fs) = &c.fighting_style {
+        let st = crate::options::style(fs);
+        md += &format!(
+            "- **战斗风格**：{}{}\n",
+            st.map(|s| format!("{}（{}）", s.zh, s.name))
+                .unwrap_or(fs.clone()),
+            st.map(|s| format!("——{}", s.effect)).unwrap_or_default()
+        );
+    }
     md += "\n## 属性\n\n| 属性 | 分数 | 调整值 |\n|------|------|--------|\n";
     for a in data::ABILITIES {
         md += &format!("| {a} | {} | {:+} |\n", scores[a], mods[a]);
@@ -752,8 +932,12 @@ pub fn sheet_with(
         c.armor.as_deref().unwrap_or("none"),
         if c.shield { " + 盾牌" } else { "" }
     );
-    for e in &c.equipment {
+    for e in c.all_items(Some(book)) {
         md += &format!("- {e}\n");
+    }
+    let gold = c.class_gold + c.background_pack(Some(book)).gold;
+    if gold > 0 {
+        md += &format!("- 起始金币：{gold} gp（`chargen confirm` 时记入钱袋）\n");
     }
     md += "\n## 法术\n\n";
     if c.spells.is_empty() {

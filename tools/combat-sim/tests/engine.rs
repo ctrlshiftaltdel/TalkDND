@@ -2217,3 +2217,54 @@ fn long_rest_ends_concentration() {
     .unwrap();
     assert!(!state.concentration.contains_key(&name));
 }
+
+#[test]
+fn great_weapon_fighting_rerolls_ones_and_twos_once() {
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
+    // to-hit 15; damage dice 1 -> 5, 2 -> 1 (kept even though it is low), 6 stays.
+    let mut rng = ScriptedRng::new(&[15, 1, 5, 2, 1]);
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Striker A",
+        "Brute A",
+        "gwf-blade",
+        &AttackOptions::default(),
+        &mut rng,
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(hp(&state, "Brute A"), 40 - (5 + 1 + 2));
+    assert!(
+        log.iter().any(|line| line.contains("2d6(1→5,2→1)+2=8")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn reroll_dice_expr_doubles_on_crit() {
+    let expr: combat_sim::dice::DiceExpr = "1d12+3".parse().unwrap();
+    let mut rng = ScriptedRng::new(&[2, 9, 7]);
+    let r = expr.roll_rerolling(2, true, &mut rng);
+    assert_eq!(r.total, 9 + 7 + 3);
+    assert_eq!(r.dice, vec![9, 7]);
+}
+
+#[test]
+fn great_weapon_fighting_2024_treats_low_dice_as_three() {
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
+    let mut rng = ScriptedRng::new(&[15, 1, 6]);
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Striker A",
+        "Brute A",
+        "gwf-2024",
+        &AttackOptions::default(),
+        &mut rng,
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(hp(&state, "Brute A"), 40 - (3 + 6 + 2));
+    assert!(log.iter().any(|l| l.contains("2d6(1→3,6)+2=11")), "{log:?}");
+}

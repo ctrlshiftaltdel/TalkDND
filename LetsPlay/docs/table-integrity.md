@@ -42,13 +42,13 @@
 
 ## 2. 存档校验（`integrity.yaml`）
 
-玩家也能看到存档文件，所以有可能直接改数据。每次程序写入存档后，都会在 `Saves/<存档>/integrity.yaml` 里记录关键文件的指纹：`progress.yaml`、`Characters/*.md`、`NPCs/*.md`（`_` 开头的除外）、`combat/*.yaml`、`reveals.yaml`。
+玩家也能看到存档文件，所以有可能直接改数据。每次程序写入存档后，都会在 `Saves/<存档>/integrity.yaml` 里记录关键文件的指纹：`progress.yaml`、`Characters/*.md`、`NPCs/*.md`（`_` 开头的除外）、`combat/*.yaml`、`sheets/*.yaml`、`reveals.yaml`。
 
 - `talkdnd start` 和 `talkdnd check` 会比对指纹。文件被工具以外的方式改过时，就给出警告。
 - 旧存档没有 `integrity.yaml`：第一次运行时会以当前状态为基准自动创建，不改其他任何文件。
 - 一个文件已经被手改过，之后程序再写入它，它仍然算“手改”，直到 DM 认可为止。这样程序写入就没法把手改洗白。
 
-**DM 自己手改了角色卡**（桌规第 6 条：HP、法术位等）：改完先在日志记录，再运行
+**DM 不手改角色卡**：HP、法术位、物品等都用 `talkdnd char`（自动记日志、更新指纹）。万一手改了（比如修正程序做不到的东西），改完先在日志记录，再运行
 
 ```
 $T integrity accept --reason "DM 更新 Yier HP 17→9（受伤，已记日志）"
