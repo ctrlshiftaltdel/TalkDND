@@ -18,6 +18,7 @@ use anyhow::{bail, Context, Result};
 use combat_sim::fsutil::atomic_write;
 use combat_sim::party::PartyState;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -183,6 +184,17 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     // Snapshot before any write: after the migration only files that were
     // clean before are recorded, so pre-existing hand edits stay flagged.
     let before = combat_sim::integrity::snapshot(save);
+    // Files the DM already edited (or added/removed) are not rewritten by the
+    // migration: a serde round-trip would drop unknown fields, comments and
+    // formatting. They stay on disk exactly as they are and keep loading
+    // because version 0 is accepted.
+    let dirty: BTreeSet<String> = match combat_sim::integrity::load(save)? {
+        Some(manifest) => combat_sim::integrity::changes_against(&manifest, &before)
+            .into_iter()
+            .map(|change| change.path().to_string())
+            .collect(),
+        None => BTreeSet::new(),
+    };
     let slot = save
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -193,7 +205,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     if from < 2 {
         report.sheets = migrate_sheets(save, root)?;
     }
-    add_versions(save)?;
+    add_versions(save, &dirty)?;
 
     let mut meta = load(save)?.unwrap_or_default();
     meta.schema = CURRENT_SCHEMA;
@@ -285,18 +297,21 @@ fn migrate_sheets(save: &Path, root: &Path) -> Result<Vec<String>> {
 }
 
 /// 2→3: rewrite the YAML files through their stores so they carry `version: 1`
-/// (additive; older files still load).
-fn add_versions(save: &Path) -> Result<()> {
-    if Progress::path(save).is_file() {
+/// (additive; older files still load). Files already dirty in the integrity
+/// manifest are left untouched so hand edits, comments and unknown fields are
+/// not lost; they stay flagged and version 0 is still accepted.
+fn add_versions(save: &Path, dirty: &BTreeSet<String>) -> Result<()> {
+    if Progress::path(save).is_file() && !dirty.contains("progress.yaml") {
         let progress = Progress::load(save)?;
         progress.store(save)?;
     }
-    if save.join(reveal::FILE).is_file() {
+    if save.join(reveal::FILE).is_file() && !dirty.contains(reveal::FILE) {
         let ledger = reveal::load(save)?;
         reveal::store(save, &ledger)?;
     }
     let party = save.join("combat").join(combat_sim::party::FILE_NAME);
-    if party.is_file() {
+    let party_rel = format!("combat/{}", combat_sim::party::FILE_NAME);
+    if party.is_file() && !dirty.contains(&party_rel) {
         let state = PartyState::load(&party)?;
         state.save(&party)?;
     }
@@ -423,6 +438,45 @@ mod tests {
                 .any(|c| c.path() == "progress.yaml" && c.describe().contains("changed")),
             "{changes:?}"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migration_skips_dirty_ledgers_and_versions_clean_ones() {
+        let root = root("dirty-ledger");
+
+        // Clean ledger: the migration rewrites it through the store.
+        let clean = root.join("Saves/2030-03-03-01");
+        fs::create_dir_all(clean.join("Sessions")).unwrap();
+        fs::write(clean.join("Sessions/log.md"), "# log\n").unwrap();
+        fs::write(clean.join("progress.yaml"), "xp: {hero: 0}\n").unwrap();
+        combat_sim::integrity::ensure(&clean).unwrap();
+        ensure(&clean, &root, false).unwrap();
+        let text = fs::read_to_string(clean.join("progress.yaml")).unwrap();
+        assert!(text.contains("version: 1"), "{text}");
+
+        // Hand-edited ledger: byte-identical, still flagged, version 0 is fine.
+        let dirty = root.join("Saves/2030-03-03-02");
+        fs::create_dir_all(dirty.join("Sessions")).unwrap();
+        fs::write(dirty.join("Sessions/log.md"), "# log\n").unwrap();
+        fs::write(dirty.join("progress.yaml"), "xp: {hero: 0}\n").unwrap();
+        combat_sim::integrity::ensure(&dirty).unwrap();
+        let edited = "# DM comment: keep this line\nxp: {hero: 0}\nhouse-rule: keep me\n";
+        fs::write(dirty.join("progress.yaml"), edited).unwrap();
+        ensure(&dirty, &root, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(dirty.join("progress.yaml")).unwrap(),
+            edited
+        );
+        let changes = combat_sim::integrity::changes(&dirty).unwrap();
+        assert!(
+            changes
+                .iter()
+                .any(|c| c.path() == "progress.yaml" && c.describe().contains("changed")),
+            "{changes:?}"
+        );
+        // The hand-edited ledger still parses with the old (0) version.
+        crate::progress::Progress::load(&dirty).unwrap();
         let _ = fs::remove_dir_all(&root);
     }
 
