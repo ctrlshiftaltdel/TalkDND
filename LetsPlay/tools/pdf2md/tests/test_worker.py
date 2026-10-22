@@ -20,6 +20,17 @@ def _book(root, manifest):
     return d
 
 
+def test_current_save_ignores_backup_and_hidden_directories(tmp_path):
+    saves = tmp_path / "Saves"
+    for name in ["2030-01-01-01", "2030-01-02-01", "_backups", ".cache"]:
+        (saves / name).mkdir(parents=True, exist_ok=True)
+    assert worker.current_save(str(tmp_path)) == str(saves / "2030-01-02-01")
+    only_internal = tmp_path / "only-internal"
+    for name in ["_backups", ".cache", "not-a-slot"]:
+        (only_internal / "Saves" / name).mkdir(parents=True, exist_ok=True)
+    assert worker.current_save(str(only_internal)) is None
+
+
 @pytest.mark.parametrize("data", ["[]", "null", '"oops"', '{"page_count": 2, "pages": []}'])
 def test_status_reports_wrong_shape_manifest_and_exits_zero(tmp_path, capsys, data):
     root = tmp_path / "LetsPlay"

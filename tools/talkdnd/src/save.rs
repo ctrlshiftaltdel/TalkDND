@@ -48,6 +48,9 @@ pub fn slots(root: &Path) -> Result<Vec<String>> {
         for e in fs::read_dir(&dir)? {
             let e = e?;
             let n = e.file_name().to_string_lossy().to_string();
+            if n.starts_with('_') || n.starts_with('.') {
+                continue;
+            }
             if e.path().is_dir() && is_slot_name(&n) {
                 v.push(n);
             }
@@ -61,6 +64,9 @@ pub fn slots(root: &Path) -> Result<Vec<String>> {
 pub fn resolve_slot(root: &Path, slot: Option<&str>) -> Result<PathBuf> {
     match slot {
         Some(s) => {
+            if s.starts_with('_') || s.starts_with('.') {
+                bail!("`{s}` is not a save slot (names starting with `_` or `.` are internal)");
+            }
             let p = root.join("Saves").join(s);
             if !p.is_dir() {
                 bail!("save {s} not found; saves: {}", slots(root)?.join(", "));
@@ -156,4 +162,39 @@ pub fn last_checkpoint(text: &str) -> Option<String> {
         .map(|i| start + 1 + i)
         .unwrap_or(lines.len());
     Some(lines[start..end].join("\n").trim_end().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backups_and_hidden_dirs_are_not_save_slots() {
+        let root = std::env::temp_dir().join(format!("talkdnd-slots-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for slot in [
+            "2030-01-02-01",
+            "2030-01-02-02",
+            "_backups/2030-01-02-01-20300101-120000-schema1",
+            ".cache",
+            "not-a-slot",
+        ] {
+            fs::create_dir_all(root.join("Saves").join(slot)).unwrap();
+        }
+        assert_eq!(
+            slots(&root).unwrap(),
+            vec!["2030-01-02-01".to_string(), "2030-01-02-02".to_string()]
+        );
+        assert_eq!(
+            resolve_slot(&root, None).unwrap(),
+            root.join("Saves/2030-01-02-02")
+        );
+        assert_eq!(
+            next_slot_name(&root, "2030-01-02").unwrap(),
+            "2030-01-02-03"
+        );
+        assert!(resolve_slot(&root, Some("_backups")).is_err());
+        assert!(resolve_slot(&root, Some(".cache")).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
 }

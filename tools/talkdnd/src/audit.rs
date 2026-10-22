@@ -374,6 +374,18 @@ mod tests {
     }
 
     #[test]
+    fn backup_and_hidden_directories_are_not_audited() {
+        let d = save_dir("backups");
+        fs::create_dir_all(d.join("_backups/Characters")).unwrap();
+        fs::write(d.join("_backups/Characters/evil.md"), "hp: 999\n").unwrap();
+        fs::create_dir_all(d.join(".cache")).unwrap();
+        fs::write(d.join(".cache/progress.yaml"), "xp: {tess: 999}\n").unwrap();
+        let r = audit(&d).unwrap();
+        assert!(r.clean(), "{:?}", r.lines());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn unexplained_changes_are_reported_until_accepted() {
         let d = save_dir("hand");
         audit(&d).unwrap();

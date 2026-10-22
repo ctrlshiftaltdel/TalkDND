@@ -351,12 +351,15 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     } else {
         "skipped (--no-pdf2md)".into()
     };
+    let migration = crate::migrate::ensure(save, root, false)?;
+    let default_notes = crate::update::sync_defaults(root)?;
+    let update_notes = crate::update::sync_installed_files(root)?;
     let log = save::latest_log(save);
     let mut warnings = Vec::new();
     let mut d = String::new();
     d += &format!("# 接档摘要：{slot}\n\n");
     d += &format!(
-        "- 规则：**{rs}**（只用 `Rules/{rs}/` 与 `Rules/rulings.md`、`Rules/rulings-{rs}.md`）\n"
+        "- 规则：**{rs}**（只用 `Rules/{rs}/` 与 `Rules/rulings.md`、`Rules/rulings-{rs}.md`；出厂默认在 `Rules/defaults/`，`Rules/` 下的是本机副本）\n"
     );
     let name = campaign_name(save);
     if !name.is_empty() {
@@ -380,6 +383,16 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         if let Some((step, label)) = c.next_step() {
             d += &format!("\n## 建卡未完成\n\n下一步：`{step}` — {label}。按 AGENTS.md「开新局」流程继续，`talkdnd chargen status` 看详情。\n");
         }
+    }
+    d += "\n## 存档结构\n\n";
+    for line in migration.lines() {
+        d += &format!("- {line}\n");
+    }
+    for line in &default_notes {
+        d += &format!("- {line}\n");
+    }
+    for line in &update_notes {
+        d += &format!("- {line}\n");
     }
     d += "\n## 最后存档点\n\n";
     let cp = log

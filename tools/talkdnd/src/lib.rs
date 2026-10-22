@@ -9,12 +9,14 @@ pub mod check;
 pub mod classdata;
 pub mod data;
 pub mod handout;
+pub mod migrate;
 pub mod npc;
 pub mod options;
 pub mod progress;
 pub mod reveal;
 pub mod save;
 pub mod start;
+pub mod update;
 
 use anyhow::{bail, Context, Result};
 use chargen::Creation;
@@ -62,6 +64,12 @@ enum Cmd {
         /// Slot date (default: today, local time)
         #[arg(long)]
         date: Option<String>,
+    },
+    /// Migrate an old save's on-disk schema (backs the whole save up first)
+    Migrate {
+        /// Only report what would be migrated; write nothing
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Character creation (player decides every step)
     Chargen {
@@ -401,6 +409,7 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     let tracked = match &cli.cmd {
         Cmd::Start { .. }
         | Cmd::New { .. }
+        | Cmd::Migrate { .. }
         | Cmd::Integrity { .. }
         | Cmd::Options { .. }
         | Cmd::Data { .. } => None,
@@ -524,6 +533,13 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             let d = start::digest(&root, &s, &start::Options { pdf2md: !no_pdf2md })?;
             print!("{d}");
+        }
+        Cmd::Migrate { dry_run } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let report = migrate::ensure(&s, &root, dry_run)?;
+            for line in report.lines() {
+                println!("{line}");
+            }
         }
         Cmd::New {
             ruleset,
@@ -771,7 +787,11 @@ fn new_save(
         ..Default::default()
     };
     chargen::store(&dir, &c)?;
+    migrate::init(&dir)?;
     println!("created Saves/{slot}");
+    for line in update::sync_defaults(root)? {
+        println!("{line}");
+    }
     print_next(&c);
     Ok(())
 }

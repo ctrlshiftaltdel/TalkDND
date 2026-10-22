@@ -266,6 +266,7 @@ bin/combat-sim
 ";
         assert!(escapes_in("LetsPlay/AGENTS.md", text).is_empty());
         assert!(escapes_in("LetsPlay/Rules/rulings.md", text).is_empty());
+        assert!(escapes_in("LetsPlay/Rules/defaults/rulings.md", text).is_empty());
     }
 
     #[test]

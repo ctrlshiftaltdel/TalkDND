@@ -26,6 +26,9 @@ pub const DEFAULT_DYING_CONDITION: &str = concat!("un", "conscious");
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PartyState {
+    /// On-disk schema; 0 and 1 are compatible, newer versions are refused.
+    #[serde(default)]
+    pub version: u32,
     /// Keyed by creature id.
     #[serde(default)]
     pub members: BTreeMap<String, Member>,
@@ -61,13 +64,24 @@ impl PartyState {
         }
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        serde_norway::from_str(&text).with_context(|| format!("invalid {}", path.display()))
+        let state: Self =
+            serde_norway::from_str(&text).with_context(|| format!("invalid {}", path.display()))?;
+        if state.version > 1 {
+            bail!(
+                "{}: unsupported party-state schema version {} (this combat-sim supports 1); update talkdnd",
+                path.display(),
+                state.version
+            );
+        }
+        Ok(state)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
+        let mut current = self.clone();
+        current.version = 1;
         let text = format!(
             "# TalkDND party state (written by combat-sim; edit with care)\n{}",
-            serde_norway::to_string(self)?
+            serde_norway::to_string(&current)?
         );
         let save = crate::integrity::save_of_combat_file(path);
         let before = save.as_deref().map(crate::integrity::snapshot);
@@ -363,6 +377,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(hit_die_of(&creature), None);
+    }
+
+    #[test]
+    fn newer_party_state_schema_is_refused_and_save_writes_version_one() {
+        let d = std::env::temp_dir().join(format!("party-schema-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let p = d.join(FILE_NAME);
+        fs::write(&p, "version: 99\nmembers: {}\n").unwrap();
+        let err = PartyState::load(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("party-state.yaml") && err.contains("99"),
+            "{err}"
+        );
+        PartyState::default().save(&p).unwrap();
+        let text = fs::read_to_string(&p).unwrap();
+        assert!(text.contains("version: 1"), "{text}");
+        let _ = fs::remove_dir_all(&d);
     }
 
     fn member(hp: i32) -> Member {

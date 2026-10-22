@@ -210,6 +210,192 @@ fn checkpoint_section_is_extracted() {
     );
 }
 
+fn v1_save(r: &Path) -> PathBuf {
+    let save = r.join("Saves/2030-06-07-01");
+    for dir in ["Characters", "NPCs", "Sessions", "combat"] {
+        fs::create_dir_all(save.join(dir)).unwrap();
+    }
+    fs::write(
+        save.join("combat/campaign.yaml"),
+        "name: X\nruleset: \"2024\"\nparty: []\n",
+    )
+    .unwrap();
+    fs::write(
+        save.join("Characters/hero.md"),
+        "# Hero\n\n- **等级**：战士 2\n\n```combat yaml\nid: hero\nname: Hero\nkind: pc\nside: party\nlevel: 2\nac: 16\nhp: 20\nspeed: {walk: 30}\nprof: 2\nabilities: {str: 16, dex: 10, con: 14, int: 10, wis: 10, cha: 12}\nnotes: \"fighter 2\"\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        save.join("Sessions/2030-06-07-session-00-setup.md"),
+        "# log\n",
+    )
+    .unwrap();
+    fs::write(save.join("progress.yaml"), "xp: {hero: 0}\n").unwrap();
+    save
+}
+
+#[test]
+fn start_migrates_a_v1_save_once_and_checks_clean() {
+    let r = root("migrate");
+    let save = v1_save(&r);
+    let out = ok(&r, &["start"]);
+    assert!(out.contains("存档结构"), "{out}");
+    assert!(
+        out.contains("schema 1 → 3") || out.contains("schema 1→3"),
+        "{out}"
+    );
+    assert!(save.join("sheets/hero.yaml").is_file());
+    let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
+    assert!(meta.contains("schema: 3"), "{meta}");
+    let backups: Vec<PathBuf> = fs::read_dir(r.join("Saves/_backups"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(backups.len(), 1);
+    assert!(backups[0].join("Characters/hero.md").is_file());
+    let log = fs::read_to_string(save.join("Sessions/2030-06-07-session-00-setup.md")).unwrap();
+    assert!(log.contains("存档结构迁移 schema 1→3"), "{log}");
+    assert!(ok(&r, &["check"]).contains("integrity: OK"));
+    assert!(ok(&r, &["start"]).contains("无需迁移"));
+    assert_eq!(fs::read_dir(r.join("Saves/_backups")).unwrap().count(), 1);
+    let after = fs::read_to_string(save.join("Sessions/2030-06-07-session-00-setup.md")).unwrap();
+    assert_eq!(after.lines().count(), log.lines().count());
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn a_save_schema_newer_than_talkdnd_is_refused() {
+    let r = root("schema99");
+    ok(&r, &["new", "--date", "2030-06-08"]);
+    let save = r.join("Saves/2030-06-08-01");
+    fs::write(save.join("save-meta.yaml"), "schema: 99\ntool: future\n").unwrap();
+    let (good, out) = run(&r, &["start"]);
+    assert!(
+        !good && out.contains("99") && out.contains("update talkdnd"),
+        "{out}"
+    );
+    assert!(!r.join("Saves/_backups").exists());
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn migrate_command_dry_run_writes_nothing_then_applies_once() {
+    let r = root("migratecmd");
+    let save = v1_save(&r);
+    let out = ok(&r, &["migrate", "--dry-run"]);
+    assert!(out.contains("dry-run"), "{out}");
+    assert!(!save.join("save-meta.yaml").exists());
+    assert!(!save.join("sheets/hero.yaml").exists());
+    let out = ok(&r, &["migrate"]);
+    assert!(out.contains("迁移完成"), "{out}");
+    assert!(save.join("save-meta.yaml").is_file());
+    assert!(save.join("sheets/hero.yaml").is_file());
+    assert!(ok(&r, &["migrate"]).contains("无需迁移"));
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn migration_does_not_launder_a_hand_edit() {
+    let r = root("mighand");
+    ok(&r, &["new", "--date", "2030-06-09"]);
+    let save = r.join("Saves/2030-06-09-01");
+    ok(&r, &["loot", "add", "--gp", "5", "rope", "--to", "party"]);
+    assert!(ok(&r, &["check"]).contains("integrity: OK"));
+    fs::remove_file(save.join("save-meta.yaml")).unwrap();
+    let p = save.join("progress.yaml");
+    let text = fs::read_to_string(&p)
+        .unwrap()
+        .replace("cp: 500", "cp: 900000");
+    fs::write(&p, text).unwrap();
+    let out = ok(&r, &["start"]);
+    assert!(
+        out.contains("schema 2 → 3") || out.contains("schema 2→3"),
+        "{out}"
+    );
+    let out = ok(&r, &["check"]);
+    assert!(
+        out.contains("progress.yaml: changed outside the tools"),
+        "{out}"
+    );
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn rulings_defaults_are_copied_once_and_never_overwrite_the_dm_copy() {
+    let r = root("defaults");
+    fs::create_dir_all(r.join("Rules/defaults")).unwrap();
+    fs::write(r.join("Rules/defaults/rulings.md"), "默认一\n").unwrap();
+    ok(&r, &["new", "--date", "2030-06-10"]);
+    assert_eq!(
+        fs::read_to_string(r.join("Rules/rulings.md")).unwrap(),
+        "默认一\n"
+    );
+    fs::write(r.join("Rules/rulings.md"), "我的裁定\n").unwrap();
+    fs::write(r.join("Rules/defaults/rulings.md"), "默认二\n").unwrap();
+    let out = ok(&r, &["start"]);
+    assert!(out.contains("请手动合并"), "{out}");
+    assert_eq!(
+        fs::read_to_string(r.join("Rules/rulings.md")).unwrap(),
+        "我的裁定\n"
+    );
+    assert!(r.join(".talkdnd/state.yaml").is_file());
+    let out = ok(&r, &["start"]);
+    assert!(!out.contains("请手动合并"), "{out}");
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn start_moves_obsolete_shipped_files_but_keeps_user_data() {
+    let r = root("obsolete");
+    ok(&r, &["new", "--date", "2030-06-12"]);
+    fs::write(r.join("old-shipped.md"), "old body\n").unwrap();
+    fs::write(r.join("Saves/keep.md"), "save body\n").unwrap();
+    fs::create_dir_all(r.join(".talkdnd")).unwrap();
+    let old_sha = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"old body\n");
+        format!("{:x}", h.finalize())
+    };
+    fs::write(
+        r.join(".talkdnd/installed-files.txt"),
+        format!("{old_sha}  old-shipped.md\n"),
+    )
+    .unwrap();
+    fs::write(r.join(".talkdnd-files.txt"), "00  README.md\n").unwrap();
+    let out = ok(&r, &["start"]);
+    assert!(!r.join("old-shipped.md").exists());
+    assert!(r.join("Saves/keep.md").is_file());
+    assert!(out.contains("旧版本文件已移走"), "{out}");
+    assert!(fs::read_dir(r.join(".talkdnd/obsolete"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .join("old-shipped.md")
+        .is_file());
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn a_newer_integrity_manifest_is_refused() {
+    let r = root("man99");
+    ok(&r, &["new", "--date", "2030-06-11"]);
+    let save = r.join("Saves/2030-06-11-01");
+    let p = save.join("integrity.yaml");
+    let text = fs::read_to_string(&p)
+        .unwrap()
+        .replacen("version: 1", "version: 99", 1);
+    fs::write(&p, text).unwrap();
+    let (good, out) = run(&r, &["check"]);
+    assert!(
+        !good && out.contains("integrity.yaml") && out.contains("99"),
+        "{out}"
+    );
+    let _ = fs::remove_dir_all(&r);
+}
+
 #[test]
 fn integrity_reconcile_and_reveal() {
     let r = root("integrity");

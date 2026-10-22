@@ -47,6 +47,9 @@ pub struct Purse {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Progress {
+    /// On-disk schema; 0 and 1 are compatible, newer versions are refused.
+    #[serde(default)]
+    pub version: u32,
     #[serde(default)]
     pub xp: BTreeMap<String, i64>,
     #[serde(default)]
@@ -250,12 +253,22 @@ impl Progress {
         if !p.is_file() {
             return Ok(Self::default());
         }
-        serde_norway::from_str(&fs::read_to_string(&p)?)
-            .with_context(|| format!("{} is not valid", p.display()))
+        let progress: Self = serde_norway::from_str(&fs::read_to_string(&p)?)
+            .with_context(|| format!("{} is not valid", p.display()))?;
+        if progress.version > 1 {
+            bail!(
+                "{}: unsupported progress schema version {} (this talkdnd supports 1); update talkdnd",
+                p.display(),
+                progress.version
+            );
+        }
+        Ok(progress)
     }
     pub fn store(&self, save: &Path) -> Result<()> {
         let head = "# TalkDND progress ledger: XP per character (hybrid advancement, see xp_log), coins (as cp) and items per character and the shared `party` pool.\n# Edit with `talkdnd xp` / `talkdnd loot`; hand edits are flagged by `talkdnd check` (accept with `talkdnd integrity accept --reason`).\n";
-        let text = head.to_string() + &serde_norway::to_string(self)?;
+        let mut current = self.clone();
+        current.version = 1;
+        let text = head.to_string() + &serde_norway::to_string(&current)?;
         atomic_write(Self::path(save), text.as_bytes())?;
         Ok(())
     }
@@ -1512,5 +1525,21 @@ mod tests {
             assert!(xp_add(&d, &aw).is_err(), "level {bad}");
             let _ = fs::remove_dir_all(&d);
         }
+    }
+
+    #[test]
+    fn newer_progress_schema_is_refused_and_store_writes_version_one() {
+        let d = save_dir("schema");
+        let p = Progress::path(&d);
+        fs::write(&p, "version: 99\nxp: {tess: 0}\n").unwrap();
+        let err = Progress::load(&d).unwrap_err().to_string();
+        assert!(err.contains("progress.yaml") && err.contains("99"), "{err}");
+        let mut progress = Progress::default();
+        progress.xp.insert("tess".into(), 50);
+        progress.store(&d).unwrap();
+        let text = fs::read_to_string(&p).unwrap();
+        assert!(text.contains("version: 1"), "{text}");
+        assert_eq!(Progress::load(&d).unwrap().xp["tess"], 50);
+        let _ = fs::remove_dir_all(&d);
     }
 }

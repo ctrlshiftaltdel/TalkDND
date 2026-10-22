@@ -509,13 +509,28 @@ pub fn store(save_dir: &Path, cf: &CharFile) -> Result<()> {
     }
     let p = path(save_dir, &cf.id);
     fs::create_dir_all(p.parent().unwrap())?;
+    let mut current = cf.clone();
+    current.version = 1;
     let text = format!(
         "# TalkDND character data (source of truth). Change it with `talkdnd char {} …`; never by hand.\n{}",
         cf.id,
-        serde_norway::to_string(cf)?
+        serde_norway::to_string(&current)?
     );
     atomic_write(&p, text.as_bytes())?;
     Ok(())
+}
+
+fn parse_char_file(p: &Path, text: &str) -> Result<CharFile> {
+    let cf: CharFile =
+        serde_norway::from_str(text).with_context(|| format!("{} is not valid", p.display()))?;
+    if cf.version > 1 {
+        bail!(
+            "{}: unsupported character schema version {} (this talkdnd supports 1); update talkdnd",
+            p.display(),
+            cf.version
+        );
+    }
+    Ok(cf)
 }
 
 /// Load the structured file, migrating the Markdown sheet on first use. The
@@ -531,8 +546,7 @@ pub fn load(save_dir: &Path, who: &str, book: &Book) -> Result<(CharFile, bool)>
     if !p.is_file() {
         return Ok((migrate(save_dir, s, book)?, true));
     }
-    let mut cf: CharFile = serde_norway::from_str(&fs::read_to_string(&p)?)
-        .with_context(|| format!("{} is not valid", p.display()))?;
+    let mut cf: CharFile = parse_char_file(&p, &fs::read_to_string(&p)?)?;
     let text = fs::read_to_string(&s.file).unwrap_or_default();
     if text.contains(BEGIN) {
         let (_, block, tail) = split_md(&text);
@@ -1016,10 +1030,8 @@ pub fn from_chargen(
         .context("written sheet not found")?;
     let fresh = migrate(save_dir, s, book)?;
     let existing = if path(save_dir, &s.id).is_file() {
-        Some(
-            serde_norway::from_str::<CharFile>(&fs::read_to_string(path(save_dir, &s.id))?)
-                .with_context(|| format!("{} is not valid", path(save_dir, &s.id).display()))?,
-        )
+        let p = path(save_dir, &s.id);
+        Some(parse_char_file(&p, &fs::read_to_string(&p)?)?)
     } else {
         None
     };
@@ -2459,5 +2471,28 @@ mod tests {
         assert!(armor_of("half plate").unwrap().0 == "half-plate");
         assert!(armor_of("rope").is_none());
         assert_eq!(add_flat("1d8+3", 2), "1d8+5");
+    }
+
+    #[test]
+    fn a_newer_character_schema_is_refused_with_the_file_name() {
+        let d = std::env::temp_dir().join(format!("talkdnd-schema-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("Characters")).unwrap();
+        fs::create_dir_all(d.join("sheets")).unwrap();
+        fs::write(
+            d.join("Characters/tess.md"),
+            "# Tess\n\n```combat yaml\nid: tess\nname: Tess\nkind: pc\n```\n",
+        )
+        .unwrap();
+        fs::write(
+            d.join("sheets/tess.yaml"),
+            "version: 99\nid: tess\nname: Tess\nfile: Characters/tess.md\nruleset: \"2024\"\n",
+        )
+        .unwrap();
+        let err = load(&d, "tess", &Book::srd("2024"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("tess.yaml") && err.contains("99"), "{err}");
+        let _ = fs::remove_dir_all(&d);
     }
 }
