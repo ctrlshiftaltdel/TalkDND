@@ -7,9 +7,11 @@
 use crate::classdata::{self, Book};
 use crate::{check, data, options, save};
 use anyhow::{anyhow, bail, Context, Result};
+use combat_sim::content::schema::ResourceDef;
 use combat_sim::dice::DiceRng;
 use combat_sim::fsutil::atomic_write;
 use combat_sim::party::{Member, PartyState};
+use combat_sim::state::ResourceState;
 use serde::{Deserialize, Serialize};
 use serde_norway::{Mapping, Value};
 use std::collections::BTreeMap;
@@ -552,15 +554,27 @@ fn member_for(ps: &mut PartyState, cf: &CharFile) -> Result<()> {
             m.max_hp = max;
             m.hp = m.hp.min(max);
         }
-        // Resource maxima follow the sheet.
+        // Resource maxima and recharge follow the sheet; resources gained on
+        // level-up are added without disturbing the current values of old ones.
         if let Some(Value::Mapping(res)) = cf.combat.get("resources") {
             for (k, v) in res {
-                let (Some(k), Some(mx)) = (k.as_str(), get_i(v, "max")) else {
+                let Some(k) = k.as_str() else {
                     continue;
                 };
-                if let Some(r) = m.resources.get_mut(k) {
-                    r.max = mx as i32;
-                    r.current = r.current.min(r.max);
+                let Ok(def) = serde_norway::from_value::<ResourceDef>(v.clone()) else {
+                    continue;
+                };
+                match m.resources.get_mut(k) {
+                    Some(r) => {
+                        r.max = def.max;
+                        r.current = r.current.clamp(0, r.max);
+                        r.recharge = def.recharge;
+                        r.short_rest_regain = def.short_rest_regain;
+                    }
+                    None => {
+                        m.resources
+                            .insert(k.to_string(), ResourceState::from_def(&def));
+                    }
                 }
             }
         }
@@ -1350,6 +1364,58 @@ fn condition(name: &str) -> Result<combat_sim::state::ActiveCondition> {
     .map_err(|e| anyhow!("{e}"))
 }
 
+/// The campaign's dying conditions from `Rules/combat/common/rules.yaml`.
+/// Falls back to `unconscious` when the file or key is absent.
+fn dying_conditions(save_dir: &Path) -> Vec<String> {
+    let fallback = || vec!["unconscious".to_string()];
+    let Some(root) = save_dir.parent().and_then(|p| p.parent()) else {
+        return fallback();
+    };
+    let path = root.join("Rules/combat/common/rules.yaml");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return fallback();
+    };
+    let Ok(value) = serde_norway::from_str::<Value>(&text) else {
+        return fallback();
+    };
+    let Some(rules) = value.get("rules") else {
+        return fallback();
+    };
+    match rules.get("dying_conditions") {
+        Some(Value::Sequence(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(|name| name.trim().to_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect(),
+        _ => fallback(),
+    }
+}
+
+/// Keep the party-state conditions in step with HP: dying conditions at 0 HP,
+/// none (and fresh death saves) above 0.
+fn sync_hp_conditions(m: &mut Member, dying: &[String]) -> Result<()> {
+    if m.hp > 0 {
+        m.conditions.retain(|active| {
+            !dying
+                .iter()
+                .any(|name| active.condition.eq_ignore_ascii_case(name))
+        });
+        m.death_saves = Default::default();
+    } else {
+        for name in dying {
+            if !m
+                .conditions
+                .iter()
+                .any(|active| active.condition.eq_ignore_ascii_case(name))
+            {
+                m.conditions.push(condition(name)?);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Apply a background from SRD or the local book import: feature/feat,
 /// tools, languages, equipment items and gold.
 fn apply_background(
@@ -1449,6 +1515,7 @@ fn apply(
     out: &mut Vec<String>,
 ) -> Result<String> {
     let id = cf.id.clone();
+    let dying = dying_conditions(save_dir);
     let m = ps
         .members
         .get_mut(&id)
@@ -1473,6 +1540,7 @@ fn apply(
                 m.dead = true;
                 m.death_saves.dead = true;
             }
+            sync_hp_conditions(m, &dying)?;
             format!(
                 "受到 {amount} 伤害{}，HP {before}→{}{}",
                 if from_temp > 0 {
@@ -1499,6 +1567,7 @@ fn apply(
             if before <= 0 && m.hp > 0 {
                 m.death_saves = Default::default();
             }
+            sync_hp_conditions(m, &dying)?;
             format!("治疗 {amount}，HP {before}→{}", m.hp)
         }
         Op::Temp { amount } => {
@@ -1542,7 +1611,7 @@ fn apply(
                     m.short_rest(hd, rng, &mut log)?;
                 }
                 "long" | "长休" => {
-                    m.long_rest(&mut log);
+                    m.long_rest(&dying, &mut log);
                     if cf.exhaustion > 0 {
                         cf.exhaustion -= 1;
                         log.push(format!("exhaustion → {}", cf.exhaustion));
@@ -1550,6 +1619,7 @@ fn apply(
                 }
                 _ => bail!("rest short|long"),
             }
+            sync_hp_conditions(m, &dying)?;
             format!(
                 "{}休息：{}（HP {}/{}）",
                 if kind.starts_with('s') || kind == "短休" {
@@ -1654,6 +1724,7 @@ fn apply(
                 ds.dead = true;
                 m.dead = true;
             }
+            sync_hp_conditions(m, &dying)?;
             format!(
                 "{text}（HP {}，{}成功/{}失败{}）",
                 m.hp,
@@ -2155,6 +2226,127 @@ mod tests {
         let back: Value = serde_norway::from_str(&y).unwrap();
         assert_eq!(back, c.combat);
         let _: combat_sim::content::schema::Creature = serde_norway::from_value(back).unwrap();
+    }
+
+    #[test]
+    fn hp_transitions_add_and_remove_dying_conditions() {
+        struct FixedRng(u32);
+        impl DiceRng for FixedRng {
+            fn roll_die(&mut self, sides: u32) -> u32 {
+                assert_eq!(sides, 20);
+                self.0
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!("talkdnd-dying-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let d = root.join("Saves/2030-01-01-01");
+        fs::create_dir_all(&d).unwrap();
+        fs::create_dir_all(root.join("Rules/combat/common")).unwrap();
+        fs::write(
+            root.join("Rules/combat/common/rules.yaml"),
+            "rules:\n  dying_conditions: [unconscious]\n",
+        )
+        .unwrap();
+        let book = Book::srd("2014");
+        let mut cf = cf("2014");
+        let mut ps = PartyState::default();
+        ps.members.insert(
+            "tess".into(),
+            Member {
+                name: "Tess".into(),
+                hp: 12,
+                max_hp: 12,
+                ..Default::default()
+            },
+        );
+        let mut out = Vec::new();
+        let mut rng = FixedRng(1);
+
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Damage { amount: 12 },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ps.members["tess"].hp, 0);
+        assert!(ps.members["tess"]
+            .conditions
+            .iter()
+            .any(|c| c.condition == "unconscious"));
+
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Heal { amount: 5 },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ps.members["tess"].hp, 5);
+        assert!(ps.members["tess"].conditions.is_empty());
+
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Damage { amount: 5 },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::DeathSave {
+                result: "roll".into(),
+            },
+            &mut FixedRng(20),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ps.members["tess"].hp, 1);
+        assert!(ps.members["tess"].conditions.is_empty());
+
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Damage { amount: 5 },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        assert!(ps.members["tess"]
+            .conditions
+            .iter()
+            .any(|c| c.condition == "unconscious"));
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Rest {
+                kind: "long".into(),
+                hd: 0,
+            },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ps.members["tess"].hp, 12);
+        assert!(ps.members["tess"].conditions.is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

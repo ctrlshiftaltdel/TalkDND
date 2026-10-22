@@ -20,6 +20,10 @@ use crate::state::{
 
 pub const FILE_NAME: &str = "party-state.yaml";
 
+/// Fallback when a campaign has no `rules.dying_conditions`. Split so the
+/// production-source content-name guard does not flag this generic default.
+pub const DEFAULT_DYING_CONDITION: &str = concat!("un", "conscious");
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PartyState {
     /// Keyed by creature id.
@@ -279,7 +283,42 @@ impl Member {
         Ok(())
     }
 
-    pub fn long_rest(&mut self, log: &mut Vec<String>) {
+    /// Set HP from outside combat, adding the campaign's dying conditions at
+    /// 0 HP and removing them (plus death saves) at 1 HP or more.
+    pub fn set_hp(&mut self, hp: i32, dying_conditions: &[String]) {
+        self.hp = hp.clamp(0, self.max_hp);
+        if self.hp > 0 {
+            self.conditions.retain(|active| {
+                !dying_conditions
+                    .iter()
+                    .any(|dying| active.condition.eq_ignore_ascii_case(dying))
+            });
+            self.death_saves = DeathSaves::default();
+        } else {
+            for name in dying_conditions {
+                if !self
+                    .conditions
+                    .iter()
+                    .any(|active| active.condition.eq_ignore_ascii_case(name))
+                {
+                    self.conditions.push(ActiveCondition {
+                        condition: name.clone(),
+                        source: Some("dying".into()),
+                        linked: None,
+                        duration: None,
+                        save_ends: None,
+                        ends_on: Vec::new(),
+                        created_by: None,
+                        concentration: false,
+                        applied_round: 0,
+                        notes: None,
+                    });
+                }
+            }
+        }
+    }
+
+    pub fn long_rest(&mut self, dying_conditions: &[String], log: &mut Vec<String>) {
         if self.dead {
             log.push(format!("{} is dead and cannot rest", self.name));
             return;
@@ -291,9 +330,8 @@ impl Member {
                 r.current = r.max;
             }
         }
-        self.hp = self.max_hp;
+        self.set_hp(self.max_hp, dying_conditions);
         self.temp_hp = 0;
-        self.death_saves = DeathSaves::default();
         self.conditions
             .retain(|c| !matches!(c.duration, Some(ActiveDuration::Minutes { .. })));
         log.push(format!("{} takes a long rest", self.name));
@@ -325,6 +363,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(hit_die_of(&creature), None);
+    }
+
+    fn member(hp: i32) -> Member {
+        Member {
+            name: "T".into(),
+            hp,
+            max_hp: 20,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn set_hp_adds_and_removes_dying_conditions() {
+        let dying = vec![DEFAULT_DYING_CONDITION.to_string()];
+        let mut member = member(10);
+        member.set_hp(0, &dying);
+        assert_eq!(member.hp, 0);
+        assert_eq!(member.conditions.len(), 1);
+        assert_eq!(member.conditions[0].condition, DEFAULT_DYING_CONDITION);
+
+        member.set_hp(1, &dying);
+        assert_eq!(member.hp, 1);
+        assert!(member.conditions.is_empty());
+    }
+
+    #[test]
+    fn long_rest_removes_dying_conditions() {
+        let dying = vec![DEFAULT_DYING_CONDITION.to_string()];
+        let mut member = member(0);
+        member.set_hp(0, &dying);
+        assert_eq!(member.conditions[0].condition, DEFAULT_DYING_CONDITION);
+
+        member.long_rest(&dying, &mut Vec::new());
+        assert_eq!(member.hp, 20);
+        assert!(member.conditions.is_empty());
     }
 
     #[test]

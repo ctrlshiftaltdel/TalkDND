@@ -1281,6 +1281,10 @@ fn run_party(
             }
         }
     }
+    let dying_conditions = load_content(sources)
+        .ok()
+        .and_then(|content| content.rules.dying_conditions.clone())
+        .unwrap_or_else(|| vec![crate::party::DEFAULT_DYING_CONDITION.to_string()]);
     let mut lines = Vec::new();
     let pick = |party: &PartyState, who: &str| -> Result<Vec<String>> {
         if who.eq_ignore_ascii_case("all") {
@@ -1321,7 +1325,7 @@ fn run_party(
                         if hd.is_some() {
                             bail!("--hd is only for short rests");
                         }
-                        member.long_rest(&mut lines)
+                        member.long_rest(&dying_conditions, &mut lines)
                     }
                 }
             }
@@ -1329,10 +1333,7 @@ fn run_party(
         PartyCommand::SetHp { who, hp } => {
             for id in pick(&party, &who)? {
                 let member = party.members.get_mut(&id).expect("picked");
-                member.hp = hp.clamp(0, member.max_hp);
-                if member.hp > 0 {
-                    member.death_saves = Default::default();
-                }
+                member.set_hp(hp, &dying_conditions);
                 lines.push(format!(
                     "{} HP set to {}/{}",
                     member.name, member.hp, member.max_hp

@@ -172,6 +172,82 @@ fn advantage_and_disadvantage_cancel() {
 }
 
 #[test]
+fn two_disadvantages_and_one_advantage_cancel_to_normal() {
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
+    let options = AddConditionOptions::default();
+    engine::add_condition(
+        &mut state,
+        "Striker A",
+        "empowered",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    for condition in ["harried-test", "pressed-test"] {
+        engine::add_condition(
+            &mut state,
+            "Brute A",
+            condition,
+            &options,
+            &mut ScriptedRng::new(&[]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+    }
+
+    let mut rng = ScriptedRng::new(&[15, 4]);
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Striker A",
+        "Brute A",
+        "test-sword",
+        &AttackOptions::default(),
+        &mut rng,
+        &mut log,
+    )
+    .unwrap();
+
+    assert_eq!(
+        rng.sides,
+        vec![20, 8],
+        "any advantage plus any disadvantage must roll a single d20"
+    );
+    assert!(!log.iter().any(|line| line.contains("dis->")), "{log:?}");
+    assert!(!log.iter().any(|line| line.contains("adv->")), "{log:?}");
+    assert_eq!(hp(&state, "Brute A"), 40 - 6);
+}
+
+#[test]
+fn initiative_cancels_advantage_and_disadvantage_once() {
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
+    let striker = index(&state, "Striker A");
+    let brute = index(&state, "Brute A");
+    let mut rng = ScriptedRng::new(&[12]);
+    let mut log = Vec::new();
+    engine::init_with_modes(
+        &mut state,
+        &[(brute, 1)],
+        &[
+            (striker, combat_sim::dice::RollMode::Advantage),
+            (striker, combat_sim::dice::RollMode::Disadvantage),
+            (striker, combat_sim::dice::RollMode::Disadvantage),
+        ],
+        &mut rng,
+        &mut log,
+    )
+    .unwrap();
+
+    assert_eq!(
+        rng.sides,
+        vec![20],
+        "two disadvantages and one advantage cancel for initiative too"
+    );
+    assert_eq!(state.combatants[striker].initiative_total, Some(12 + 3));
+}
+
+#[test]
 fn data_defined_on_hit_trigger_runs_once_per_turn() {
     let mut state = encounter_state("test-fight", &["striker-a"], &[]);
     let options = AddConditionOptions::default();
@@ -537,6 +613,84 @@ fn static_and_condition_resistance_apply() {
         hp(&state, "Striker A"),
         15,
         "condition resistance halves damage"
+    );
+}
+
+#[test]
+fn resistance_applies_once_per_damage_type() {
+    for quiet in [false, true] {
+        let mut state = encounter_state("test-fight", &["striker-a"], &[("resistant-r", "beta")]);
+        let mut rng = ScriptedRng::new(&[10]);
+        if quiet {
+            engine::attack(
+                &mut state,
+                "Striker A",
+                "Resistant R",
+                "twin-cut",
+                &AttackOptions::default(),
+                &mut rng,
+                &mut engine::NullSink,
+            )
+            .unwrap();
+        } else {
+            engine::attack(
+                &mut state,
+                "Striker A",
+                "Resistant R",
+                "twin-cut",
+                &AttackOptions::default(),
+                &mut rng,
+                &mut Vec::new(),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            hp(&state, "Resistant R"),
+            19,
+            "two 1-point slashing parts against resistance deal 1 (quiet: {quiet})"
+        );
+    }
+}
+
+#[test]
+fn manual_heal_applies_healing_received() {
+    let mut state = encounter_state("test-fight", &["striker-a"], &[]);
+    engine::damage(
+        &mut state,
+        "Striker A",
+        "10",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let options = AddConditionOptions::default();
+    engine::add_condition(
+        &mut state,
+        "Striker A",
+        "healing-penalty-test",
+        &options,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    let mut log = Vec::new();
+    engine::heal(
+        &mut state,
+        "Striker A",
+        "5",
+        None,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+
+    assert_eq!(hp(&state, "Striker A"), 13, "5 healing minus the 2 penalty");
+    assert!(
+        log.iter().any(|line| line.contains("healing-penalty-test")),
+        "{log:?}"
     );
 }
 

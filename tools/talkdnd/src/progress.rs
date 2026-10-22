@@ -7,12 +7,13 @@
 //! (ASI, subclass, spells) stay with the player and the DM.
 
 use crate::check::{self, Sheet};
-use crate::{classdata, data, save};
+use crate::{charsheet, classdata, data, save};
 use anyhow::{anyhow, bail, Context, Result};
 use combat_sim::dice::{DiceRng, RollMode};
 use combat_sim::fsutil::atomic_write;
 use combat_sim::roll::roll_command;
 use serde::{Deserialize, Serialize};
+use serde_norway::{Mapping, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -581,6 +582,196 @@ fn map_flow(lines: &mut [String], key: &str, f: &dyn Fn(&str, i64) -> i64) {
     }
 }
 
+fn spell_ability(book: &classdata::Book, class: &str) -> Option<String> {
+    book.class(class)
+        .and_then(|c| c.spell_ability.clone())
+        .or_else(|| {
+            data::class(class)
+                .and_then(|c| c.spell_ability)
+                .map(str::to_string)
+        })
+}
+
+fn subclass_of(
+    text: &str,
+    cf: Option<&charsheet::CharFile>,
+    class: &str,
+    book: &classdata::Book,
+) -> Option<String> {
+    if let Some(saved) = cf.and_then(|cf| cf.info.get("subclass")) {
+        let slug = crate::chargen::slug(saved);
+        if !slug.is_empty() {
+            return Some(slug);
+        }
+    }
+    let class_data = book.class(class)?;
+    let header = text
+        .lines()
+        .find(|line| line.contains("**等级**") || line.to_lowercase().contains("**level**"))?;
+    let lower = header.to_lowercase();
+    class_data
+        .subclasses
+        .keys()
+        .find(|id| {
+            let id = id.to_lowercase();
+            lower.contains(&format!("({id})")) || lower.contains(&format!("（{id}）"))
+        })
+        .cloned()
+}
+
+fn resource_entry(max: i32, recharge: &str) -> Mapping {
+    let mut entry = Mapping::new();
+    entry.insert(Value::String("max".into()), Value::from(i64::from(max)));
+    entry.insert(
+        Value::String("recharge".into()),
+        Value::String(recharge.to_string()),
+    );
+    entry
+}
+
+fn is_spell_slot(key: &Value) -> bool {
+    key.as_str()
+        .is_some_and(|key| key.starts_with("spell-slot-"))
+}
+
+/// Rebuild the class-derived parts of a combat block after a level-up:
+/// resources (maxima and recharge), spell slots and spellcasting attack/DC.
+/// Current resource values are kept (clamped to the new maxima); unknown
+/// custom resources are never removed.
+fn rebuild_class_derived(
+    block: &mut Value,
+    book: &classdata::Book,
+    root: &Path,
+    rs: &str,
+    class: &str,
+    subclass: Option<&str>,
+    level: i32,
+) {
+    let Some(_) = book.class(class) else {
+        return;
+    };
+    let mut scores = BTreeMap::new();
+    if let Some(abilities) = block.get("abilities") {
+        for ability in data::ABILITIES {
+            let score = abilities.get(ability).and_then(Value::as_i64).unwrap_or(10);
+            scores.insert((*ability).to_string(), score as i32);
+        }
+    }
+    let creation = crate::chargen::Creation {
+        ruleset: Some(rs.to_string()),
+        class: Some(class.to_string()),
+        subclass: subclass.map(str::to_string),
+        level,
+        scores,
+        ..Default::default()
+    };
+    let generated = classdata::generate(&creation, book, Some(root));
+    let Value::Mapping(map) = block else {
+        return;
+    };
+    let resources_key = Value::String("resources".into());
+    let old_resources = match map.get(&resources_key) {
+        Some(Value::Mapping(resources)) => resources.clone(),
+        _ => Mapping::new(),
+    };
+    let mut resources = Mapping::new();
+    for (key, value) in &old_resources {
+        if !is_spell_slot(key) {
+            resources.insert(key.clone(), value.clone());
+        }
+    }
+    for resource in &generated.resources {
+        let key = Value::String(resource.id.clone());
+        let current = old_resources
+            .get(&key)
+            .and_then(|value| value.get("current"))
+            .and_then(Value::as_i64);
+        let mut entry = resource_entry(resource.max, &resource.recharge);
+        if let Some(regain) = resource.short_regain {
+            entry.insert(
+                Value::String("short_rest_regain".into()),
+                Value::from(i64::from(regain)),
+            );
+        }
+        if resource.id == "hit-dice" {
+            if let Some(die) = resource
+                .name
+                .split("(d")
+                .nth(1)
+                .and_then(|tail| tail.trim_end_matches(')').parse::<u32>().ok())
+            {
+                entry.insert(Value::String("die".into()), Value::from(i64::from(die)));
+            }
+        }
+        if let Some(notes) = &resource.notes {
+            entry.insert(Value::String("notes".into()), Value::String(notes.clone()));
+        }
+        if let Some(current) = current {
+            entry.insert(
+                Value::String("current".into()),
+                Value::from(current.min(i64::from(resource.max))),
+            );
+        }
+        resources.insert(key, Value::Mapping(entry));
+    }
+    for (index, count) in generated.slots.iter().enumerate() {
+        if *count <= 0 {
+            continue;
+        }
+        resources.insert(
+            Value::String(format!("spell-slot-{}", index + 1)),
+            Value::Mapping(resource_entry(*count, "long")),
+        );
+    }
+    if let Some((count, slot_level)) = generated.pact {
+        let mut entry = resource_entry(count, "short");
+        entry.insert(
+            Value::String("notes".into()),
+            Value::String("pact magic".into()),
+        );
+        resources.insert(
+            Value::String(format!("spell-slot-{slot_level}")),
+            Value::Mapping(entry),
+        );
+    }
+    map.insert(resources_key, Value::Mapping(resources));
+    if let Some(ability) = spell_ability(book, class) {
+        let modifier = data::modifier(creation.scores.get(&ability).copied().unwrap_or(10));
+        let prof = prof_for_level(level);
+        let mut spellcasting = Mapping::new();
+        spellcasting.insert(Value::String("ability".into()), Value::String(ability));
+        spellcasting.insert(
+            Value::String("attack".into()),
+            Value::from(i64::from(modifier + prof)),
+        );
+        spellcasting.insert(
+            Value::String("dc".into()),
+            Value::from(i64::from(8 + modifier + prof)),
+        );
+        map.insert(
+            Value::String("spellcasting".into()),
+            Value::Mapping(spellcasting),
+        );
+    }
+}
+
+fn append_level_record(tail: &str, note: &str) -> String {
+    let mut text = tail.trim_end().to_string();
+    if text.is_empty() {
+        return format!("## 升级记录\n\n{note}\n");
+    }
+    if text.contains("## 升级记录") {
+        text.push('\n');
+        text.push_str(note);
+        text.push('\n');
+    } else {
+        text.push_str("\n\n## 升级记录\n\n");
+        text.push_str(note);
+        text.push('\n');
+    }
+    text
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn level_up(
     save_dir: &Path,
@@ -642,6 +833,14 @@ pub fn level_up(
     let class = class_arg
         .map(str::to_string)
         .or_else(|| class_of(s, &text, &book));
+    let structured_cf = if charsheet::path(save_dir, &s.id).is_file() {
+        Some(charsheet::load(save_dir, who, &book)?.0)
+    } else {
+        None
+    };
+    let subclass = class
+        .as_deref()
+        .and_then(|class| subclass_of(&text, structured_cf.as_ref(), class, &book));
     let die = hit_die(s, class.as_deref(), &book).ok_or_else(|| {
         anyhow!(
             "cannot tell {}'s class or hit die; pass --class <id>",
@@ -739,18 +938,39 @@ pub fn level_up(
             }
         }
     }
-    let mut out = text[..b0].to_string() + &lines.join("\n") + &text[b1..];
+    let mut block: Value = serde_norway::from_str(&lines.join("\n"))
+        .with_context(|| format!("{} combat block is not valid YAML", s.file.display()))?;
+    if let Some(class) = class.as_deref() {
+        rebuild_class_derived(
+            &mut block,
+            &book,
+            root,
+            &rs,
+            class,
+            subclass.as_deref(),
+            new,
+        );
+    }
     let stamp = chrono::Local::now().format("%Y-%m-%d");
     let note = format!(
         "- {stamp}：升到 {new} 级；HP +{gain}（d{die} {how}，体质 {con_mod:+}）→ {}；熟练 +{new_prof}",
         hp + gain
     );
-    if out.contains("\n## 升级记录\n") {
-        out = out.trim_end().to_string() + "\n" + &note + "\n";
+    if let Some(mut cf) = structured_cf {
+        cf.combat = block;
+        cf.tail_md = append_level_record(&cf.tail_md, &note);
+        let ps = charsheet::party(save_dir, &cf)?;
+        charsheet::commit(save_dir, &cf, &ps)?;
     } else {
-        out = out.trim_end().to_string() + "\n\n## 升级记录\n\n" + &note + "\n";
+        let mut out =
+            text[..b0].to_string() + charsheet::emit_block(&block).trim_end() + &text[b1..];
+        if out.contains("\n## 升级记录\n") {
+            out = out.trim_end().to_string() + "\n" + &note + "\n";
+        } else {
+            out = out.trim_end().to_string() + "\n\n## 升级记录\n\n" + &note + "\n";
+        }
+        atomic_write(&s.file, out.as_bytes())?;
     }
-    atomic_write(&s.file, out.as_bytes())?;
     let mut r = LevelUp::default();
     if let Some(reason) = milestone {
         let floor = XP_TABLE[(new - 1) as usize];
@@ -1167,6 +1387,104 @@ mod tests {
         .unwrap();
         assert!(Progress::load(&d).unwrap().purses["quill"].items.is_empty());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn level_up_regenerates_class_resources_and_spellcasting() {
+        for structured in [false, true] {
+            let d = std::env::temp_dir().join(format!(
+                "talkdnd-lvres-{}-{}",
+                u8::from(structured),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&d);
+            fs::create_dir_all(d.join("Characters")).unwrap();
+            fs::create_dir_all(d.join("combat")).unwrap();
+            fs::write(
+                d.join("combat/campaign.yaml"),
+                "party: [wiz]\nruleset: \"2014\"\n",
+            )
+            .unwrap();
+            let block = "id: wiz\nname: Wiz\nkind: pc\nside: party\nlevel: 4\nhp: 20\nprof: 2\nabilities: {str: 8, dex: 14, con: 12, int: 16, wis: 12, cha: 10}\nresources:\n  hit-dice: {max: 4, recharge: long, die: 6}\n  spell-slot-1: {max: 4, recharge: long}\n  spell-slot-2: {max: 3, recharge: long}\nnotes: \"wizard 4. synthetic\"\n";
+            let body = "# Wiz\n\n- **等级**：wizard 4\n";
+            let md = format!("{body}\n```combat yaml\n{block}```\n");
+            fs::write(d.join("Characters/Wiz.md"), &md).unwrap();
+            if structured {
+                fs::create_dir_all(d.join("sheets")).unwrap();
+                let cf = charsheet::CharFile {
+                    version: 1,
+                    id: "wiz".into(),
+                    name: "Wiz".into(),
+                    file: "Characters/Wiz.md".into(),
+                    ruleset: "2014".into(),
+                    body_md: body.trim_end().to_string(),
+                    tail_md: "## 升级记录\n\n- old record".into(),
+                    notes: vec!["keep this note".into()],
+                    inventory: vec![charsheet::Item {
+                        name: "spellbook".into(),
+                        qty: 1,
+                        ..Default::default()
+                    }],
+                    combat: serde_norway::from_str(block).unwrap(),
+                    ..Default::default()
+                };
+                charsheet::store(&d, &cf).unwrap();
+                fs::write(
+                    d.join("combat/party-state.yaml"),
+                    "members:\n  wiz:\n    name: Wiz\n    hp: 20\n    max_hp: 20\n    resources:\n      spell-slot-1: {current: 1, max: 4, recharge: long}\n",
+                )
+                .unwrap();
+            }
+            let mut rng = combat_sim::dice::seeded_rng(1);
+            level_up(
+                &d,
+                &d,
+                "Wiz",
+                "avg",
+                None,
+                Some("wizard test"),
+                &mut rng,
+                true,
+            )
+            .unwrap();
+
+            let block: Value = if structured {
+                let cf: charsheet::CharFile =
+                    serde_norway::from_str(&fs::read_to_string(d.join("sheets/wiz.yaml")).unwrap())
+                        .unwrap();
+                assert_eq!(cf.notes, vec!["keep this note"]);
+                assert!(cf.inventory.iter().any(|item| item.name == "spellbook"));
+                assert!(cf.tail_md.contains("old record"));
+                assert!(cf.tail_md.contains("升到 5 级"));
+                let ps = combat_sim::party::PartyState::load(&d.join("combat/party-state.yaml"))
+                    .unwrap();
+                assert_eq!(ps.members["wiz"].resources["spell-slot-1"].current, 1);
+                assert_eq!(ps.members["wiz"].resources["spell-slot-3"].max, 2);
+                cf.combat
+            } else {
+                let text = fs::read_to_string(d.join("Characters/Wiz.md")).unwrap();
+                let (b0, b1) = block_bounds(&text).unwrap();
+                serde_norway::from_str(&text[b0..b1]).unwrap()
+            };
+            for (slot, max) in [
+                ("spell-slot-1", 4),
+                ("spell-slot-2", 3),
+                ("spell-slot-3", 2),
+            ] {
+                assert_eq!(
+                    block["resources"][slot]["max"].as_i64(),
+                    Some(max),
+                    "{slot} for structured={structured}"
+                );
+            }
+            assert_eq!(
+                block["spellcasting"]["attack"].as_i64(),
+                Some(6),
+                "int +3 and prof +3"
+            );
+            assert_eq!(block["spellcasting"]["dc"].as_i64(), Some(14));
+            let _ = fs::remove_dir_all(&d);
+        }
     }
 
     #[test]

@@ -305,6 +305,14 @@ fn old_sheet_repair_without_chargen() {
     assert!(fs::read_to_string(save.join("Characters/gar.md"))
         .unwrap()
         .contains("## 升级记录"));
+    // HP transitions carry the campaign's dying condition (fallback here).
+    let out = ok(&r, &["char", "gar", "damage", "28"]);
+    assert!(out.contains("倒地"), "{out}");
+    let party = fs::read_to_string(save.join("combat/party-state.yaml")).unwrap();
+    assert!(party.contains("unconscious"), "{party}");
+    ok(&r, &["char", "gar", "heal", "5"]);
+    let party = fs::read_to_string(save.join("combat/party-state.yaml")).unwrap();
+    assert!(!party.contains("unconscious"), "{party}");
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
     let _ = fs::remove_dir_all(&r);
 }

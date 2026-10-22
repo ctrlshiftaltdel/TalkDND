@@ -597,6 +597,21 @@ fn party_state_carries_hp_between_encounters_and_rests() {
         "{}",
         stdout(&out)
     );
+    // Dropping to 0 HP adds the campaign's dying condition; raising it removes it.
+    assert_success(
+        &cs(&["party", "set-hp", "striker-a", "0"]),
+        "party set-hp 0",
+    );
+    let show = cs(&["party", "show"]);
+    assert_success(&show, "party show after set-hp 0");
+    assert!(stdout(&show).contains("downed-test"), "{}", stdout(&show));
+    assert_success(
+        &cs(&["party", "set-hp", "striker-a", "1"]),
+        "party set-hp 1",
+    );
+    let show = cs(&["party", "show"]);
+    assert_success(&show, "party show after set-hp 1");
+    assert!(!stdout(&show).contains("downed-test"), "{}", stdout(&show));
     // Scratch states outside state_dir never touch the party file.
     let before = std::fs::read_to_string(&party_file).unwrap();
     let scratch = root.join("elsewhere");
