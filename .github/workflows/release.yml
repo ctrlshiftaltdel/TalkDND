@@ -94,8 +94,24 @@ jobs:
             cp "tools/${tool}/target/${TARGET}/release/${tool}${EXT}" "dist/stage/LetsPlay/bin/${tool}${EXT}"
             chmod 755 "dist/stage/LetsPlay/bin/${tool}${EXT}"
           done
-          # Allowed list = tracked LetsPlay files + NOTICE + LICENSE + binaries.
-          { git ls-files -- LetsPlay; echo LetsPlay/NOTICE; echo LetsPlay/LICENSE; echo "LetsPlay/bin/combat-sim${EXT}"; echo "LetsPlay/bin/talkdnd${EXT}"; } \
+          # Shipped-file manifest: lets `talkdnd start` clean files this
+          # version no longer ships. One `<sha256>  <path>` line per file,
+          # paths relative to LetsPlay/.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha_file() { sha256sum "$1" | awk '{print $1}'; }
+          elif command -v shasum >/dev/null 2>&1; then
+            sha_file() { shasum -a 256 "$1" | awk '{print $1}'; }
+          else
+            echo "no sha256 tool available" >&2
+            exit 1
+          fi
+          rm -f dist/stage/LetsPlay/.talkdnd-files.txt
+          (cd dist/stage/LetsPlay && find . -type f ! -name '.talkdnd-files.txt' | LC_ALL=C sort | while IFS= read -r file; do
+            printf '%s  %s\n' "$(sha_file "$file")" "${file#./}"
+          done) > dist/stage/LetsPlay/.talkdnd-files.txt
+          # Allowed list = tracked LetsPlay files + NOTICE + LICENSE + binaries
+          # + the shipped-file manifest.
+          { git ls-files -- LetsPlay; echo LetsPlay/NOTICE; echo LetsPlay/LICENSE; echo "LetsPlay/bin/combat-sim${EXT}"; echo "LetsPlay/bin/talkdnd${EXT}"; echo LetsPlay/.talkdnd-files.txt; } \
             | LC_ALL=C sort -u > dist/allowed.txt
           if [ "$ARCHIVE" = "zip" ]; then
             archive="dist/out/${name}.zip"
@@ -128,6 +144,13 @@ jobs:
               exit 1
             fi
           done
+          # User-data areas must never ship: top-level rulings (the shipped
+          # defaults live in Rules/defaults/), local/fixes/handout files and
+          # tool state.
+          if grep -E '^LetsPlay/Rules/rulings[^/]*\.md$|^LetsPlay/.*/local/|^LetsPlay/.*/fixes/|^LetsPlay/.*/handouts\.yaml$|^LetsPlay/\.talkdnd/' dist/raw.txt; then
+            echo "archive contains user-data files" >&2
+            exit 1
+          fi
           if command -v sha256sum >/dev/null 2>&1; then
             hash=$(sha256sum "$archive" | awk '{print $1}')
           elif command -v shasum >/dev/null 2>&1; then
@@ -160,6 +183,15 @@ jobs:
       contents: write
       actions: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate release notes
+        run: cargo run --quiet --manifest-path tools/talkdnd-dev/Cargo.toml -- release-notes "${{ github.ref_name }}" > notes.md
+
       - name: Download packages
         uses: actions/download-artifact@v8
         with:
@@ -171,19 +203,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           fail_on_unmatched_files: true
-          body: |
-            TalkDND ${{ github.ref_name }}: the play folder `LetsPlay/` with prebuilt combat-sim and talkdnd.
-
-            - Linux x86_64: `talkdnd-letsplay-${{ github.ref_name }}-linux-x86_64.tar.gz`
-            - Windows x86_64: `talkdnd-letsplay-${{ github.ref_name }}-windows-x86_64.zip`
-            - macOS Apple Silicon: `talkdnd-letsplay-${{ github.ref_name }}-macos-arm64.tar.gz`
-
-            Each archive holds the git-tracked `LetsPlay/` tree (DM guide, combat data,
-            rulings, README placeholders), `LICENSE`, `NOTICE`, and both binaries in
-            `LetsPlay/bin/`. No rulebooks, adventures, or saves are included: put your
-            own SRD / books into `LetsPlay/Rules/<edition>/` and `LetsPlay/Adventures/`.
-            The matching `.sha256` file checksums that archive. macOS Intel builds are
-            not published.
+          body_path: notes.md
           files: |
             release-assets/*.tar.gz
             release-assets/*.zip

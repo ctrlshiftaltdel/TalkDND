@@ -1190,7 +1190,7 @@ impl EncounterState {
         }
         let json =
             serde_json::to_string_pretty(self).context("failed to serialize encounter state")?;
-        fs::write(path, json)
+        crate::fsutil::atomic_write(path, json.as_bytes())
             .with_context(|| format!("failed to write state file {}", path.display()))
     }
 }

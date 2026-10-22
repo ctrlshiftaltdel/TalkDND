@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{chargen, reveal, save};
+use combat_sim::fsutil::atomic_write;
 
 pub const REGISTRY: &str = "handouts.yaml";
 const SHOWN: &str = "handouts.yaml";
@@ -50,6 +51,10 @@ pub struct Entry {
     /// DM's reason or checklist note for the marking.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// The last conversion no longer has this image; the entry and its DM
+    /// markings are kept so a reconversion does not lose them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub missing: bool,
 }
 
 fn dm() -> String {
@@ -238,6 +243,7 @@ pub fn build(dir: &Path) -> Result<(Registry, usize)> {
         add(format!("img/{n}"), page, "figure", String::new());
     }
     let old = load(dir).unwrap_or_default();
+    let present: Vec<String> = found.iter().map(|e| e.img.clone()).collect();
     let mut reg = Registry {
         book: dir
             .file_name()
@@ -261,6 +267,15 @@ pub fn build(dir: &Path) -> Result<(Registry, usize)> {
         }
         reg.entries.push(e);
     }
+    // Keep old entries whose image vanished (a reconversion renamed or
+    // dropped it) so the DM's visibility, crop, caption and note survive.
+    for o in old.entries {
+        if !present.contains(&o.img) {
+            let mut e = o;
+            e.missing = true;
+            reg.entries.push(e);
+        }
+    }
     reg.entries
         .sort_by(|a, b| (a.page, &a.id).cmp(&(b.page, &b.id)));
     store(dir, &reg)?;
@@ -277,13 +292,11 @@ pub fn load(dir: &Path) -> Result<Registry> {
 }
 
 fn store(dir: &Path, r: &Registry) -> Result<()> {
-    fs::write(
-        dir.join(REGISTRY),
-        format!(
-            "# TalkDND handout registry (local, from the converted book; never commit).\n# visibility: dm (default, never shown) | player. Change with `talkdnd handout mark`.\n{}",
-            serde_norway::to_string(r)?
-        ),
-    )?;
+    let text = format!(
+        "# TalkDND handout registry (local, from the converted book; never commit).\n# visibility: dm (default, never shown) | player. Change with `talkdnd handout mark`.\n{}",
+        serde_norway::to_string(r)?
+    );
+    atomic_write(dir.join(REGISTRY), text.as_bytes())?;
     Ok(())
 }
 
@@ -380,6 +393,19 @@ pub struct ShowOpts<'a> {
     pub png: bool,
 }
 
+/// Path to an entry's image, refusing entries whose image is gone.
+fn image_of(dir: &Path, e: &Entry) -> Result<PathBuf> {
+    let src = dir.join(&e.img);
+    if e.missing || !src.is_file() {
+        bail!(
+            "handout {} has no image in this conversion ({}); reconvert the book (`pdf2md run`) and run `talkdnd handout build`",
+            e.id,
+            src.display()
+        );
+    }
+    Ok(src)
+}
+
 /// Export a player-safe handout to the save and record it. Returns output lines.
 pub fn show(
     root: &Path,
@@ -391,11 +417,19 @@ pub fn show(
     let dirs = book_dirs(root, save, book)?;
     let regs = registries(&dirs)?;
     let (dir, e) = find(&regs, q)?;
+    if !chargen::valid_id(&e.id) {
+        bail!(
+            "handout id `{}` is not a safe file name; fix {} (`talkdnd handout build`)",
+            e.id,
+            dir.join(REGISTRY).display()
+        );
+    }
+    let src = image_of(dir, e)?;
     if !e.player() {
         bail!(
             "handout {} is DM-only and is never shown. Look at it yourself (`{}`); if it really has no secret doors, traps, monster or treasure keys or unrevealed names, mark it (`talkdnd handout mark {} --player [--crop x,y,w,h]`), otherwise describe it in words",
             e.id,
-            dir.join(&e.img).display(),
+            src.display(),
             e.id
         );
     }
@@ -408,10 +442,6 @@ pub fn show(
         (Some(c), None) => Some(c.as_str()),
         (None, c) => c,
     };
-    let src = dir.join(&e.img);
-    if !src.is_file() {
-        bail!("image missing: {} (convert the book again)", src.display());
-    }
     let out_dir = save.join("handouts");
     fs::create_dir_all(&out_dir)?;
     let ext = src
@@ -458,13 +488,11 @@ pub fn show(
         file: rel.clone(),
         date: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
     });
-    fs::write(
-        &sp,
-        format!(
-            "# TalkDND handouts shown to the players (`talkdnd handout show`).\n{}",
-            serde_norway::to_string(&shown)?
-        ),
-    )?;
+    let text = format!(
+        "# TalkDND handouts shown to the players (`talkdnd handout show`).\n{}",
+        serde_norway::to_string(&shown)?
+    );
+    atomic_write(&sp, text.as_bytes())?;
     let mut lines = Vec::new();
     match reveal::add(
         save,
@@ -515,12 +543,13 @@ pub fn list(root: &Path, save: &Path, book: Option<&str>, dm: bool) -> Result<Ve
         out.push(format!("# {}（{}）", r.book, d.join(REGISTRY).display()));
         for e in &r.entries {
             out.push(format!(
-                "{} [{}] p.{} {} {}{}{}",
+                "{} [{}] p.{} {} {}{}{}{}",
                 e.id,
                 e.visibility,
                 e.page,
                 e.kind,
                 e.title(),
+                if e.missing { " (missing)" } else { "" },
                 e.crop
                     .as_deref()
                     .map(|c| format!(" crop={c}"))
@@ -540,16 +569,27 @@ pub fn rebuild(root: &Path, save: &Path, book: Option<&str>) -> Result<Vec<Strin
     let mut out = Vec::new();
     for d in book_dirs(root, save, book)? {
         let (r, new) = build(&d)?;
-        let p = r.entries.iter().filter(|e| e.player()).count();
+        let missing = r.entries.iter().filter(|e| e.missing).count();
+        let p = r
+            .entries
+            .iter()
+            .filter(|e| e.player() && !e.missing)
+            .count();
         out.push(format!(
-            "{}: {} images ({} new), {} player-safe, {} DM-only → {}",
+            "{}: {} images ({} new), {} player-safe, {} DM-only, {} missing → {}",
             r.book,
             r.entries.len(),
             new,
             p,
-            r.entries.len() - p,
+            r.entries.len() - p - missing,
+            missing,
             d.join(REGISTRY).display()
         ));
+        if missing > 0 {
+            out.push(format!(
+                "warning: {missing} handout image(s) are gone from this conversion; the entries and their markings are kept (shown as `(missing)`)"
+            ));
+        }
     }
     Ok(out)
 }
@@ -620,5 +660,54 @@ mod tests {
         assert!(player_caption("MAP 2.1: Village (Player Version)"));
         assert!(!player_caption("MAP 2.1: Village"));
         assert!(!player_caption("Player and DM map"));
+    }
+
+    #[test]
+    fn build_keeps_entries_whose_image_vanished() {
+        let d = std::env::temp_dir().join(format!("handout-missing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("img")).unwrap();
+        fs::write(d.join("img/p0010-00.webp"), b"img").unwrap();
+        fs::write(
+            d.join("index.json"),
+            serde_json::json!({
+                "headings": [{"page": 1, "level": 1, "text": "Chapter 1"}],
+                "maps": [{"img": "img/p0010-00.webp", "page": 10, "caption": "Map 1: The Vault"}],
+                "art": [],
+                "figures": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let (mut reg, _) = build(&d).unwrap();
+        assert_eq!(reg.entries.len(), 1);
+        reg.entries[0].visibility = "player".into();
+        reg.entries[0].crop = Some("0,0,1,1".into());
+        reg.entries[0].note = "players need this".into();
+        store(&d, &reg).unwrap();
+
+        // A reconversion renames/drops the image and no longer lists it.
+        fs::remove_file(d.join("img/p0010-00.webp")).unwrap();
+        fs::write(
+            d.join("index.json"),
+            serde_json::json!({"headings": [], "maps": [], "art": [], "figures": []}).to_string(),
+        )
+        .unwrap();
+        build(&d).unwrap();
+
+        let reg = load(&d).unwrap();
+        let e = reg
+            .entries
+            .iter()
+            .find(|e| e.id == "p0010-00")
+            .expect("entry kept");
+        assert!(e.missing, "{e:?}");
+        assert_eq!(e.visibility, "player");
+        assert_eq!(e.crop.as_deref(), Some("0,0,1,1"));
+        assert_eq!(e.note, "players need this");
+        assert_eq!(e.img, "img/p0010-00.webp");
+        let err = image_of(&d, e).unwrap_err().to_string();
+        assert!(err.contains("no image"), "{err}");
+        let _ = fs::remove_dir_all(&d);
     }
 }

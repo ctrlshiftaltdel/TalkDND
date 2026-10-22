@@ -7,8 +7,11 @@
 use crate::classdata::{self, Book};
 use crate::{check, data, options, save};
 use anyhow::{anyhow, bail, Context, Result};
+use combat_sim::content::schema::ResourceDef;
 use combat_sim::dice::DiceRng;
+use combat_sim::fsutil::atomic_write;
 use combat_sim::party::{Member, PartyState};
+use combat_sim::state::ResourceState;
 use serde::{Deserialize, Serialize};
 use serde_norway::{Mapping, Value};
 use std::collections::BTreeMap;
@@ -378,6 +381,13 @@ fn guess_class(block: &Value, body: &str) -> Option<String> {
 /// Build the structured file from an existing Markdown sheet. Nothing is
 /// lost: the prose body is kept and rendered above the generated part.
 pub fn migrate(save_dir: &Path, sheet: &check::Sheet, book: &Book) -> Result<CharFile> {
+    if !crate::chargen::valid_id(&sheet.id) {
+        bail!(
+            "invalid character id `{}` in {}; use lowercase letters, digits and hyphens",
+            sheet.id,
+            sheet.file.display()
+        );
+    }
     let text = fs::read_to_string(&sheet.file)?;
     let (body, block, tail) = split_md(&text);
     let block = block.context("sheet has no ```combat yaml``` block")?;
@@ -491,17 +501,36 @@ fn sheet_mentions_defense(body: &str) -> bool {
 }
 
 pub fn store(save_dir: &Path, cf: &CharFile) -> Result<()> {
+    if !crate::chargen::valid_id(&cf.id) {
+        bail!(
+            "invalid character id `{}`; use lowercase letters, digits and hyphens",
+            cf.id
+        );
+    }
     let p = path(save_dir, &cf.id);
     fs::create_dir_all(p.parent().unwrap())?;
-    fs::write(
-        &p,
-        format!(
-            "# TalkDND character data (source of truth). Change it with `talkdnd char {} …`; never by hand.\n{}",
-            cf.id,
-            serde_norway::to_string(cf)?
-        ),
-    )?;
+    let mut current = cf.clone();
+    current.version = 1;
+    let text = format!(
+        "# TalkDND character data (source of truth). Change it with `talkdnd char {} …`; never by hand.\n{}",
+        cf.id,
+        serde_norway::to_string(&current)?
+    );
+    atomic_write(&p, text.as_bytes())?;
     Ok(())
+}
+
+fn parse_char_file(p: &Path, text: &str) -> Result<CharFile> {
+    let cf: CharFile =
+        serde_norway::from_str(text).with_context(|| format!("{} is not valid", p.display()))?;
+    if cf.version > 1 {
+        bail!(
+            "{}: unsupported character schema version {} (this talkdnd supports 1); update talkdnd",
+            p.display(),
+            cf.version
+        );
+    }
+    Ok(cf)
 }
 
 /// Load the structured file, migrating the Markdown sheet on first use. The
@@ -510,12 +539,14 @@ pub fn store(save_dir: &Path, cf: &CharFile) -> Result<()> {
 pub fn load(save_dir: &Path, who: &str, book: &Book) -> Result<(CharFile, bool)> {
     let sheets = check::sheets(save_dir);
     let s = check::find(&sheets, who)?;
+    if !crate::chargen::valid_id(&s.id) {
+        bail!("invalid character id `{}` in {}", s.id, s.file.display());
+    }
     let p = path(save_dir, &s.id);
     if !p.is_file() {
         return Ok((migrate(save_dir, s, book)?, true));
     }
-    let mut cf: CharFile = serde_norway::from_str(&fs::read_to_string(&p)?)
-        .with_context(|| format!("{} is not valid", p.display()))?;
+    let mut cf: CharFile = parse_char_file(&p, &fs::read_to_string(&p)?)?;
     let text = fs::read_to_string(&s.file).unwrap_or_default();
     if text.contains(BEGIN) {
         let (_, block, tail) = split_md(&text);
@@ -537,15 +568,27 @@ fn member_for(ps: &mut PartyState, cf: &CharFile) -> Result<()> {
             m.max_hp = max;
             m.hp = m.hp.min(max);
         }
-        // Resource maxima follow the sheet.
+        // Resource maxima and recharge follow the sheet; resources gained on
+        // level-up are added without disturbing the current values of old ones.
         if let Some(Value::Mapping(res)) = cf.combat.get("resources") {
             for (k, v) in res {
-                let (Some(k), Some(mx)) = (k.as_str(), get_i(v, "max")) else {
+                let Some(k) = k.as_str() else {
                     continue;
                 };
-                if let Some(r) = m.resources.get_mut(k) {
-                    r.max = mx as i32;
-                    r.current = r.current.min(r.max);
+                let Ok(def) = serde_norway::from_value::<ResourceDef>(v.clone()) else {
+                    continue;
+                };
+                match m.resources.get_mut(k) {
+                    Some(r) => {
+                        r.max = def.max;
+                        r.current = r.current.clamp(0, r.max);
+                        r.recharge = def.recharge;
+                        r.short_rest_regain = def.short_rest_regain;
+                    }
+                    None => {
+                        m.resources
+                            .insert(k.to_string(), ResourceState::from_def(&def));
+                    }
                 }
             }
         }
@@ -749,8 +792,23 @@ pub fn commit(save_dir: &Path, cf: &CharFile, ps: &PartyState) -> Result<()> {
         ps.save(&pp)?;
     }
     let md = render(cf, ps.members.get(&cf.id));
-    fs::write(save_dir.join(&cf.file), md)?;
+    atomic_write(markdown_path(save_dir, &cf.file)?, md.as_bytes())?;
     Ok(())
+}
+
+/// The rendered sheet path must stay inside the save directory: a hand-edited
+/// `file:` in sheets/<id>.yaml must not write outside of it.
+fn markdown_path(save_dir: &Path, file: &str) -> Result<PathBuf> {
+    let rel = Path::new(file);
+    let safe = !file.is_empty()
+        && rel.is_relative()
+        && rel
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+    if !safe {
+        bail!("invalid sheet path `{file}`; it must stay inside the save");
+    }
+    Ok(save_dir.join(rel))
 }
 
 // ---------- derived values: AC and weapon attacks ----------
@@ -970,8 +1028,25 @@ pub fn from_chargen(
         .iter()
         .find(|s| s.file == sheet_file)
         .context("written sheet not found")?;
-    let mut cf = migrate(save_dir, s, book)?;
-    // The inventory section replaces chargen's equipment list.
+    let fresh = migrate(save_dir, s, book)?;
+    let existing = if path(save_dir, &s.id).is_file() {
+        let p = path(save_dir, &s.id);
+        Some(parse_char_file(&p, &fs::read_to_string(&p)?)?)
+    } else {
+        None
+    };
+    let is_new = existing.is_none();
+    let mut cf = existing.unwrap_or_else(|| fresh.clone());
+    // The freshly written Markdown is the new build snapshot. Keep the old
+    // tail (level-up records) unless the new sheet carries one.
+    cf.file = fresh.file.clone();
+    cf.ruleset = fresh.ruleset.clone();
+    cf.body_md = fresh.body_md.clone();
+    cf.combat = fresh.combat.clone();
+    if !fresh.tail_md.trim().is_empty() {
+        cf.tail_md = fresh.tail_md.clone();
+    }
+    // The inventory table replaces chargen's duplicated gear section.
     if let Some(i) = cf.body_md.find("\n## 装备\n") {
         let rest = &cf.body_md[i + 1..];
         let end = rest[3..]
@@ -980,7 +1055,7 @@ pub fn from_chargen(
             .unwrap_or(cf.body_md.len());
         cf.body_md = format!("{}{}", &cf.body_md[..i], &cf.body_md[end..]);
     }
-    cf.ruleset = c.rs().to_string();
+    // Build choices always follow the creation state.
     let put = |cf: &mut CharFile, k: &str, v: &Option<String>| {
         if let Some(v) = v {
             cf.info.insert(k.into(), v.clone());
@@ -994,14 +1069,35 @@ pub fn from_chargen(
     put(&mut cf, "ideals", &c.ideals);
     put(&mut cf, "bonds", &c.bonds);
     put(&mut cf, "flaws", &c.flaws);
-    cf.fighting_style = c.fighting_style.clone();
-    cf.feats = c.feats.clone();
-    cf.languages = c.languages.clone();
-    cf.tools = c.tools.clone();
-    cf.masteries = c.masteries.clone();
+    // Play choices are kept; only fill what the structured file does not have.
+    if cf.fighting_style.is_none() {
+        cf.fighting_style = c.fighting_style.clone();
+    }
+    if cf.feats.is_empty() {
+        cf.feats = c.feats.clone();
+    }
+    if cf.languages.is_empty() {
+        cf.languages = c.languages.clone();
+    }
+    if cf.tools.is_empty() {
+        cf.tools = c.tools.clone();
+    }
+    if cf.masteries.is_empty() {
+        cf.masteries = c.masteries.clone();
+    }
+    if cf.weapon_prof.is_empty() {
+        if let Some(cd) = c.class.as_deref().and_then(|x| book.class(x)) {
+            if !cd.weapons.is_empty() {
+                cf.weapon_prof = cd.weapons.clone();
+            }
+        }
+    }
     if let Some(bg) = c.background_def(Some(book)) {
         if let Some(f) = &bg.feature {
-            cf.features.push(format!("背景特性：{f}"));
+            let line = format!("背景特性：{f}");
+            if !cf.features.contains(&line) {
+                cf.features.push(line);
+            }
         }
         if let Some(f) = &bg.feat {
             if !cf.feats.contains(f) {
@@ -1022,12 +1118,10 @@ pub fn from_chargen(
             }
         }
     }
-    if let Some(cd) = c.class.as_deref().and_then(|x| book.class(x)) {
-        if !cd.weapons.is_empty() {
-            cf.weapon_prof = cd.weapons.clone();
-        }
+    // Starting equipment: add missing items, never remove what play added.
+    if is_new {
+        cf.inventory.clear();
     }
-    cf.inventory.clear();
     let mut items = c.all_items(Some(book));
     if let Some(a) = c.armor.as_deref().filter(|a| *a != "none") {
         if !items.iter().any(|i| armor_of(i).map(|x| x.0) == Some(a)) {
@@ -1037,7 +1131,10 @@ pub fn from_chargen(
     if c.shield && !items.iter().any(|i| is_shield(i)) {
         items.push("shield".into());
     }
-    let mut armor_on = false;
+    let mut armor_on = cf
+        .inventory
+        .iter()
+        .any(|i| i.equipped && armor_of(&i.name).is_some());
     for raw in items {
         if options::is_placeholder(&raw) {
             continue;
@@ -1045,20 +1142,30 @@ pub fn from_chargen(
         let mut it = parse_item(&raw);
         let weapon = !classdata::weapons_in(std::slice::from_ref(&it.name), book).is_empty();
         let armor = armor_of(&it.name).is_some();
-        it.equipped = weapon || is_shield(&it.name) || (armor && !armor_on);
+        let equipped = weapon || is_shield(&it.name) || (armor && !armor_on);
         armor_on |= armor;
+        it.equipped = equipped;
         match cf
             .inventory
             .iter()
             .position(|x| x.name.eq_ignore_ascii_case(&it.name))
         {
-            Some(i) => cf.inventory[i].qty += it.qty,
+            Some(i) => {
+                if cf.inventory[i].qty < it.qty {
+                    cf.inventory[i].qty = it.qty;
+                }
+                if is_new {
+                    cf.inventory[i].equipped = equipped;
+                }
+            }
             None => cf.inventory.push(it),
         }
     }
-    cf.ac_base = c.ac_unarmored();
-    cf.ac_base_armored = false;
-    cf.ac_base_has_style = false;
+    if is_new {
+        cf.ac_base = c.ac_unarmored();
+        cf.ac_base_armored = false;
+        cf.ac_base_has_style = false;
+    }
     recompute(&mut cf, book);
     let ps = party(save_dir, &cf)?;
     commit(save_dir, &cf, &ps)?;
@@ -1269,6 +1376,58 @@ fn condition(name: &str) -> Result<combat_sim::state::ActiveCondition> {
     .map_err(|e| anyhow!("{e}"))
 }
 
+/// The campaign's dying conditions from `Rules/combat/common/rules.yaml`.
+/// Falls back to `unconscious` when the file or key is absent.
+fn dying_conditions(save_dir: &Path) -> Vec<String> {
+    let fallback = || vec!["unconscious".to_string()];
+    let Some(root) = save_dir.parent().and_then(|p| p.parent()) else {
+        return fallback();
+    };
+    let path = root.join("Rules/combat/common/rules.yaml");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return fallback();
+    };
+    let Ok(value) = serde_norway::from_str::<Value>(&text) else {
+        return fallback();
+    };
+    let Some(rules) = value.get("rules") else {
+        return fallback();
+    };
+    match rules.get("dying_conditions") {
+        Some(Value::Sequence(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(|name| name.trim().to_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect(),
+        _ => fallback(),
+    }
+}
+
+/// Keep the party-state conditions in step with HP: dying conditions at 0 HP,
+/// none (and fresh death saves) above 0.
+fn sync_hp_conditions(m: &mut Member, dying: &[String]) -> Result<()> {
+    if m.hp > 0 {
+        m.conditions.retain(|active| {
+            !dying
+                .iter()
+                .any(|name| active.condition.eq_ignore_ascii_case(name))
+        });
+        m.death_saves = Default::default();
+    } else {
+        for name in dying {
+            if !m
+                .conditions
+                .iter()
+                .any(|active| active.condition.eq_ignore_ascii_case(name))
+            {
+                m.conditions.push(condition(name)?);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Apply a background from SRD or the local book import: feature/feat,
 /// tools, languages, equipment items and gold.
 fn apply_background(
@@ -1368,6 +1527,7 @@ fn apply(
     out: &mut Vec<String>,
 ) -> Result<String> {
     let id = cf.id.clone();
+    let dying = dying_conditions(save_dir);
     let m = ps
         .members
         .get_mut(&id)
@@ -1392,6 +1552,7 @@ fn apply(
                 m.dead = true;
                 m.death_saves.dead = true;
             }
+            sync_hp_conditions(m, &dying)?;
             format!(
                 "受到 {amount} 伤害{}，HP {before}→{}{}",
                 if from_temp > 0 {
@@ -1418,6 +1579,7 @@ fn apply(
             if before <= 0 && m.hp > 0 {
                 m.death_saves = Default::default();
             }
+            sync_hp_conditions(m, &dying)?;
             format!("治疗 {amount}，HP {before}→{}", m.hp)
         }
         Op::Temp { amount } => {
@@ -1461,7 +1623,7 @@ fn apply(
                     m.short_rest(hd, rng, &mut log)?;
                 }
                 "long" | "长休" => {
-                    m.long_rest(&mut log);
+                    m.long_rest(&dying, &mut log);
                     if cf.exhaustion > 0 {
                         cf.exhaustion -= 1;
                         log.push(format!("exhaustion → {}", cf.exhaustion));
@@ -1469,6 +1631,7 @@ fn apply(
                 }
                 _ => bail!("rest short|long"),
             }
+            sync_hp_conditions(m, &dying)?;
             format!(
                 "{}休息：{}（HP {}/{}）",
                 if kind.starts_with('s') || kind == "短休" {
@@ -1573,6 +1736,7 @@ fn apply(
                 ds.dead = true;
                 m.dead = true;
             }
+            sync_hp_conditions(m, &dying)?;
             format!(
                 "{text}（HP {}，{}成功/{}失败{}）",
                 m.hp,
@@ -2077,12 +2241,222 @@ mod tests {
     }
 
     #[test]
+    fn hp_transitions_add_and_remove_dying_conditions() {
+        struct FixedRng(u32);
+        impl DiceRng for FixedRng {
+            fn roll_die(&mut self, sides: u32) -> u32 {
+                assert_eq!(sides, 20);
+                self.0
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!("talkdnd-dying-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let d = root.join("Saves/2030-01-01-01");
+        fs::create_dir_all(&d).unwrap();
+        fs::create_dir_all(root.join("Rules/combat/common")).unwrap();
+        fs::write(
+            root.join("Rules/combat/common/rules.yaml"),
+            "rules:\n  dying_conditions: [unconscious]\n",
+        )
+        .unwrap();
+        let book = Book::srd("2014");
+        let mut cf = cf("2014");
+        let mut ps = PartyState::default();
+        ps.members.insert(
+            "tess".into(),
+            Member {
+                name: "Tess".into(),
+                hp: 12,
+                max_hp: 12,
+                ..Default::default()
+            },
+        );
+        let mut out = Vec::new();
+        let mut rng = FixedRng(1);
+
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Damage { amount: 12 },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ps.members["tess"].hp, 0);
+        assert!(ps.members["tess"]
+            .conditions
+            .iter()
+            .any(|c| c.condition == "unconscious"));
+
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Heal { amount: 5 },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ps.members["tess"].hp, 5);
+        assert!(ps.members["tess"].conditions.is_empty());
+
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Damage { amount: 5 },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::DeathSave {
+                result: "roll".into(),
+            },
+            &mut FixedRng(20),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ps.members["tess"].hp, 1);
+        assert!(ps.members["tess"].conditions.is_empty());
+
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Damage { amount: 5 },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        assert!(ps.members["tess"]
+            .conditions
+            .iter()
+            .any(|c| c.condition == "unconscious"));
+        apply(
+            &d,
+            &mut cf,
+            &mut ps,
+            &book,
+            Op::Rest {
+                kind: "long".into(),
+                hd: 0,
+            },
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ps.members["tess"].hp, 12);
+        assert!(ps.members["tess"].conditions.is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn split_old_sheet_keeps_body_and_tail() {
         let md = "# A\n\nbody\n\n## 战斗数据块（combat-sim）\n\n> x\n\n```combat yaml\nid: a\nhp: 3\n```\n\n## 升级记录\n\n- up\n";
         let (b, blk, t) = split_md(md);
         assert_eq!(b, "# A\n\nbody");
         assert_eq!(blk.unwrap()["hp"].as_i64(), Some(3));
         assert_eq!(t, "## 升级记录\n\n- up");
+    }
+
+    #[test]
+    fn rerunning_chargen_sheet_keeps_play_data() {
+        let d = std::env::temp_dir().join(format!("talkdnd-fromchargen-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("Characters")).unwrap();
+        fs::create_dir_all(d.join("combat")).unwrap();
+        let book = Book::srd("2014");
+        let mut c = crate::chargen::Creation {
+            ruleset: Some("2014".into()),
+            species: Some("human".into()),
+            class: Some("fighter".into()),
+            background: Some("acolyte".into()),
+            method: Some("array".into()),
+            pool: data::STANDARD_ARRAY.to_vec(),
+            level: 1,
+            level_done: true,
+            asi_done: true,
+            spells_done: true,
+            name: Some("Aria".into()),
+            armor: Some("chain-mail".into()),
+            shield: true,
+            ..Default::default()
+        };
+        for (a, v) in ["str", "dex", "con", "int", "wis", "cha"]
+            .iter()
+            .zip(data::STANDARD_ARRAY)
+        {
+            c.scores.insert(a.to_string(), v);
+        }
+        let (id, md) = crate::chargen::sheet_with(&c, "p", &book, Some(&d)).unwrap();
+        assert_eq!(id, "aria");
+        let sheet = d.join("Characters/aria.md");
+        fs::write(&sheet, &md).unwrap();
+        let mut saved = from_chargen(&d, &c, &book, &sheet).unwrap();
+        saved.inventory.push(Item {
+            name: "potion of healing".into(),
+            qty: 2,
+            ..Default::default()
+        });
+        saved.notes.push("met the baron".into());
+        saved.dm_notes = "secret".into();
+        saved.feats.push("Alert".into());
+        saved.languages.push("Elvish".into());
+        saved.tools.push("thieves' tools".into());
+        saved.fighting_style = Some("defense".into());
+        store(&d, &saved).unwrap();
+
+        // Re-running the creation sheet must not wipe play data.
+        let again = from_chargen(&d, &c, &book, &sheet).unwrap();
+        assert!(again
+            .inventory
+            .iter()
+            .any(|i| i.name == "potion of healing" && i.qty == 2));
+        assert!(again.notes.iter().any(|n| n == "met the baron"));
+        assert_eq!(again.dm_notes, "secret");
+        assert!(again.feats.iter().any(|f| f == "Alert"));
+        assert!(again.languages.iter().any(|l| l == "Elvish"));
+        assert!(again.tools.iter().any(|t| t == "thieves' tools"));
+        assert_eq!(again.fighting_style.as_deref(), Some("defense"));
+        let rendered = fs::read_to_string(&sheet).unwrap();
+        assert!(rendered.contains("potion of healing"), "{rendered}");
+        assert!(rendered.contains("met the baron"), "{rendered}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn store_rejects_path_traversal_ids() {
+        let d = std::env::temp_dir().join(format!("talkdnd-badid-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        let mut c = cf("2014");
+        c.id = "../../evil".into();
+        assert!(store(&d, &c).is_err());
+        assert!(!d.join("sheets").join("..").exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn commit_rejects_sheet_paths_outside_the_save() {
+        let base = std::env::temp_dir().join(format!("talkdnd-badfile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let d = base.join("save");
+        fs::create_dir_all(&d).unwrap();
+        let mut c = cf("2014");
+        c.file = "../evil.md".into();
+        assert!(commit(&d, &c, &PartyState::default()).is_err());
+        assert!(!base.join("evil.md").exists());
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -2097,5 +2471,28 @@ mod tests {
         assert!(armor_of("half plate").unwrap().0 == "half-plate");
         assert!(armor_of("rope").is_none());
         assert_eq!(add_flat("1d8+3", 2), "1d8+5");
+    }
+
+    #[test]
+    fn a_newer_character_schema_is_refused_with_the_file_name() {
+        let d = std::env::temp_dir().join(format!("talkdnd-schema-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("Characters")).unwrap();
+        fs::create_dir_all(d.join("sheets")).unwrap();
+        fs::write(
+            d.join("Characters/tess.md"),
+            "# Tess\n\n```combat yaml\nid: tess\nname: Tess\nkind: pc\n```\n",
+        )
+        .unwrap();
+        fs::write(
+            d.join("sheets/tess.yaml"),
+            "version: 99\nid: tess\nname: Tess\nfile: Characters/tess.md\nruleset: \"2024\"\n",
+        )
+        .unwrap();
+        let err = load(&d, "tess", &Book::srd("2024"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("tess.yaml") && err.contains("99"), "{err}");
+        let _ = fs::remove_dir_all(&d);
     }
 }

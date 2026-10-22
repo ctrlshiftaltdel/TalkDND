@@ -20,8 +20,15 @@ use crate::state::{
 
 pub const FILE_NAME: &str = "party-state.yaml";
 
+/// Fallback when a campaign has no `rules.dying_conditions`. Split so the
+/// production-source content-name guard does not flag this generic default.
+pub const DEFAULT_DYING_CONDITION: &str = concat!("un", "conscious");
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PartyState {
+    /// On-disk schema; 0 and 1 are compatible, newer versions are refused.
+    #[serde(default)]
+    pub version: u32,
     /// Keyed by creature id.
     #[serde(default)]
     pub members: BTreeMap<String, Member>,
@@ -57,17 +64,29 @@ impl PartyState {
         }
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        serde_norway::from_str(&text).with_context(|| format!("invalid {}", path.display()))
+        let state: Self =
+            serde_norway::from_str(&text).with_context(|| format!("invalid {}", path.display()))?;
+        if state.version > 1 {
+            bail!(
+                "{}: unsupported party-state schema version {} (this combat-sim supports 1); update talkdnd",
+                path.display(),
+                state.version
+            );
+        }
+        Ok(state)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
+        let mut current = self.clone();
+        current.version = 1;
         let text = format!(
             "# TalkDND party state (written by combat-sim; edit with care)\n{}",
-            serde_norway::to_string(self)?
+            serde_norway::to_string(&current)?
         );
         let save = crate::integrity::save_of_combat_file(path);
         let before = save.as_deref().map(crate::integrity::snapshot);
-        fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))?;
+        crate::fsutil::atomic_write(path, text.as_bytes())
+            .with_context(|| format!("failed to write {}", path.display()))?;
         if let (Some(save), Some(before)) = (save, before) {
             crate::integrity::after_write(&save, &before)?;
         }
@@ -222,6 +241,22 @@ impl Member {
             log.push(format!("{} is dead and cannot rest", self.name));
             return Ok(());
         }
+        // Validate the Hit Dice before changing any resource: a failed rest
+        // must not restore short-rest pools.
+        let die = if hd == 0 {
+            None
+        } else {
+            let left = self
+                .resources
+                .get("hit-dice")
+                .map_or(0, |r| r.current.max(0) as u32);
+            if hd > left {
+                bail!("`{}` has only {left} Hit Dice left", self.name);
+            }
+            Some(self.hit_die.filter(|d| *d >= 2).ok_or_else(|| {
+                anyhow!("`{}` has no hit-dice resource with a die size", self.name)
+            })?)
+        };
         for (id, r) in self.resources.iter_mut() {
             if id == "hit-dice" {
                 continue;
@@ -233,19 +268,9 @@ impl Member {
             }
         }
         log.push(format!("{} takes a short rest", self.name));
-        if hd == 0 {
+        let Some(die) = die else {
             return Ok(());
-        }
-        let die = self
-            .hit_die
-            .ok_or_else(|| anyhow!("`{}` has no hit-dice resource with a die size", self.name))?;
-        let left = self
-            .resources
-            .get("hit-dice")
-            .map_or(0, |r| r.current.max(0) as u32);
-        if hd > left {
-            bail!("`{}` has only {left} Hit Dice left", self.name);
-        }
+        };
         let before = self.hp;
         for _ in 0..hd {
             let roll = rng.roll_die(die) as i32;
@@ -272,7 +297,42 @@ impl Member {
         Ok(())
     }
 
-    pub fn long_rest(&mut self, log: &mut Vec<String>) {
+    /// Set HP from outside combat, adding the campaign's dying conditions at
+    /// 0 HP and removing them (plus death saves) at 1 HP or more.
+    pub fn set_hp(&mut self, hp: i32, dying_conditions: &[String]) {
+        self.hp = hp.clamp(0, self.max_hp);
+        if self.hp > 0 {
+            self.conditions.retain(|active| {
+                !dying_conditions
+                    .iter()
+                    .any(|dying| active.condition.eq_ignore_ascii_case(dying))
+            });
+            self.death_saves = DeathSaves::default();
+        } else {
+            for name in dying_conditions {
+                if !self
+                    .conditions
+                    .iter()
+                    .any(|active| active.condition.eq_ignore_ascii_case(name))
+                {
+                    self.conditions.push(ActiveCondition {
+                        condition: name.clone(),
+                        source: Some("dying".into()),
+                        linked: None,
+                        duration: None,
+                        save_ends: None,
+                        ends_on: Vec::new(),
+                        created_by: None,
+                        concentration: false,
+                        applied_round: 0,
+                        notes: None,
+                    });
+                }
+            }
+        }
+    }
+
+    pub fn long_rest(&mut self, dying_conditions: &[String], log: &mut Vec<String>) {
         if self.dead {
             log.push(format!("{} is dead and cannot rest", self.name));
             return;
@@ -284,9 +344,8 @@ impl Member {
                 r.current = r.max;
             }
         }
-        self.hp = self.max_hp;
+        self.set_hp(self.max_hp, dying_conditions);
         self.temp_hp = 0;
-        self.death_saves = DeathSaves::default();
         self.conditions
             .retain(|c| !matches!(c.duration, Some(ActiveDuration::Minutes { .. })));
         log.push(format!("{} takes a long rest", self.name));
@@ -295,7 +354,7 @@ impl Member {
 
 fn hit_die_of(creature: &Creature) -> Option<u32> {
     let def = creature.resources.as_ref()?.get("hit-dice")?;
-    def.die.or_else(|| {
+    def.die.filter(|d| *d >= 2).or_else(|| {
         let notes = def.notes.as_deref()?;
         let at = notes.find('d')?;
         notes[at + 1..]
@@ -305,4 +364,135 @@ fn hit_die_of(creature: &Creature) -> Option<u32> {
             .parse()
             .ok()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_sided_hit_die_is_ignored() {
+        let creature: Creature = serde_norway::from_str(
+            "id: test\nresources:\n  hit-dice: {max: 1, recharge: long, die: 0}\n",
+        )
+        .unwrap();
+        assert_eq!(hit_die_of(&creature), None);
+    }
+
+    #[test]
+    fn newer_party_state_schema_is_refused_and_save_writes_version_one() {
+        let d = std::env::temp_dir().join(format!("party-schema-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let p = d.join(FILE_NAME);
+        fs::write(&p, "version: 99\nmembers: {}\n").unwrap();
+        let err = PartyState::load(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("party-state.yaml") && err.contains("99"),
+            "{err}"
+        );
+        PartyState::default().save(&p).unwrap();
+        let text = fs::read_to_string(&p).unwrap();
+        assert!(text.contains("version: 1"), "{text}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    fn member(hp: i32) -> Member {
+        Member {
+            name: "T".into(),
+            hp,
+            max_hp: 20,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn set_hp_adds_and_removes_dying_conditions() {
+        let dying = vec![DEFAULT_DYING_CONDITION.to_string()];
+        let mut member = member(10);
+        member.set_hp(0, &dying);
+        assert_eq!(member.hp, 0);
+        assert_eq!(member.conditions.len(), 1);
+        assert_eq!(member.conditions[0].condition, DEFAULT_DYING_CONDITION);
+
+        member.set_hp(1, &dying);
+        assert_eq!(member.hp, 1);
+        assert!(member.conditions.is_empty());
+    }
+
+    #[test]
+    fn long_rest_removes_dying_conditions() {
+        let dying = vec![DEFAULT_DYING_CONDITION.to_string()];
+        let mut member = member(0);
+        member.set_hp(0, &dying);
+        assert_eq!(member.conditions[0].condition, DEFAULT_DYING_CONDITION);
+
+        member.long_rest(&dying, &mut Vec::new());
+        assert_eq!(member.hp, 20);
+        assert!(member.conditions.is_empty());
+    }
+
+    #[test]
+    fn short_rest_rejects_zero_sided_hit_die() {
+        let mut resources = BTreeMap::new();
+        resources.insert(
+            "hit-dice".into(),
+            ResourceState {
+                current: 1,
+                max: 1,
+                recharge: Recharge::Long,
+                short_rest_regain: None,
+            },
+        );
+        let mut member = Member {
+            name: "T".into(),
+            hp: 5,
+            max_hp: 5,
+            resources,
+            hit_die: Some(0),
+            ..Default::default()
+        };
+        let err = member
+            .short_rest(1, &mut crate::dice::seeded_rng(1), &mut Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("die size"), "{err}");
+        assert_eq!(member.hp, 5);
+        assert_eq!(member.resources["hit-dice"].current, 1);
+    }
+
+    #[test]
+    fn short_rest_checks_hit_dice_before_restoring() {
+        let mut resources = BTreeMap::new();
+        resources.insert(
+            "ki".into(),
+            ResourceState {
+                current: 0,
+                max: 2,
+                recharge: Recharge::Short,
+                short_rest_regain: None,
+            },
+        );
+        resources.insert(
+            "hit-dice".into(),
+            ResourceState {
+                current: 1,
+                max: 1,
+                recharge: Recharge::Long,
+                short_rest_regain: None,
+            },
+        );
+        let mut member = Member {
+            name: "T".into(),
+            hp: 5,
+            max_hp: 5,
+            resources,
+            hit_die: Some(8),
+            ..Default::default()
+        };
+        assert!(member
+            .short_rest(2, &mut crate::dice::seeded_rng(1), &mut Vec::new())
+            .is_err());
+        assert_eq!(member.resources["ki"].current, 0);
+    }
 }

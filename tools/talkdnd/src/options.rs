@@ -151,7 +151,9 @@ pub fn class_equipment(
     rng: &mut dyn DiceRng,
 ) -> Result<Resolved> {
     let Some(ce) = data().class_equipment.get(rs).and_then(|m| m.get(class)) else {
-        bail!("no starting-equipment data for {rs} `{class}`: list the items with `chargen set equipment` and the gold with `chargen set gold`");
+        bail!(
+            "no starting-equipment data for {rs} `{class}`: list the items with `chargen set equipment` and add gold with `talkdnd loot add --gp N --to party`"
+        );
     };
     let choice = choice.trim();
     if !ce.options.is_empty() {
@@ -281,6 +283,17 @@ mod tests {
         assert!(a.contains(&"dueling".to_string()));
         assert!(!a.contains(&"blessed-warrior".to_string()));
         assert!(style_for_class("2014", "rogue").is_none());
+    }
+
+    #[test]
+    fn class_equipment_hint_names_real_commands() {
+        let mut rng = combat_sim::dice::seeded_rng(1);
+        let err = class_equipment("2014", "no-such-class", "a", &mut rng)
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("chargen set gold"), "{err}");
+        assert!(err.contains("chargen set equipment"), "{err}");
+        assert!(err.contains("talkdnd loot add --gp"), "{err}");
     }
 
     #[test]

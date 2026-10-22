@@ -25,6 +25,9 @@ fn clean_index_exits_zero_and_prints_nothing() {
         "LetsPlay/Rules/rulings.md",
         "LetsPlay/Rules/rulings-2014.md",
         "LetsPlay/Rules/rulings-2024.md",
+        "LetsPlay/Rules/defaults/rulings.md",
+        "LetsPlay/Rules/defaults/rulings-2014.md",
+        "LetsPlay/Rules/defaults/rulings-2024.md",
         "LetsPlay/Rules/combat/rulings-house.md",
         "LetsPlay/Rules/2014/README.md",
         "LetsPlay/Rules/2024/README.md",
@@ -112,6 +115,8 @@ fn leaks_print_paths_only_and_exit_one() {
     ];
     let allowed = [
         "LetsPlay/Rules/rulings.md",
+        "LetsPlay/Rules/defaults/rulings.md",
+        "LetsPlay/Rules/defaults/rulings-2024.md",
         "LetsPlay/Rules/combat/rulings-house.md",
         "LetsPlay/Rules/2014/README.md",
         "LetsPlay/Adventures/README.md",

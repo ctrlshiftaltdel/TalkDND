@@ -940,15 +940,13 @@ pub fn init_with_modes(
             rows.push((index, *total, true));
             continue;
         }
-        let mode = modes.iter().filter(|(target, _)| *target == index).fold(
-            RollMode::Normal,
-            |acc, (_, mode)| match (acc, *mode) {
-                (RollMode::Normal, other) => other,
-                (current, RollMode::Normal) => current,
-                (current, other) if current == other => current,
-                _ => RollMode::Normal,
-            },
-        );
+        let has_advantage = modes
+            .iter()
+            .any(|(target, mode)| *target == index && *mode == RollMode::Advantage);
+        let has_disadvantage = modes
+            .iter()
+            .any(|(target, mode)| *target == index && *mode == RollMode::Disadvantage);
+        let mode = RollMode::from_flags(has_advantage, has_disadvantage);
         let roll = D20Roll::roll(combatant.creature.init_bonus(), mode, rng);
         combatant.initiative_total = Some(roll.total);
         log.log(format_args!(
@@ -1831,7 +1829,8 @@ fn forecast_profile(
         damage_type: None,
         source_tags: profile.tags.clone(),
     };
-    let mut mode = RollMode::Normal;
+    let mut has_advantage = false;
+    let mut has_disadvantage = false;
     let mut auto_crit = false;
     if !fast_path {
         for collected in collect_modifiers(
@@ -1842,8 +1841,8 @@ fn forecast_profile(
             source,
         ) {
             match collected.modifier.effect {
-                ModifierEffect::Advantage => mode = add_advantage(mode),
-                ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
+                ModifierEffect::Advantage => has_advantage = true,
+                ModifierEffect::Disadvantage => has_disadvantage = true,
                 _ => {}
             }
         }
@@ -1855,8 +1854,8 @@ fn forecast_profile(
             None,
         ) {
             match collected.modifier.effect {
-                ModifierEffect::Advantage => mode = add_advantage(mode),
-                ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
+                ModifierEffect::Advantage => has_advantage = true,
+                ModifierEffect::Disadvantage => has_disadvantage = true,
                 ModifierEffect::AutoCrit => auto_crit = true,
                 _ => {}
             }
@@ -1892,25 +1891,26 @@ fn forecast_profile(
             if kind != AttackKind::Melee
                 && profile.range.is_some_and(|[normal, _]| distance > normal)
             {
-                mode = add_disadvantage(mode);
+                has_disadvantage = true;
             }
             if kind != AttackKind::Melee && hostile_within_5(state, attacker) {
-                mode = add_disadvantage(mode);
+                has_disadvantage = true;
             }
             if space.light_at(target_position) == Light::Dark
                 && !has_dark_sense(&state.combatants[attacker])
             {
-                mode = add_disadvantage(mode);
+                has_disadvantage = true;
             }
             if space.light_at(attacker_position) == Light::Dark
                 && !has_dark_sense(&state.combatants[target])
             {
-                mode = add_advantage(mode);
+                has_advantage = true;
             }
         } else {
             in_range = false;
         }
     }
+    let mode = RollMode::from_flags(has_advantage, has_disadvantage);
     let advantage = mode == RollMode::Advantage;
     let disadvantage = mode == RollMode::Disadvantage;
     let crit_chance = if auto_crit {
@@ -1967,7 +1967,8 @@ pub fn simple_attack_forecast(
     let mut ac = state.combatants[target].creature.ac();
     let mut in_range = true;
     let mut total_cover = false;
-    let mut mode = RollMode::Normal;
+    let mut has_advantage = false;
+    let mut has_disadvantage = false;
     let attacker_position = state.combatants[attacker].position_ref();
     let target_position = state.combatants[target].position_ref();
     if let Some(space) = space.as_ref() {
@@ -2000,20 +2001,20 @@ pub fn simple_attack_forecast(
             if effective_kind != AttackKind::Melee
                 && range.is_some_and(|[normal, _]| distance > normal)
             {
-                mode = add_disadvantage(mode);
+                has_disadvantage = true;
             }
             if effective_kind != AttackKind::Melee && hostile_within_5(state, attacker) {
-                mode = add_disadvantage(mode);
+                has_disadvantage = true;
             }
             if space.light_at(target_position) == Light::Dark
                 && !has_dark_sense(&state.combatants[attacker])
             {
-                mode = add_disadvantage(mode);
+                has_disadvantage = true;
             }
             if space.light_at(attacker_position) == Light::Dark
                 && !has_dark_sense(&state.combatants[target])
             {
-                mode = add_advantage(mode);
+                has_advantage = true;
             }
         } else {
             in_range = false;
@@ -2022,6 +2023,7 @@ pub fn simple_attack_forecast(
     if total_cover {
         in_range = false;
     }
+    let mode = RollMode::from_flags(has_advantage, has_disadvantage);
     let advantage = mode == RollMode::Advantage;
     let disadvantage = mode == RollMode::Disadvantage;
     let crit_chance = match mode {
@@ -2118,7 +2120,8 @@ pub fn save_fail_chance(
     attacker: Option<usize>,
 ) -> f64 {
     let combatant = &state.combatants[target];
-    let mut mode = RollMode::Normal;
+    let mut has_advantage = false;
+    let mut has_disadvantage = false;
     let mut auto_fail = false;
     let mut bonus = 0.0;
     if has_modifier_sources(state, target) {
@@ -2141,8 +2144,8 @@ pub fn save_fail_chance(
         };
         for collected in collect_modifiers(state, target, ModifierApplies::Save, &context, None) {
             match collected.modifier.effect {
-                ModifierEffect::Advantage => mode = add_advantage(mode),
-                ModifierEffect::Disadvantage => mode = add_disadvantage(mode),
+                ModifierEffect::Advantage => has_advantage = true,
+                ModifierEffect::Disadvantage => has_disadvantage = true,
                 ModifierEffect::AutoFail => auto_fail = true,
                 ModifierEffect::Bonus => {
                     if let Some(value) = &collected.modifier.value {
@@ -2172,6 +2175,7 @@ pub fn save_fail_chance(
         }
     }
     let need = f64::from(dc) - f64::from(combatant.save_bonus(ability)) - bonus;
+    let mode = RollMode::from_flags(has_advantage, has_disadvantage);
     let success = d20_at_least(need, mode);
     1.0 - success
 }
@@ -2600,7 +2604,10 @@ fn resolve_attack_inner(
 
     let attacker_name = state.combatants[attacker].name.clone();
     let target_name = state.combatants[target].name.clone();
-    let mut mode = RollMode::from_flags(options.advantage, options.disadvantage);
+    // Collect both flags from every source, then resolve once: any advantage
+    // plus any disadvantage cancels to a normal roll.
+    let mut has_advantage = options.advantage;
+    let mut has_disadvantage = options.disadvantage;
     let mut advantage_sources = Vec::new();
     let mut disadvantage_sources = Vec::new();
     if options.advantage {
@@ -2663,11 +2670,11 @@ fn resolve_attack_inner(
             match collected.modifier.effect {
                 ModifierEffect::Advantage => {
                     advantage_sources.push(collected.label.clone());
-                    mode = add_advantage(mode);
+                    has_advantage = true;
                 }
                 ModifierEffect::Disadvantage => {
                     disadvantage_sources.push(collected.label.clone());
-                    mode = add_disadvantage(mode);
+                    has_disadvantage = true;
                 }
                 _ => {}
             }
@@ -2682,11 +2689,11 @@ fn resolve_attack_inner(
             match collected.modifier.effect {
                 ModifierEffect::Advantage => {
                     advantage_sources.push(collected.label.clone());
-                    mode = add_advantage(mode);
+                    has_advantage = true;
                 }
                 ModifierEffect::Disadvantage => {
                     disadvantage_sources.push(collected.label.clone());
-                    mode = add_disadvantage(mode);
+                    has_disadvantage = true;
                 }
                 _ => {}
             }
@@ -2731,11 +2738,11 @@ fn resolve_attack_inner(
                 }
                 if distance > normal {
                     disadvantage_sources.push("long range".to_string());
-                    mode = add_disadvantage(mode);
+                    has_disadvantage = true;
                 }
                 if hostile_within_5(state, attacker) {
                     disadvantage_sources.push("ranged in melee".to_string());
-                    mode = add_disadvantage(mode);
+                    has_disadvantage = true;
                 }
             }
         }
@@ -2744,13 +2751,13 @@ fn resolve_attack_inner(
         && !has_dark_sense(&state.combatants[attacker])
     {
         disadvantage_sources.push("darkness".to_string());
-        mode = add_disadvantage(mode);
+        has_disadvantage = true;
     }
     if space.light_at(attacker_position) == Light::Dark
         && !has_dark_sense(&state.combatants[target])
     {
         advantage_sources.push("unseen".to_string());
-        mode = add_advantage(mode);
+        has_advantage = true;
     }
     drop(space);
 
@@ -2811,6 +2818,7 @@ fn resolve_attack_inner(
             .with_context(|| format!("attack `{}` to_hit", profile.name))?
             .modifier
     };
+    let mode = RollMode::from_flags(has_advantage, has_disadvantage);
     let result = if log.enabled() {
         roll_d20(
             state,
@@ -2978,22 +2986,6 @@ fn resolve_attack_inner(
         );
     }
     Ok(())
-}
-
-fn add_advantage(mode: RollMode) -> RollMode {
-    match mode {
-        RollMode::Normal => RollMode::Advantage,
-        RollMode::Disadvantage => RollMode::Normal,
-        RollMode::Advantage => RollMode::Advantage,
-    }
-}
-
-fn add_disadvantage(mode: RollMode) -> RollMode {
-    match mode {
-        RollMode::Normal => RollMode::Disadvantage,
-        RollMode::Advantage => RollMode::Normal,
-        RollMode::Disadvantage => RollMode::Disadvantage,
-    }
 }
 
 fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
@@ -3999,7 +3991,8 @@ fn save_modifiers(
         damage_type: None,
         source_tags: Vec::new(),
     };
-    let mut mode = RollMode::Normal;
+    let mut has_advantage = false;
+    let mut has_disadvantage = false;
     let mut advantages = Vec::new();
     let mut disadvantages = Vec::new();
     let mut bonuses = Vec::new();
@@ -4010,11 +4003,11 @@ fn save_modifiers(
         match collected.modifier.effect {
             ModifierEffect::Advantage => {
                 advantages.push(collected.label.clone());
-                mode = add_advantage(mode);
+                has_advantage = true;
             }
             ModifierEffect::Disadvantage => {
                 disadvantages.push(collected.label.clone());
-                mode = add_disadvantage(mode);
+                has_disadvantage = true;
             }
             ModifierEffect::AutoFail => auto_fail = true,
             ModifierEffect::Bonus => {
@@ -4041,6 +4034,7 @@ fn save_modifiers(
         None,
         &mut Vec::new(),
     );
+    let mode = RollMode::from_flags(has_advantage, has_disadvantage);
     Ok((mode, bonuses, advantages, disadvantages, auto_fail))
 }
 
@@ -4435,18 +4429,19 @@ fn check_modifiers(
         damage_type: None,
         source_tags: Vec::new(),
     };
-    let mut mode = RollMode::Normal;
+    let mut has_advantage = false;
+    let mut has_disadvantage = false;
     let mut advantages = Vec::new();
     let mut disadvantages = Vec::new();
     for collected in collect_modifiers(state, who, ModifierApplies::Check, &context, None) {
         match collected.modifier.effect {
             ModifierEffect::Advantage => {
                 advantages.push(collected.label.clone());
-                mode = add_advantage(mode);
+                has_advantage = true;
             }
             ModifierEffect::Disadvantage => {
                 disadvantages.push(collected.label.clone());
-                mode = add_disadvantage(mode);
+                has_disadvantage = true;
             }
             _ => {}
         }
@@ -4459,7 +4454,11 @@ fn check_modifiers(
         None,
         &mut Vec::new(),
     );
-    (mode, advantages, disadvantages)
+    (
+        RollMode::from_flags(has_advantage, has_disadvantage),
+        advantages,
+        disadvantages,
+    )
 }
 
 fn apply_basic_action(
@@ -5321,44 +5320,29 @@ fn apply_damage_rolls(
     } else {
         String::new()
     };
-    let (total, parts) = if log.enabled() {
-        let mut grouped: BTreeMap<String, (i32, Vec<String>)> = BTreeMap::new();
-        for (record, damage_type) in &rolls {
-            let mitigated = mitigate(
-                state,
-                target,
-                source,
-                record.total,
-                damage_type,
-                source_tags,
-            )?;
-            let entry = grouped
-                .entry(damage_type.clone())
-                .or_insert_with(|| (0, Vec::new()));
-            entry.0 += mitigated;
+    // Resistance, vulnerability and immunity apply once to the summed raw
+    // damage of each type, not to each part separately: two 1-point slashing
+    // parts against resistance deal 1, not 0 + 0.
+    let logging = log.enabled();
+    let mut grouped: BTreeMap<String, (i32, Vec<String>)> = BTreeMap::new();
+    for (record, damage_type) in &rolls {
+        let entry = grouped
+            .entry(damage_type.clone())
+            .or_insert_with(|| (0, Vec::new()));
+        entry.0 += record.total;
+        if logging {
             entry.1.push(record.text.clone());
         }
-        let mut total = 0;
-        let mut parts = Vec::new();
-        for (damage_type, (amount, formulas)) in grouped {
-            total += amount;
+    }
+    let mut total = 0;
+    let mut parts = Vec::new();
+    for (damage_type, (raw, formulas)) in grouped {
+        let amount = mitigate(state, target, source, raw, &damage_type, source_tags)?;
+        total += amount;
+        if logging {
             parts.push(format!("{amount} {damage_type} ({})", formulas.join(", ")));
         }
-        (total, parts)
-    } else {
-        let mut total = 0;
-        for (record, damage_type) in &rolls {
-            total += mitigate(
-                state,
-                target,
-                source,
-                record.total,
-                damage_type,
-                source_tags,
-            )?;
-        }
-        (total, Vec::new())
-    };
+    }
     if total <= 0 {
         if log.enabled() {
             log.log(format_args!(
@@ -5753,6 +5737,42 @@ pub fn heal(
                     amount += extra;
                     terms.push(format!("+{extra}[{}]", collected.label));
                 }
+            }
+        }
+    }
+    // Healing received works the same as the spell `heal` effect path:
+    // bonuses and penalties from the target's conditions and features.
+    let received_context = PredicateContext {
+        self_idx: target,
+        actor: target,
+        target: Some(target),
+        attacker: None,
+        linked: None,
+        attack: AttackFacts::default(),
+        has_advantage: false,
+        has_disadvantage: false,
+        damage_dealt: 0,
+        slot_level: None,
+        current_attack_total: None,
+        current_ac: None,
+        ability: None,
+        damage_type: None,
+        source_tags: Vec::new(),
+    };
+    let received_value_context = score_context(&state.combatants[from_index.unwrap_or(target)]);
+    for collected in collect_modifiers(
+        state,
+        target,
+        ModifierApplies::HealingReceived,
+        &received_context,
+        None,
+    ) {
+        if collected.modifier.effect == ModifierEffect::Bonus {
+            if let Some(value) = &collected.modifier.value {
+                let (_, expression) = evaluate_value(&received_value_context, value)?;
+                let extra = expression.roll(rng).total;
+                amount += extra;
+                terms.push(format!("{extra:+}[{}]", collected.label));
             }
         }
     }
@@ -6982,14 +7002,14 @@ pub fn rest(
 pub fn hit_die_size(combatant: &CombatantState) -> Option<u32> {
     combatant.creature.resources.as_ref().and_then(|defs| {
         let def = defs.get("hit-dice")?;
-        def.die.or_else(|| {
+        def.die.filter(|d| *d >= 2).or_else(|| {
             let notes = def.notes.as_deref()?;
             let at = notes.find('d')?;
             let digits: String = notes[at + 1..]
                 .chars()
                 .take_while(|c| c.is_ascii_digit())
                 .collect();
-            digits.parse().ok()
+            digits.parse().ok().filter(|d| *d >= 2)
         })
     })
 }

@@ -27,6 +27,15 @@ conditions:
   - id: insulated
     modifiers:
       - {applies: damage_taken, effect: resistance, filter: {damage_type: [fire]}}
+  - id: harried-test
+    modifiers:
+      - {applies: incoming_attack, effect: disadvantage}
+  - id: pressed-test
+    modifiers:
+      - {applies: incoming_attack, effect: disadvantage}
+  - id: healing-penalty-test
+    modifiers:
+      - {applies: healing_received, effect: bonus, value: -2}
   - id: downed-test
   - id: disabled-test
     flags: [incapacitated, speed_zero]
@@ -137,6 +146,7 @@ creatures:
       - {id: gwf-blade, name: GWF Blade, kind: melee, ability: str, to_hit: 5, damage: [{dice: "2d6+2", type: slashing}], reach: 5, properties: [heavy, two-handed], reroll_damage_below: 2}
       - {id: gwf-2024, name: GWF 2024, kind: melee, ability: str, to_hit: 5, damage: [{dice: "2d6+2", type: slashing}], reach: 5, properties: [heavy, two-handed], damage_die_min: 3}
       - {id: test-bow, name: Test Bow, kind: ranged, ability: dex, to_hit: 5, damage: [{dice: "1d6+2", type: piercing}], range: [80, 320], properties: [ranged, two-handed]}
+      - {id: twin-cut, name: Twin Cut, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1", type: slashing}, {dice: "1", type: slashing}], reach: 5}
     features:
       - {ref: sneaky, params: {dice: 1d6}}
   - id: brute-a
@@ -153,6 +163,17 @@ creatures:
     vulnerabilities: [cold]
     attacks:
       - {id: club, name: Club, kind: melee, ability: str, to_hit: 3, damage: [{dice: "1d8+1", type: bludgeoning}], reach: 5, mastery: dazing}
+  - id: resistant-r
+    name: Resistant R
+    kind: monster
+    side: enemy
+    ac: 10
+    hp: 20
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10}
+    resistances: [slashing]
   - id: warden-b
     name: Warden B
     kind: pc

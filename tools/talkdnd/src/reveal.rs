@@ -5,6 +5,7 @@
 
 use crate::save;
 use anyhow::{bail, Context, Result};
+use combat_sim::fsutil::atomic_write;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,6 +26,9 @@ pub struct Fact {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Ledger {
+    /// On-disk schema; 0 and 1 are compatible, newer versions are refused.
+    #[serde(default)]
+    pub version: u32,
     #[serde(default)]
     pub facts: Vec<Fact>,
 }
@@ -39,17 +43,26 @@ pub fn load(save: &Path) -> Result<Ledger> {
         return Ok(Ledger::default());
     }
     let t = fs::read_to_string(&p)?;
-    serde_norway::from_str(&t).with_context(|| format!("invalid {}", p.display()))
+    let ledger: Ledger =
+        serde_norway::from_str(&t).with_context(|| format!("invalid {}", p.display()))?;
+    if ledger.version > 1 {
+        bail!(
+            "{}: unsupported reveals schema version {} (this talkdnd supports 1); update talkdnd",
+            p.display(),
+            ledger.version
+        );
+    }
+    Ok(ledger)
 }
 
-fn store(save: &Path, l: &Ledger) -> Result<()> {
-    fs::write(
-        path(save),
-        format!(
-            "# TalkDND revealed knowledge: facts the party has learned (player-safe; secrets stay in dm-secrets.md).\n# Edit with `talkdnd reveal add`.\n{}",
-            serde_norway::to_string(l)?
-        ),
-    )?;
+pub(crate) fn store(save: &Path, l: &Ledger) -> Result<()> {
+    let mut current = l.clone();
+    current.version = 1;
+    let text = format!(
+        "# TalkDND revealed knowledge: facts the party has learned (player-safe; secrets stay in dm-secrets.md).\n# Edit with `talkdnd reveal add`.\n{}",
+        serde_norway::to_string(&current)?
+    );
+    atomic_write(path(save), text.as_bytes())?;
     Ok(())
 }
 
@@ -179,6 +192,28 @@ mod tests {
         assert!(fs::read_to_string(d.join("Sessions/s1.md"))
             .unwrap()
             .contains("揭示 #1"));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn newer_reveals_schema_is_refused_and_store_writes_version_one() {
+        let d = std::env::temp_dir().join(format!("talkdnd-reveal-schema-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join(FILE), "version: 99\nfacts: []\n").unwrap();
+        let err = load(&d).unwrap_err().to_string();
+        assert!(err.contains("reveals.yaml") && err.contains("99"), "{err}");
+        let mut ledger = Ledger::default();
+        ledger.facts.push(Fact {
+            n: 1,
+            date: "2030-01-01".into(),
+            fact: "A fact".into(),
+            ..Default::default()
+        });
+        store(&d, &ledger).unwrap();
+        let text = fs::read_to_string(d.join(FILE)).unwrap();
+        assert!(text.contains("version: 1"), "{text}");
+        assert_eq!(load(&d).unwrap().facts.len(), 1);
         let _ = fs::remove_dir_all(&d);
     }
 }

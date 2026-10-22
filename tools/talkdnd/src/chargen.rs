@@ -4,6 +4,7 @@ use crate::data::{self, ABILITIES};
 use anyhow::{bail, Context, Result};
 use combat_sim::dice::DiceRng;
 use combat_sim::dice::RollMode;
+use combat_sim::fsutil::atomic_write;
 use combat_sim::roll::roll_command;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -152,7 +153,10 @@ pub fn load(save: &Path) -> Result<Creation> {
 }
 
 pub fn store(save: &Path, c: &Creation) -> Result<()> {
-    fs::write(state_path(save), serde_json::to_string_pretty(c)? + "\n")?;
+    atomic_write(
+        state_path(save),
+        (serde_json::to_string_pretty(c)? + "\n").as_bytes(),
+    )?;
     Ok(())
 }
 
@@ -823,6 +827,18 @@ pub fn slug(s: &str) -> String {
     out.trim_end_matches('-').to_string()
 }
 
+/// A safe id for file names and references: lowercase ASCII letters, digits
+/// and hyphens, starting with a letter or digit.
+pub fn valid_id(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    s.len() <= 80
+        && (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 fn yaml_str(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
@@ -1229,6 +1245,18 @@ mod tests {
             c.scores.insert(a.to_string(), v);
         }
         c
+    }
+
+    #[test]
+    fn ids_are_path_safe() {
+        assert_eq!(slug("../../evil"), "evil");
+        assert_eq!(slug("Aria"), "aria");
+        assert!(valid_id("evil"));
+        assert!(valid_id("a-1"));
+        assert!(!valid_id("../evil"));
+        assert!(!valid_id("Aria"));
+        assert!(!valid_id("a/b"));
+        assert!(!valid_id(""));
     }
 
     #[test]

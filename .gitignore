@@ -9,13 +9,13 @@ Rules/2014/*
 !Rules/2014/README.md
 Rules/2024/*
 !Rules/2024/README.md
-# loose rulebook files directly under Rules/ (only our own rulings are tracked)
+# loose rulebook files directly under Rules/ (only our own rulings are tracked;
+# shipped rulings defaults live in LetsPlay/Rules/defaults/ and user copies in
+# LetsPlay/Rules/rulings*.md stay local)
 LetsPlay/Rules/*.md
 LetsPlay/Rules/*.pdf
-!LetsPlay/Rules/rulings*.md
 Rules/*.md
 Rules/*.pdf
-!Rules/rulings*.md
 LetsPlay/Adventures/*
 !LetsPlay/Adventures/README.md
 Adventures/*
@@ -60,6 +60,9 @@ combat-state.json
 
 # Agent-Orchestration single-user machine-local state
 .orchestration/
+# talkdnd local update state (installed file list, obsolete files, default hashes)
+.talkdnd/
+LetsPlay/.talkdnd-files.txt
 # Worktree root: one execution instance per worktree, at a fixed path
 .worktrees/
 # Private machine-local files (never committed): .env, host info, release-scan rules

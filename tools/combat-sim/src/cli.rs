@@ -1070,7 +1070,8 @@ fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> 
                     crate::srd::ATTRIBUTION,
                     serde_norway::to_string(&v)?
                 );
-                std::fs::write(&path, text).with_context(|| path.display().to_string())?;
+                crate::fsutil::atomic_write(&path, text.as_bytes())
+                    .with_context(|| path.display().to_string())?;
                 println!("wrote {} ({n} item(s))", path.display());
             }
             Ok(())
@@ -1280,6 +1281,10 @@ fn run_party(
             }
         }
     }
+    let dying_conditions = load_content(sources)
+        .ok()
+        .and_then(|content| content.rules.dying_conditions.clone())
+        .unwrap_or_else(|| vec![crate::party::DEFAULT_DYING_CONDITION.to_string()]);
     let mut lines = Vec::new();
     let pick = |party: &PartyState, who: &str| -> Result<Vec<String>> {
         if who.eq_ignore_ascii_case("all") {
@@ -1320,7 +1325,7 @@ fn run_party(
                         if hd.is_some() {
                             bail!("--hd is only for short rests");
                         }
-                        member.long_rest(&mut lines)
+                        member.long_rest(&dying_conditions, &mut lines)
                     }
                 }
             }
@@ -1328,10 +1333,7 @@ fn run_party(
         PartyCommand::SetHp { who, hp } => {
             for id in pick(&party, &who)? {
                 let member = party.members.get_mut(&id).expect("picked");
-                member.hp = hp.clamp(0, member.max_hp);
-                if member.hp > 0 {
-                    member.death_saves = Default::default();
-                }
+                member.set_hp(hp, &dying_conditions);
                 lines.push(format!(
                     "{} HP set to {}/{}",
                     member.name, member.hp, member.max_hp
@@ -1415,7 +1417,7 @@ fn quick_state(
     let dir = std::env::temp_dir().join(format!("combat-sim-quick-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let file = dir.join("quick.yaml");
-    std::fs::write(&file, yaml)?;
+    crate::fsutil::atomic_write(&file, yaml.as_bytes())?;
     let mut sources = sources.clone();
     sources.adventures.push(file);
     let result = new_state(&sources, requested, "quick".into(), party, None, Vec::new());

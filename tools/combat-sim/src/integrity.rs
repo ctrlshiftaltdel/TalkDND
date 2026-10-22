@@ -11,7 +11,7 @@
 //! it is not a security boundary (anyone with file access can also edit the
 //! manifest).
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -126,9 +126,16 @@ pub fn load(save: &Path) -> Result<Option<Manifest>> {
         return Ok(None);
     }
     let text = fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
-    Ok(Some(
-        serde_norway::from_str(&text).with_context(|| format!("invalid {}", p.display()))?,
-    ))
+    let manifest: Manifest =
+        serde_norway::from_str(&text).with_context(|| format!("invalid {}", p.display()))?;
+    if manifest.version > 1 {
+        bail!(
+            "{}: unsupported integrity manifest version {} (this build supports 1); update talkdnd",
+            p.display(),
+            manifest.version
+        );
+    }
+    Ok(Some(manifest))
 }
 
 pub fn store(save: &Path, m: &Manifest) -> Result<()> {
@@ -136,7 +143,8 @@ pub fn store(save: &Path, m: &Manifest) -> Result<()> {
         "# TalkDND save integrity manifest (written by talkdnd/combat-sim; do not edit).\n# Accept hand edits with `talkdnd integrity accept --reason \"...\"`.\n{}",
         serde_norway::to_string(m)?
     );
-    fs::write(path(save), text).with_context(|| format!("write {}", path(save).display()))
+    crate::fsutil::atomic_write(path(save), text.as_bytes())
+        .with_context(|| format!("write {}", path(save).display()))
 }
 
 /// Fresh manifest from the current state.
@@ -185,15 +193,31 @@ pub fn changes(save: &Path) -> Result<Vec<Change>> {
 /// Record the files a tool changed between `before` and now. Files that
 /// were already out of step with the manifest before the write stay flagged.
 pub fn after_write(save: &Path, before: &BTreeMap<String, String>) -> Result<()> {
+    let now = snapshot(save);
+    after_write_with(save, before, &now)
+}
+
+/// [`after_write`] with the current snapshot already taken, so callers that
+/// need it anyway (audit reconciliation) parse the save only once.
+pub fn after_write_with(
+    save: &Path,
+    before: &BTreeMap<String, String>,
+    now: &BTreeMap<String, String>,
+) -> Result<()> {
     let Some(mut m) = load(save)? else {
         // First tool write on an old save: the current state is the baseline.
-        store(save, &baseline(save))?;
+        let m = Manifest {
+            version: 1,
+            files: now.clone(),
+            baseline: None,
+            accepted: Vec::new(),
+        };
+        store(save, &m)?;
         return Ok(());
     };
-    let now = snapshot(save);
     let clean = |p: &String| before.get(p) == m.files.get(p);
     let mut updates = Vec::new();
-    for (p, h) in &now {
+    for (p, h) in now {
         if before.get(p) != Some(h) && clean(p) {
             updates.push((p.clone(), Some(h.clone())));
         }
@@ -271,5 +295,35 @@ mod tests {
     fn fingerprint_is_stable() {
         assert_eq!(fingerprint(b""), "fnv1a64:cbf29ce484222325:0");
         assert_ne!(fingerprint(b"a"), fingerprint(b"b"));
+    }
+
+    #[test]
+    fn a_newer_manifest_schema_is_refused() {
+        let d = dir("schema");
+        fs::write(path(&d), "version: 99\nfiles: {}\n").unwrap();
+        let err = load(&d).unwrap_err().to_string();
+        assert!(
+            err.contains("integrity.yaml") && err.contains("99"),
+            "{err}"
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn snapshot_ignores_internal_directories() {
+        let d = dir("internal");
+        fs::write(d.join("combat/a.yaml"), "x: 1\n").unwrap();
+        fs::create_dir_all(d.join("_backups/combat")).unwrap();
+        fs::write(d.join("_backups/combat/old.yaml"), "x: 0\n").unwrap();
+        fs::create_dir_all(d.join(".cache")).unwrap();
+        fs::write(d.join(".cache/skip.yaml"), "x: 0\n").unwrap();
+        let files = snapshot(&d);
+        assert!(files.contains_key("combat/a.yaml"));
+        assert!(
+            !files.keys().any(|k| k.starts_with("_backups")),
+            "{files:?}"
+        );
+        assert!(!files.keys().any(|k| k.starts_with(".cache")), "{files:?}");
+        let _ = fs::remove_dir_all(&d);
     }
 }

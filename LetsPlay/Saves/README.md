@@ -13,7 +13,12 @@ Saves/<存档>/
   digest.md             接档摘要（`bin/talkdnd start` 生成，可随时重建）
   chargen.json          建卡进度（`bin/talkdnd new` / `chargen`）
   npc-drafts/           随机同伴草稿（`bin/talkdnd npc random`）
+  save-meta.yaml        存档结构版本与迁移记录（程序维护，不要手改）
+  integrity.yaml        存档校验清单（程序维护）
+  sheets/               角色数据源 yaml（`talkdnd char` 维护）
 ```
+
+整份存档的迁移备份放在 `Saves/_backups/<存档>-<时间>-schema<N>/`；`_` 和 `.` 开头的目录不是存档槽，程序不会把它们当成可读档。
 
 新存档用 `bin/talkdnd new` 自动建好以上结构。手工建时，`campaign.yaml` 的模板在 `../example/save/combat/campaign.yaml`。把它复制到 `Saves/<存档>/combat/campaign.yaml`，再改名字、`ruleset` 和 `party`。模板里的库路径从清单文件本身数，仍然落在 `../Rules/` 和 `../Adventures/` 里面。
 

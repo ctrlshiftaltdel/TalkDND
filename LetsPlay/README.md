@@ -132,7 +132,7 @@ bin\combat-sim.exe roll 1d20+5
 4. 存档在 `Saves/YYYY-MM-DD-NN/`（结构见 `Saves/README.md`），`combat/campaign.yaml` 记录本存档用的规则版本。
 5. 想结束时说「今天先到这，存档」。
 
-`AGENTS.md` 是给 AI DM 的核心手册，细节在 `docs/`。`Rules/rulings.md`（通用）和 `Rules/rulings-2014.md` / `Rules/rulings-2024.md`（版本差异）是规则书没写清时的统一裁定。
+`AGENTS.md` 是给 AI DM 的核心手册，细节在 `docs/`。`Rules/rulings.md`（通用）和 `Rules/rulings-2014.md` / `Rules/rulings-2024.md`（版本差异）是规则书没写清时的统一裁定，也是你的本机副本；同名的出厂默认在 `Rules/defaults/`，升级不会覆盖你的副本。
 
 ## 骰子和日志
 
@@ -167,9 +167,24 @@ $CS roll 1d20+5 --adv --dc 15
 
 两个版本的差异由数据决定：`Rules/combat/common/` 是通用部分，`Rules/combat/2014/`、`Rules/combat/2024/` 是各版本特有的内容。引擎读存档清单里的 `ruleset` 自动选择。
 
+## 更新到新版本
+
+直接覆盖解压即可，不需要手动替换任何文件：
+
+1. 在游戏里先「存档」，然后关掉正在运行的 talkdnd / combat-sim（Windows 上运行中的 `.exe` 无法被覆盖）。
+2. 从 [Releases](https://github.com/ctrlshiftaltdel/TalkDND/releases) 下载对应平台的包，可用同名 `.sha256` 校验。
+3. 把包解压到 `LetsPlay/` 的**上一级**目录，遇到同名文件选择「全部覆盖」。
+4. 照常「继续游戏」（`talkdnd start`）。第一次运行新版时程序会自动：
+   - 检查存档结构版本（`Saves/<存档>/save-meta.yaml`），旧了就先把整个存档备份到 `Saves/_backups/`，再迁移到新结构，写进会话日志并更新完整性清单；
+   - 书籍导入数据（`Rules/chargen/local/`）的导入器版本过旧时重新导入；
+   - 缺少的默认规则裁定从 `Rules/defaults/` 复制到 `Rules/`，已有的不动（默认版有更新时摘要会提示合并）；
+   - 把新版已删除、你没改过的旧程序文件移到 `.talkdnd/obsolete/`。
+
+发布包里**没有**任何用户数据：存档（只有 `Saves/README.md`）、规则书和冒险书（只有 README）、本地导入、`fixes/`、资料图登记表、你自己的规则裁定都不会被覆盖，打包时会自动检查。确认迁移没问题后，`Saves/_backups/` 里的备份可以自行删除。每个版本改了什么见仓库里的 `CHANGELOG.md`。
+
 ## 版权与许可
 
-- 文档和 `Rules/rulings*.md`：MIT 许可。许可全文在仓库的 LICENSE 文件。
+- 文档、`Rules/defaults/rulings*.md` 与本机 `Rules/rulings*.md`：MIT 许可。许可全文在仓库的 LICENSE 文件。
 - `Rules/combat/` 中的规则数据只取自 **System Reference Document 5.1**（2014）与 **5.2.1**（2024），按 CC-BY-4.0 使用。署名在仓库的 NOTICE 文件。
 - 「Dungeons & Dragons」「D&D」是 Wizards of the Coast 的商标。本项目是非官方的爱好者作品，与 Wizards of the Coast 无关，也未获其认可。
 - 本仓库不包含、也不分发任何非 SRD 的规则书或冒险书文本；请使用你自己合法拥有的书。

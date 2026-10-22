@@ -116,7 +116,9 @@ fn secret_basename(path: &str) -> bool {
 
 fn disallowed_rules_markdown(path: &str) -> bool {
     // Bash `LetsPlay/Rules/*.md` and `Rules/*.md`: `*` matches slashes, and the
-    // pattern is anchored to the whole path. `rulings*.md` is the basename.
+    // pattern is anchored to the whole path. `rulings*.md` is the basename:
+    // shipped defaults live in `LetsPlay/Rules/defaults/`, older checkouts had
+    // them at `LetsPlay/Rules/`, and user copies at `Rules/` are gitignored.
     let under_rules =
         (is_under(path, "LetsPlay/Rules") || is_under(path, "Rules")) && path.ends_with(".md");
     if !under_rules {

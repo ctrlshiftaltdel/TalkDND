@@ -55,9 +55,10 @@ fn dispatch(args: &[String]) -> Result<u8, String> {
         }
         Some("fetch-binary") => talkdnd_dev::fetch::run(&args[1..]),
         Some("install-local") => talkdnd_dev::install::run(&args[1..]),
+        Some("release-notes") => talkdnd_dev::release_notes::run(&args[1..]),
         _ => {
             usage(
-                "usage: talkdnd-dev <check-leaks|check-letsplay|migrate-layout|fetch-binary|install-local>",
+                "usage: talkdnd-dev <check-leaks|check-letsplay|migrate-layout|fetch-binary|install-local|release-notes>",
             );
             Ok(2)
         }
