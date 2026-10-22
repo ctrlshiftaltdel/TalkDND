@@ -75,6 +75,9 @@ def main(argv=None):
     if args.cmd == "status":
         rows = worker.write_status(root)
         for row in rows:
+            if row.get("error"):
+                print(f"manifest error: {row['error']} ({row['pdf']})")
+                continue
             total = row["pages"] if row["pages"] is not None else "?"
             flag = " (PDF changed: will restart)" if row["stale"] else ""
             print(f"{row['done']:>4}/{total:<4} low {row['low']:<3} ocr {row['ocr']:<3} {row['pdf']}{flag}")

@@ -1070,7 +1070,8 @@ fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> 
                     crate::srd::ATTRIBUTION,
                     serde_norway::to_string(&v)?
                 );
-                std::fs::write(&path, text).with_context(|| path.display().to_string())?;
+                crate::fsutil::atomic_write(&path, text.as_bytes())
+                    .with_context(|| path.display().to_string())?;
                 println!("wrote {} ({n} item(s))", path.display());
             }
             Ok(())
@@ -1415,7 +1416,7 @@ fn quick_state(
     let dir = std::env::temp_dir().join(format!("combat-sim-quick-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let file = dir.join("quick.yaml");
-    std::fs::write(&file, yaml)?;
+    crate::fsutil::atomic_write(&file, yaml.as_bytes())?;
     let mut sources = sources.clone();
     sources.adventures.push(file);
     let result = new_state(&sources, requested, "quick".into(), party, None, Vec::new());

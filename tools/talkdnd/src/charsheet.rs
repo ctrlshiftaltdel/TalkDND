@@ -8,6 +8,7 @@ use crate::classdata::{self, Book};
 use crate::{check, data, options, save};
 use anyhow::{anyhow, bail, Context, Result};
 use combat_sim::dice::DiceRng;
+use combat_sim::fsutil::atomic_write;
 use combat_sim::party::{Member, PartyState};
 use serde::{Deserialize, Serialize};
 use serde_norway::{Mapping, Value};
@@ -378,6 +379,13 @@ fn guess_class(block: &Value, body: &str) -> Option<String> {
 /// Build the structured file from an existing Markdown sheet. Nothing is
 /// lost: the prose body is kept and rendered above the generated part.
 pub fn migrate(save_dir: &Path, sheet: &check::Sheet, book: &Book) -> Result<CharFile> {
+    if !crate::chargen::valid_id(&sheet.id) {
+        bail!(
+            "invalid character id `{}` in {}; use lowercase letters, digits and hyphens",
+            sheet.id,
+            sheet.file.display()
+        );
+    }
     let text = fs::read_to_string(&sheet.file)?;
     let (body, block, tail) = split_md(&text);
     let block = block.context("sheet has no ```combat yaml``` block")?;
@@ -491,16 +499,20 @@ fn sheet_mentions_defense(body: &str) -> bool {
 }
 
 pub fn store(save_dir: &Path, cf: &CharFile) -> Result<()> {
+    if !crate::chargen::valid_id(&cf.id) {
+        bail!(
+            "invalid character id `{}`; use lowercase letters, digits and hyphens",
+            cf.id
+        );
+    }
     let p = path(save_dir, &cf.id);
     fs::create_dir_all(p.parent().unwrap())?;
-    fs::write(
-        &p,
-        format!(
-            "# TalkDND character data (source of truth). Change it with `talkdnd char {} …`; never by hand.\n{}",
-            cf.id,
-            serde_norway::to_string(cf)?
-        ),
-    )?;
+    let text = format!(
+        "# TalkDND character data (source of truth). Change it with `talkdnd char {} …`; never by hand.\n{}",
+        cf.id,
+        serde_norway::to_string(cf)?
+    );
+    atomic_write(&p, text.as_bytes())?;
     Ok(())
 }
 
@@ -510,6 +522,9 @@ pub fn store(save_dir: &Path, cf: &CharFile) -> Result<()> {
 pub fn load(save_dir: &Path, who: &str, book: &Book) -> Result<(CharFile, bool)> {
     let sheets = check::sheets(save_dir);
     let s = check::find(&sheets, who)?;
+    if !crate::chargen::valid_id(&s.id) {
+        bail!("invalid character id `{}` in {}", s.id, s.file.display());
+    }
     let p = path(save_dir, &s.id);
     if !p.is_file() {
         return Ok((migrate(save_dir, s, book)?, true));
@@ -749,8 +764,23 @@ pub fn commit(save_dir: &Path, cf: &CharFile, ps: &PartyState) -> Result<()> {
         ps.save(&pp)?;
     }
     let md = render(cf, ps.members.get(&cf.id));
-    fs::write(save_dir.join(&cf.file), md)?;
+    atomic_write(markdown_path(save_dir, &cf.file)?, md.as_bytes())?;
     Ok(())
+}
+
+/// The rendered sheet path must stay inside the save directory: a hand-edited
+/// `file:` in sheets/<id>.yaml must not write outside of it.
+fn markdown_path(save_dir: &Path, file: &str) -> Result<PathBuf> {
+    let rel = Path::new(file);
+    let safe = !file.is_empty()
+        && rel.is_relative()
+        && rel
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+    if !safe {
+        bail!("invalid sheet path `{file}`; it must stay inside the save");
+    }
+    Ok(save_dir.join(rel))
 }
 
 // ---------- derived values: AC and weapon attacks ----------
@@ -970,8 +1000,27 @@ pub fn from_chargen(
         .iter()
         .find(|s| s.file == sheet_file)
         .context("written sheet not found")?;
-    let mut cf = migrate(save_dir, s, book)?;
-    // The inventory section replaces chargen's equipment list.
+    let fresh = migrate(save_dir, s, book)?;
+    let existing = if path(save_dir, &s.id).is_file() {
+        Some(
+            serde_norway::from_str::<CharFile>(&fs::read_to_string(path(save_dir, &s.id))?)
+                .with_context(|| format!("{} is not valid", path(save_dir, &s.id).display()))?,
+        )
+    } else {
+        None
+    };
+    let is_new = existing.is_none();
+    let mut cf = existing.unwrap_or_else(|| fresh.clone());
+    // The freshly written Markdown is the new build snapshot. Keep the old
+    // tail (level-up records) unless the new sheet carries one.
+    cf.file = fresh.file.clone();
+    cf.ruleset = fresh.ruleset.clone();
+    cf.body_md = fresh.body_md.clone();
+    cf.combat = fresh.combat.clone();
+    if !fresh.tail_md.trim().is_empty() {
+        cf.tail_md = fresh.tail_md.clone();
+    }
+    // The inventory table replaces chargen's duplicated gear section.
     if let Some(i) = cf.body_md.find("\n## 装备\n") {
         let rest = &cf.body_md[i + 1..];
         let end = rest[3..]
@@ -980,7 +1029,7 @@ pub fn from_chargen(
             .unwrap_or(cf.body_md.len());
         cf.body_md = format!("{}{}", &cf.body_md[..i], &cf.body_md[end..]);
     }
-    cf.ruleset = c.rs().to_string();
+    // Build choices always follow the creation state.
     let put = |cf: &mut CharFile, k: &str, v: &Option<String>| {
         if let Some(v) = v {
             cf.info.insert(k.into(), v.clone());
@@ -994,14 +1043,35 @@ pub fn from_chargen(
     put(&mut cf, "ideals", &c.ideals);
     put(&mut cf, "bonds", &c.bonds);
     put(&mut cf, "flaws", &c.flaws);
-    cf.fighting_style = c.fighting_style.clone();
-    cf.feats = c.feats.clone();
-    cf.languages = c.languages.clone();
-    cf.tools = c.tools.clone();
-    cf.masteries = c.masteries.clone();
+    // Play choices are kept; only fill what the structured file does not have.
+    if cf.fighting_style.is_none() {
+        cf.fighting_style = c.fighting_style.clone();
+    }
+    if cf.feats.is_empty() {
+        cf.feats = c.feats.clone();
+    }
+    if cf.languages.is_empty() {
+        cf.languages = c.languages.clone();
+    }
+    if cf.tools.is_empty() {
+        cf.tools = c.tools.clone();
+    }
+    if cf.masteries.is_empty() {
+        cf.masteries = c.masteries.clone();
+    }
+    if cf.weapon_prof.is_empty() {
+        if let Some(cd) = c.class.as_deref().and_then(|x| book.class(x)) {
+            if !cd.weapons.is_empty() {
+                cf.weapon_prof = cd.weapons.clone();
+            }
+        }
+    }
     if let Some(bg) = c.background_def(Some(book)) {
         if let Some(f) = &bg.feature {
-            cf.features.push(format!("背景特性：{f}"));
+            let line = format!("背景特性：{f}");
+            if !cf.features.contains(&line) {
+                cf.features.push(line);
+            }
         }
         if let Some(f) = &bg.feat {
             if !cf.feats.contains(f) {
@@ -1022,12 +1092,10 @@ pub fn from_chargen(
             }
         }
     }
-    if let Some(cd) = c.class.as_deref().and_then(|x| book.class(x)) {
-        if !cd.weapons.is_empty() {
-            cf.weapon_prof = cd.weapons.clone();
-        }
+    // Starting equipment: add missing items, never remove what play added.
+    if is_new {
+        cf.inventory.clear();
     }
-    cf.inventory.clear();
     let mut items = c.all_items(Some(book));
     if let Some(a) = c.armor.as_deref().filter(|a| *a != "none") {
         if !items.iter().any(|i| armor_of(i).map(|x| x.0) == Some(a)) {
@@ -1037,7 +1105,10 @@ pub fn from_chargen(
     if c.shield && !items.iter().any(|i| is_shield(i)) {
         items.push("shield".into());
     }
-    let mut armor_on = false;
+    let mut armor_on = cf
+        .inventory
+        .iter()
+        .any(|i| i.equipped && armor_of(&i.name).is_some());
     for raw in items {
         if options::is_placeholder(&raw) {
             continue;
@@ -1045,20 +1116,30 @@ pub fn from_chargen(
         let mut it = parse_item(&raw);
         let weapon = !classdata::weapons_in(std::slice::from_ref(&it.name), book).is_empty();
         let armor = armor_of(&it.name).is_some();
-        it.equipped = weapon || is_shield(&it.name) || (armor && !armor_on);
+        let equipped = weapon || is_shield(&it.name) || (armor && !armor_on);
         armor_on |= armor;
+        it.equipped = equipped;
         match cf
             .inventory
             .iter()
             .position(|x| x.name.eq_ignore_ascii_case(&it.name))
         {
-            Some(i) => cf.inventory[i].qty += it.qty,
+            Some(i) => {
+                if cf.inventory[i].qty < it.qty {
+                    cf.inventory[i].qty = it.qty;
+                }
+                if is_new {
+                    cf.inventory[i].equipped = equipped;
+                }
+            }
             None => cf.inventory.push(it),
         }
     }
-    cf.ac_base = c.ac_unarmored();
-    cf.ac_base_armored = false;
-    cf.ac_base_has_style = false;
+    if is_new {
+        cf.ac_base = c.ac_unarmored();
+        cf.ac_base_armored = false;
+        cf.ac_base_has_style = false;
+    }
     recompute(&mut cf, book);
     let ps = party(save_dir, &cf)?;
     commit(save_dir, &cf, &ps)?;
@@ -2083,6 +2164,95 @@ mod tests {
         assert_eq!(b, "# A\n\nbody");
         assert_eq!(blk.unwrap()["hp"].as_i64(), Some(3));
         assert_eq!(t, "## 升级记录\n\n- up");
+    }
+
+    #[test]
+    fn rerunning_chargen_sheet_keeps_play_data() {
+        let d = std::env::temp_dir().join(format!("talkdnd-fromchargen-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("Characters")).unwrap();
+        fs::create_dir_all(d.join("combat")).unwrap();
+        let book = Book::srd("2014");
+        let mut c = crate::chargen::Creation {
+            ruleset: Some("2014".into()),
+            species: Some("human".into()),
+            class: Some("fighter".into()),
+            background: Some("acolyte".into()),
+            method: Some("array".into()),
+            pool: data::STANDARD_ARRAY.to_vec(),
+            level: 1,
+            level_done: true,
+            asi_done: true,
+            spells_done: true,
+            name: Some("Aria".into()),
+            armor: Some("chain-mail".into()),
+            shield: true,
+            ..Default::default()
+        };
+        for (a, v) in ["str", "dex", "con", "int", "wis", "cha"]
+            .iter()
+            .zip(data::STANDARD_ARRAY)
+        {
+            c.scores.insert(a.to_string(), v);
+        }
+        let (id, md) = crate::chargen::sheet_with(&c, "p", &book, Some(&d)).unwrap();
+        assert_eq!(id, "aria");
+        let sheet = d.join("Characters/aria.md");
+        fs::write(&sheet, &md).unwrap();
+        let mut saved = from_chargen(&d, &c, &book, &sheet).unwrap();
+        saved.inventory.push(Item {
+            name: "potion of healing".into(),
+            qty: 2,
+            ..Default::default()
+        });
+        saved.notes.push("met the baron".into());
+        saved.dm_notes = "secret".into();
+        saved.feats.push("Alert".into());
+        saved.languages.push("Elvish".into());
+        saved.tools.push("thieves' tools".into());
+        saved.fighting_style = Some("defense".into());
+        store(&d, &saved).unwrap();
+
+        // Re-running the creation sheet must not wipe play data.
+        let again = from_chargen(&d, &c, &book, &sheet).unwrap();
+        assert!(again
+            .inventory
+            .iter()
+            .any(|i| i.name == "potion of healing" && i.qty == 2));
+        assert!(again.notes.iter().any(|n| n == "met the baron"));
+        assert_eq!(again.dm_notes, "secret");
+        assert!(again.feats.iter().any(|f| f == "Alert"));
+        assert!(again.languages.iter().any(|l| l == "Elvish"));
+        assert!(again.tools.iter().any(|t| t == "thieves' tools"));
+        assert_eq!(again.fighting_style.as_deref(), Some("defense"));
+        let rendered = fs::read_to_string(&sheet).unwrap();
+        assert!(rendered.contains("potion of healing"), "{rendered}");
+        assert!(rendered.contains("met the baron"), "{rendered}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn store_rejects_path_traversal_ids() {
+        let d = std::env::temp_dir().join(format!("talkdnd-badid-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        let mut c = cf("2014");
+        c.id = "../../evil".into();
+        assert!(store(&d, &c).is_err());
+        assert!(!d.join("sheets").join("..").exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn commit_rejects_sheet_paths_outside_the_save() {
+        let base = std::env::temp_dir().join(format!("talkdnd-badfile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let d = base.join("save");
+        fs::create_dir_all(&d).unwrap();
+        let mut c = cf("2014");
+        c.file = "../evil.md".into();
+        assert!(commit(&d, &c, &PartyState::default()).is_err());
+        assert!(!base.join("evil.md").exists());
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

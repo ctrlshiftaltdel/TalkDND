@@ -10,6 +10,7 @@ use crate::check::{self, Sheet};
 use crate::{classdata, data, save};
 use anyhow::{anyhow, bail, Context, Result};
 use combat_sim::dice::{DiceRng, RollMode};
+use combat_sim::fsutil::atomic_write;
 use combat_sim::roll::roll_command;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -253,10 +254,8 @@ impl Progress {
     }
     pub fn store(&self, save: &Path) -> Result<()> {
         let head = "# TalkDND progress ledger: XP per character (hybrid advancement, see xp_log), coins (as cp) and items per character and the shared `party` pool.\n# Edit with `talkdnd xp` / `talkdnd loot`; hand edits are flagged by `talkdnd check` (accept with `talkdnd integrity accept --reason`).\n";
-        fs::write(
-            Self::path(save),
-            head.to_string() + &serde_norway::to_string(self)?,
-        )?;
+        let text = head.to_string() + &serde_norway::to_string(self)?;
+        atomic_write(Self::path(save), text.as_bytes())?;
         Ok(())
     }
 }
@@ -367,6 +366,9 @@ pub fn xp_add(save_dir: &Path, aw: &Award) -> Result<Vec<String>> {
     let mut given = Vec::new();
     for id in &ids {
         let lv = level_of(id);
+        if !(1..=20).contains(&lv) {
+            bail!("`{id}` has sheet level {lv}; fix the sheet (level must be 1..20) first");
+        }
         let cur = p.xp.get(id).copied().unwrap_or(0);
         // Cap: never more than one level ahead of the sheet.
         let cap = XP_TABLE
@@ -536,6 +538,7 @@ pub(crate) fn hit_die(s: &Sheet, class: Option<&str>, book: &classdata::Book) ->
         .and_then(|h| h.get("die"))
         .and_then(|d| d.as_i64())
         .map(|d| d as i32)
+        .filter(|d| *d >= 2)
         .or_else(|| {
             class
                 .and_then(|c| book.classes.get(c))
@@ -602,6 +605,12 @@ pub fn level_up(
     let old = sheet_level(s);
     if old >= 20 {
         bail!("{} is already level 20", s.name);
+    }
+    if old < 1 {
+        bail!(
+            "{} has sheet level {old}; fix the sheet (level must be 1..20) before levelling up",
+            s.name
+        );
     }
     let new = old + 1;
     let mut p = Progress::load(save_dir)?;
@@ -741,7 +750,7 @@ pub fn level_up(
     } else {
         out = out.trim_end().to_string() + "\n\n## 升级记录\n\n" + &note + "\n";
     }
-    fs::write(&s.file, out)?;
+    atomic_write(&s.file, out.as_bytes())?;
     let mut r = LevelUp::default();
     if let Some(reason) = milestone {
         let floor = XP_TABLE[(new - 1) as usize];
@@ -1158,5 +1167,32 @@ mod tests {
         .unwrap();
         assert!(Progress::load(&d).unwrap().purses["quill"].items.is_empty());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn bad_sheet_levels_error_instead_of_panicking() {
+        for bad in ["-1", "0", "25"] {
+            let d = save_dir(&format!("badlevel{bad}"));
+            let sheet = d.join("Characters/Tess.md");
+            let text = fs::read_to_string(&sheet)
+                .unwrap()
+                .replace("level: 4", &format!("level: {bad}"));
+            fs::write(&sheet, text).unwrap();
+            let mut rng = combat_sim::dice::seeded_rng(1);
+            assert!(
+                level_up(&d, &d, "Tess", "avg", None, None, &mut rng, true).is_err(),
+                "level {bad}"
+            );
+            let aw = Award {
+                amount: Some(10),
+                difficulty: None,
+                category: "quest",
+                to: "tess",
+                reason: "bad level",
+                again: false,
+            };
+            assert!(xp_add(&d, &aw).is_err(), "level {bad}");
+            let _ = fs::remove_dir_all(&d);
+        }
     }
 }

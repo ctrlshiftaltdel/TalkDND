@@ -6982,14 +6982,14 @@ pub fn rest(
 pub fn hit_die_size(combatant: &CombatantState) -> Option<u32> {
     combatant.creature.resources.as_ref().and_then(|defs| {
         let def = defs.get("hit-dice")?;
-        def.die.or_else(|| {
+        def.die.filter(|d| *d >= 2).or_else(|| {
             let notes = def.notes.as_deref()?;
             let at = notes.find('d')?;
             let digits: String = notes[at + 1..]
                 .chars()
                 .take_while(|c| c.is_ascii_digit())
                 .collect();
-            digits.parse().ok()
+            digits.parse().ok().filter(|d| *d >= 2)
         })
     })
 }

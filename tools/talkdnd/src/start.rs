@@ -3,6 +3,7 @@
 use crate::chargen;
 use crate::save;
 use anyhow::Result;
+use combat_sim::fsutil::atomic_write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -456,7 +457,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
             d += &format!("- {w}\n");
         }
     }
-    fs::write(save.join("digest.md"), &d)?;
+    atomic_write(save.join("digest.md"), d.as_bytes())?;
     Ok(d)
 }
 

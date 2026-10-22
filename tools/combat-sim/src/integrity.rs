@@ -136,7 +136,8 @@ pub fn store(save: &Path, m: &Manifest) -> Result<()> {
         "# TalkDND save integrity manifest (written by talkdnd/combat-sim; do not edit).\n# Accept hand edits with `talkdnd integrity accept --reason \"...\"`.\n{}",
         serde_norway::to_string(m)?
     );
-    fs::write(path(save), text).with_context(|| format!("write {}", path(save).display()))
+    crate::fsutil::atomic_write(path(save), text.as_bytes())
+        .with_context(|| format!("write {}", path(save).display()))
 }
 
 /// Fresh manifest from the current state.

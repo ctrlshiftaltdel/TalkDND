@@ -67,7 +67,8 @@ impl PartyState {
         );
         let save = crate::integrity::save_of_combat_file(path);
         let before = save.as_deref().map(crate::integrity::snapshot);
-        fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))?;
+        crate::fsutil::atomic_write(path, text.as_bytes())
+            .with_context(|| format!("failed to write {}", path.display()))?;
         if let (Some(save), Some(before)) = (save, before) {
             crate::integrity::after_write(&save, &before)?;
         }
@@ -222,6 +223,22 @@ impl Member {
             log.push(format!("{} is dead and cannot rest", self.name));
             return Ok(());
         }
+        // Validate the Hit Dice before changing any resource: a failed rest
+        // must not restore short-rest pools.
+        let die = if hd == 0 {
+            None
+        } else {
+            let left = self
+                .resources
+                .get("hit-dice")
+                .map_or(0, |r| r.current.max(0) as u32);
+            if hd > left {
+                bail!("`{}` has only {left} Hit Dice left", self.name);
+            }
+            Some(self.hit_die.filter(|d| *d >= 2).ok_or_else(|| {
+                anyhow!("`{}` has no hit-dice resource with a die size", self.name)
+            })?)
+        };
         for (id, r) in self.resources.iter_mut() {
             if id == "hit-dice" {
                 continue;
@@ -233,19 +250,9 @@ impl Member {
             }
         }
         log.push(format!("{} takes a short rest", self.name));
-        if hd == 0 {
+        let Some(die) = die else {
             return Ok(());
-        }
-        let die = self
-            .hit_die
-            .ok_or_else(|| anyhow!("`{}` has no hit-dice resource with a die size", self.name))?;
-        let left = self
-            .resources
-            .get("hit-dice")
-            .map_or(0, |r| r.current.max(0) as u32);
-        if hd > left {
-            bail!("`{}` has only {left} Hit Dice left", self.name);
-        }
+        };
         let before = self.hp;
         for _ in 0..hd {
             let roll = rng.roll_die(die) as i32;
@@ -295,7 +302,7 @@ impl Member {
 
 fn hit_die_of(creature: &Creature) -> Option<u32> {
     let def = creature.resources.as_ref()?.get("hit-dice")?;
-    def.die.or_else(|| {
+    def.die.filter(|d| *d >= 2).or_else(|| {
         let notes = def.notes.as_deref()?;
         let at = notes.find('d')?;
         notes[at + 1..]
@@ -305,4 +312,82 @@ fn hit_die_of(creature: &Creature) -> Option<u32> {
             .parse()
             .ok()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_sided_hit_die_is_ignored() {
+        let creature: Creature = serde_norway::from_str(
+            "id: test\nresources:\n  hit-dice: {max: 1, recharge: long, die: 0}\n",
+        )
+        .unwrap();
+        assert_eq!(hit_die_of(&creature), None);
+    }
+
+    #[test]
+    fn short_rest_rejects_zero_sided_hit_die() {
+        let mut resources = BTreeMap::new();
+        resources.insert(
+            "hit-dice".into(),
+            ResourceState {
+                current: 1,
+                max: 1,
+                recharge: Recharge::Long,
+                short_rest_regain: None,
+            },
+        );
+        let mut member = Member {
+            name: "T".into(),
+            hp: 5,
+            max_hp: 5,
+            resources,
+            hit_die: Some(0),
+            ..Default::default()
+        };
+        let err = member
+            .short_rest(1, &mut crate::dice::seeded_rng(1), &mut Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("die size"), "{err}");
+        assert_eq!(member.hp, 5);
+        assert_eq!(member.resources["hit-dice"].current, 1);
+    }
+
+    #[test]
+    fn short_rest_checks_hit_dice_before_restoring() {
+        let mut resources = BTreeMap::new();
+        resources.insert(
+            "ki".into(),
+            ResourceState {
+                current: 0,
+                max: 2,
+                recharge: Recharge::Short,
+                short_rest_regain: None,
+            },
+        );
+        resources.insert(
+            "hit-dice".into(),
+            ResourceState {
+                current: 1,
+                max: 1,
+                recharge: Recharge::Long,
+                short_rest_regain: None,
+            },
+        );
+        let mut member = Member {
+            name: "T".into(),
+            hp: 5,
+            max_hp: 5,
+            resources,
+            hit_die: Some(8),
+            ..Default::default()
+        };
+        assert!(member
+            .short_rest(2, &mut crate::dice::seeded_rng(1), &mut Vec::new())
+            .is_err());
+        assert_eq!(member.resources["ki"].current, 0);
+    }
 }

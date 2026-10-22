@@ -5,6 +5,7 @@
 
 use crate::save;
 use anyhow::{bail, Context, Result};
+use combat_sim::fsutil::atomic_write;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,13 +44,11 @@ pub fn load(save: &Path) -> Result<Ledger> {
 }
 
 fn store(save: &Path, l: &Ledger) -> Result<()> {
-    fs::write(
-        path(save),
-        format!(
-            "# TalkDND revealed knowledge: facts the party has learned (player-safe; secrets stay in dm-secrets.md).\n# Edit with `talkdnd reveal add`.\n{}",
-            serde_norway::to_string(l)?
-        ),
-    )?;
+    let text = format!(
+        "# TalkDND revealed knowledge: facts the party has learned (player-safe; secrets stay in dm-secrets.md).\n# Edit with `talkdnd reveal add`.\n{}",
+        serde_norway::to_string(l)?
+    );
+    atomic_write(path(save), text.as_bytes())?;
     Ok(())
 }
 

@@ -98,13 +98,39 @@ def sha256_file(path):
 
 
 def _write_atomic(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     mode = "wb" if isinstance(data, bytes) else "w"
     kw = {} if mode == "wb" else {"encoding": "utf-8", "newline": "\n"}
-    with open(tmp, mode, **kw) as f:
-        f.write(data)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, mode, **kw) as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    _fsync_dir(os.path.dirname(path))
+
+
+def _fsync_dir(path):
+    """Best-effort directory sync so the rename itself is durable on POSIX."""
+    if not path or os.name == "nt":
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def chunk_ranges(page_count, size):

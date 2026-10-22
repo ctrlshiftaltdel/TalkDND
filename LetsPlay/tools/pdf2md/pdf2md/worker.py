@@ -237,22 +237,43 @@ def status(root):
         try:
             with open(os.path.join(d, "manifest.json"), encoding="utf-8") as f:
                 m = json.load(f)
-            row["pages"] = m["page_count"]
-            row["done"] = sum(1 for _ in m["pages"])
-            row["low"] = sum(1 for i in m["pages"].values() if i.get("quality") == "low")
-            row["ocr"] = sum(1 for i in m["pages"].values() if i.get("ocr"))
-            row["stale"] = m.get("size") != os.path.getsize(pdf)
-        except (OSError, ValueError, KeyError):
-            pass
+        except OSError:
+            m = None
+        except ValueError as err:
+            row["error"] = f"invalid manifest: {err}"
+            m = None
+        else:
+            if not isinstance(m, dict):
+                row["error"] = f"invalid manifest: expected an object, got {type(m).__name__}"
+                m = None
+        if m is not None:
+            try:
+                pages = m["pages"]
+                page_count = m["page_count"]
+                if not isinstance(page_count, int):
+                    raise TypeError("page_count is not a number")
+                if not isinstance(pages, dict):
+                    raise TypeError("pages is not an object")
+                row["pages"] = page_count
+                row["done"] = len(pages)
+                row["low"] = sum(1 for i in pages.values()
+                                 if isinstance(i, dict) and i.get("quality") == "low")
+                row["ocr"] = sum(1 for i in pages.values()
+                                 if isinstance(i, dict) and i.get("ocr"))
+                row["stale"] = m.get("size") != os.path.getsize(pdf)
+            except (TypeError, AttributeError, KeyError, ValueError, OSError) as err:
+                row["error"] = f"invalid manifest: {err}"
         rows.append(row)
     return rows
 
 
 def write_status(root):
+    from .convert import _write_atomic
+
     rows = status(root)
     os.makedirs(state_dir(root), exist_ok=True)
-    with open(os.path.join(state_dir(root), "status.json"), "w", encoding="utf-8") as f:
-        json.dump(rows, f, indent=1, ensure_ascii=False)
+    _write_atomic(os.path.join(state_dir(root), "status.json"),
+                  json.dumps(rows, indent=1, ensure_ascii=False))
     return rows
 
 

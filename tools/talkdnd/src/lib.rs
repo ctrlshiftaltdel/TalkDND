@@ -20,6 +20,7 @@ use anyhow::{bail, Context, Result};
 use chargen::Creation;
 use clap::{Parser, Subcommand};
 use combat_sim::dice::{seeded_rng, step_rng, DiceRng};
+use combat_sim::fsutil::atomic_write;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
@@ -745,21 +746,23 @@ fn new_save(
         }
         None => "adventures: []\n".into(),
     };
-    fs::write(
-        dir.join("combat/campaign.yaml"),
-        format!(
-            "# combat-sim campaign manifest for save {slot} (paths relative to this file)\nname: \"TalkDND {slot}\"\nlibrary: [../../../Rules/combat]\n{adv_line}characters: [../Characters, ../NPCs]\nstate_dir: .\nparty: []\nruleset: \"{rs}\"   # 2014 | 2024\n"
-        ),
+    let campaign = format!(
+        "# combat-sim campaign manifest for save {slot} (paths relative to this file)\nname: \"TalkDND {slot}\"\nlibrary: [../../../Rules/combat]\n{adv_line}characters: [../Characters, ../NPCs]\nstate_dir: .\nparty: []\nruleset: \"{rs}\"   # 2014 | 2024\n"
+    );
+    atomic_write(dir.join("combat/campaign.yaml"), campaign.as_bytes())?;
+    atomic_write(dir.join("canon.md"), "# 即兴定论（公开）\n\n".as_bytes())?;
+    atomic_write(
+        dir.join("dm-secrets.md"),
+        "# DM 秘密（只给 DM）\n\n".as_bytes(),
     )?;
-    fs::write(dir.join("canon.md"), "# 即兴定论（公开）\n\n")?;
-    fs::write(dir.join("dm-secrets.md"), "# DM 秘密（只给 DM）\n\n")?;
-    fs::write(
+    let setup = format!(
+        "# {slot} 第 0 节：建卡\n\n- [{}] 新存档，规则 {}\n",
+        chrono::Local::now().format("%H:%M"),
+        ruleset.as_deref().unwrap_or("待定")
+    );
+    atomic_write(
         dir.join(format!("Sessions/{date}-session-00-setup.md")),
-        format!(
-            "# {slot} 第 0 节：建卡\n\n- [{}] 新存档，规则 {}\n",
-            chrono::Local::now().format("%H:%M"),
-            ruleset.as_deref().unwrap_or("待定")
-        ),
+        setup.as_bytes(),
     )?;
     let c = Creation {
         ruleset,
@@ -800,7 +803,7 @@ fn set_campaign_line(save: &Path, key: &str, value: &str) -> Result<()> {
     if !found {
         out.push(format!("{key}: {value}"));
     }
-    fs::write(&p, out.join("\n") + "\n")?;
+    atomic_write(&p, (out.join("\n") + "\n").as_bytes())?;
     Ok(())
 }
 
@@ -1077,16 +1080,14 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
             for w in classdata::generate(&c, &book, root).warnings {
                 println!("warning: {w}");
             }
-            let file = save
-                .join("Characters")
-                .join(format!("{}.md", c.name.as_deref().unwrap_or(&id)));
-            fs::write(&file, md)?;
+            if !chargen::valid_id(&id) {
+                bail!("character name must give an id of lowercase letters, digits and hyphens (got `{id}`)");
+            }
+            let file = save.join("Characters").join(format!("{id}.md"));
+            atomic_write(&file, md.as_bytes())?;
             add_to_party(save, &id)?;
             charsheet::from_chargen(save, &c, &book, &file)?;
-            println!(
-                "wrote Characters/{} (id {id}); show it to the player, then `chargen confirm`",
-                file.file_name().unwrap_or_default().to_string_lossy()
-            );
+            println!("wrote Characters/{id}.md; show it to the player, then `chargen confirm`");
             return Ok(());
         }
         ChargenCmd::Confirm => {
@@ -1095,12 +1096,8 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                 report(&c, &r);
                 bail!("cannot confirm with errors");
             }
-            if c.name.is_none()
-                || !save
-                    .join("Characters")
-                    .join(format!("{}.md", c.name.clone().unwrap_or_default()))
-                    .is_file()
-            {
+            let id = chargen::slug(c.name.as_deref().unwrap_or_default());
+            if c.name.is_none() || !save.join("Characters").join(format!("{id}.md")).is_file() {
                 bail!("write the sheet first (`chargen sheet`)");
             }
             c.confirmed = true;
@@ -1204,10 +1201,8 @@ fn npc_cmd(
                 let num = start_n + i;
                 println!("draft {num}: {}", npc::summary(&n));
                 if let (Some(d), Some(s)) = (&drafts, &save) {
-                    fs::write(
-                        d.join(format!("{num}.json")),
-                        serde_json::to_string_pretty(&n.creation)?,
-                    )?;
+                    let draft = serde_json::to_string_pretty(&n.creation)?;
+                    atomic_write(d.join(format!("{num}.json")), draft.as_bytes())?;
                     log_rolls(s, &format!("同伴草稿 {num}"), &n.roll_texts, seeded)?;
                 }
             }
@@ -1228,12 +1223,13 @@ fn npc_cmd(
             c.adventure = chargen::load(&s).ok().and_then(|x| x.adventure);
             let book = classdata::Book::load(c.rs(), Some(root))?;
             let (id, md) = chargen::sheet_with(&c, "DM（同伴 NPC）", &book, Some(root))?;
+            if !chargen::valid_id(&id) {
+                bail!("NPC name must give an id of lowercase letters, digits and hyphens (got `{id}`)");
+            }
             let md = md.replacen("kind: pc", "kind: npc", 1);
-            fs::write(s.join("NPCs").join(format!("{name}.md")), md)?;
+            atomic_write(s.join("NPCs").join(format!("{id}.md")), md.as_bytes())?;
             add_to_party(&s, &id)?;
-            println!(
-                "wrote NPCs/{name}.md (id {id}); add backstory and voice to it and NPCs/_party.md"
-            );
+            println!("wrote NPCs/{id}.md; add backstory and voice to it and NPCs/_party.md");
         }
     }
     Ok(())

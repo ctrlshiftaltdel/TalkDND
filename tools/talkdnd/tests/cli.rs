@@ -97,7 +97,7 @@ fn full_creation_flow() {
     let out = ok(&r, &["chargen", "confirm"]);
     assert!(out.contains("character creation complete"));
     assert!(out.contains("50 gp"), "background B gold: {out}");
-    let sheet = fs::read_to_string(save.join("Characters/Aria.md")).unwrap();
+    let sheet = fs::read_to_string(save.join("Characters/aria.md")).unwrap();
     assert!(
         sheet.contains("ac: 19\n"),
         "chain mail + shield + Defense: {sheet}"
@@ -147,7 +147,7 @@ fn full_creation_flow() {
     let out = ok(&r, &["--seed", "9", "npc", "random", "--count", "3"]);
     assert_eq!(out.matches("draft ").count(), 3);
     ok(&r, &["npc", "sheet", "2", "--name", "Kel"]);
-    assert!(fs::read_to_string(save.join("NPCs/Kel.md"))
+    assert!(fs::read_to_string(save.join("NPCs/kel.md"))
         .unwrap()
         .contains("kind: npc"));
     assert!(fs::read_to_string(save.join("combat/campaign.yaml"))
@@ -258,7 +258,7 @@ fn old_sheet_repair_without_chargen() {
     let save = r.join("Saves/2030-03-04-01");
     fs::create_dir_all(save.join("Characters")).unwrap();
     fs::write(
-        save.join("Characters/Gar.md"),
+        save.join("Characters/gar.md"),
         "# Gar——角色卡\n\n- **等级**：战士 2\n- 护甲：链甲（chain mail）\n\n## 战斗数据块（combat-sim）\n\n```combat yaml\nid: gar\nname: Gar\nkind: pc\nside: party\nsize: medium\nlevel: 2\nac: 16\nhp: 20\nspeed: {walk: 30}\nprof: 2\nabilities: {str: 16, dex: 10, con: 14, int: 10, wis: 10, cha: 12}\nsaves: {str: 5, con: 4}\nskills: {athletics: 5}\nattacks:\n  - {id: greatsword, name: Greatsword, kind: melee, ability: str, to_hit: 5, damage: [{dice: \"2d6+3\", type: slashing}], reach: 5, properties: [heavy, two-handed]}\nresources:\n  hit-dice: {max: 2, recharge: long, die: 10}\nnotes: \"fighter 2\"\n```\n",
     )
     .unwrap();
@@ -283,14 +283,14 @@ fn old_sheet_repair_without_chargen() {
     assert!(out.contains("migrated"), "{out}");
     let out = ok(&r, &["char", "gar", "set", "background", "test-heir"]);
     assert!(out.contains("25 gp"), "{out}");
-    let sheet = fs::read_to_string(save.join("Characters/Gar.md")).unwrap();
+    let sheet = fs::read_to_string(save.join("Characters/gar.md")).unwrap();
     assert!(sheet.contains("reroll_damage_below: 2"), "{sheet}");
     assert!(sheet.contains("- 护甲：链甲"), "body kept");
     assert!(sheet.contains("signet ring") && sheet.contains("背景特性：Test Privilege"));
     assert!(ok(&r, &["loot", "show"]).contains("gar: 25 gp"));
     // Defense counts the migrated armor.
     ok(&r, &["char", "gar", "set", "fighting-style", "defense"]);
-    assert!(fs::read_to_string(save.join("Characters/Gar.md"))
+    assert!(fs::read_to_string(save.join("Characters/gar.md"))
         .unwrap()
         .contains("ac: 17\n"));
     // level-up edits the rendered block; char keeps it.
@@ -302,7 +302,7 @@ fn old_sheet_repair_without_chargen() {
     assert!(out.contains("HP 25/28"), "{out}");
     let y = fs::read_to_string(save.join("sheets/gar.yaml")).unwrap();
     assert!(y.contains("level: 3"), "{y}");
-    assert!(fs::read_to_string(save.join("Characters/Gar.md"))
+    assert!(fs::read_to_string(save.join("Characters/gar.md"))
         .unwrap()
         .contains("## 升级记录"));
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
