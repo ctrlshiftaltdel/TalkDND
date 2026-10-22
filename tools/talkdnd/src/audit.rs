@@ -269,13 +269,15 @@ pub fn audit(save: &Path) -> Result<Report> {
 }
 
 /// Call after a tool command: record the files it wrote; refresh the
-/// baseline when everything is clean.
+/// baseline when everything is clean. Takes one save snapshot and reuses it
+/// for both the manifest update and the reconciliation check.
 pub fn after_command(save: &Path, before: &BTreeMap<String, String>) -> Result<()> {
-    integrity::after_write(save, before)?;
+    let now = integrity::snapshot(save);
+    integrity::after_write_with(save, before, &now)?;
     let Some(mut m) = integrity::load(save)? else {
         return Ok(());
     };
-    let clean_files = integrity::changes_against(&m, &integrity::snapshot(save)).is_empty();
+    let clean_files = integrity::changes_against(&m, &now).is_empty();
     let clean_values = baseline_of(&m).is_none_or(|b| reconcile(save, &b).is_empty());
     if clean_files && clean_values {
         set_baseline(save, &mut m)?;

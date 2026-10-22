@@ -4,9 +4,11 @@ use crate::chargen;
 use crate::save;
 use anyhow::Result;
 use combat_sim::fsutil::atomic_write;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
 pub fn combat_sim_path(root: &Path) -> PathBuf {
     if let Ok(p) = std::env::var("TALKDND_COMBAT_SIM") {
@@ -21,6 +23,10 @@ pub fn combat_sim_path(root: &Path) -> PathBuf {
 }
 
 /// Runs `combat-sim content check`; returns a one-line summary.
+///
+/// The result is cached in `Saves/<slot>/.cache/content-check.json` and reused
+/// while the binary and every file the check reads are unchanged. That removes
+/// a full process spawn from the common `talkdnd start` path (P3-1).
 pub fn content_check(root: &Path, save: &Path) -> (bool, String) {
     let bin = combat_sim_path(root);
     let manifest = save.join("combat/campaign.yaml");
@@ -33,9 +39,28 @@ pub fn content_check(root: &Path, save: &Path) -> (bool, String) {
             format!("{} missing — see bin/README.md", bin.display()),
         );
     }
-    match Command::new(&bin)
+    let key = content_key(root, save, &bin, &manifest);
+    if let Some(cache) = load_cache(save) {
+        if cache.key == key {
+            return (cache.ok, cache.summary);
+        }
+    }
+    let result = run_content_check(&bin, &manifest);
+    store_cache(
+        save,
+        &ContentCache {
+            key,
+            ok: result.0,
+            summary: result.1.clone(),
+        },
+    );
+    result
+}
+
+fn run_content_check(bin: &Path, manifest: &Path) -> (bool, String) {
+    match Command::new(bin)
         .arg("--campaign")
-        .arg(&manifest)
+        .arg(manifest)
         .args(["content", "check"])
         .output()
     {
@@ -58,22 +83,131 @@ pub fn content_check(root: &Path, save: &Path) -> (bool, String) {
     }
 }
 
-/// Starts pdf2md in the background when uv is available. Never waits.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ContentCache {
+    key: String,
+    ok: bool,
+    summary: String,
+}
+
+fn cache_path(save: &Path) -> PathBuf {
+    save.join(".cache/content-check.json")
+}
+
+fn load_cache(save: &Path) -> Option<ContentCache> {
+    let text = fs::read_to_string(cache_path(save)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn store_cache(save: &Path, cache: &ContentCache) {
+    if let Ok(text) = serde_json::to_string(cache) {
+        let _ = atomic_write(cache_path(save), text.as_bytes());
+    }
+}
+
+/// `mtime(ns):len`, or `missing`, so the key changes when a file changes.
+fn stamp(path: &Path) -> String {
+    match fs::metadata(path) {
+        Ok(m) => {
+            let nanos = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("{nanos}:{}", m.len())
+        }
+        Err(_) => "missing".to_string(),
+    }
+}
+
+fn rel_key(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn collect_files(dir: &Path, md_only: bool, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(&path, md_only, out);
+        } else if path.is_file() && (!md_only || path.extension().is_some_and(|x| x == "md")) {
+            out.push(path);
+        }
+    }
+}
+
+/// `combat/` directories from the campaign manifest's inline `adventures:` list.
+fn adventure_dirs(save: &Path) -> Vec<PathBuf> {
+    let dir = save.join("combat");
+    let text = fs::read_to_string(dir.join("campaign.yaml")).unwrap_or_default();
+    for line in text.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("adventures:") else {
+            continue;
+        };
+        let rest = rest
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches(['[', ']']);
+        return rest
+            .split(',')
+            .map(|s| s.trim().trim_matches(['"', '\'']).to_string())
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                let p = PathBuf::from(&s);
+                if p.is_absolute() {
+                    p
+                } else {
+                    dir.join(p)
+                }
+            })
+            .collect();
+    }
+    Vec::new()
+}
+
+/// Stable hash over the combat-sim binary and every input of `content check`.
+fn content_key(root: &Path, save: &Path, bin: &Path, manifest: &Path) -> String {
+    let mut rows = vec![
+        format!("bin|{}|{}", rel_key(root, bin), stamp(bin)),
+        format!("manifest|{}|{}", rel_key(root, manifest), stamp(manifest)),
+    ];
+    let mut files = Vec::new();
+    collect_files(&root.join("Rules/combat"), false, &mut files);
+    collect_files(&save.join("Characters"), true, &mut files);
+    collect_files(&save.join("NPCs"), true, &mut files);
+    for dir in adventure_dirs(save) {
+        collect_files(&dir, false, &mut files);
+    }
+    let mut entries: Vec<String> = files
+        .iter()
+        .map(|p| format!("{}|{}", rel_key(root, p), stamp(p)))
+        .collect();
+    entries.sort();
+    rows.extend(entries);
+    let mut hash = Sha256::new();
+    for row in rows {
+        hash.update(row.as_bytes());
+        hash.update(b"\n");
+    }
+    format!("{:x}", hash.finalize())
+}
+
+/// Starts pdf2md in the background. Never waits: a missing `uv` shows up as a
+/// spawn error in the digest instead of a blocking `uv --version` probe.
 pub fn kick_pdf2md(root: &Path) -> String {
     if std::env::var_os("TALKDND_NO_PDF2MD").is_some() {
         return "skipped (TALKDND_NO_PDF2MD)".into();
     }
     if !root.join("tools/pdf2md/pyproject.toml").is_file() {
         return "skipped (tools/pdf2md missing)".into();
-    }
-    let uv_ok = Command::new("uv")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !uv_ok {
-        return "skipped (uv not installed; see docs/pdf2md.md)".into();
     }
     let log = root.join("tools/pdf2md/.run.log");
     let out = fs::OpenOptions::new()
@@ -236,6 +370,47 @@ pub struct Options {
     pub pdf2md: bool,
 }
 
+/// Per-phase wall-clock timings for `TALKDND_TIMING=1` (stderr only).
+struct Timing {
+    on: bool,
+    start: Instant,
+    last: Instant,
+}
+
+impl Timing {
+    fn new() -> Self {
+        let on = std::env::var("TALKDND_TIMING")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false);
+        let now = Instant::now();
+        Self {
+            on,
+            start: now,
+            last: now,
+        }
+    }
+
+    fn mark(&mut self, phase: &str) {
+        let now = Instant::now();
+        if self.on {
+            eprintln!(
+                "timing: {phase} {:.1}ms",
+                (now - self.last).as_secs_f64() * 1000.0
+            );
+        }
+        self.last = now;
+    }
+
+    fn total(&self) {
+        if self.on {
+            eprintln!(
+                "timing: total {:.1}ms",
+                self.start.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+}
+
 /// Adventure slug from the save's chargen, else from the campaign manifest.
 pub(crate) fn adventure_slug(save: &Path) -> Option<String> {
     if let Ok(c) = chargen::load(save) {
@@ -339,6 +514,7 @@ fn book_mds(md_root: &Path) -> Vec<PathBuf> {
 }
 
 pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
+    let mut timing = Timing::new();
     let slot = save
         .file_name()
         .unwrap_or_default()
@@ -346,14 +522,19 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         .to_string();
     let rs = save::ruleset(save);
     let (ok, check) = content_check(root, save);
+    timing.mark("content_check");
     let pdf = if opts.pdf2md {
         kick_pdf2md(root)
     } else {
         "skipped (--no-pdf2md)".into()
     };
+    timing.mark("kick_pdf2md");
     let migration = crate::migrate::ensure(save, root, false)?;
+    timing.mark("migrate");
     let default_notes = crate::update::sync_defaults(root)?;
+    timing.mark("sync_defaults");
     let update_notes = crate::update::sync_installed_files(root)?;
+    timing.mark("sync_installed_files");
     let log = save::latest_log(save);
     let mut warnings = Vec::new();
     let mut d = String::new();
@@ -367,6 +548,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     }
     d += &format!("- content check：{check}\n- pdf2md：{pdf}\n");
     d += &rules_source_line(root, &rs);
+    timing.mark("rules_source_line");
     if !ok {
         warnings.push("content check 未通过：战斗前修好，或战斗手动结算".to_string());
     }
@@ -435,6 +617,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         Ok(_) => d += "- 还没有记录：第一场战斗或 `combat-sim party show` 后生成；之前满血满资源\n",
         Err(e) => warnings.push(format!("party-state.yaml 读不了：{e}")),
     }
+    timing.mark("members/party");
     d += "\n## 开场前再读（按需）\n\n";
     d += "- `dm-secrets.md`（只给 DM）、`canon.md`、`NPCs/_party.md`（同伴声音）\n";
     d += &adventure_lines(root, save);
@@ -464,6 +647,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         }
         Err(e) => warnings.push(format!("存档校验失败：{e}")),
     }
+    timing.mark("audit");
     if !warnings.is_empty() {
         d += "\n## 警告\n\n";
         for w in &warnings {
@@ -471,6 +655,8 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         }
     }
     atomic_write(save.join("digest.md"), d.as_bytes())?;
+    timing.mark("write");
+    timing.total();
     Ok(d)
 }
 
@@ -561,6 +747,93 @@ mod tests {
             d.contains("PDF：`Adventures/storm-kings-thunder/Storm King's Thunder.pdf`"),
             "{d}"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn cache_root(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("talkdnd-cache-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let save = root.join("Saves/2030-03-04-01");
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::create_dir_all(save.join("Characters")).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::create_dir_all(root.join("Rules/combat/common")).unwrap();
+        fs::write(
+            save.join("combat/campaign.yaml"),
+            "name: X\nruleset: \"2024\"\nadventures: []\n",
+        )
+        .unwrap();
+        fs::write(root.join("bin/combat-sim"), "stub").unwrap();
+        fs::write(root.join("Rules/combat/common/conditions.yaml"), "x: 1\n").unwrap();
+        fs::write(save.join("Characters/ann.md"), "# Ann\n").unwrap();
+        root
+    }
+
+    #[test]
+    fn content_key_changes_with_every_input() {
+        let root = cache_root("key");
+        let save = root.join("Saves/2030-03-04-01");
+        let bin = root.join("bin/combat-sim");
+        let manifest = save.join("combat/campaign.yaml");
+        let first = content_key(&root, &save, &bin, &manifest);
+        assert_eq!(first, content_key(&root, &save, &bin, &manifest));
+
+        fs::write(save.join("Characters/ann.md"), "# Ann\nmore text\n").unwrap();
+        let second = content_key(&root, &save, &bin, &manifest);
+        assert_ne!(first, second);
+
+        fs::write(
+            root.join("Rules/combat/common/conditions.yaml"),
+            "x: 2\nchanged\n",
+        )
+        .unwrap();
+        let third = content_key(&root, &save, &bin, &manifest);
+        assert_ne!(second, third);
+
+        fs::write(&bin, "stub-v2").unwrap();
+        assert_ne!(third, content_key(&root, &save, &bin, &manifest));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn content_check_is_cached_until_an_input_changes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = cache_root("check");
+        let save = root.join("Saves/2030-03-04-01");
+        let counter = root.join("bin/count.txt");
+        let script = format!(
+            "#!/bin/sh\necho run >> \"{}\"\necho \"content check: 0 error(s), 0 warning(s)\"\n",
+            counter.display()
+        );
+        let bin = root.join("bin/combat-sim");
+        fs::write(&bin, script).unwrap();
+        let mut perms = fs::metadata(&bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&bin, perms).unwrap();
+
+        let (ok, summary) = content_check(&root, &save);
+        assert!(ok, "{summary}");
+        assert!(summary.contains("0 error(s)"), "{summary}");
+        assert_eq!(fs::read_to_string(&counter).unwrap().lines().count(), 1);
+        assert!(save.join(".cache/content-check.json").is_file());
+
+        // Second call: unchanged inputs -> cache hit, no process spawn.
+        let (ok, summary) = content_check(&root, &save);
+        assert!(ok);
+        assert!(summary.contains("0 error(s)"));
+        assert_eq!(fs::read_to_string(&counter).unwrap().lines().count(), 1);
+
+        // A changed content file invalidates the key.
+        fs::write(
+            root.join("Rules/combat/common/conditions.yaml"),
+            "x: 2\nchanged\n",
+        )
+        .unwrap();
+        let _ = content_check(&root, &save);
+        assert_eq!(fs::read_to_string(&counter).unwrap().lines().count(), 2);
         let _ = fs::remove_dir_all(&root);
     }
 }

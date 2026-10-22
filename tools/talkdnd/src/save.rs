@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 /// The LetsPlay folder: `--root`, else the nearest ancestor of the current
@@ -125,25 +125,34 @@ pub fn latest_log(save: &Path) -> Option<PathBuf> {
     v.pop()
 }
 
+/// Append `text` without reading the whole file: only the last byte is read to
+/// decide whether a separating newline is needed. Long campaign logs therefore
+/// cost O(1), not O(file size).
 pub fn append(path: &Path, text: &str) -> Result<()> {
     let mut f = fs::OpenOptions::new()
-        .create(true)
+        .read(true)
         .append(true)
+        .create(true)
         .open(path)
         .with_context(|| format!("open {}", path.display()))?;
-    let existing = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    let mut s = String::new();
+    let existing = f
+        .metadata()
+        .map(|m| m.len())
+        .with_context(|| format!("stat {}", path.display()))?;
     if existing > 0 {
-        let body = fs::read(path)?;
-        if !body.ends_with(b"\n") {
-            s.push('\n');
+        f.seek(SeekFrom::End(-1))
+            .with_context(|| format!("seek {}", path.display()))?;
+        let mut last = [0u8; 1];
+        f.read_exact(&mut last)
+            .with_context(|| format!("read {}", path.display()))?;
+        if last[0] != b'\n' {
+            f.write_all(b"\n")?;
         }
     }
-    s.push_str(text);
-    if !s.ends_with('\n') {
-        s.push('\n');
+    f.write_all(text.as_bytes())?;
+    if !text.ends_with('\n') {
+        f.write_all(b"\n")?;
     }
-    f.write_all(s.as_bytes())?;
     Ok(())
 }
 
@@ -195,6 +204,31 @@ mod tests {
         );
         assert!(resolve_slot(&root, Some("_backups")).is_err());
         assert!(resolve_slot(&root, Some(".cache")).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn append_adds_a_newline_only_when_needed() {
+        let root = std::env::temp_dir().join(format!("talkdnd-append-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let log = root.join("log.md");
+
+        append(&log, "first").unwrap();
+        assert_eq!(fs::read_to_string(&log).unwrap(), "first\n");
+
+        append(&log, "second\n").unwrap();
+        assert_eq!(fs::read_to_string(&log).unwrap(), "first\nsecond\n");
+
+        // A large file without a trailing newline still gets exactly one.
+        let big = root.join("big.md");
+        let body = "x".repeat(5 * 1024 * 1024);
+        fs::write(&big, &body).unwrap();
+        append(&big, "tail").unwrap();
+        let text = fs::read_to_string(&big).unwrap();
+        assert!(text.starts_with(&body));
+        assert!(text.ends_with("x\ntail\n"));
+
         let _ = fs::remove_dir_all(&root);
     }
 }

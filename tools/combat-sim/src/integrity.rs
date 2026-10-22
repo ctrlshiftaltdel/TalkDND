@@ -193,15 +193,31 @@ pub fn changes(save: &Path) -> Result<Vec<Change>> {
 /// Record the files a tool changed between `before` and now. Files that
 /// were already out of step with the manifest before the write stay flagged.
 pub fn after_write(save: &Path, before: &BTreeMap<String, String>) -> Result<()> {
+    let now = snapshot(save);
+    after_write_with(save, before, &now)
+}
+
+/// [`after_write`] with the current snapshot already taken, so callers that
+/// need it anyway (audit reconciliation) parse the save only once.
+pub fn after_write_with(
+    save: &Path,
+    before: &BTreeMap<String, String>,
+    now: &BTreeMap<String, String>,
+) -> Result<()> {
     let Some(mut m) = load(save)? else {
         // First tool write on an old save: the current state is the baseline.
-        store(save, &baseline(save))?;
+        let m = Manifest {
+            version: 1,
+            files: now.clone(),
+            baseline: None,
+            accepted: Vec::new(),
+        };
+        store(save, &m)?;
         return Ok(());
     };
-    let now = snapshot(save);
     let clean = |p: &String| before.get(p) == m.files.get(p);
     let mut updates = Vec::new();
-    for (p, h) in &now {
+    for (p, h) in now {
         if before.get(p) != Some(h) && clean(p) {
             updates.push((p.clone(), Some(h.clone())));
         }

@@ -5,6 +5,7 @@ pub mod install;
 pub mod leaks;
 pub mod letsplay;
 pub mod migrate;
+pub mod release_notes;
 
 use std::path::PathBuf;
 use std::process::Command;

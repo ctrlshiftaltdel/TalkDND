@@ -183,6 +183,15 @@ jobs:
       contents: write
       actions: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate release notes
+        run: cargo run --quiet --manifest-path tools/talkdnd-dev/Cargo.toml -- release-notes "${{ github.ref_name }}" > notes.md
+
       - name: Download packages
         uses: actions/download-artifact@v8
         with:
@@ -194,19 +203,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           fail_on_unmatched_files: true
-          body: |
-            TalkDND ${{ github.ref_name }}: the play folder `LetsPlay/` with prebuilt combat-sim and talkdnd.
-
-            - Linux x86_64: `talkdnd-letsplay-${{ github.ref_name }}-linux-x86_64.tar.gz`
-            - Windows x86_64: `talkdnd-letsplay-${{ github.ref_name }}-windows-x86_64.zip`
-            - macOS Apple Silicon: `talkdnd-letsplay-${{ github.ref_name }}-macos-arm64.tar.gz`
-
-            Each archive holds the git-tracked `LetsPlay/` tree (DM guide, combat data,
-            rulings, README placeholders), `LICENSE`, `NOTICE`, and both binaries in
-            `LetsPlay/bin/`. No rulebooks, adventures, or saves are included: put your
-            own SRD / books into `LetsPlay/Rules/<edition>/` and `LetsPlay/Adventures/`.
-            The matching `.sha256` file checksums that archive. macOS Intel builds are
-            not published.
+          body_path: notes.md
           files: |
             release-assets/*.tar.gz
             release-assets/*.zip
