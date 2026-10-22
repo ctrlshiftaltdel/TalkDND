@@ -92,7 +92,13 @@ fn list(dir: &Path, ext: &str, skip_underscore: bool) -> Vec<PathBuf> {
 /// Current fingerprints of the tracked files.
 pub fn snapshot(save: &Path) -> BTreeMap<String, String> {
     let mut files: Vec<PathBuf> = Vec::new();
-    for f in ["progress.yaml", "reveals.yaml", "house-rules.md"] {
+    for f in [
+        "progress.yaml",
+        "reveals.yaml",
+        "house-rules.md",
+        "save-meta.yaml",
+        "original.yaml",
+    ] {
         let p = save.join(f);
         if p.is_file() {
             files.push(p);
@@ -215,7 +221,14 @@ pub fn after_write_with(
         store(save, &m)?;
         return Ok(());
     };
-    let clean = |p: &String| before.get(p) == m.files.get(p);
+    let clean = |p: &String| match m.files.get(p) {
+        Some(old) => before.get(p) == Some(old),
+        // A file tracked by this newer tool version but absent from an older
+        // manifest (save-meta.yaml, original.yaml) is adopted by the first
+        // tool write. If the DM had edited it in the meantime, the tool just
+        // overwrote that value, so there is nothing left to compare.
+        None => true,
+    };
     let mut updates = Vec::new();
     for (p, h) in now {
         if before.get(p) != Some(h) && clean(p) {
@@ -287,6 +300,68 @@ mod tests {
         assert_eq!(
             changes(&d).unwrap(),
             vec![Change::Modified("Characters/A.md".into())]
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn save_meta_and_original_ledger_are_tracked() {
+        let d = dir("deviation");
+        fs::write(
+            d.join("save-meta.yaml"),
+            "schema: 4\ndeviation: {scope: 0}\n",
+        )
+        .unwrap();
+        fs::write(d.join("original.yaml"), "version: 1\nentries: []\n").unwrap();
+        ensure(&d).unwrap();
+        assert!(changes(&d).unwrap().is_empty());
+        fs::write(
+            d.join("save-meta.yaml"),
+            "schema: 4\ndeviation: {scope: 2, ratio: 25}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            changes(&d).unwrap(),
+            vec![Change::Modified("save-meta.yaml".into())]
+        );
+        let before = snapshot(&d);
+        fs::write(d.join("original.yaml"), "version: 1\nentries: [x]\n").unwrap();
+        // The tool write records the clean ledger; the already-edited
+        // save-meta stays flagged.
+        after_write(&d, &before).unwrap();
+        assert_eq!(
+            changes(&d).unwrap(),
+            vec![Change::Modified("save-meta.yaml".into())]
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_file_new_to_the_manifest_is_adopted_on_a_tool_write() {
+        let d = dir("adopt");
+        fs::write(d.join("progress.yaml"), "xp: {a: 0}\n").unwrap();
+        ensure(&d).unwrap();
+        // Simulate an older manifest that predates save-meta tracking.
+        fs::write(
+            d.join("save-meta.yaml"),
+            "schema: 4\ndeviation: {scope: 0}\n",
+        )
+        .unwrap();
+        assert!(changes(&d)
+            .unwrap()
+            .iter()
+            .any(|c| c.path() == "save-meta.yaml"));
+        let before = snapshot(&d);
+        fs::write(
+            d.join("save-meta.yaml"),
+            "schema: 4\ndeviation: {scope: 0}\n# migrated\n",
+        )
+        .unwrap();
+        after_write(&d, &before).unwrap();
+        assert!(
+            changes(&d).unwrap().is_empty(),
+            "{:?}",
+            changes(&d).unwrap()
         );
         let _ = fs::remove_dir_all(&d);
     }

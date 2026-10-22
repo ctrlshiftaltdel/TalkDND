@@ -13,7 +13,8 @@ Saves/<存档>/
   digest.md             接档摘要（`bin/talkdnd start` 生成，可随时重建）
   chargen.json          建卡进度（`bin/talkdnd new` / `chargen`）
   npc-drafts/           随机同伴草稿（`bin/talkdnd npc random`）
-  save-meta.yaml        存档结构版本与迁移记录（程序维护，不要手改）
+  save-meta.yaml        存档结构版本、迁移记录与开档时锁定的剧本偏离度（程序维护，不要手改）
+  original.yaml         DM 的原创内容台账（`talkdnd original`；只给 DM，不要给玩家看）
   integrity.yaml        存档校验清单（程序维护）
   sheets/               角色数据源 yaml（`talkdnd char` 维护）
 ```

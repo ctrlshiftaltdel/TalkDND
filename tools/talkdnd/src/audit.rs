@@ -219,11 +219,18 @@ pub struct Report {
     pub created: bool,
     pub changes: Vec<Change>,
     pub unexplained: Vec<String>,
+    /// Deviation/ledger warnings from `original::audit`.
+    pub original: Vec<String>,
 }
 
 impl Report {
     pub fn clean(&self) -> bool {
-        self.changes.is_empty() && self.unexplained.is_empty()
+        self.changes.is_empty() && self.unexplained.is_empty() && self.original.is_empty()
+    }
+
+    /// Number of issue lines (for the short warning before a check roll).
+    pub fn issue_count(&self) -> usize {
+        self.changes.len() + self.unexplained.len() + self.original.len()
     }
 
     /// Warning lines plus DM guidance (empty when clean).
@@ -234,6 +241,9 @@ impl Report {
         }
         for u in &self.unexplained {
             v.push(format!("reconcile: {u}"));
+        }
+        for o in &self.original {
+            v.push(format!("deviation: {o}"));
         }
         if !v.is_empty() {
             v.push("DM：若是你自己按桌规手改并已记日志 → `talkdnd integrity accept --reason \"…\"`；否则跳出角色问玩家，`talkdnd log` 记下处理结果，不合理的改动按日志改回后再 accept（见 docs/table-integrity.md）".into());
@@ -258,6 +268,10 @@ pub fn audit(save: &Path) -> Result<Report> {
     let (mut m, created) = integrity::ensure(save)?;
     let mut r = Report {
         created,
+        original: crate::original::audit(
+            save,
+            &crate::migrate::load(save)?.unwrap_or_default().deviation,
+        ),
         ..Default::default()
     };
     r.changes = integrity::changes_against(&m, &integrity::snapshot(save));

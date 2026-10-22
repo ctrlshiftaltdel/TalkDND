@@ -647,6 +647,15 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         }
         Err(e) => warnings.push(format!("存档校验失败：{e}")),
     }
+    d += "\n## 剧本偏离度（只看自己）\n\n";
+    match crate::original::status_lines(save) {
+        Ok(lines) => {
+            for line in lines {
+                d += &format!("- {line}\n");
+            }
+        }
+        Err(e) => warnings.push(format!("剧本偏离度读不了：{e}")),
+    }
     timing.mark("audit");
     if !warnings.is_empty() {
         d += "\n## 警告\n\n";

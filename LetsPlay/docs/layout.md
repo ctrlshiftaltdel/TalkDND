@@ -14,7 +14,7 @@
 | `Rules/combat/` | combat-sim 规则数据，分层：`common/` + `2014/` + `2024/`（只收 SRD 内容） | ✅（SRD，CC-BY-4.0） |
 | `Adventures/<书名>.md` | 玩家自备的冒险书文本 | ❌ 仅 README 入库 |
 | `Adventures/<冒险名>/combat/` | 该冒险的战斗数据：`scenes/`、`encounters.yaml`、`creatures.yaml` | ❌（由书改编，本地自建） |
-| `Saves/YYYY-MM-DD-NN/` | 一份存档：`Characters/`（玩家角色卡）、`NPCs/`（同伴与重要 NPC，含 `_party.md`）、`Sessions/`（会话日志）、`combat/`（`campaign.yaml` 清单 + `*.state.json` 战斗状态）、`canon.md`（即兴定论）、`progress.yaml`（经验/金币/物品）、`reveals.yaml`、`handouts.yaml` 与 `handouts/`（已给玩家看的资料图）（已揭示知识，`talkdnd reveal`）、`integrity.yaml`（存档校验，程序维护，不要手改）、`save-meta.yaml`（存档结构版本，程序维护）、`house-rules.md`（可选，开局前商定的房规）、`dm-secrets.md`（🔒）、`digest.md`（`talkdnd start` 生成的接档摘要）、`chargen.json`（建卡进度）、`sheets/`（角色数据源 yaml，`talkdnd char` 维护）、`npc-drafts/` | ❌（个人进度） |
+| `Saves/YYYY-MM-DD-NN/` | 一份存档：`Characters/`（玩家角色卡）、`NPCs/`（同伴与重要 NPC，含 `_party.md`）、`Sessions/`（会话日志）、`combat/`（`campaign.yaml` 清单 + `*.state.json` 战斗状态）、`canon.md`（即兴定论）、`progress.yaml`（经验/金币/物品）、`reveals.yaml`、`handouts.yaml` 与 `handouts/`（已给玩家看的资料图）（已揭示知识，`talkdnd reveal`）、`integrity.yaml`（存档校验，程序维护，不要手改）、`save-meta.yaml`（存档结构版本与开档时锁定的剧本偏离度，程序维护）、`original.yaml`（DM 原创内容台账，`talkdnd original`）、`house-rules.md`（可选，开局前商定的房规）、`dm-secrets.md`（🔒）、`digest.md`（`talkdnd start` 生成的接档摘要）、`chargen.json`（建卡进度）、`sheets/`（角色数据源 yaml，`talkdnd char` 维护）、`npc-drafts/` | ❌（个人进度） |
 | `Saves/_backups/` | 存档结构迁移前的整份备份（自动生成，可删） | ❌ |
 | `docs/` | DM 参考章节（本文件、掷骰、叙事、战斗、pdf2md、建卡细节），按需读 | ✅ |
 | `tools/pdf2md/` | PDF → Markdown 后台转换工具（Python，经 uv 运行）。输出在各 PDF 旁的隐藏目录 `.md/<PDF 文件名>/`，见 `docs/pdf2md.md` | ✅ 源码；❌ 输出与 `.venv` |
