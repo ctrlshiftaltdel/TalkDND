@@ -19,6 +19,7 @@ combat-sim 仍从角色卡的 `combat yaml` 块读数据，从 `party-state.yaml
 
 - `talkdnd level-up` 直接改数据块并追加升级记录；下次 `char` 命令把数据块和尾部读回 yaml，所以不会丢。
 - 手改角色卡会被下一次 `char` 覆盖（除了数据块和尾部），存档校验也会报警告。**DM 不手改角色卡。**
+- **物品来源**：`item add` 只接受规则数据里的武器、护甲、盾牌和常见装备；书里特有或原创物品要用 `--canon`（查过书）或 `--original O-xxx`（已登记的原创物品），说明见 `docs/deviation.md`。原创标记只留在 `sheets/*.yaml`，不会写进给玩家看的角色卡。
 
 ## 自动计算
 

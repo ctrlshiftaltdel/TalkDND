@@ -30,6 +30,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 - Keep copyrighted books and adventures, personal saves, and DM secrets out of Git, Issues, pull requests, commit messages, and CI logs.
 - Publish prebuilt `combat-sim` binaries for the release targets in this charter, and keep a from-source build for everyone else.
 - Record product decisions in this charter so later tasks do not drift from them.
+- Let the DM leave a published adventure only within a per-save, creation-locked deviation scope and ratio, with every original element registered in a DM-only ledger.
 
 ## Non-goals
 
@@ -135,6 +136,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 - The play directory is self-contained. The binary lives in `LetsPlay/bin/` and is not committed.
 - Prebuilt releases cover Linux x86_64, Windows x86_64, and macOS arm64.
 - This file is a living charter, updated in the same pull request as the decision it records.
+- Adventure deviation is per save, chosen with `talkdnd new --scope/--ratio`, stored in `save-meta.yaml`, and cannot be changed after creation. Original content is registered in the DM-only `original.yaml` before it is used, and its type, rarity and chapter budget are checked by the tool.
 
 ## Open decisions
 
@@ -254,6 +256,14 @@ Alternative considered: commit Allosaurus under 2014 because 2024 already tracks
 
 Pilot rejects on cleaned-up stat-block pages were mostly tiny recall dips (about 0.01–0.05) while unknown/1k improved. The gate now allows that soft recall drop when unknown/1k improves, words stay ≥ 90% of before, badness does not worsen, and the page has a `statblock` flag or structure markers; unknown/1k rising or words below 50% still hard-reject. Grok Build max-turns default is 60, with one short-prompt retry on max-turns. Prompts inject name-matched snippets from converted local SRD Markdown (web search stays off). `pdf2md review --rejudge` promotes prior soft rejects without an agent call. Thresholds and pilot numbers live in `LetsPlay/tools/pdf2md/docs/LESSONS.md` (no book text).
 
+### 2026-10-22 — Per-save adventure deviation and original-content ledger
+
+Each save locks how far the DM may leave the published adventure. `talkdnd new` asks for or accepts `--scope` (0 = gap filling only, 1 = minor original encounters/NPCs/items/locations, 2 = also side quests) and, for scope 1/2, `--ratio` (5–25%). The pair is stored as `deviation` in `Saves/<slot>/save-meta.yaml`, schema 4, and there is deliberately no setter command. Old saves migrate to scope 0 with the usual whole-save backup and a session-log line.
+
+Original content goes into the DM-only `Saves/<slot>/original.yaml` before it appears in play (`talkdnd original add/list/status`). Types are gated by scope; rarity is capped by both the scope and the party level (1–4 uncommon, 5–10 rare, 11–16 very rare, 17+ legendary), taking the lower cap. The per-chapter budget is `original / (original + canon progress) <= ratio`, checked after adding; canon progress counts `xp_log` entries and revealed facts since the last major milestone (all campaign units when there is none). Going over refuses the registration and tells the DM to return to the main line. Key anchors — main villain, core secrets, ending direction — never change at any scope. Main-line player freedom is unaffected, adopted player hooks count as original, and players are never told which elements are original. `talkdnd start` shows the DM the scope, ratio, caps and budget; `talkdnd check` reports manual edits to `save-meta.yaml`/`original.yaml`, out-of-scope ledger entries, and inventory items marked original without a ledger entry.
+
+Alternative considered: a global setting or a setter command. Rejected because deviation is a deliberate per-campaign decision and must not be relaxed mid-play.
+
 ## Change history
 
 | Date | Change |
@@ -271,6 +281,7 @@ Pilot rejects on cleaned-up stat-block pages were mostly tiny recall dips (about
 | 2026-10-21 | `talkdnd` play helper (start digest, new save, chargen, npc, checkpoint, log) built and shipped with combat-sim; release assets use plain platform names (`linux-x86_64`, `windows-x86_64`, `macos-arm64`). |
 | 2026-10-21 | DM guide split: short `LetsPlay/AGENTS.md` (player commands 开新局 / 继续游戏 / 存档, mandatory step-by-step character creation, core rules) plus `LetsPlay/docs/`. No CLAUDE.md / GEMINI.md pointers (current agents read AGENTS.md). |
 | 2026-10-21 | chargen validation: adventure start-level step, 2014 level-1 subclass rule, armor proficiency from class+subclass, cantrip/spell count checks, species traits in the sheet and combat yaml. |
+| 2026-10-22 | Per-save adventure deviation (scope 0–2, ratio 5–25%) locked in `save-meta.yaml` schema 4; DM-only `original.yaml` ledger with scope/rarity/chapter-budget checks; `char item add` source check; `start`/`check` surfacing; v0.7.0. |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 

@@ -930,6 +930,22 @@ mod tests {
     }
 
     #[test]
+    fn party_and_scope_caps_take_the_lower_value() {
+        assert_eq!(party_cap(1), Rarity::Uncommon);
+        assert_eq!(party_cap(4), Rarity::Uncommon);
+        assert_eq!(party_cap(5), Rarity::Rare);
+        assert_eq!(party_cap(10), Rarity::Rare);
+        assert_eq!(party_cap(11), Rarity::VeryRare);
+        assert_eq!(party_cap(16), Rarity::VeryRare);
+        assert_eq!(party_cap(17), Rarity::Legendary);
+        assert_eq!(effective_cap(1, 17), Some(Rarity::Uncommon));
+        assert_eq!(effective_cap(2, 1), Some(Rarity::Uncommon));
+        assert_eq!(effective_cap(2, 5), Some(Rarity::Rare));
+        assert_eq!(effective_cap(2, 17), Some(Rarity::Rare));
+        assert_eq!(effective_cap(0, 17), None);
+    }
+
+    #[test]
     fn scope_type_and_rarity_rules() {
         let d = save_dir("rules", 1, Some(15));
         canon(&d, 20, 0);
@@ -981,6 +997,11 @@ mod tests {
         canon(&d, 20, 0);
         assert!(budget_ok(0, 20, 5));
         add(&d, "encounter", "Ambush", None).unwrap();
+        let log = fs::read_to_string(d.join("Sessions/s1.md")).unwrap();
+        assert!(
+            log.contains("原创登记 O-001") && log.contains("Ambush"),
+            "{log}"
+        );
         // original 1, canon 20, ratio 5: a second would be 2/22 = 9.1%.
         let e = add(&d, "npc", "Guide", None).unwrap_err().to_string();
         assert!(e.contains("预算") && e.contains("回到主线"), "{e}");

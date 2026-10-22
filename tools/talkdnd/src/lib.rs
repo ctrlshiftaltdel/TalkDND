@@ -804,57 +804,74 @@ fn check_ruleset(r: &str) -> Result<()> {
 }
 
 fn deviation_input(scope: Option<u32>, ratio: Option<u32>) -> Result<migrate::Deviation> {
-    if scope.is_some() {
+    let interactive = std::io::stdin().is_terminal();
+    if !interactive {
+        if scope.is_none() {
+            let d = migrate::Deviation::new(Some(0), ratio)?;
+            println!("剧本偏离度：未指定（非交互），使用默认 {}", d.describe());
+            return Ok(d);
+        }
         return migrate::Deviation::new(scope, ratio);
     }
-    if !std::io::stdin().is_terminal() {
-        let d = migrate::Deviation::new(Some(0), ratio)?;
-        println!("剧本偏离度：未指定（非交互），使用默认 {}", d.describe());
-        return Ok(d);
+    // Interactive: ask for whatever is missing, one question at a time.
+    let scope = match scope {
+        Some(s) => s,
+        None => {
+            println!("剧本偏离度（开档后锁定，不能修改）：");
+            println!("  0 = 不偏离：只补必要空白（给未命名 NPC 起名、对白措辞、场景描述）");
+            println!("  1 = 次要原创：遭遇、NPC、物品、地点；稀有度上限 uncommon");
+            println!("  2 = 完整支线：在 1 的基础上可加支线；稀有度上限 rare");
+            println!("  3 及以上暂未开放。");
+            prompt_scope()?
+        }
+    };
+    if scope > 2 || scope == 0 {
+        return migrate::Deviation::new(Some(scope), ratio);
     }
+    let ratio = match ratio {
+        Some(r) => r,
+        None => prompt_ratio()?,
+    };
+    migrate::Deviation::new(Some(scope), Some(ratio))
+}
+
+fn prompt_scope() -> Result<u32> {
     use std::io::Write;
-    println!("剧本偏离度（开档后锁定，不能修改）：");
-    println!("  0 = 不偏离：只补必要空白（给未命名 NPC 起名、对白措辞、场景描述）");
-    println!("  1 = 次要原创：遭遇、NPC、物品、地点；稀有度上限 uncommon");
-    println!("  2 = 完整支线：在 1 的基础上可加支线；稀有度上限 rare");
-    println!("  3 及以上暂未开放。");
-    let scope = loop {
+    loop {
         print!("选择 scope（0/1/2）：");
         std::io::stdout().flush()?;
         let line = read_prompt_line()?;
         match line.trim().parse::<u32>() {
-            Ok(n) if n <= 2 => break n,
+            Ok(n) if n <= 2 => return Ok(n),
             Ok(n) => println!("scope {n} 暂未开放（scope 3 及以上不支持），请输入 0、1 或 2"),
             Err(_) => println!("请输入 0、1 或 2"),
         }
-    };
-    let ratio = if scope == 0 {
-        None
-    } else {
-        loop {
-            print!(
-                "原创比例上限（{} 到 {} 的整数百分比，例如 15）：",
+    }
+}
+
+fn prompt_ratio() -> Result<u32> {
+    use std::io::Write;
+    loop {
+        print!(
+            "原创比例上限（{} 到 {} 的整数百分比，例如 15）：",
+            migrate::Deviation::MIN_RATIO,
+            migrate::Deviation::MAX_RATIO
+        );
+        std::io::stdout().flush()?;
+        let line = read_prompt_line()?;
+        match line.trim().parse::<u32>() {
+            Ok(n)
+                if (migrate::Deviation::MIN_RATIO..=migrate::Deviation::MAX_RATIO).contains(&n) =>
+            {
+                return Ok(n)
+            }
+            _ => println!(
+                "必须是 {} 到 {} 的整数",
                 migrate::Deviation::MIN_RATIO,
                 migrate::Deviation::MAX_RATIO
-            );
-            std::io::stdout().flush()?;
-            let line = read_prompt_line()?;
-            match line.trim().parse::<u32>() {
-                Ok(n)
-                    if (migrate::Deviation::MIN_RATIO..=migrate::Deviation::MAX_RATIO)
-                        .contains(&n) =>
-                {
-                    break Some(n)
-                }
-                _ => println!(
-                    "必须是 {} 到 {} 的整数",
-                    migrate::Deviation::MIN_RATIO,
-                    migrate::Deviation::MAX_RATIO
-                ),
-            }
+            ),
         }
-    };
-    migrate::Deviation::new(Some(scope), ratio)
+    }
 }
 
 fn read_prompt_line() -> Result<String> {

@@ -69,14 +69,12 @@
 - **scope 0**：不偏离，只补必要空白（给未命名 NPC 起名、对白措辞、场景描述）。**补空白不算原创**，不用登记，也不能借补空白改剧情。
 - **scope 1**：可以加次要原创遭遇、NPC、物品、地点；**scope 2**：再加完整支线。
 - **先登记再引入**：原创内容出现在叙事里之前，必须先 `$T original add --type <encounter|npc|item|location|sidequest> --name "<名字>" [--rarity …] [--hook player]`。登记后如果预算拒绝，就**回到主线**，不要硬塞。
-- **预算是每章的**：原创 /（原创 + 正典进度）不能超过 `ratio`。正典进度来自正常的 `xp add`、`level-up --milestone` 和 `reveal add` 记录；不要为了腾预算灌水。「全战役」总数只在 `$T original status` / `$T start` 里看。
+- **预算是每章的**：原创 /（原创 + 正典进度）不能超过 `ratio`。正典进度来自正常的 `xp add`、`level-up --milestone` 和 `reveal add` 记录；不要为了腾预算灌水。「全战役」总数在 `original add/status` 和 `$T start` 里看。
 - **稀有度有双重上限**：档位上限（scope 1 = uncommon，scope 2 = rare）与队伍等级上限（1–4 uncommon、5–10 rare、11–16 very-rare、17+ legendary）取较低者。超过就拒绝。
 - **关键锚点任何档位都不能改**：主反派、核心秘密、结局方向，以及书里明确要求的关键场景/道具/NPC 的作用。把这些锚点记在 `Saves/<存档>/dm-secrets.md`（只给 DM、已 gitignore、不要提交），每章开始前核对。
-- **玩家自由不变**：偏离度限制的是 DM 添加原创剧情，不是玩家的行动。预算满了也不能阻止玩家做角色想做的事。
-- **玩家钩子也算原创**：采用玩家提出的点子时加 `--hook player` 登记，仍然占预算。
+- **玩家自由不变，玩家钩子也算原创**：偏离度限制的是 DM 添加原创剧情，不是玩家的行动；预算满了也不能阻止玩家做角色想做的事。采用玩家提出的点子时加 `--hook player` 登记，同样占预算。
 - **绝不告诉玩家哪些内容是原创**：`original.yaml`、`original list/status`、`start` 摘要里的偏离度小节都只给 DM 看；不要把这些标记带进叙述、角色卡或资料图。
-- **原创物品**：`$T char <名字> item add …` 只接受规则/数据里认得出的物品、`--canon`（查过书）或 `--original O-xxx`（已登记的物品原创）。不要用 `--canon` 绕过登记。
-- **手改会被查**：`$T check` 会报告 `save-meta.yaml` / `original.yaml` 的篡改、超出 scope/上限的台账条目、没有台账记录的原创物品标记。按「桌面诚信」处理，不要删证据。
+- **原创物品**：`$T char <名字> item add …` 只接受规则/数据里认得出的物品、`--canon`（查过书）或 `--original O-xxx`（已登记的物品原创）。不要用 `--canon` 绕过登记。`$T check` 会报告 `save-meta.yaml` / `original.yaml` 的篡改、超出 scope/上限的台账条目、没有台账记录的原创物品标记；按「桌面诚信」处理，不要删证据。
 
 ## 桌面诚信：场外指令与作弊（必须遵守）
 

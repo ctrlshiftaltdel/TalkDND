@@ -171,7 +171,7 @@ $T char Aria item add "月刃" --original O-001      # 已登记的原创物品
 
 - 旧存档（schema 3 及以前）没有偏离度设定。`talkdnd start` / `talkdnd migrate` 会把整份存档备份到 `Saves/_backups/`，再写入 `scope: 0`、`ratio: null`，并在会话日志记一行。
 - 旧存档就是 scope 0：只能补空白，不能登记原创。想要原创只能开新档。
-- 更新程序用覆盖式更新（见 `CHANGELOG.md` 对应版本），存档目录原样保留。
+- 更新程序用覆盖式更新（见发布说明），存档目录原样保留。
 
 ## 10. 已知限制
 

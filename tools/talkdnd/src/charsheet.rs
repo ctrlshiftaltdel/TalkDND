@@ -1242,7 +1242,9 @@ pub enum Op {
         reason: Option<String>,
     },
     /// Inventory: `item add "rope (50 ft)" --qty 1`, `item equip longsword`,
-    /// `item remove torch --qty 2`, `item attune "ring of protection"`
+    /// `item remove torch --qty 2`, `item attune "ring of protection"`.
+    /// Names outside the weapon/armor/common-gear data need `--canon` or
+    /// `--original O-xxx` (a registered original item)
     Item {
         action: String,
         name: Vec<String>,
