@@ -8,6 +8,7 @@ pub mod charsheet;
 pub mod check;
 pub mod classdata;
 pub mod data;
+pub mod handout;
 pub mod npc;
 pub mod options;
 pub mod progress;
@@ -135,6 +136,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: RevealCmd,
     },
+    /// Book images shown to the players (maps, letters, items). Only
+    /// player-safe entries are exported; DM-only maps never are
+    Handout {
+        /// Converted book folder or book/adventure name (default: the save's adventure)
+        #[arg(long, global = true)]
+        book: Option<String>,
+        #[command(subcommand)]
+        cmd: HandoutCmd,
+    },
     /// Character sheet changes (HP, resources, rests, conditions, items, gold,
     /// choices, notes). The sheet is rendered from Saves/<slot>/sheets/<id>.yaml;
     /// never hand-edit it. `talkdnd char Yier batch "damage 7; use slot1"`
@@ -159,6 +169,44 @@ enum IntegrityCmd {
     Accept {
         #[arg(long)]
         reason: String,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum HandoutCmd {
+    /// Export a player-safe handout to Saves/<slot>/handouts/, print its path
+    /// and a Markdown image link, and record it (reveal ledger, session log)
+    Show {
+        /// Handout id (p0012-00) or a caption / area search
+        query: Vec<String>,
+        /// Only this region: x,y,w,h as fractions 0-1 or pixels (exported as PNG)
+        #[arg(long)]
+        crop: Option<String>,
+        /// Convert to PNG (for hosts that do not display WebP)
+        #[arg(long)]
+        png: bool,
+    },
+    /// Handouts shown so far; --dm lists the whole registry with visibility
+    List {
+        #[arg(long)]
+        dm: bool,
+    },
+    /// Build or refresh the registry from the pdf2md index (keeps markings)
+    Build,
+    /// Mark a handout player-safe (--player) or DM-only (--dm)
+    Mark {
+        id: String,
+        #[arg(long, conflicts_with = "dm")]
+        player: bool,
+        #[arg(long)]
+        dm: bool,
+        /// Player-safe region x,y,w,h (only this part is ever exported; "" clears)
+        #[arg(long)]
+        crop: Option<String>,
+        #[arg(long)]
+        caption: Option<String>,
+        #[arg(long)]
+        note: Option<String>,
     },
 }
 
@@ -421,6 +469,51 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                 }
                 RevealCmd::List { tag } => reveal::list(&s, tag.as_deref())?,
                 RevealCmd::Check { term } => reveal::check(&s, &term.join(" "))?,
+            };
+            for l in lines {
+                println!("{l}");
+            }
+        }
+        Cmd::Handout { book, cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let b = book.as_deref();
+            let lines = match cmd {
+                HandoutCmd::Show { query, crop, png } => handout::show(
+                    &root,
+                    &s,
+                    b,
+                    &query.join(" "),
+                    &handout::ShowOpts {
+                        crop: crop.as_deref(),
+                        png,
+                    },
+                )?,
+                HandoutCmd::List { dm } => handout::list(&root, &s, b, dm)?,
+                HandoutCmd::Build => handout::rebuild(&root, &s, b)?,
+                HandoutCmd::Mark {
+                    id,
+                    player,
+                    dm,
+                    crop,
+                    caption,
+                    note,
+                } => {
+                    if !player && !dm {
+                        bail!("--player or --dm");
+                    }
+                    vec![handout::mark(
+                        &root,
+                        &s,
+                        b,
+                        &id,
+                        &handout::Mark {
+                            player,
+                            crop: crop.as_deref(),
+                            caption: caption.as_deref(),
+                            note: note.as_deref(),
+                        },
+                    )?]
+                }
             };
             for l in lines {
                 println!("{l}");

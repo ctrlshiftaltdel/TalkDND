@@ -308,3 +308,71 @@ fn old_sheet_repair_without_chargen() {
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
     let _ = fs::remove_dir_all(&r);
 }
+
+#[test]
+fn handouts_player_safe_only() {
+    let r = root("handout");
+    ok(&r, &["new", "--date", "2030-05-06", "--ruleset", "2014"]);
+    ok(&r, &["chargen", "set", "adventure", "Made Up Quest"]);
+    let save = r.join("Saves/2030-05-06-01");
+    // A made-up converted book: two generated images, no book content.
+    let book = r.join("Adventures/made-up-quest/.md/Made Up Quest");
+    fs::create_dir_all(book.join("img")).unwrap();
+    for (n, c) in [("p0003-00", [200u8, 30, 30]), ("p0007-00", [30, 30, 200])] {
+        image::RgbImage::from_pixel(40, 20, image::Rgb(c))
+            .save(book.join(format!("img/{n}.png")))
+            .unwrap();
+    }
+    fs::write(
+        book.join("index.json"),
+        r#"{"headings":[{"level":2,"text":"Fake Village","page":3},{"level":2,"text":"Fake Crypt","page":7}],
+        "maps":[{"caption":"MAP 1.1: Fake Village (Player Version)","img":"img/p0003-00.png","page":3},
+                {"caption":"MAP 1.2: Fake Crypt","img":"img/p0007-00.png","page":7}],"figures":[]}"#,
+    )
+    .unwrap();
+    let out = ok(&r, &["handout", "build"]);
+    assert!(
+        out.contains("2 images") && out.contains("1 player-safe"),
+        "{out}"
+    );
+    // DM-only maps are refused.
+    let (good, out) = run(&r, &["handout", "show", "p0007-00"]);
+    assert!(!good && out.contains("DM-only"), "{out}");
+    assert!(!save.join("handouts/p0007-00.png").exists());
+    assert!(ok(&r, &["handout", "list"]).contains("no handouts"));
+    // Player-safe map by search.
+    let out = ok(&r, &["handout", "show", "fake", "village"]);
+    assert!(out.contains("markdown: ![MAP 1.1"), "{out}");
+    assert!(save.join("handouts/p0003-00.png").is_file());
+    assert!(ok(&r, &["reveal", "list"]).contains("资料：MAP 1.1"));
+    assert!(ok(&r, &["handout", "list"]).contains("p0003-00"));
+    // Only a region of the crypt map is player-safe.
+    ok(
+        &r,
+        &[
+            "handout",
+            "mark",
+            "p0007-00",
+            "--player",
+            "--crop",
+            "0,0,0.5,1",
+            "--note",
+            "entrance only",
+        ],
+    );
+    let (good, out) = run(&r, &["handout", "show", "p0007-00", "--crop", "0,0,1,1"]);
+    assert!(!good && out.contains("registered crop"), "{out}");
+    ok(&r, &["handout", "show", "p0007-00"]);
+    let img = image::open(save.join("handouts/p0007-00-crop.png")).unwrap();
+    assert_eq!((img.width(), img.height()), (20, 20));
+    // Rebuild keeps the marking.
+    ok(&r, &["handout", "build"]);
+    assert!(ok(&r, &["handout", "list", "--dm"]).contains("p0007-00 [player]"));
+    let log = fs::read_dir(save.join("Sessions"))
+        .unwrap()
+        .flatten()
+        .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
+        .collect::<String>();
+    assert!(log.contains("资料：MAP 1.1"), "{log}");
+    let _ = fs::remove_dir_all(&r);
+}
