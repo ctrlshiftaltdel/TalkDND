@@ -7,6 +7,7 @@
 | 步骤 | 问玩家什么 | 记录命令 |
 |------|-----------|----------|
 | 规则版本 | 2014 还是 2024（只列 `Rules/2014/`、`Rules/2024/` 里有书的版本） | `$T new --ruleset 2014`（或先 `$T new`，再 `$T chargen set ruleset 2014`） |
+| 剧本偏离度 | 开档时问一次：scope 0（只补空白）/1（次要原创）/2（完整支线）；scope 1/2 再问比例 5–25%。**开档后锁定**，设置前向玩家解释清楚 | 和规则版本一起：`$T new --ruleset 2014 --scope 2 --ratio 15`；交互终端不带参数时程序会中文询问，非交互默认 scope 0。详见 `docs/deviation.md` |
 | 冒险 | `Adventures/` 里有哪些书 | `$T chargen set adventure "Keys from the Golden Vault"` |
 | 种族 / 物种 | 列出该版可选项，各一句特点 | `$T chargen set species hill-dwarf` |
 | 职业 | 同上 | `$T chargen set class cleric` |
@@ -27,6 +28,8 @@
 | 名字 | 名字 | `$T chargen set name Bruni` |
 | 性格四项与阵营 | 性格特点、理想、牵绊、缺点（可参考背景的建议表，由玩家定）、阵营 | `$T chargen set traits "..."`、`set ideals`、`set bonds`、`set flaws`、`set alignment "混乱善良"` |
 | 确认 | 生成角色卡给玩家看，玩家说可以再确认 | `$T chargen validate` → `$T chargen sheet --player <玩家名>` → `$T chargen confirm` |
+
+- **剧本偏离度**在 `new` 时随规则版本一起定，之后不能改；`$T start` 摘要会显示当前档位、比例和本章预算。DM 用它约束原创内容，玩家不需要管理；详见 `docs/deviation.md`。
 
 - `$T chargen status` 随时查看进度和下一步；中途断了，下次 `talkdnd start` 的摘要会提示从哪一步接着做。
 - `chargen roll` 用 combat-sim 的骰子引擎掷 6 次 4d6dl1，结果自动写入会话日志。**掷过就不能重掷，也不能改用数组或购点**。

@@ -202,6 +202,118 @@ fn newest_slot_and_numbering() {
 }
 
 #[test]
+fn deviation_is_validated_locked_and_tamper_checked() {
+    let r = root("deviation");
+    for args in [
+        vec![
+            "new",
+            "--date",
+            "2030-01-03",
+            "--scope",
+            "3",
+            "--ratio",
+            "10",
+        ],
+        vec![
+            "new",
+            "--date",
+            "2030-01-03",
+            "--scope",
+            "0",
+            "--ratio",
+            "10",
+        ],
+        vec![
+            "new",
+            "--date",
+            "2030-01-03",
+            "--scope",
+            "1",
+            "--ratio",
+            "4",
+        ],
+        vec![
+            "new",
+            "--date",
+            "2030-01-03",
+            "--scope",
+            "1",
+            "--ratio",
+            "26",
+        ],
+        vec!["new", "--date", "2030-01-03", "--scope", "1"],
+    ] {
+        let (good, out) = run(&r, &args);
+        assert!(!good, "{args:?} accepted: {out}");
+        assert!(
+            out.contains("scope") || out.contains("ratio"),
+            "{args:?}: {out}"
+        );
+    }
+    assert_eq!(fs::read_dir(r.join("Saves")).unwrap().count(), 0);
+    ok(
+        &r,
+        &[
+            "new",
+            "--date",
+            "2030-01-03",
+            "--scope",
+            "2",
+            "--ratio",
+            "15",
+            "--ruleset",
+            "2014",
+        ],
+    );
+    let save = r.join("Saves/2030-01-03-01");
+    let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
+    assert!(
+        meta.contains("schema: 4") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
+        "{meta}"
+    );
+    let out = ok(&r, &["original", "status"]);
+    for want in [
+        "scope 2",
+        "比例上限 15%",
+        "允许原创类型",
+        "稀有度上限",
+        "本章原创",
+        "全战役原创",
+    ] {
+        assert!(out.contains(want), "missing {want}: {out}");
+    }
+    let (good, out) = run(
+        &r,
+        &[
+            "original",
+            "add",
+            "--type",
+            "sidequest",
+            "--name",
+            "Test",
+            "--rarity",
+            "uncommon",
+        ],
+    );
+    assert!(
+        !good && out.contains("预算") && out.contains("回到主线"),
+        "{out}"
+    );
+    // No setter: editing save-meta by hand is flagged by `check`.
+    fs::write(
+        save.join("save-meta.yaml"),
+        meta.replace("scope: 2", "scope: 1"),
+    )
+    .unwrap();
+    let out = ok(&r, &["check"]);
+    assert!(
+        out.contains("save-meta.yaml: changed outside the tools"),
+        "{out}"
+    );
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
 fn checkpoint_section_is_extracted() {
     let text = "# log\n## 存档点（1）\nold\n## 场景\nx\n## 存档点（2）\nnew line\n- hp\n";
     assert_eq!(
@@ -241,12 +353,15 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     let out = ok(&r, &["start"]);
     assert!(out.contains("存档结构"), "{out}");
     assert!(
-        out.contains("schema 1 → 3") || out.contains("schema 1→3"),
+        out.contains("schema 1 → 4") || out.contains("schema 1→4"),
         "{out}"
     );
     assert!(save.join("sheets/hero.yaml").is_file());
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
-    assert!(meta.contains("schema: 3"), "{meta}");
+    assert!(
+        meta.contains("schema: 4") && meta.contains("scope: 0"),
+        "{meta}"
+    );
     let backups: Vec<PathBuf> = fs::read_dir(r.join("Saves/_backups"))
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -254,7 +369,7 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     assert_eq!(backups.len(), 1);
     assert!(backups[0].join("Characters/hero.md").is_file());
     let log = fs::read_to_string(save.join("Sessions/2030-06-07-session-00-setup.md")).unwrap();
-    assert!(log.contains("存档结构迁移 schema 1→3"), "{log}");
+    assert!(log.contains("存档结构迁移 schema 1→4"), "{log}");
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
     assert!(ok(&r, &["start"]).contains("无需迁移"));
     assert_eq!(fs::read_dir(r.join("Saves/_backups")).unwrap().count(), 1);
@@ -309,7 +424,7 @@ fn migration_does_not_launder_a_hand_edit() {
     fs::write(&p, text).unwrap();
     let out = ok(&r, &["start"]);
     assert!(
-        out.contains("schema 2 → 3") || out.contains("schema 2→3"),
+        out.contains("schema 2 → 4") || out.contains("schema 2→4"),
         "{out}"
     );
     let out = ok(&r, &["check"]);
@@ -499,6 +614,91 @@ fn old_sheet_repair_without_chargen() {
     ok(&r, &["char", "gar", "heal", "5"]);
     let party = fs::read_to_string(save.join("combat/party-state.yaml")).unwrap();
     assert!(!party.contains("unconscious"), "{party}");
+    assert!(ok(&r, &["check"]).contains("integrity: OK"));
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn original_item_add_requires_canon_or_a_ledger_entry() {
+    let r = root("origitem");
+    ok(
+        &r,
+        &[
+            "new",
+            "--date",
+            "2030-07-01",
+            "--scope",
+            "2",
+            "--ratio",
+            "25",
+            "--ruleset",
+            "2014",
+        ],
+    );
+    let save = r.join("Saves/2030-07-01-01");
+    fs::write(
+        save.join("Characters/hero.md"),
+        "# Hero\n\n```combat yaml\nid: hero\nname: Hero\nkind: pc\nside: party\nlevel: 1\nac: 12\nhp: 10\nprof: 2\nabilities: {str: 14, dex: 12, con: 12, int: 10, wis: 10, cha: 10}\nnotes: \"fighter 1\"\n```\n",
+    )
+    .unwrap();
+    ok(&r, &["char", "hero", "item", "add", "longsword"]);
+    let (good, out) = run(&r, &["char", "hero", "item", "add", "vorpal sword"]);
+    assert!(
+        !good && out.contains("--canon") && out.contains("--original"),
+        "{out}"
+    );
+    ok(
+        &r,
+        &["char", "hero", "item", "add", "vorpal sword", "--canon"],
+    );
+    for reason in ["one", "two", "three"] {
+        ok(&r, &["xp", "add", "10", "--to", "hero", "--reason", reason]);
+    }
+    let out = ok(
+        &r,
+        &[
+            "original",
+            "add",
+            "--type",
+            "item",
+            "--name",
+            "Moonblade",
+            "--rarity",
+            "uncommon",
+            "--hook",
+            "player",
+        ],
+    );
+    assert!(out.contains("O-001") && out.contains("玩家钩子"), "{out}");
+    ok(
+        &r,
+        &[
+            "char",
+            "hero",
+            "item",
+            "add",
+            "Moonblade",
+            "--original",
+            "O-001",
+        ],
+    );
+    let sheet = fs::read_to_string(save.join("sheets/hero.yaml")).unwrap();
+    assert!(sheet.contains("original: O-001"), "{sheet}");
+    let rendered = fs::read_to_string(save.join("Characters/hero.md")).unwrap();
+    assert!(!rendered.contains("O-001"), "{rendered}");
+    let (good, out) = run(
+        &r,
+        &[
+            "char",
+            "hero",
+            "item",
+            "add",
+            "Other",
+            "--original",
+            "O-999",
+        ],
+    );
+    assert!(!good && out.contains("O-999"), "{out}");
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
     let _ = fs::remove_dir_all(&r);
 }

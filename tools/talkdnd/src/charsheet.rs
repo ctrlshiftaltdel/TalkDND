@@ -43,6 +43,10 @@ pub struct Item {
     /// Extra AC while equipped (shields, rings, magic armor).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub ac_bonus: i32,
+    /// Original-content id (`O-001`) when this is a registered original item.
+    /// DM-only: never rendered onto the player-facing sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<String>,
 }
 
 fn is_zero(v: &i32) -> bool {
@@ -1238,7 +1242,9 @@ pub enum Op {
         reason: Option<String>,
     },
     /// Inventory: `item add "rope (50 ft)" --qty 1`, `item equip longsword`,
-    /// `item remove torch --qty 2`, `item attune "ring of protection"`
+    /// `item remove torch --qty 2`, `item attune "ring of protection"`.
+    /// Names outside the weapon/armor/common-gear data need `--canon` or
+    /// `--original O-xxx` (a registered original item)
     Item {
         action: String,
         name: Vec<String>,
@@ -1252,6 +1258,14 @@ pub enum Op {
         ac_bonus: Option<i32>,
         #[arg(long)]
         ammo: bool,
+        /// The DM checked the book: accept a name that is not in the weapon,
+        /// armor or common-gear data
+        #[arg(long)]
+        canon: bool,
+        /// Registered original item (`O-001`); validated against the save's
+        /// original ledger
+        #[arg(long, conflicts_with = "canon")]
+        original: Option<String>,
     },
     /// Ammunition: `ammo arrows -3` (spent) or `ammo arrows +2` (recovered)
     Ammo {
@@ -1789,16 +1803,31 @@ fn apply(
             bonus,
             ac_bonus,
             ammo,
+            canon,
+            original,
         } => {
             let name = name.join(" ");
             if name.trim().is_empty() {
                 bail!("item {action} <name>");
+            }
+            if action != "add" && (canon || original.is_some()) {
+                bail!("--canon/--original 只用于 `item add`");
             }
             let res = match action.as_str() {
                 "add" => {
                     let mut it = parse_item(&name);
                     if let Some(q) = qty {
                         it.qty = q;
+                    }
+                    if let Some(id) = &original {
+                        crate::original::validate_item_reference(save_dir, id)?;
+                        it.original = Some(id.trim().to_string());
+                    } else if !canon && !crate::original::is_canon_item(&it.name, book) {
+                        bail!(
+                            "物品「{}」不在规则/剧本数据里。确认书里有这件东西就加 --canon；是原创物品就先 `talkdnd original add --type item --name \"{}\" --rarity <稀有度>`，再用 `--original O-xxx` 加入。",
+                            it.name,
+                            it.name
+                        );
                     }
                     it.equipped = equip;
                     it.bonus = bonus.unwrap_or(0);
@@ -1810,10 +1839,28 @@ fn apply(
                         .iter()
                         .position(|x| x.name.eq_ignore_ascii_case(&it.name))
                     {
-                        Some(i) => cf.inventory[i].qty += it.qty,
+                        Some(i) => {
+                            if let Some(new_id) = &it.original {
+                                match &cf.inventory[i].original {
+                                    Some(old_id) if old_id != new_id => bail!(
+                                        "同名物品已标为原创 {old_id}，不能再作为 {new_id} 加入"
+                                    ),
+                                    None => cf.inventory[i].original = Some(new_id.clone()),
+                                    _ => {}
+                                }
+                            }
+                            cf.inventory[i].qty += it.qty;
+                        }
                         None => cf.inventory.push(it),
                     }
-                    format!("获得物品 {label}{}", if equip { "（已装备）" } else { "" })
+                    format!(
+                        "获得物品 {label}{}{}",
+                        if equip { "（已装备）" } else { "" },
+                        match &original {
+                            Some(id) => format!("（原创 {id}）"),
+                            None => String::new(),
+                        }
+                    )
                 }
                 "remove" | "rm" | "drop" => {
                     let i = cf.find_item(&name)?;
@@ -2471,6 +2518,131 @@ mod tests {
         assert!(armor_of("half plate").unwrap().0 == "half-plate");
         assert!(armor_of("rope").is_none());
         assert_eq!(add_flat("1d8+3", 2), "1d8+5");
+    }
+
+    #[test]
+    fn item_add_requires_canon_or_a_registered_original() {
+        let d = std::env::temp_dir().join(format!("talkdnd-origitem-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        for sub in ["Characters", "Sessions", "combat"] {
+            fs::create_dir_all(d.join(sub)).unwrap();
+        }
+        fs::write(d.join("Sessions/s1.md"), "# log\n").unwrap();
+        crate::migrate::init_with_deviation(
+            &d,
+            &crate::migrate::Deviation::new(Some(1), Some(25)).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            d.join("original.yaml"),
+            "version: 1\nentries:\n  - {id: O-001, type: item, name: Moonblade, rarity: uncommon, chapter: 未分章, logged: \"2026-10-22 10:00\"}\n",
+        )
+        .unwrap();
+        let book = Book::srd("2014");
+        let mut c = cf("2014");
+        let mut ps = PartyState::default();
+        ps.members.insert(
+            "tess".into(),
+            Member {
+                name: "Tess".into(),
+                hp: 12,
+                max_hp: 12,
+                ..Default::default()
+            },
+        );
+        let mut out = Vec::new();
+        let mut rng = combat_sim::dice::seeded_rng(1);
+        let item = |action: &str, name: &str, canon: bool, original: Option<&str>| Op::Item {
+            action: action.into(),
+            name: vec![name.into()],
+            qty: None,
+            equip: false,
+            bonus: None,
+            ac_bonus: None,
+            ammo: false,
+            canon,
+            original: original.map(str::to_string),
+        };
+        apply(
+            &d,
+            &mut c,
+            &mut ps,
+            &book,
+            item("add", "longsword", false, None),
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        assert!(c.inventory.iter().any(|i| i.name == "longsword"));
+        // Not in the data and not registered: refused with both hints.
+        let e = apply(
+            &d,
+            &mut c,
+            &mut ps,
+            &book,
+            item("add", "vorpal sword", false, None),
+            &mut rng,
+            &mut out,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("--canon") && e.contains("--original"), "{e}");
+        assert!(!c.inventory.iter().any(|i| i.name == "vorpal sword"));
+        // The DM checked the book: --canon accepts it.
+        apply(
+            &d,
+            &mut c,
+            &mut ps,
+            &book,
+            item("add", "vorpal sword", true, None),
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        // A registered item original is accepted and keeps its DM-only marker.
+        apply(
+            &d,
+            &mut c,
+            &mut ps,
+            &book,
+            item("add", "Moonblade", false, Some("O-001")),
+            &mut rng,
+            &mut out,
+        )
+        .unwrap();
+        let moon = c.inventory.iter().find(|i| i.name == "Moonblade").unwrap();
+        assert_eq!(moon.original.as_deref(), Some("O-001"));
+        let md = render(&c, None);
+        assert!(!md.contains("O-001") && !md.contains("original"), "{md}");
+        // Bogus ids are refused.
+        for id in ["O-999", "O-002"] {
+            let e = apply(
+                &d,
+                &mut c,
+                &mut ps,
+                &book,
+                item("add", "Moonblade", false, Some(id)),
+                &mut rng,
+                &mut out,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(e.contains(id), "{e}");
+        }
+        // Common gear keeps working without flags.
+        for name in ["rope", "torch", "20 arrows", "potion of healing"] {
+            apply(
+                &d,
+                &mut c,
+                &mut ps,
+                &book,
+                item("add", name, false, None),
+                &mut rng,
+                &mut out,
+            )
+            .unwrap();
+        }
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

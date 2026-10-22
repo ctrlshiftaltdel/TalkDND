@@ -2,10 +2,11 @@
 //!
 //! The schema number describes the on-disk layout of a save:
 //! 1 = Markdown sheets only, 2 = structured `sheets/<id>.yaml`, 3 = versioned
-//! YAML files plus `save-meta.yaml`. `talkdnd start` and `talkdnd migrate`
-//! back the whole save up into `Saves/_backups/` before writing, then run the
-//! migrations in order. A save from a newer talkdnd is refused: this binary
-//! cannot know its format.
+//! YAML files plus `save-meta.yaml`, 4 = the locked adventure-deviation
+//! settings (`deviation:`) in `save-meta.yaml`. `talkdnd start` and
+//! `talkdnd migrate` back the whole save up into `Saves/_backups/` before
+//! writing, then run the migrations in order. A save from a newer talkdnd is
+//! refused: this binary cannot know its format.
 //!
 //! Migrations only update the integrity manifest for files that were clean
 //! before; a file the DM had already hand-edited stays flagged.
@@ -23,8 +24,77 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "save-meta.yaml";
-pub const CURRENT_SCHEMA: u32 = 3;
+pub const CURRENT_SCHEMA: u32 = 4;
 pub const BACKUP_DIR: &str = "_backups";
+
+/// How far this save may deviate from the published adventure.
+///
+/// Set once when the save is created and stored in `save-meta.yaml`; there is
+/// deliberately no command that changes it later. `scope` is 0 (fill blanks
+/// only), 1 (minor encounters/NPCs/items/locations) or 2 (also side quests).
+/// `ratio` is the per-chapter original-content ceiling in percent and is
+/// `None` for scope 0.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Deviation {
+    #[serde(default)]
+    pub scope: u32,
+    #[serde(default)]
+    pub ratio: Option<u32>,
+}
+
+impl Deviation {
+    pub const MIN_RATIO: u32 = 5;
+    pub const MAX_RATIO: u32 = 25;
+
+    /// Validate a player's choice from `talkdnd new`.
+    pub fn new(scope: Option<u32>, ratio: Option<u32>) -> Result<Self> {
+        let scope = scope.unwrap_or(0);
+        if scope > 2 {
+            bail!("剧本偏离度 scope 只能是 0、1、2（收到 {scope}）；scope 3 及以上暂未开放");
+        }
+        let ratio = match (scope, ratio) {
+            (0, Some(_)) => bail!("scope 0 表示不偏离剧本，不能设置 --ratio"),
+            (0, None) => None,
+            (_, None) => bail!(
+                "scope {scope} 需要 --ratio（{} 到 {} 的整数百分比）",
+                Self::MIN_RATIO,
+                Self::MAX_RATIO
+            ),
+            (_, Some(r)) => {
+                if !(Self::MIN_RATIO..=Self::MAX_RATIO).contains(&r) {
+                    bail!(
+                        "ratio 必须是 {} 到 {} 的整数百分比（收到 {r}）",
+                        Self::MIN_RATIO,
+                        Self::MAX_RATIO
+                    );
+                }
+                Some(r)
+            }
+        };
+        Ok(Self { scope, ratio })
+    }
+
+    /// Validate a deviation read back from disk (also used by `talkdnd
+    /// check`, so a hand-edited value is reported instead of silently used).
+    pub fn check(&self) -> Result<()> {
+        Self::new(Some(self.scope), self.ratio).map(|_| ())
+    }
+
+    pub fn scope_name(&self) -> &'static str {
+        match self.scope {
+            0 => "scope 0（不偏离：只补必要空白）",
+            1 => "scope 1（次要原创：遭遇/NPC/物品/地点）",
+            _ => "scope 2（完整支线）",
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        match self.ratio {
+            Some(r) => format!("{}，比例上限 {r}%", self.scope_name()),
+            None => self.scope_name().to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Migration {
@@ -41,6 +111,9 @@ pub struct SaveMeta {
     pub schema: u32,
     #[serde(default)]
     pub tool: String,
+    /// Locked when the save is created; see [`Deviation`].
+    #[serde(default)]
+    pub deviation: Deviation,
     #[serde(default)]
     pub migrations: Vec<Migration>,
 }
@@ -85,12 +158,19 @@ pub fn detect(save: &Path) -> Result<u32> {
 
 /// Write the current schema for a brand-new save.
 pub fn init(save: &Path) -> Result<()> {
+    init_with_deviation(save, &Deviation::default())
+}
+
+/// Write the current schema and the deviation chosen at save creation.
+pub fn init_with_deviation(save: &Path, deviation: &Deviation) -> Result<()> {
     if path(save).is_file() {
         return Ok(());
     }
+    deviation.check()?;
     let meta = SaveMeta {
         schema: CURRENT_SCHEMA,
         tool: env!("CARGO_PKG_VERSION").to_string(),
+        deviation: deviation.clone(),
         migrations: Vec::new(),
     };
     write_meta(save, &meta)
@@ -112,6 +192,8 @@ pub struct Report {
     /// Backup path relative to the play folder.
     pub backup: Option<String>,
     pub sheets: Vec<String>,
+    /// 3→4: the old save had no deviation; it becomes scope 0 (no deviation).
+    pub deviation_default: bool,
     pub log_text: Option<String>,
 }
 
@@ -132,6 +214,9 @@ impl Report {
             if !self.sheets.is_empty() {
                 v.push(format!("会迁移角色卡：{}", self.sheets.join(", ")));
             }
+            if self.deviation_default {
+                v.push("会写入剧本偏离度：scope 0（不偏离）、无比例（旧存档没有设置过）".into());
+            }
             return v;
         }
         let mut v = vec![format!("存档 schema {} → {}：迁移完成", self.from, self.to)];
@@ -144,6 +229,9 @@ impl Report {
                 self.sheets.len(),
                 self.sheets.join(", ")
             ));
+        }
+        if self.deviation_default {
+            v.push("剧本偏离度：旧存档未设置，按 scope 0（不偏离）、无比例处理".into());
         }
         if let Some(log) = &self.log_text {
             v.push(format!("已写入会话日志：{log}"));
@@ -168,6 +256,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         from,
         to: CURRENT_SCHEMA,
         dry_run,
+        deviation_default: from < 4,
         ..Default::default()
     };
     if dry_run {
@@ -210,6 +299,10 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     let mut meta = load(save)?.unwrap_or_default();
     meta.schema = CURRENT_SCHEMA;
     meta.tool = env!("CARGO_PKG_VERSION").to_string();
+    if from < 4 {
+        // Old saves never had the setting: they are plain adventure runs.
+        meta.deviation = Deviation::default();
+    }
     let date = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
     if from < 2 {
         meta.migrations.push(Migration {
@@ -219,16 +312,29 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             backup: backup.clone(),
         });
     }
+    if from < 3 {
+        meta.migrations.push(Migration {
+            from: from.max(2),
+            to: 3,
+            date: date.clone(),
+            backup: backup.clone(),
+        });
+    }
     meta.migrations.push(Migration {
-        from: from.max(2),
-        to: 3,
+        from: from.max(3),
+        to: 4,
         date,
         backup: backup.clone(),
     });
     write_meta(save, &meta)?;
 
+    let deviation_note = if from < 4 {
+        "；剧本偏离度按 scope 0（不偏离）迁移"
+    } else {
+        ""
+    };
     let text = format!(
-        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）",
+        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}",
         chrono::Local::now().format("%H:%M")
     );
     if let Some(log) = save::latest_log(save) {
@@ -357,14 +463,21 @@ mod tests {
         let root = root("v1");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (1, 3));
+        assert_eq!((report.from, report.to), (1, 4));
+        assert!(report.deviation_default);
         assert_eq!(report.sheets, vec!["hero".to_string()]);
         assert!(charsheet::path(&save, "hero").is_file());
-        assert_eq!(meta(&save).schema, 3);
+        assert_eq!(meta(&save).schema, 4);
+        assert_eq!(meta(&save).deviation.scope, 0);
+        assert_eq!(meta(&save).deviation.ratio, None);
         assert!(meta(&save)
             .migrations
             .iter()
             .any(|m| m.from == 1 && m.to == 2));
+        assert!(meta(&save)
+            .migrations
+            .iter()
+            .any(|m| m.from == 3 && m.to == 4));
 
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
             .unwrap()
@@ -376,7 +489,7 @@ mod tests {
         assert!(!backups[0].join("_backups").exists());
 
         let log = fs::read_to_string(save.join("Sessions/2030-01-01-session-00.md")).unwrap();
-        assert!(log.contains("存档结构迁移 schema 1→3"), "{log}");
+        assert!(log.contains("存档结构迁移 schema 1→4"), "{log}");
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
 
@@ -400,7 +513,7 @@ mod tests {
         let root = root("dry");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, true).unwrap();
-        assert_eq!((report.from, report.to), (1, 3));
+        assert_eq!((report.from, report.to), (1, 4));
         assert!(report.dry_run && report.sheets == vec!["hero".to_string()]);
         assert!(!path(&save).is_file());
         assert!(!charsheet::path(&save, "hero").is_file());
@@ -429,8 +542,8 @@ mod tests {
         fs::write(save.join("progress.yaml"), edited).unwrap();
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (2, 3));
-        assert!(meta(&save).schema == 3);
+        assert_eq!((report.from, report.to), (2, 4));
+        assert!(meta(&save).schema == 4);
         let changes = combat_sim::integrity::changes(&save).unwrap();
         assert!(
             changes
@@ -477,6 +590,73 @@ mod tests {
         );
         // The hand-edited ledger still parses with the old (0) version.
         crate::progress::Progress::load(&dirty).unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deviation_validation() {
+        assert_eq!(Deviation::new(Some(0), None).unwrap().ratio, None);
+        assert_eq!(Deviation::new(Some(1), Some(5)).unwrap().ratio, Some(5));
+        assert_eq!(Deviation::new(Some(2), Some(25)).unwrap().scope, 2);
+        assert_eq!(Deviation::new(None, None).unwrap().scope, 0);
+
+        let e = Deviation::new(Some(3), Some(10)).unwrap_err().to_string();
+        assert!(e.contains("3") && e.contains("未开放"), "{e}");
+        let e = Deviation::new(Some(0), Some(10)).unwrap_err().to_string();
+        assert!(e.contains("scope 0") && e.contains("--ratio"), "{e}");
+        for ratio in [4, 26, 0, 100] {
+            let e = Deviation::new(Some(1), Some(ratio))
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("5") && e.contains("25"), "{ratio}: {e}");
+        }
+        assert!(Deviation::new(Some(1), None)
+            .unwrap_err()
+            .to_string()
+            .contains("--ratio"));
+        assert!(Deviation::new(Some(2), Some(15)).unwrap().check().is_ok());
+        assert!(Deviation {
+            scope: 3,
+            ratio: Some(10)
+        }
+        .check()
+        .is_err());
+    }
+
+    #[test]
+    fn migrates_a_v3_save_to_scope_zero_and_logs_it() {
+        let root = root("v3");
+        let save = root.join("Saves/2030-04-05-01");
+        fs::create_dir_all(save.join("Sessions")).unwrap();
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::write(save.join("Sessions/2030-04-05-session-00.md"), "# log\n").unwrap();
+        fs::write(
+            save.join("save-meta.yaml"),
+            "schema: 3\ntool: 0.6.1\nmigrations: []\n",
+        )
+        .unwrap();
+        let report = ensure(&save, &root, false).unwrap();
+        assert_eq!((report.from, report.to), (3, 4));
+        assert!(report.deviation_default);
+        assert!(report
+            .lines()
+            .iter()
+            .any(|l| l.contains("scope 0") && l.contains("偏离度")));
+        let m = meta(&save);
+        assert_eq!(m.schema, 4);
+        assert_eq!(m.deviation.scope, 0);
+        assert_eq!(m.deviation.ratio, None);
+        assert!(m.migrations.iter().any(|x| x.from == 3 && x.to == 4));
+        let log = fs::read_to_string(save.join("Sessions/2030-04-05-session-00.md")).unwrap();
+        assert!(log.contains("schema 3→4"), "{log}");
+        assert!(log.contains("scope 0"), "{log}");
+        let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert!(backups[0].join("save-meta.yaml").is_file());
+        assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 

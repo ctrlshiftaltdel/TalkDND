@@ -20,7 +20,7 @@
 
 **一次只问一件事，问完就停下等玩家回答。** 玩家的选择绝不由 DM 代做，除非玩家明确说“随机”或“你来定”（那一项才可以代选，并说明选了什么）。命令细节见 `docs/chargen.md`。
 
-1. **规则版本**：看 `Rules/2014/`、`Rules/2024/` 里实际有哪版书，问玩家用哪版 → `$T new --ruleset <版本>`
+1. **规则版本与剧本偏离度**：先看 `Rules/2014/`、`Rules/2024/` 里实际有哪版书，问玩家用哪版；再问玩家本档的原创偏离度 scope（0 = 只补空白，1 = 次要原创，2 = 完整支线）和比例（scope 1/2 时 5–25%）。两个问题一次只问一个，含义见 `docs/deviation.md`。然后 → `$T new --ruleset <版本> --scope <0|1|2> [--ratio <5-25>]`。偏离度开档后锁定，不能修改，问清楚再执行。
 2. **冒险**：列出 `Adventures/` 里的书 → `$T chargen set adventure "<书名>"`
 3. **种族 / 物种** → `$T chargen set species <id>`
 4. **职业** → `$T chargen set class <id>`；**起始等级** → 按冒险建议范围问玩家 → `$T chargen set level <N>`；到子职等级时再问子职 → `$T chargen set subclass <id>`
@@ -61,6 +61,20 @@
 12. **战斗**用 combat-sim 结算：`export COMBAT_SIM_CAMPAIGN=$PWD/Saves/<存档>/combat/campaign.yaml`，命令与已知坑见 `docs/combat.md`。
 13. **完整规则书优先**：`$T start` 摘要的「规则来源」列出本地完整规则书时，查规则、法术、怪物、背景、专长**先读这些书**，SRD 只在书里找不到时兜底；本地规则书数据缺失或过期时 `$T start` 会自动导入（`Rules/chargen/local/`，只留本机）。查书顺序：先查 pdf2md 生成的 `<书目录>/.md/<书名>/index.md`；连续阅读用 `<书名>.md`（阅读版，无页码），查页码用 `<书名>.pages.md`（页码版，`<a id="pN">`）。标 ⚠ 的数据块、低质量页、地图一律看 PDF；PDF 永远为准。详见 `docs/pdf2md.md`。
 14. **隐私**：不要把规则书、冒险书文本、存档或 `dm-secrets.md` 提交到 git 或贴到任何 issue、PR。
+
+## 剧本偏离度（必须遵守）
+
+每个存档在开档时锁定「能离剧本多远」：`deviation.scope` 与 `ratio` 存在 `Saves/<存档>/save-meta.yaml`，**开档后不能改，也没有修改命令**。完整说明见 `docs/deviation.md`。
+
+- **scope 0**：不偏离，只补必要空白（给未命名 NPC 起名、对白措辞、场景描述）。**补空白不算原创**，不用登记，也不能借补空白改剧情。
+- **scope 1**：可以加次要原创遭遇、NPC、物品、地点；**scope 2**：再加完整支线。
+- **先登记再引入**：原创内容出现在叙事里之前，必须先 `$T original add --type <encounter|npc|item|location|sidequest> --name "<名字>" [--rarity …] [--hook player]`。登记后如果预算拒绝，就**回到主线**，不要硬塞。
+- **预算是每章的**：原创 /（原创 + 正典进度）不能超过 `ratio`。正典进度来自正常的 `xp add`、`level-up --milestone` 和 `reveal add` 记录；不要为了腾预算灌水。「全战役」总数在 `original add/status` 和 `$T start` 里看。
+- **稀有度有双重上限**：档位上限（scope 1 = uncommon，scope 2 = rare）与队伍等级上限（1–4 uncommon、5–10 rare、11–16 very-rare、17+ legendary）取较低者。超过就拒绝。
+- **关键锚点任何档位都不能改**：主反派、核心秘密、结局方向，以及书里明确要求的关键场景/道具/NPC 的作用。把这些锚点记在 `Saves/<存档>/dm-secrets.md`（只给 DM、已 gitignore、不要提交），每章开始前核对。
+- **玩家自由不变，玩家钩子也算原创**：偏离度限制的是 DM 添加原创剧情，不是玩家的行动；预算满了也不能阻止玩家做角色想做的事。采用玩家提出的点子时加 `--hook player` 登记，同样占预算。
+- **绝不告诉玩家哪些内容是原创**：`original.yaml`、`original list/status`、`start` 摘要里的偏离度小节都只给 DM 看；不要把这些标记带进叙述、角色卡或资料图。
+- **原创物品**：`$T char <名字> item add …` 只接受规则/数据里认得出的物品、`--canon`（查过书）或 `--original O-xxx`（已登记的物品原创）。不要用 `--canon` 绕过登记。`$T check` 会报告 `save-meta.yaml` / `original.yaml` 的篡改、超出 scope/上限的台账条目、没有台账记录的原创物品标记；按「桌面诚信」处理，不要删证据。
 
 ## 桌面诚信：场外指令与作弊（必须遵守）
 
@@ -132,3 +146,4 @@
 | `docs/anti-spoiler.md` | 防剧透分层设计、已揭示账本、说漏了怎么办 |
 | `docs/pdf2md.md` | 书籍 PDF 转 Markdown、查书顺序、质量审核 |
 | `docs/layout.md` | 目录结构、存档结构、交接清单（结束会话或「存档」时用） |
+| `docs/deviation.md` | 剧本偏离度：scope/比例、原创台账、预算与稀有度上限、关键锚点 |

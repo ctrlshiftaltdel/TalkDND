@@ -12,6 +12,7 @@ pub mod handout;
 pub mod migrate;
 pub mod npc;
 pub mod options;
+pub mod original;
 pub mod progress;
 pub mod reveal;
 pub mod save;
@@ -25,7 +26,7 @@ use combat_sim::dice::{seeded_rng, step_rng, DiceRng};
 use combat_sim::fsutil::atomic_write;
 use std::ffi::OsString;
 use std::fs;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -55,7 +56,9 @@ enum Cmd {
         #[arg(long)]
         no_pdf2md: bool,
     },
-    /// Create a new save skeleton and start character creation
+    /// Create a new save skeleton and start character creation.
+    /// The deviation scope (0-2) and ratio (5-25%) are locked when the save is
+    /// created; ask the player first. Without flags in a terminal, asks here.
     New {
         #[arg(long)]
         ruleset: Option<String>,
@@ -64,6 +67,12 @@ enum Cmd {
         /// Slot date (default: today, local time)
         #[arg(long)]
         date: Option<String>,
+        /// 剧本偏离度：0 = 只补空白，1 = 次要原创，2 = 完整支线（开档后锁定）
+        #[arg(long)]
+        scope: Option<u32>,
+        /// Original-content ceiling in percent (5-25; required for scope 1/2)
+        #[arg(long)]
+        ratio: Option<u32>,
     },
     /// Migrate an old save's on-disk schema (backs the whole save up first)
     Migrate {
@@ -139,6 +148,12 @@ enum Cmd {
     Integrity {
         #[command(subcommand)]
         cmd: IntegrityCmd,
+    },
+    /// Original content ledger for this save (DM only): register an original
+    /// element before introducing it, list them, or show the budget
+    Original {
+        #[command(subcommand)]
+        cmd: OriginalCmd,
     },
     /// Revealed-knowledge ledger (what the party has actually learned)
     Reveal {
@@ -217,6 +232,31 @@ enum HandoutCmd {
         #[arg(long)]
         note: Option<String>,
     },
+}
+
+#[derive(Subcommand, Clone)]
+enum OriginalCmd {
+    /// Register an original element before it appears in play (DM only)
+    Add {
+        /// encounter | npc | item | location | sidequest
+        #[arg(long = "type")]
+        kind: String,
+        #[arg(long)]
+        name: String,
+        /// common | uncommon | rare | very-rare | legendary (required for item)
+        #[arg(long)]
+        rarity: Option<String>,
+        #[arg(long, default_value = "")]
+        note: String,
+        /// The idea came from a player: `--hook player` (adopted player hooks
+        /// count as original)
+        #[arg(long, value_name = "SOURCE", value_parser = ["player"])]
+        hook: Option<String>,
+    },
+    /// List this save's original-content ledger (DM only)
+    List,
+    /// Show the deviation settings, caps and the current chapter budget
+    Status,
 }
 
 #[derive(Subcommand, Clone)]
@@ -471,6 +511,32 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                 }
             }
         }
+        Cmd::Original { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let lines = match cmd {
+                OriginalCmd::Add {
+                    kind,
+                    name,
+                    rarity,
+                    note,
+                    hook,
+                } => original::add(
+                    &s,
+                    &original::New {
+                        kind: &kind,
+                        name: &name,
+                        rarity: rarity.as_deref(),
+                        note: &note,
+                        player_hook: hook.is_some(),
+                    },
+                )?,
+                OriginalCmd::List => original::list(&s)?,
+                OriginalCmd::Status => original::status_lines(&s)?,
+            };
+            for l in lines {
+                println!("{l}");
+            }
+        }
         Cmd::Reveal { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             let lines = match cmd {
@@ -545,7 +611,9 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             ruleset,
             adventure,
             date,
-        } => new_save(&root, ruleset, adventure, date)?,
+            scope,
+            ratio,
+        } => new_save(&root, ruleset, adventure, date, scope, ratio)?,
         Cmd::Chargen { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             chargen_cmd(&s, cmd, rng, cli.seed.is_some())?
@@ -565,7 +633,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             };
             let r = audit::audit(&s)?;
             if !r.clean() {
-                eprintln!("warning: save audit found {} issue(s); run `talkdnd check` (no arguments) for details", r.changes.len() + r.unexplained.len());
+                eprintln!("warning: save audit found {} issue(s); run `talkdnd check` (no arguments) for details", r.issue_count());
             }
             let line = check::run(
                 &s,
@@ -735,15 +803,97 @@ fn check_ruleset(r: &str) -> Result<()> {
     Ok(())
 }
 
+fn deviation_input(scope: Option<u32>, ratio: Option<u32>) -> Result<migrate::Deviation> {
+    let interactive = std::io::stdin().is_terminal();
+    if !interactive {
+        if scope.is_none() {
+            let d = migrate::Deviation::new(Some(0), ratio)?;
+            println!("剧本偏离度：未指定（非交互），使用默认 {}", d.describe());
+            return Ok(d);
+        }
+        return migrate::Deviation::new(scope, ratio);
+    }
+    // Interactive: ask for whatever is missing, one question at a time.
+    let scope = match scope {
+        Some(s) => s,
+        None => {
+            println!("剧本偏离度（开档后锁定，不能修改）：");
+            println!("  0 = 不偏离：只补必要空白（给未命名 NPC 起名、对白措辞、场景描述）");
+            println!("  1 = 次要原创：遭遇、NPC、物品、地点；稀有度上限 uncommon");
+            println!("  2 = 完整支线：在 1 的基础上可加支线；稀有度上限 rare");
+            println!("  3 及以上暂未开放。");
+            prompt_scope()?
+        }
+    };
+    if scope > 2 || scope == 0 {
+        return migrate::Deviation::new(Some(scope), ratio);
+    }
+    let ratio = match ratio {
+        Some(r) => r,
+        None => prompt_ratio()?,
+    };
+    migrate::Deviation::new(Some(scope), Some(ratio))
+}
+
+fn prompt_scope() -> Result<u32> {
+    use std::io::Write;
+    loop {
+        print!("选择 scope（0/1/2）：");
+        std::io::stdout().flush()?;
+        let line = read_prompt_line()?;
+        match line.trim().parse::<u32>() {
+            Ok(n) if n <= 2 => return Ok(n),
+            Ok(n) => println!("scope {n} 暂未开放（scope 3 及以上不支持），请输入 0、1 或 2"),
+            Err(_) => println!("请输入 0、1 或 2"),
+        }
+    }
+}
+
+fn prompt_ratio() -> Result<u32> {
+    use std::io::Write;
+    loop {
+        print!(
+            "原创比例上限（{} 到 {} 的整数百分比，例如 15）：",
+            migrate::Deviation::MIN_RATIO,
+            migrate::Deviation::MAX_RATIO
+        );
+        std::io::stdout().flush()?;
+        let line = read_prompt_line()?;
+        match line.trim().parse::<u32>() {
+            Ok(n)
+                if (migrate::Deviation::MIN_RATIO..=migrate::Deviation::MAX_RATIO).contains(&n) =>
+            {
+                return Ok(n)
+            }
+            _ => println!(
+                "必须是 {} 到 {} 的整数",
+                migrate::Deviation::MIN_RATIO,
+                migrate::Deviation::MAX_RATIO
+            ),
+        }
+    }
+}
+
+fn read_prompt_line() -> Result<String> {
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line)? == 0 {
+        bail!("没有读到输入；非交互环境请用 --scope 和 --ratio");
+    }
+    Ok(line)
+}
+
 fn new_save(
     root: &Path,
     ruleset: Option<String>,
     adventure: Option<String>,
     date: Option<String>,
+    scope: Option<u32>,
+    ratio: Option<u32>,
 ) -> Result<()> {
     if let Some(r) = &ruleset {
         check_ruleset(r)?;
     }
+    let deviation = deviation_input(scope, ratio)?;
     let date = date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     if !save::is_slot_name(&format!("{date}-01")) {
         bail!("date must be YYYY-MM-DD");
@@ -772,9 +922,10 @@ fn new_save(
         "# DM 秘密（只给 DM）\n\n".as_bytes(),
     )?;
     let setup = format!(
-        "# {slot} 第 0 节：建卡\n\n- [{}] 新存档，规则 {}\n",
+        "# {slot} 第 0 节：建卡\n\n- [{}] 新存档，规则 {}\n- 剧本偏离度：{}（开档后锁定）\n",
         chrono::Local::now().format("%H:%M"),
-        ruleset.as_deref().unwrap_or("待定")
+        ruleset.as_deref().unwrap_or("待定"),
+        deviation.describe()
     );
     atomic_write(
         dir.join(format!("Sessions/{date}-session-00-setup.md")),
@@ -787,8 +938,12 @@ fn new_save(
         ..Default::default()
     };
     chargen::store(&dir, &c)?;
-    migrate::init(&dir)?;
+    migrate::init_with_deviation(&dir, &deviation)?;
     println!("created Saves/{slot}");
+    println!(
+        "剧本偏离度：{}（开档后锁定，不能修改）",
+        deviation.describe()
+    );
     for line in update::sync_defaults(root)? {
         println!("{line}");
     }
