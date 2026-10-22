@@ -1,6 +1,6 @@
 # 建卡细节（`talkdnd chargen`）
 
-> 本文件是 `AGENTS.md`「开新局」的参考，按需查阅。路径相对于 `LetsPlay/`。`T=bin/talkdnd`（Windows：`bin\talkdnd.exe`）。
+> 本文件是 `AGENTS.md`「开新局」的参考，按需查阅。路径都相对于游戏文件夹（解压出来的那个文件夹，名字随意）。`T=bin/talkdnd`（Windows：`bin\talkdnd.exe`）。
 
 每一步：用中文向玩家说明可选项（必要时查 `Rules/<版本>/` 里的书或 `$T options --ruleset <版本>`），**等玩家回答**，再用命令记录。程序只记录和检查，不替玩家做决定。
 

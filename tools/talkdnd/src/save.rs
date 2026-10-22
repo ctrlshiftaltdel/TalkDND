@@ -5,31 +5,62 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-/// The LetsPlay folder: `--root`, else the nearest ancestor of the current
-/// directory holding `AGENTS.md` and `Saves/`, else the parent of the
-/// executable's `bin/` directory.
+/// Marker file at the top of every play folder (shipped in the release).
+pub const ROOT_MARKER: &str = ".talkdnd-root";
+
+/// A play folder: has the marker, or the classic `AGENTS.md` + `Saves/` pair.
+pub fn is_play_root(p: &Path) -> bool {
+    p.join(ROOT_MARKER).is_file() || (p.join("AGENTS.md").is_file() && p.join("Saves").is_dir())
+}
+
+/// The play folder, independent of its name and location. Order:
+/// `--root`, then `TALKDND_ROOT`, then the parent of the executable's `bin/`
+/// (the normal case for an extracted release, whatever the cwd), then the
+/// nearest ancestor of the current directory that is a play folder or has a
+/// `LetsPlay/` child (development repository).
 pub fn find_root(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(p) = explicit {
-        return Ok(p.to_path_buf());
+        return Ok(absolute(p));
     }
-    let is_root = |p: &Path| p.join("AGENTS.md").is_file() && p.join("Saves").is_dir();
+    if let Some(p) = std::env::var_os("TALKDND_ROOT").filter(|v| !v.is_empty()) {
+        let p = absolute(Path::new(&p));
+        if !is_play_root(&p) {
+            bail!(
+                "TALKDND_ROOT={} is not a play folder (no {ROOT_MARKER} or AGENTS.md + Saves/)",
+                p.display()
+            );
+        }
+        return Ok(p);
+    }
+    if let Some(root) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.canonicalize().ok().or(Some(e)))
+        .and_then(|e| e.parent().and_then(|b| b.parent()).map(Path::to_path_buf))
+    {
+        if is_play_root(&root) {
+            return Ok(root);
+        }
+    }
     let cwd = std::env::current_dir()?;
     for dir in cwd.ancestors() {
-        if is_root(dir) {
+        if is_play_root(dir) {
             return Ok(dir.to_path_buf());
         }
-        if is_root(&dir.join("LetsPlay")) {
+        if is_play_root(&dir.join("LetsPlay")) {
             return Ok(dir.join("LetsPlay"));
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(root) = exe.parent().and_then(|b| b.parent()) {
-            if is_root(root) {
-                return Ok(root.to_path_buf());
-            }
-        }
+    bail!("play folder not found: run the program from its bin/ folder inside the extracted package, run inside that folder, or pass --root / set TALKDND_ROOT")
+}
+
+fn absolute(p: &Path) -> PathBuf {
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|c| c.join(p))
+            .unwrap_or_else(|_| p.to_path_buf())
     }
-    bail!("LetsPlay folder not found (run inside LetsPlay/ or pass --root)")
 }
 
 pub fn is_slot_name(name: &str) -> bool {

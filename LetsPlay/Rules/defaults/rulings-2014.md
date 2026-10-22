@@ -1,6 +1,6 @@
 # TalkDND 版本裁定：2014（5e）
 
-> 存档 `ruleset: "2014"` 时使用。规则来源只看本目录旁的 `2014/`（仓库路径 `LetsPlay/Rules/2014/`：PHB / DMG / MM 2014，或 SRD 5.1）。通用裁定见 `rulings.md`。
+> 存档 `ruleset: "2014"` 时使用。规则来源只看本目录旁的 `2014/`（游戏文件夹里的 `Rules/2014/`：PHB / DMG / MM 2014，或 SRD 5.1）。通用裁定见 `rulings.md`。
 > 本文件为原创摘要，不含规则书原文；有出入时以你手上的规则书为准。
 
 ### V-01 突袭
@@ -8,7 +8,7 @@
 - 引擎：`init --surprised "名字"` 会给目标加上 `surprised` 状态（失能 + 速度 0），在其第一回合结束时自动移除。
 
 ### V-02 无武器精通
-- 2014 没有 Weapon Mastery。`combat/2014/`（仓库路径 `LetsPlay/Rules/combat/2014/`）不提供精通数据；角色卡 combat 块里的 `mastery` 字段要删掉，否则 `content check` 会报错。
+- 2014 没有 Weapon Mastery。`combat/2014/`（游戏文件夹里的 `Rules/combat/2014/`）不提供精通数据；角色卡 combat 块里的 `mastery` 字段要删掉，否则 `content check` 会报错。
 
 ### V-03 睡眠术（HP 池）
 - 1 环：掷 5d8（每升 1 环 +2d8）。以 90 尺内一点为中心 20 尺半径，按**当前 HP 从低到高**依次让生物昏迷，HP 不超过剩余池子才生效并扣除。不死生物与免疫魅惑者不受影响。**无豁免、无需专注**，持续 1 分钟；受伤或他人用动作摇醒则醒来。

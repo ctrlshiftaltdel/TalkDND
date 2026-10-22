@@ -32,10 +32,10 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "talkdnd",
     version,
-    about = "TalkDND play helper (run inside LetsPlay/)"
+    about = "TalkDND play helper (finds its play folder from bin/.., TALKDND_ROOT or --root)"
 )]
 struct Cli {
-    /// LetsPlay folder (default: found from the current directory)
+    /// Play folder (default: TALKDND_ROOT, else the folder above bin/, else found from the current directory)
     #[arg(long, global = true)]
     root: Option<PathBuf>,
     /// Save slot (default: newest)

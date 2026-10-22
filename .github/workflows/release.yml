@@ -109,18 +109,21 @@ jobs:
           (cd dist/stage/LetsPlay && find . -type f ! -name '.talkdnd-files.txt' | LC_ALL=C sort | while IFS= read -r file; do
             printf '%s  %s\n' "$(sha_file "$file")" "${file#./}"
           done) > dist/stage/LetsPlay/.talkdnd-files.txt
+          # The archive extracts to one self-contained folder named TalkDND/;
+          # players may move or rename it (the tools find it from bin/..).
+          mv dist/stage/LetsPlay dist/stage/TalkDND
           # Allowed list = tracked LetsPlay files + NOTICE + LICENSE + binaries
           # + the shipped-file manifest.
-          { git ls-files -- LetsPlay; echo LetsPlay/NOTICE; echo LetsPlay/LICENSE; echo "LetsPlay/bin/combat-sim${EXT}"; echo "LetsPlay/bin/talkdnd${EXT}"; echo LetsPlay/.talkdnd-files.txt; } \
+          { git ls-files -- LetsPlay | sed "s#^LetsPlay/#TalkDND/#"; echo TalkDND/NOTICE; echo TalkDND/LICENSE; echo "TalkDND/bin/combat-sim${EXT}"; echo "TalkDND/bin/talkdnd${EXT}"; echo TalkDND/.talkdnd-files.txt; } \
             | LC_ALL=C sort -u > dist/allowed.txt
           if [ "$ARCHIVE" = "zip" ]; then
             archive="dist/out/${name}.zip"
-            (cd dist/stage && 7z a -tzip -bd -r "../out/${name}.zip" LetsPlay >/dev/null)
+            (cd dist/stage && 7z a -tzip -bd -r "../out/${name}.zip" TalkDND >/dev/null)
             7z l -slt "$archive" | sed -n 's/^Path = //p' | tail -n +2 | tr '\\' '/' > dist/raw.txt
             7z l -slt "$archive" | awk '/^Path = /{p=substr($0,8)} /^Folder = -/{print p}' | tr '\\' '/' | LC_ALL=C sort -u > dist/listed.txt
           else
             archive="dist/out/${name}.tar.gz"
-            COPYFILE_DISABLE=1 tar -czf "$archive" -C dist/stage LetsPlay
+            COPYFILE_DISABLE=1 tar -czf "$archive" -C dist/stage TalkDND
             tar -tzf "$archive" > dist/raw.txt
             grep -v '/$' dist/raw.txt | LC_ALL=C sort -u > dist/listed.txt
           fi
@@ -134,12 +137,12 @@ jobs:
             echo "archive contains a forbidden file" >&2
             exit 1
           fi
-          if grep -E '^LetsPlay/Saves/' dist/raw.txt | grep -Ev '^LetsPlay/Saves/(README\.md)?$' | grep -q .; then
+          if grep -E '^TalkDND/Saves/' dist/raw.txt | grep -Ev '^TalkDND/Saves/(README\.md)?$' | grep -q .; then
             echo "archive contains save content" >&2
             exit 1
           fi
           for d in Rules/2014 Rules/2024 Adventures; do
-            if grep -E "^LetsPlay/$d/" dist/raw.txt | grep -Ev "^LetsPlay/$d/(README\.md)?\$" | grep -q .; then
+            if grep -E "^TalkDND/$d/" dist/raw.txt | grep -Ev "^TalkDND/$d/(README\.md)?\$" | grep -q .; then
               echo "archive contains player book content" >&2
               exit 1
             fi
@@ -147,7 +150,7 @@ jobs:
           # User-data areas must never ship: top-level rulings (the shipped
           # defaults live in Rules/defaults/), local/fixes/handout files and
           # tool state.
-          if grep -E '^LetsPlay/Rules/rulings[^/]*\.md$|^LetsPlay/.*/local/|^LetsPlay/.*/fixes/|^LetsPlay/.*/handouts\.yaml$|^LetsPlay/\.talkdnd/' dist/raw.txt; then
+          if grep -E '^TalkDND/Rules/rulings[^/]*\.md$|^TalkDND/.*/local/|^TalkDND/.*/fixes/|^TalkDND/.*/handouts\.yaml$|^TalkDND/\.talkdnd/' dist/raw.txt; then
             echo "archive contains user-data files" >&2
             exit 1
           fi
@@ -164,6 +167,24 @@ jobs:
             exit 1
           fi
           printf '%s  %s\n' "$hash" "$(basename "$archive")" > "${archive}.sha256"
+
+      - name: Smoke-test the package from a renamed folder
+        if: matrix.archive != 'zip'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(mktemp -d)"
+          tar -xzf dist/out/*.tar.gz -C "$base"
+          play="$base/我的 冒险 game"
+          mv "$base/TalkDND" "$play"
+          elsewhere="$(mktemp -d)"
+          cd "$elsewhere"
+          "$play/bin/talkdnd" new --ruleset 2014 --date 2030-01-01
+          "$play/bin/talkdnd" chargen status
+          "$play/bin/talkdnd" start --no-pdf2md
+          "$play/bin/combat-sim" roll 1d20+5
+          test -d "$play/Saves/2030-01-01-01"
+          test ! -e "$elsewhere/Saves"
 
       - name: Upload package
         uses: actions/upload-artifact@v7

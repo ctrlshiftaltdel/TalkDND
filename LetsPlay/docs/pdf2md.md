@@ -1,6 +1,6 @@
 # 书籍文本：pdf2md
 
-> 本文件是 `AGENTS.md` 的参考章节，按需查阅。路径相对于 `LetsPlay/`。
+> 本文件是 `AGENTS.md` 的参考章节，按需查阅。路径都相对于游戏文件夹（解压出来的那个文件夹，名字随意）。
 
 
 玩家只需把 PDF 放进 `Rules/2014/`、`Rules/2024/`、`Adventures/`（可放子目录）。`tools/pdf2md` 会在后台把 PDF 逐段转成便于搜索的 Markdown，放在 PDF 旁边的隐藏目录里，文件名与 PDF 相同：
