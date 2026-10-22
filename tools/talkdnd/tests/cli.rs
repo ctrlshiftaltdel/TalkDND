@@ -82,13 +82,61 @@ fn full_creation_flow() {
     ok(&r, &["chargen", "set", "shield", "yes"]);
     ok(&r, &["chargen", "set", "spells", "none"]);
     ok(&r, &["chargen", "set", "name", "Aria"]);
+    // Level-1 fighter needs a Fighting Style.
+    let (good, out) = run(&r, &["chargen", "validate"]);
+    assert!(!good && out.contains("needs a Fighting Style"), "{out}");
+    ok(&r, &["chargen", "set", "fighting-style", "defense"]);
+    ok(&r, &["chargen", "set", "background-equipment", "B"]);
+    ok(&r, &["chargen", "set", "languages", "none"]);
+    for f in ["traits", "ideals", "bonds", "flaws"] {
+        ok(&r, &["chargen", "set", f, "由玩家决定"]);
+    }
     ok(&r, &["chargen", "validate"]);
     assert!(!run(&r, &["chargen", "confirm"]).0, "confirm needs a sheet");
     ok(&r, &["chargen", "sheet"]);
     let out = ok(&r, &["chargen", "confirm"]);
     assert!(out.contains("character creation complete"));
+    assert!(out.contains("50 gp"), "background B gold: {out}");
     let sheet = fs::read_to_string(save.join("Characters/Aria.md")).unwrap();
-    assert!(sheet.contains("ac: 18\n"));
+    assert!(
+        sheet.contains("ac: 19\n"),
+        "chain mail + shield + Defense: {sheet}"
+    );
+    assert!(save.join("sheets/aria.yaml").is_file());
+    assert!(sheet.contains("Fighting Style: Defense"));
+    // Sheet changes go through `char`, logged and integrity-clean.
+    let out = ok(
+        &r,
+        &["char", "Aria", "batch", "damage 5; temp 3; item add 20 arrows; ammo arrows -2; gold spend --gp 10; condition add prone; exhaustion +1; inspiration on"],
+    );
+    assert!(out.contains("Aria HP 7/12 (+3 临时)"), "{out}");
+    assert!(out.contains("力竭 1"), "{out}");
+    let out = ok(&r, &["char", "Aria", "rest", "long"]);
+    assert!(out.contains("HP 12/12") && !out.contains("力竭"), "{out}");
+    let ps = fs::read_to_string(save.join("combat/party-state.yaml")).unwrap();
+    assert!(ps.contains("aria:") && ps.contains("hp: 12"), "{ps}");
+    let out = ok(&r, &["check"]);
+    assert!(out.contains("integrity: OK"), "{out}");
+    let log = fs::read_to_string(save.join("Sessions/2030-01-02-session-00-setup.md")).unwrap();
+    assert!(log.contains("角色 Aria：受到 5 伤害"), "{log}");
+    // A failing op in a batch writes nothing.
+    let before = fs::read_to_string(save.join("sheets/aria.yaml")).unwrap();
+    assert!(
+        !run(
+            &r,
+            &[
+                "char",
+                "Aria",
+                "batch",
+                "item add rope; use no-such-resource"
+            ]
+        )
+        .0
+    );
+    assert_eq!(
+        before,
+        fs::read_to_string(save.join("sheets/aria.yaml")).unwrap()
+    );
     let manifest = fs::read_to_string(save.join("combat/campaign.yaml")).unwrap();
     assert!(manifest.contains("party: [aria]"));
     assert!(manifest.contains("ruleset: \"2024\""));
@@ -200,5 +248,63 @@ fn integrity_reconcile_and_reveal() {
     // old save without a manifest keeps working
     fs::remove_file(save.join("integrity.yaml")).unwrap();
     assert!(ok(&r, &["check"]).contains("created a baseline"));
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn old_sheet_repair_without_chargen() {
+    let r = root("repair");
+    ok(&r, &["new", "--date", "2030-03-04", "--ruleset", "2014"]);
+    let save = r.join("Saves/2030-03-04-01");
+    fs::create_dir_all(save.join("Characters")).unwrap();
+    fs::write(
+        save.join("Characters/Gar.md"),
+        "# Gar——角色卡\n\n- **等级**：战士 2\n- 护甲：链甲（chain mail）\n\n## 战斗数据块（combat-sim）\n\n```combat yaml\nid: gar\nname: Gar\nkind: pc\nside: party\nsize: medium\nlevel: 2\nac: 16\nhp: 20\nspeed: {walk: 30}\nprof: 2\nabilities: {str: 16, dex: 10, con: 14, int: 10, wis: 10, cha: 12}\nsaves: {str: 5, con: 4}\nskills: {athletics: 5}\nattacks:\n  - {id: greatsword, name: Greatsword, kind: melee, ability: str, to_hit: 5, damage: [{dice: \"2d6+3\", type: slashing}], reach: 5, properties: [heavy, two-handed]}\nresources:\n  hit-dice: {max: 2, recharge: long, die: 10}\nnotes: \"fighter 2\"\n```\n",
+    )
+    .unwrap();
+    ok(&r, &["integrity", "accept", "--reason", "test sheet"]);
+    // A homebrew background in local data (stands in for a book import).
+    fs::create_dir_all(r.join("Rules/chargen/local")).unwrap();
+    fs::write(
+        r.join("Rules/chargen/local/manual-2014.yaml"),
+        "ruleset: \"2014\"\nbackgrounds:\n  test-heir:\n    name: Test Heir\n    feature: Test Privilege\n    tools: [dice set]\n    languages: 1\n    equipment: [fine clothes, signet ring]\n    gold: 25\n",
+    )
+    .unwrap();
+    let out = ok(
+        &r,
+        &[
+            "char",
+            "gar",
+            "set",
+            "fighting-style",
+            "great-weapon-fighting",
+        ],
+    );
+    assert!(out.contains("migrated"), "{out}");
+    let out = ok(&r, &["char", "gar", "set", "background", "test-heir"]);
+    assert!(out.contains("25 gp"), "{out}");
+    let sheet = fs::read_to_string(save.join("Characters/Gar.md")).unwrap();
+    assert!(sheet.contains("reroll_damage_below: 2"), "{sheet}");
+    assert!(sheet.contains("- 护甲：链甲"), "body kept");
+    assert!(sheet.contains("signet ring") && sheet.contains("背景特性：Test Privilege"));
+    assert!(ok(&r, &["loot", "show"]).contains("gar: 25 gp"));
+    // Defense counts the migrated armor.
+    ok(&r, &["char", "gar", "set", "fighting-style", "defense"]);
+    assert!(fs::read_to_string(save.join("Characters/Gar.md"))
+        .unwrap()
+        .contains("ac: 17\n"));
+    // level-up edits the rendered block; char keeps it.
+    ok(
+        &r,
+        &["level-up", "gar", "--milestone", "--reason", "test arc"],
+    );
+    let out = ok(&r, &["char", "gar", "damage", "3"]);
+    assert!(out.contains("HP 25/28"), "{out}");
+    let y = fs::read_to_string(save.join("sheets/gar.yaml")).unwrap();
+    assert!(y.contains("level: 3"), "{y}");
+    assert!(fs::read_to_string(save.join("Characters/Gar.md"))
+        .unwrap()
+        .contains("## 升级记录"));
+    assert!(ok(&r, &["check"]).contains("integrity: OK"));
     let _ = fs::remove_dir_all(&r);
 }

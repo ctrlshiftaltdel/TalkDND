@@ -1408,6 +1408,8 @@ struct AttackProfile {
     range: Option<[i32; 2]>,
     properties: Vec<AttackProperty>,
     mastery: Option<String>,
+    reroll_damage_below: Option<u32>,
+    damage_die_min: Option<u32>,
     on_hit: Vec<Effect>,
     on_miss: Vec<Effect>,
     tags: Vec<String>,
@@ -1426,6 +1428,8 @@ impl AttackProfile {
             range: attack.range,
             properties: attack.properties.clone(),
             mastery: attack.mastery.clone(),
+            reroll_damage_below: attack.reroll_damage_below,
+            damage_die_min: attack.damage_die_min,
             on_hit: attack.on_hit.clone(),
             on_miss: Vec::new(),
             tags: Vec::new(),
@@ -1449,6 +1453,8 @@ impl AttackProfile {
             range: ranged,
             properties: effect.properties.clone(),
             mastery: effect.mastery.clone(),
+            reroll_damage_below: None,
+            damage_die_min: None,
             on_hit: effect.on_hit.clone(),
             on_miss: effect.on_miss.clone(),
             tags: source.tags.clone(),
@@ -3275,9 +3281,26 @@ fn apply_attack_damage_parts(
         Some(attack_mod),
         None,
     );
+    let reroll = context.attack.as_ref().and_then(|attack| {
+        attack
+            .reroll_damage_below
+            .map(|n| (n, false))
+            .or(attack.damage_die_min.map(|n| (n, true)))
+    });
     let mut rolls = Vec::new();
     for part in parts {
-        let record = if log.enabled() {
+        let record = if let Some((n, floor)) = reroll {
+            let expression = evaluate_dice(&expr_context, &part.dice)?;
+            let mut record = if floor {
+                expression.roll_floored(n, context.crit, rng)
+            } else {
+                expression.roll_rerolling(n, context.crit, rng)
+            };
+            if !log.enabled() {
+                record.text.clear();
+            }
+            record
+        } else if log.enabled() {
             roll_value(&expr_context, &part.dice, context.crit, rng)?.1
         } else {
             let expression = evaluate_dice(&expr_context, &part.dice)?;

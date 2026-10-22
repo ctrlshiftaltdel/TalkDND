@@ -4,10 +4,12 @@
 
 pub mod audit;
 pub mod chargen;
+pub mod charsheet;
 pub mod check;
 pub mod classdata;
 pub mod data;
 pub mod npc;
+pub mod options;
 pub mod progress;
 pub mod reveal;
 pub mod save;
@@ -132,6 +134,15 @@ enum Cmd {
     Reveal {
         #[command(subcommand)]
         cmd: RevealCmd,
+    },
+    /// Character sheet changes (HP, resources, rests, conditions, items, gold,
+    /// choices, notes). The sheet is rendered from Saves/<slot>/sheets/<id>.yaml;
+    /// never hand-edit it. `talkdnd char Yier batch "damage 7; use slot1"`
+    Char {
+        /// Character id or name (`all` for `rest`)
+        who: String,
+        #[command(subcommand)]
+        op: Option<charsheet::Op>,
     },
     /// List SRD options for a ruleset
     Options {
@@ -280,7 +291,7 @@ enum ChargenCmd {
     Assign { scores: Vec<String> },
     /// Player-chosen increases: `str=2 con=1`, or `none`
     Asi { values: Vec<String> },
-    /// Record a choice: ruleset|adventure|species|class|subclass|masteries|background|skills|background-skills|armor|shield|equipment|spells|name|personality|level
+    /// Record a choice: ruleset|adventure|species|class|level|subclass|fighting-style|masteries|background|background-equipment|skills|background-skills|languages|tools|feats|class-equipment|armor|shield|equipment|spells|name|traits|ideals|bonds|flaws|alignment
     Set { field: String, value: Vec<String> },
     /// Check the character against the ruleset
     Validate,
@@ -382,6 +393,12 @@ fn print_audit(s: &Path) -> Result<()> {
 fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
     let root = root.to_path_buf();
     match cli.cmd.clone() {
+        Cmd::Char { who, op } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            for l in charsheet::run(&s, &who, op.unwrap_or(charsheet::Op::Show), rng)? {
+                println!("{l}");
+            }
+        }
         Cmd::Integrity { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             match cmd {
@@ -843,9 +860,6 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
                         .collect();
-                    if c.armor.is_none() {
-                        c.armor = Some("none".into());
-                    }
                 }
                 "spells" => {
                     c.spells = if v == "none" {
@@ -859,7 +873,90 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                     c.spells_done = true;
                 }
                 "name" => c.name = Some(v),
-                "personality" => c.personality = Some(v),
+                "personality" | "traits" => c.personality = Some(v),
+                "ideals" => c.ideals = Some(v),
+                "bonds" => c.bonds = Some(v),
+                "flaws" => c.flaws = Some(v),
+                "alignment" => c.alignment = Some(v),
+                "fighting-style" | "style" => {
+                    let id = chargen::slug(&v);
+                    match options::style(&id) {
+                        Some(s) => println!("{}（{}）：{}", s.zh, s.name, s.effect),
+                        None => {
+                            println!("warning: `{id}` is not in the data; the DM rules its effect")
+                        }
+                    }
+                    c.fighting_style = Some(id);
+                }
+                "feats" => {
+                    c.feats = v
+                        .split([',', ';'])
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                }
+                "languages" => {
+                    c.languages = v
+                        .split([',', ';'])
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty() && s != "none")
+                        .collect();
+                    c.proficiencies_done = true;
+                }
+                "tools" => {
+                    c.tools = v
+                        .split([',', ';'])
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty() && s != "none")
+                        .collect();
+                    c.proficiencies_done = true;
+                }
+                "class-equipment" => {
+                    let cls = c.class.clone().context("set class first")?;
+                    let r = options::class_equipment(c.rs(), &cls, &v, rng)?;
+                    if let Some(t) = &r.roll {
+                        println!("starting gold: {t}");
+                        if let Some(log) = save::latest_log(save) {
+                            save::append(
+                                &log,
+                                &format!(
+                                    "- [{}] PC 起始金币掷骰{}：{t}",
+                                    chrono::Local::now().format("%H:%M"),
+                                    if seeded { " (seeded test roll)" } else { "" }
+                                ),
+                            )?;
+                        }
+                    }
+                    println!(
+                        "class equipment: {}{}",
+                        if r.items.is_empty() {
+                            "—".into()
+                        } else {
+                            r.items.join(", ")
+                        },
+                        if r.gold > 0 {
+                            format!(" + {} gp", r.gold)
+                        } else {
+                            String::new()
+                        }
+                    );
+                    c.class_equipment = Some(v);
+                    c.class_items = r.items;
+                    c.class_gold = r.gold;
+                }
+                "background-equipment" => {
+                    c.background_equipment = Some(v.to_uppercase());
+                    let r = c.background_pack(
+                        classdata::Book::load(c.rs(), save.parent().and_then(|p| p.parent()))
+                            .ok()
+                            .as_ref(),
+                    );
+                    println!(
+                        "background equipment: {} + {} gp",
+                        r.items.join(", "),
+                        r.gold
+                    );
+                }
                 "level" => {
                     c.level = v.parse().context("level must be a number")?;
                     c.level_done = true;
@@ -892,6 +989,7 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                 .join(format!("{}.md", c.name.as_deref().unwrap_or(&id)));
             fs::write(&file, md)?;
             add_to_party(save, &id)?;
+            charsheet::from_chargen(save, &c, &book, &file)?;
             println!(
                 "wrote Characters/{} (id {id}); show it to the player, then `chargen confirm`",
                 file.file_name().unwrap_or_default().to_string_lossy()
@@ -913,6 +1011,26 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                 bail!("write the sheet first (`chargen sheet`)");
             }
             c.confirmed = true;
+            if !c.gold_granted {
+                let root = save.parent().and_then(|p| p.parent());
+                let book = classdata::Book::load(c.rs(), root)?;
+                let gold = c.class_gold + c.background_pack(Some(&book)).gold;
+                if gold > 0 {
+                    let id = chargen::slug(c.name.as_deref().unwrap_or_default());
+                    for l in progress::loot(
+                        save,
+                        progress::LootOp::Add {
+                            to: &id,
+                            cp: gold * 100,
+                            items: &[],
+                        },
+                        Some(&format!("{} 起始金币", c.name.clone().unwrap_or_default())),
+                    )? {
+                        println!("{l}");
+                    }
+                }
+                c.gold_granted = true;
+            }
         }
     }
     chargen::store(save, &c)?;
@@ -1038,6 +1156,21 @@ fn data_cmd(root: &Path, cmd: DataCmd) -> Result<()> {
                 "ruleset {ruleset}: {} classes (SRD + local)",
                 b.classes.len()
             );
+            let (reader, pages) = classdata::rulebooks(&root.join("Rules").join(&ruleset));
+            if reader.is_empty() {
+                println!("rules source: SRD only (no full-rulebook Markdown found)");
+            } else {
+                println!("rules source: FULL RULEBOOKS (local) — read these first; SRD is only a fallback");
+                for f in &reader {
+                    println!("  reader: {}", rel(root, f));
+                }
+                for f in &pages {
+                    println!("  pages:  {}", rel(root, f));
+                }
+            }
+            if classdata::import_stale(root, &ruleset) {
+                println!("local import is missing or older than the books: run `talkdnd data import --ruleset {ruleset}` (talkdnd start does it automatically)");
+            }
             println!("converted Markdown: {}", md.len());
             for f in &md {
                 println!("  {}", rel(root, f));
@@ -1055,25 +1188,11 @@ fn data_cmd(root: &Path, cmd: DataCmd) -> Result<()> {
         }
         DataCmd::Import { ruleset } => {
             check_ruleset(&ruleset)?;
-            let md = classdata::md_files(&root.join("Rules").join(&ruleset));
-            if md.is_empty() {
-                bail!("{}", classdata::import_hint(Some(root), &ruleset));
-            }
-            let srd = classdata::Book::srd(&ruleset);
-            let df = classdata::import_markdown(&ruleset, &srd, &md)?;
-            let dir = root.join(classdata::LOCAL_DIR);
-            fs::create_dir_all(&dir)?;
-            let out = dir.join(format!("imported-{ruleset}.yaml"));
-            let head = format!("# Generated by `talkdnd data import --ruleset {ruleset}` from your own books. LOCAL ONLY: never commit.\n# Feature names by level only; check them against the PDF. Hand edits belong in another file (e.g. manual-{ruleset}.yaml), this one is overwritten.\n");
-            fs::write(&out, head + &serde_norway::to_string(&df)?)?;
-            let mut n = 0;
-            for (cid, c) in &df.classes {
-                for (sid, s) in &c.subclasses {
-                    n += 1;
-                    println!("  {cid}/{sid}: {} feature(s)", s.features.len());
-                }
-            }
-            println!("wrote {} ({n} non-SRD subclass(es))", rel(root, &out));
+            let (out, subs, bgs) = classdata::run_import(root, &ruleset)?;
+            println!(
+                "wrote {} ({subs} non-SRD subclass(es), {bgs} background(s))",
+                rel(root, &out)
+            );
         }
     }
     Ok(())

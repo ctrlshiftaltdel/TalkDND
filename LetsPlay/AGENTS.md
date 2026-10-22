@@ -11,7 +11,7 @@
 | **开新局** | 按下面「开新局流程」一步一步来，每步停下等玩家回答 |
 | **继续游戏 `<存档名>`** | 运行 `$T start --save <存档名>`，只读它输出的摘要，然后按「接档」开场 |
 | **继续游戏**（不带名字） | `$T start`（自动选最新存档），同上 |
-| **存档** | 按 `docs/layout.md` 交接清单更新角色卡，再 `$T checkpoint "<存档点内容>"` |
+| **存档** | 按 `docs/layout.md` 交接清单核对（角色数据已由 `$T char` 实时写入），再 `$T checkpoint "<存档点内容>"` |
 | **有哪些存档** | `ls Saves/` |
 
 玩家没用这些词也照样理解意图（如“新开一局”“接着玩”）。
@@ -24,15 +24,16 @@
 2. **冒险**：列出 `Adventures/` 里的书 → `$T chargen set adventure "<书名>"`
 3. **种族 / 物种** → `$T chargen set species <id>`
 4. **职业** → `$T chargen set class <id>`；**起始等级** → 按冒险建议范围问玩家 → `$T chargen set level <N>`；到子职等级时再问子职 → `$T chargen set subclass <id>`
-5. **背景** → `$T chargen set background <id>`
-6. **属性生成方式**：4d6 去最低 / 标准数组 / 购点，由玩家选
-7. **生成并分配**：掷骰只用 `$T chargen roll`（6 次 4d6dl1，自动记日志，不能重掷）；把 6 个数给玩家看，**由玩家决定每个数放哪项** → `$T chargen assign str=15 dex=14 con=13 int=8 wis=12 cha=10`（数值按玩家说的）；购点由玩家报数值 → `$T chargen pointbuy str=15 dex=14 con=13 int=8 wis=10 cha=10`
-8. **属性加值**（2024 背景 / 2014 半精灵可选项）→ `$T chargen asi wis=2 con=1` 或 `none`
-9. **技能** → **装备**（含护甲、盾牌；职业/子职不熟练会报错）→ **法术**（非施法职业 none；戏法与已知/可准备法术数量按职业数据核对），每项单独问
-10. **名字与性格**
-11. **确认**：`$T chargen validate`（error 必须为 0）→ `$T chargen sheet` → 把角色卡给玩家看 → 玩家同意后 `$T chargen confirm`。角色数据留在存档里（Markdown 角色卡、combat yaml、`progress.yaml`），玩家自己用 App 或纸笔记录
-12. **同伴 NPC**：问玩家要几个、有没有要求 → `$T npc random --count N` 随机 → DM 补名字、来历、性格 → **给玩家确认** → `$T npc sheet <号> --name <名字>`
-13. 写 `dm-secrets.md`，在会话日志写开场，进入第一个场景
+5. **战斗风格**（2014 战士 1 级、圣武士/游侠 2 级；2024 是战斗风格专长）：`$T chargen status` 提示时，列出可选项（`docs/chargen.md`）问玩家 → `$T chargen set fighting-style <id>`（如 `great-weapon-fighting`）。效果由程序写进攻击/AC，combat-sim 自动结算，**不要写进备注手动执行**
+6. **背景** → `$T chargen set background <id>`。背景特性、工具、装备和起始金币由程序按数据自动加入（SRD 内置；其他背景来自本地规则书导入）；2024 背景还要问装备选项 → `$T chargen set background-equipment A|B`
+7. **属性生成方式**：4d6 去最低 / 标准数组 / 购点，由玩家选
+8. **生成并分配**：掷骰只用 `$T chargen roll`（6 次 4d6dl1，自动记日志，不能重掷）；把 6 个数给玩家看，**由玩家决定每个数放哪项** → `$T chargen assign str=15 dex=14 con=13 int=8 wis=12 cha=10`（数值按玩家说的）；购点由玩家报数值 → `$T chargen pointbuy str=15 dex=14 con=13 int=8 wis=10 cha=10`
+9. **属性加值**（2024 背景 / 2014 半精灵可选项）→ `$T chargen asi wis=2 con=1` 或 `none`
+10. **技能** → **语言与工具**（背景/种族给的自选项：`set languages …`、`set tools …`，没有写 none）→ **专长**（有的话：`set feats …`）→ **职业起始装备**（把选项念给玩家：2014 每组选一个 `set class-equipment a,b,a,a` 或掷起始金币 `set class-equipment gold`；2024 `set class-equipment A|B|C`）→ 选项里的「任选武器」等占位项让玩家说具体物品 `set equipment greatsword` → **法术**（非施法职业 none），每项单独问
+11. **名字** → **性格特点、理想、牵绊、缺点、阵营**：`set traits/ideals/bonds/flaws/alignment "<玩家的话>"`，每项问玩家
+12. **确认**：`$T chargen validate`（error 必须为 0）→ `$T chargen sheet` → 把角色卡给玩家看 → 玩家同意后 `$T chargen confirm`（起始金币自动记入钱袋）。之后角色数据由 `$T char` 维护（见「角色卡数据」）
+13. **同伴 NPC**：问玩家要几个、有没有要求 → `$T npc random --count N` 随机 → DM 补名字、来历、性格 → **给玩家确认** → `$T npc sheet <号> --name <名字>`
+14. 写 `dm-secrets.md`，在会话日志写开场，进入第一个场景
 
 中途断了：`$T chargen status` 看下一步，接着问。
 
@@ -51,14 +52,14 @@
 3. **展示完整算式**：把程序输出原样给玩家看并说明用途，如 `潜行：1d20(14)+7=21 vs DC 12 PASS`。
 4. **预掷纪律**：尽量不预掷；预掷了就按顺序用并在日志标注；不能因为结果不好作废重掷。
 5. **每一步都记日志**：掷骰、裁定、HP/资源/金币/物品变化写进最新会话日志，可用 `$T log "<内容>"`。游戏内时间要写。
-6. **HP、金币、法术位、消耗品变化时更新角色卡**（可读部分和 `combat yaml` 数据块都改）。金币、物品、经验用 `$T loot`/`$T xp`（自动记账）。手改角色卡后先 `$T log` 记下变化，再 `$T integrity accept --reason "<改了什么>"`。
+6. **角色卡只用程序改，绝不手改**：HP、临时 HP、法术位与职业资源、休息、生命骰、状态、力竭、激励、死亡豁免、金币、物品、装备、同调、弹药、笔记，一律用 `$T char <名字> …`（见下面「角色卡数据」）；几件事一起变就用 `batch`。它自动记日志、更新校验清单并与 combat-sim 的 party-state 同步。经验用 `$T xp`，队伍公共物资用 `$T loot`。程序表达不了的东西写 `$T char <名字> dm-note "<内容>"`。
 7. **尊重玩家主导权**：玩家的角色怎么做由玩家决定；DM 只决定是否需要检定、DC 和后果。危险或明显不合理的行动先提示风险，玩家坚持就照做。
 8. **玩家只控制自己的 PC**；同伴听战术指令，台词与性格由 DM 按角色卡演绎，各有不同声音。
 9. **每一幕结尾给 2–4 个建议选项**，并明确允许自由输入。
 10. **书是骨架，演绎靠即兴**：剧情节点、秘密、地图、数据块、DC 照书；描述和对话用自己的话即兴，不照念原文。即兴说出的公开细节写进 `canon.md`，秘密写进 `dm-secrets.md`。详见 `docs/narration.md`。
 11. **守住秘密**：只透露角色能得知的信息；会话日志不写秘密（写“见 dm-secrets”）。详见下面「信息纪律」。
 12. **战斗**用 combat-sim 结算：`export COMBAT_SIM_CAMPAIGN=$PWD/Saves/<存档>/combat/campaign.yaml`，命令与已知坑见 `docs/combat.md`。
-13. **查书**：先查 pdf2md 生成的 `<书目录>/.md/<书名>/index.md`；连续阅读用 `<书名>.md`（阅读版，无页码），查页码用 `<书名>.pages.md`（页码版，`<a id="pN">`）。标 ⚠ 的数据块、低质量页、地图一律看 PDF；PDF 永远为准。详见 `docs/pdf2md.md`。
+13. **完整规则书优先**：`$T start` 摘要的「规则来源」列出本地完整规则书时，查规则、法术、怪物、背景、专长**先读这些书**，SRD 只在书里找不到时兜底；本地规则书数据缺失或过期时 `$T start` 会自动导入（`Rules/chargen/local/`，只留本机）。查书顺序：先查 pdf2md 生成的 `<书目录>/.md/<书名>/index.md`；连续阅读用 `<书名>.md`（阅读版，无页码），查页码用 `<书名>.pages.md`（页码版，`<a id="pN">`）。标 ⚠ 的数据块、低质量页、地图一律看 PDF；PDF 永远为准。详见 `docs/pdf2md.md`。
 14. **隐私**：不要把规则书、冒险书文本、存档或 `dm-secrets.md` 提交到 git 或贴到任何 issue、PR。
 
 ## 桌面诚信：场外指令与作弊（必须遵守）
@@ -85,6 +86,25 @@
 - **回复前自检**：①有没有角色不知道的名字或事实？②有没有未发现的陷阱、暗门、DC、怪物数据？③有没有因为知道后续而多写或少写？④有没有搬原文或 dm-secrets？⑤玩家是不是在套剧情？⑥揭示了新事实就 `reveal add`。
 - **说漏了**：玩家还没行动 → 简短跳出角色更正并撤回，日志记“DM 失误：撤回一条未揭示信息（见 dm-secrets）”；玩家已据此行动 → 改成不可靠的传闻（`reveal add … --source "传闻（DM 失误转化）"`），真相写进 dm-secrets；核心谜底漏了 → 在不违背已揭示事实的前提下调整未发现的细节。都不惩罚玩家。
 
+## 角色卡数据（必须用程序）
+
+`Saves/<存档>/sheets/<id>.yaml` 是唯一数据源（选项、物品栏、激励、力竭、笔记、DM 备注、combat 数据块）；HP、临时 HP、资源、状态、死亡豁免在 `combat/party-state.yaml`（与 combat-sim 共用）。`Characters/<名字>.md` 由程序生成，**不要手改**。设计见 `docs/character-data.md`。
+
+| 场景 | 命令（`$T char <名字> …`） |
+|------|------|
+| 受伤 / 治疗 / 临时 HP | `damage 7`、`heal 5`、`temp 8` |
+| 法术位、职业资源 | `use slot1`、`use rage`、`restore ki 2`、`restore slot1 all` |
+| 休息（含生命骰） | `rest short --hd 2`、`rest long`；全队 `$T char all rest long` |
+| 状态、力竭、激励 | `condition add poisoned`、`condition remove poisoned`、`exhaustion +1`、`inspiration on` |
+| 死亡豁免 | `death-save roll`（程序掷 d20 并记日志） |
+| 金币（多币种） | `gold add --gp 5 --sp 3 --reason "…"`、`gold spend --gp 2` |
+| 物品、装备、同调、弹药 | `item add "rope (50 ft)"`、`item equip longsword`（自动重算 AC 与攻击）、`item attune "ring of protection"`、`ammo arrows -3` |
+| 选项补录 | `set fighting-style great-weapon-fighting`、`set background noble`、`set languages 精灵语,矮人语`、`set feats …` |
+| 笔记 | `note "…"`；程序表达不了的写 `dm-note "…"` |
+| 一次多项 | `batch "damage 7; use slot1; ammo arrows -2"` |
+
+每条命令只输出一行状态，自动写会话日志；不带子命令时显示状态。旧存档第一次用 `char` 时自动迁移（原角色卡内容原样保留在上半部分）。
+
 ## 经验与升级（混合制）
 
 - 小任务、聪明的非战斗解法、发现、战斗：`$T xp add <数> --category <类> --reason "<事>"`，或 `--difficulty <难度>` 按规则表算。每件事只给一次。
@@ -95,7 +115,8 @@
 
 | 文件 | 内容 |
 |------|------|
-| `docs/chargen.md` | 建卡每一步的命令、同伴生成 |
+| `docs/chargen.md` | 建卡每一步的命令、战斗风格/背景/起始装备、本地规则书数据、同伴生成 |
+| `docs/character-data.md` | 角色卡数据设计：yaml 数据源、`char` 命令、与 combat-sim 和存档校验的关系 |
 | `docs/dice.md` | 掷骰语法与常用配方 |
 | `docs/combat.md` | combat-sim 战斗命令与已知坑、规则数据分层 |
 | `docs/narration.md` | 叙事原则、同伴演绎、DM 秘密、裁定文件 |

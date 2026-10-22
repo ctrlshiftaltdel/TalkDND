@@ -134,6 +134,8 @@ creatures:
       - {id: test-sword, name: Test Sword, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5, properties: [finesse, light]}
       - {id: slow-blade, name: Slow Blade, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5, mastery: slowing}
       - {id: topple-blade, name: Topple Blade, kind: melee, ability: dex, to_hit: 5, damage: [{dice: "1d8+2", type: slashing}], reach: 5, mastery: toppling}
+      - {id: gwf-blade, name: GWF Blade, kind: melee, ability: str, to_hit: 5, damage: [{dice: "2d6+2", type: slashing}], reach: 5, properties: [heavy, two-handed], reroll_damage_below: 2}
+      - {id: gwf-2024, name: GWF 2024, kind: melee, ability: str, to_hit: 5, damage: [{dice: "2d6+2", type: slashing}], reach: 5, properties: [heavy, two-handed], damage_die_min: 3}
       - {id: test-bow, name: Test Bow, kind: ranged, ability: dex, to_hit: 5, damage: [{dice: "1d6+2", type: piercing}], range: [80, 320], properties: [ranged, two-handed]}
     features:
       - {ref: sneaky, params: {dice: 1d6}}

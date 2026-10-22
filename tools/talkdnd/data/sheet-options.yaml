@@ -1,0 +1,149 @@
+# Character-sheet option data (SRD 5.1 / SRD 5.2.1, CC-BY-4.0): item lists, gold, names only.
+# Non-SRD backgrounds come from your own books via `talkdnd data import` (local, gitignored).
+# class_equipment: 2014 = fixed items + choice groups (pick a/b/c per group) or gold dice;
+#                  2024 = options A/B/C (the last is usually gold only).
+# Items in braces {…} are placeholders the player names with `chargen set equipment`.
+
+fighting_styles:
+  # id: [name, effect, rulesets, srd]
+  archery: {name: Archery, zh: 箭术, effect: "远程武器攻击检定 +2", rulesets: ["2014", "2024"], srd: true}
+  defense: {name: Defense, zh: 防御, effect: "穿着护甲时 AC +1", rulesets: ["2014", "2024"], srd: true}
+  dueling: {name: Dueling, zh: 对决, effect: "单手持近战武器且不持其他武器时伤害 +2", rulesets: ["2014", "2024"], srd: true}
+  great-weapon-fighting: {name: Great Weapon Fighting, zh: 巨武器战斗, effect: "双手持近战武器（双手/可双手）时：2014 伤害骰 1、2 重掷一次取新值；2024 伤害骰 1、2 视为 3", rulesets: ["2014", "2024"], srd: true}
+  protection: {name: Protection, zh: 守护, effect: "持盾时可用反应使 5 尺内友方受到的一次攻击具有劣势", rulesets: ["2014", "2024"], srd: false}
+  two-weapon-fighting: {name: Two-Weapon Fighting, zh: 双武器战斗, effect: "双持时副手攻击伤害加属性调整值", rulesets: ["2014", "2024"], srd: true}
+  blind-fighting: {name: Blind Fighting, zh: 盲斗, effect: "10 尺盲视", rulesets: ["2014", "2024"], srd: false}
+  interception: {name: Interception, zh: 拦截, effect: "反应减少 5 尺内友方受到的伤害", rulesets: ["2014", "2024"], srd: false}
+  thrown-weapon-fighting: {name: Thrown Weapon Fighting, zh: 投掷武器战斗, effect: "投掷武器远程攻击伤害 +2", rulesets: ["2014", "2024"], srd: false}
+  unarmed-fighting: {name: Unarmed Fighting, zh: 徒手格斗, effect: "徒手打击伤害提高，可擒抱伤害", rulesets: ["2014", "2024"], srd: false}
+  blessed-warrior: {name: Blessed Warrior, zh: 受祝福的战士, effect: "（2024 圣武士可替代战斗风格）两道牧师戏法", rulesets: ["2024"], srd: false}
+  druidic-warrior: {name: Druidic Warrior, zh: 德鲁伊战士, effect: "（2024 游侠可替代战斗风格）两道德鲁伊戏法", rulesets: ["2024"], srd: false}
+
+# Class -> level that grants a Fighting Style, and allowed ids (empty = any above for the ruleset).
+fighting_style_classes:
+  "2014":
+    fighter: {level: 1, allowed: [archery, defense, dueling, great-weapon-fighting, protection, two-weapon-fighting]}
+    paladin: {level: 2, allowed: [defense, dueling, great-weapon-fighting, protection]}
+    ranger: {level: 2, allowed: [archery, defense, dueling, two-weapon-fighting]}
+  "2024":
+    fighter: {level: 1, allowed: []}
+    paladin: {level: 2, allowed: []}
+    ranger: {level: 2, allowed: []}
+
+backgrounds:
+  "2014":
+    acolyte:
+      name: Acolyte
+      tools: []
+      languages: 2
+      feature: Shelter of the Faithful
+      equipment: [holy symbol, prayer book, 5 sticks of incense, vestments, common clothes, belt pouch]
+      gold: 15
+  "2024":
+    acolyte:
+      name: Acolyte
+      feat: Magic Initiate (Cleric)
+      tools: [calligrapher's supplies]
+      options:
+        A: {items: [calligrapher's supplies, book (prayers), holy symbol, parchment (10 sheets), robe], gold: 8}
+        B: {items: [], gold: 50}
+    criminal:
+      name: Criminal
+      feat: Alert
+      tools: [thieves' tools]
+      options:
+        A: {items: [2 daggers, thieves' tools, crowbar, 2 pouches, traveler's clothes], gold: 16}
+        B: {items: [], gold: 50}
+    sage:
+      name: Sage
+      feat: Magic Initiate (Wizard)
+      tools: [calligrapher's supplies]
+      options:
+        A: {items: [quarterstaff, calligrapher's supplies, book (history), parchment (8 sheets), robe], gold: 8}
+        B: {items: [], gold: 50}
+    soldier:
+      name: Soldier
+      feat: Savage Attacker
+      tools: [gaming set]
+      options:
+        A: {items: [spear, shortbow, 20 arrows, gaming set, healer's kit, quiver, traveler's clothes], gold: 14}
+        B: {items: [], gold: 50}
+
+class_equipment:
+  "2014":
+    barbarian:
+      groups: [[greataxe, "{martial melee weapon}"], [2 handaxes, "{simple weapon}"]]
+      fixed: [explorer's pack, 4 javelins]
+      gold_dice: 2d4x10
+    bard:
+      groups: [[rapier, longsword, "{simple weapon}"], [diplomat's pack, entertainer's pack], [lute, "{musical instrument}"]]
+      fixed: [leather armor, dagger]
+      gold_dice: 5d4x10
+    cleric:
+      groups: [[mace, warhammer], [scale mail, leather armor, chain mail], ["light crossbow, 20 bolts", "{simple weapon}"], [priest's pack, explorer's pack]]
+      fixed: [shield, holy symbol]
+      gold_dice: 5d4x10
+    druid:
+      groups: [[wooden shield, "{simple weapon}"], [scimitar, "{simple melee weapon}"]]
+      fixed: [leather armor, explorer's pack, druidic focus]
+      gold_dice: 2d4x10
+    fighter:
+      groups: [[chain mail, "leather armor, longbow, 20 arrows"], ["{martial weapon}, shield", "{martial weapon}, {martial weapon}"], ["light crossbow, 20 bolts", 2 handaxes], [dungeoneer's pack, explorer's pack]]
+      fixed: []
+      gold_dice: 5d4x10
+    monk:
+      groups: [[shortsword, "{simple weapon}"], [dungeoneer's pack, explorer's pack]]
+      fixed: [10 darts]
+      gold_dice: 5d4
+    paladin:
+      groups: [["{martial weapon}, shield", "{martial weapon}, {martial weapon}"], [5 javelins, "{simple melee weapon}"], [priest's pack, explorer's pack]]
+      fixed: [chain mail, holy symbol]
+      gold_dice: 5d4x10
+    ranger:
+      groups: [[scale mail, leather armor], [2 shortswords, "{simple melee weapon}, {simple melee weapon}"], [dungeoneer's pack, explorer's pack]]
+      fixed: [longbow, quiver of 20 arrows]
+      gold_dice: 5d4x10
+    rogue:
+      groups: [[rapier, shortsword], ["shortbow, quiver of 20 arrows", shortsword], [burglar's pack, dungeoneer's pack, explorer's pack]]
+      fixed: [leather armor, 2 daggers, thieves' tools]
+      gold_dice: 4d4x10
+    sorcerer:
+      groups: [["light crossbow, 20 bolts", "{simple weapon}"], [component pouch, arcane focus], [dungeoneer's pack, explorer's pack]]
+      fixed: [2 daggers]
+      gold_dice: 3d4x10
+    warlock:
+      groups: [["light crossbow, 20 bolts", "{simple weapon}"], [component pouch, arcane focus], [scholar's pack, dungeoneer's pack]]
+      fixed: [leather armor, "{simple weapon}", 2 daggers]
+      gold_dice: 4d4x10
+    wizard:
+      groups: [[quarterstaff, dagger], [component pouch, arcane focus], [scholar's pack, explorer's pack]]
+      fixed: [spellbook]
+      gold_dice: 4d4x10
+  "2024":
+    barbarian:
+      options: {A: {items: [greataxe, 4 handaxes, explorer's pack], gold: 15}, B: {items: [], gold: 75}}
+    bard:
+      options: {A: {items: [leather armor, 2 daggers, "{musical instrument}", entertainer's pack], gold: 19}, B: {items: [], gold: 90}}
+    cleric:
+      options: {A: {items: [chain shirt, shield, mace, holy symbol, priest's pack], gold: 7}, B: {items: [], gold: 110}}
+    druid:
+      options: {A: {items: [leather armor, shield, sickle, druidic focus (quarterstaff), explorer's pack, herbalism kit], gold: 9}, B: {items: [], gold: 50}}
+    fighter:
+      options:
+        A: {items: [chain mail, greatsword, flail, 8 javelins, dungeoneer's pack], gold: 4}
+        B: {items: [studded leather armor, scimitar, shortsword, longbow, 20 arrows, quiver, dungeoneer's pack], gold: 11}
+        C: {items: [], gold: 155}
+    monk:
+      options: {A: {items: [spear, 5 daggers, "{artisan's tools or musical instrument}", explorer's pack], gold: 11}, B: {items: [], gold: 50}}
+    paladin:
+      options: {A: {items: [chain mail, shield, longsword, 6 javelins, holy symbol, priest's pack], gold: 9}, B: {items: [], gold: 150}}
+    ranger:
+      options: {A: {items: [studded leather armor, scimitar, shortsword, longbow, 20 arrows, quiver, druidic focus (sprig of mistletoe), explorer's pack], gold: 7}, B: {items: [], gold: 150}}
+    rogue:
+      options: {A: {items: [leather armor, 2 daggers, shortsword, shortbow, 20 arrows, quiver, thieves' tools, burglar's pack], gold: 8}, B: {items: [], gold: 100}}
+    sorcerer:
+      options: {A: {items: [spear, 2 daggers, arcane focus (crystal), dungeoneer's pack], gold: 28}, B: {items: [], gold: 50}}
+    warlock:
+      options: {A: {items: [leather armor, sickle, 2 daggers, arcane focus (orb), book (occult lore), scholar's pack], gold: 15}, B: {items: [], gold: 100}}
+    wizard:
+      options: {A: {items: [2 daggers, arcane focus (quarterstaff), robe, spellbook, scholar's pack], gold: 5}, B: {items: [], gold: 55}}

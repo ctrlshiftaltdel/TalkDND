@@ -161,6 +161,40 @@ fn members(save: &Path) -> Vec<Member> {
     v
 }
 
+/// Rules source for the digest; imports book data when it is missing or stale.
+fn rules_source_line(root: &Path, rs: &str) -> String {
+    let (reader, pages) = crate::classdata::rulebooks(&root.join("Rules").join(rs));
+    if reader.is_empty() {
+        return format!("- 规则来源：仅 SRD（Rules/{rs}/ 下没有完整规则书 Markdown；见 docs/chargen.md「本地规则书数据」）\n");
+    }
+    let mut s = String::new();
+    if crate::classdata::import_stale(root, rs) {
+        match crate::classdata::run_import(root, rs) {
+            Ok((_, subs, bgs)) => s += &format!("- 本地规则书数据：已自动导入（{subs} 个子职、{bgs} 个背景，Rules/chargen/local/，不提交）\n"),
+            Err(e) => s += &format!("- 本地规则书数据：自动导入失败（{e}）；手动运行 `talkdnd data import --ruleset {rs}`\n"),
+        }
+    }
+    let rel = |p: &std::path::PathBuf| {
+        p.strip_prefix(root)
+            .unwrap_or(p)
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
+    s += &format!(
+        "- 规则来源：**完整规则书优先**（SRD 只在书里找不到时兜底）。阅读版：{}{}\n",
+        reader.iter().map(rel).collect::<Vec<_>>().join("；"),
+        if pages.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "；分页版（查页码）：{}",
+                pages.iter().map(rel).collect::<Vec<_>>().join("；")
+            )
+        }
+    );
+    s
+}
+
 pub fn party_ids(save: &Path) -> Vec<String> {
     let text = fs::read_to_string(save.join("combat/campaign.yaml")).unwrap_or_default();
     for line in text.lines() {
@@ -328,6 +362,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         d += &format!("- 战役：{name}\n");
     }
     d += &format!("- content check：{check}\n- pdf2md：{pdf}\n");
+    d += &rules_source_line(root, &rs);
     if !ok {
         warnings.push("content check 未通过：战斗前修好，或战斗手动结算".to_string());
     }

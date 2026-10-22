@@ -100,6 +100,7 @@ pub fn snapshot(save: &Path) -> BTreeMap<String, String> {
     }
     files.extend(list(&save.join("Characters"), "md", true));
     files.extend(list(&save.join("NPCs"), "md", true));
+    files.extend(list(&save.join("sheets"), "yaml", false));
     files.extend(list(&save.join("combat"), "yaml", false));
     let mut out = BTreeMap::new();
     for f in files {
