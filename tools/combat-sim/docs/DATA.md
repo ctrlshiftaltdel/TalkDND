@@ -1,6 +1,6 @@
 # Data sources
 
-- Party: `LetsPlay/Saves/2026-10-19-01/Characters/Will.md`, `NPCs/{Rina-Merryblade,Milo-Quill,Sera-Brightwell}.md`.
+- Party: `LetsPlay/Saves/2026-10-19-01/Characters/{Will,Rina-Merryblade,Milo-Quill,Sera-Brightwell}.md` (companions moved from `NPCs/` in save schema 6).
 - Monsters: the edition's monster book under `LetsPlay/Rules/2014/` or `LetsPlay/Rules/2024/` (player-supplied text):
   Guard (~line 18800), Animated Armor (~2545), Scarecrow (~31150), Mimic (~24610), Allosaurus (~39605).
 - Animatronic allosaurus changes: `LetsPlay/Adventures/Keys-from-the-Golden-Vault.md` area V10.

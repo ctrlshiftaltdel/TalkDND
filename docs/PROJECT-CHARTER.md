@@ -213,7 +213,7 @@ Alternative considered: allow any die size. Rejected: no D&D rule rolls a d7, an
 
 ### 2026-10-20 — Book is canon, presentation is improvised
 
-The owner wants the adventure book followed faithfully for facts, structure, and mechanics (plot beats, NPC motives and secrets, clues, maps, stat blocks, DCs) while scenes, dialogue, NPC personality, and reactions are improvised rather than read aloud. The DM guide (`LetsPlay/AGENTS.md` section 5) now says so: paraphrase boxed text and never recite it; react to player choices through world logic; invent minor details freely and record them so they become canon (public ones in `Saves/<slot>/canon.md` or `NPCs/`, hidden ones in `dm-secrets.md`); keep improvisation consistent with book secrets; give each companion a distinct voice; manage pacing; end scenes with suggested options plus free input; follow the save's ruleset strictly and rule only where the rules are silent; use the adventure PDF maps. The guidance names no particular agent.
+The owner wants the adventure book followed faithfully for facts, structure, and mechanics (plot beats, NPC motives and secrets, clues, maps, stat blocks, DCs) while scenes, dialogue, NPC personality, and reactions are improvised rather than read aloud. The DM guide (`LetsPlay/AGENTS.md` section 5) now says so: paraphrase boxed text and never recite it; react to player choices through world logic; invent minor details freely and record them so they become canon (public ones in `Saves/<slot>/canon.md` or `NPCs/` (story NPCs), hidden ones in `dm-secrets.md`); keep improvisation consistent with book secrets; give each companion a distinct voice; manage pacing; end scenes with suggested options plus free input; follow the save's ruleset strictly and rule only where the rules are silent; use the adventure PDF maps. The guidance names no particular agent.
 
 Alternative considered: read boxed text verbatim. Rejected by the owner, and it would put copyrighted text into session logs.
 
@@ -264,6 +264,10 @@ Original content goes into the DM-only `Saves/<slot>/original.yaml` before it ap
 
 Alternative considered: a global setting or a setter command. Rejected because deviation is a deliberate per-campaign decision and must not be relaxed mid-play.
 
+### 2026-10-23 — Companions are party members (v0.9.0)
+
+The owner noticed that DM-run companions were stored in `Saves/<slot>/NPCs/` (non-playable characters), which misdescribes them: they are party members. All party members now live in `Characters/`, and `sheets/<id>.yaml` carries `controller: player` or `controller: dm`, shown on the rendered sheet. `NPCs/` is kept for story NPCs only. `talkdnd companion random|sheet` replaces `talkdnd npc …` (the old name still works with a note). Save schema 6 moves companion sheets and `_party.md` on `start`/`migrate` after the usual whole-save backup, edits `sheets/*.yaml` textually so nothing is lost, keeps both files on a name clash, and carries pre-existing hand-edit flags to the new paths.
+
 ### 2026-10-23 — Information discipline, secret guard and dice display (v0.8.0)
 
 The DM now reads converted adventures one heading at a time (`talkdnd adventure section`; future/DM-only sections need a logged `--reason`), builds narration and options only from `talkdnd known`, and checks drafts with `talkdnd guard` against local secret terms (`dm-secrets.md`, `dm-plan.md`, future chapter headings, original `--hidden`, manual terms). Unidentified monsters/items are shown to players by appearance (`talkdnd identify`, combat-sim `--player`), while DM views keep real names. Per-save `settings.dice_display` (default on, changeable mid-game and logged) controls whether dice values, DCs and modifiers are spoken; every roll stays program-made and lands in `rolls.log`. `LetsPlay/AGENTS.md` stays at 150 lines; details live in `option-writing.md`, `anti-spoiler.md` and `dice.md`.
@@ -289,6 +293,7 @@ Alternative considered: rely on DM discipline alone. Rejected: the new tools mak
 | 2026-10-21 | chargen validation: adventure start-level step, 2014 level-1 subclass rule, armor proficiency from class+subclass, cantrip/spell count checks, species traits in the sheet and combat yaml. |
 | 2026-10-22 | Per-save adventure deviation (scope 0–2, ratio 5–25%) locked in `save-meta.yaml` schema 4; DM-only `original.yaml` ledger with scope/rarity/chapter-budget checks; `char item add` source check; `start`/`check` surfacing; v0.7.0. |
 | 2026-10-23 | v0.8.0 information discipline: scene-scoped reading, known list, secret terms/guard, hidden original aspects, player-facing name masking, option-writing rules, per-save dice display and roll log; schema 5. |
+| 2026-10-23 | v0.9.0 party companions live in `Characters/` next to the PC, told apart by `controller: player|dm` in `sheets/<id>.yaml`; `talkdnd companion`; `NPCs/` is for story NPCs only; schema 6 migration. |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 

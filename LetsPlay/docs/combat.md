@@ -38,7 +38,7 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 - 非致命：只有**近战**可以击昏；要击昏就加 `--nonlethal`（或生物数据带 `tags: [nonlethal]`）。不加就是致死。
 - 越回合的 `cast` / `use`：反应能力照常执行；其他能力**直接报错**，先 `next`。准备动作或 DM 裁定时加 `--force`（会打印 WARNING）。`attack`、`move`、`interact` 越回合仍只警告（借机攻击等）。
 - 休息：`rest short <名字|all> [--hd N]` 花 N 个生命骰（每个掷骰 + 体质调整值）恢复 HP；`rest long <名字|all>` 回满 HP 和资源、恢复一半生命骰（至少 1）并结束专注。`all` 只包括 party 一方活着的角色，敌人和死者不休息。
-- 同伴 NPC（`kind: npc`、`side: party`）和 PC 一样在 0 HP 时倒地并做死亡豁免（`deathsave`）。
+- 同伴（`Characters/` 里 `controller: dm` 的队友；战斗块 `side: party`，`kind` 可以是 `pc` 或 `npc`）和 PC 一样在 0 HP 时倒地并做死亡豁免（`deathsave`）。
 - 睡眠术（2024 第二次豁免；2014 的 HP 池整个是手动）、冒险书的特殊机关、增援到场时机等是**手动**的：用 `save`、`condition add`、`activate`。
 - 状态文件是自包含的快照；改了角色卡/怪物数据后，**正在进行的**战斗不会自动更新，需要新建 state。
 - 引擎结果 = 规则结算的建议，DM 仍要检查是否符合叙事与规则（例如潜行、视线、幻象遮挡是否允许借机攻击）。
@@ -78,7 +78,7 @@ $CS --campaign "$COMBAT_SIM_CAMPAIGN" --player status
 ```
 
 - 未识别的怪物显示 `appearance`（creature 数据里的字段），或 `$T identify --appearance <东西> "<描述>"` 写的覆盖值，否则用「一只大型野兽」这样的体型+类型描述。
-- 识别后用 `$T identify <东西>` 记录，`identified.yaml` 里 `identified: true` 的条目恢复真名；PC 和同伴 NPC 永远显示真名。
+- 识别后用 `$T identify <东西>` 记录，`identified.yaml` 里 `identified: true` 的条目恢复真名；PC 和同伴永远显示真名。
 - `identified.yaml` 默认从 `--campaign` 指向的存档（`<存档>/combat/campaign.yaml` 的上一级）读取；也可以加 `--save Saves/<存档>` 或设 `TALKDND_SAVE`。
 - `combat-sim roll` 的每次掷骰也会追加到 `<存档>/rolls.log`（同上定位存档），`$T log rolls` 可查。
 - 战斗状态命令（`attack`、`cast`、`use`、`save`、`check`、`damage`、`init`、`deathsave`、`rest` 等）产生的掷骰行也会自动追加到同一份 `rolls.log`；只写入含骰式（如 `1d20(`、`1d6(`）的行，条件/叙述行不写入，战斗 state 日志保持原样。

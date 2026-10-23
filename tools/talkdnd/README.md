@@ -7,7 +7,7 @@ agent can start a scene after reading one short digest. Players run it as
 | Command | What it does |
 |---|---|
 | `start [--save S] [--no-pdf2md]` | Newest (or named) save: ruleset, `combat-sim content check`, starts `pdf2md run` in the background when `uv` exists, writes `Saves/<slot>/digest.md` (last checkpoint, party, warnings) and prints it |
-| `new [--ruleset 2014\|2024] [--adventure NAME]` | New save skeleton (`Characters/ NPCs/ Sessions/ combat/campaign.yaml canon.md dm-secrets.md`) and `chargen.json` |
+| `new [--ruleset 2014\|2024] [--adventure NAME]` | New save skeleton (`Characters/` (PCs + companions) `NPCs/` (story NPCs) `Sessions/ combat/campaign.yaml canon.md dm-secrets.md`) and `chargen.json` |
 | `chargen status` | Steps done and the next step |
 | `chargen set <field> <value>` | ruleset, adventure, species, class, subclass, masteries, background, skills, background-skills, armor, shield, equipment, spells, name, personality, level |
 | `chargen roll` / `array` / `pointbuy [scores]` | 6×`4d6dl1` through the combat-sim dice engine (logged, final), standard array, or 27-point buy |
@@ -15,8 +15,8 @@ agent can start a scene after reading one short digest. Players run it as
 | `chargen asi str=2 con=1` / `none` | 2024 background +2/+1 or +1/+1/+1; 2014 half-elf free picks (other 2014 species apply automatically) |
 | `chargen validate` / `sheet` / `confirm` | Rule checks; sheet Markdown + `combat yaml` block from the same numbers (attacks, class features, resources, spell slots); mark done |
 | `data status [--ruleset R]` / `data import [--ruleset R]` | Local book data: show loaded files; build `Rules/chargen/local/imported-R.yaml` (gitignored) from converted Markdown |
-| `npc random [--count N] [--level L]` | Random SRD species/class/background/abilities for companions (drafts in `npc-drafts/`) |
-| `npc sheet <draft> --name X` | Write `NPCs/X.md` after the player confirms |
+| `companion random [--count N] [--level L]` (old name `npc random` still works) | Random SRD species/class/background/abilities for companions (drafts in `npc-drafts/`) |
+| `companion sheet <draft> --name X` (old name `npc sheet` still works) | Write `Characters/X.md` (`controller: dm`) after the player confirms |
 | `xp add [N] --category C --reason R [--difficulty D] [--again]` / `xp show` | Hybrid advancement ledger (`progress.yaml` `xp`, `xp_log`): small awards, ruleset difficulty tables, one-level-ahead cap, no double awards; `show` prints the adventure track (Golden Vault heist levels) |
 | `level-up <who\|all> [--milestone --reason R]` | Level from XP, or a milestone level for a major story beat (XP raised to the threshold; once per event) |
 | `check` (no arguments) | Save audit: integrity manifest (`integrity.yaml`: fingerprints of `progress.yaml`, sheets, `combat/*.yaml`, `reveals.yaml`, `house-rules.md` after every tool write) plus reconciliation of HP, coins, items and XP changes against new session-log lines and `xp_log`. `start` runs it too; old saves get a baseline on first run |

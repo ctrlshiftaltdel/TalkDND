@@ -1680,7 +1680,7 @@ fn npc_cmd(
             c.personality = personality;
             c.adventure = chargen::load(&s).ok().and_then(|x| x.adventure);
             let book = classdata::Book::load(c.rs(), Some(root))?;
-            let (id, md) = chargen::sheet_with(&c, "DM（同伴 NPC）", &book, Some(root))?;
+            let (id, md) = chargen::sheet_with(&c, "DM（同伴，DM 操控）", &book, Some(root))?;
             if !chargen::valid_id(&id) {
                 bail!("NPC name must give an id of lowercase letters, digits and hyphens (got `{id}`)");
             }

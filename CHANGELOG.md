@@ -4,6 +4,46 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v0.9.0 — 2026-10-23
+
+### 新功能
+- **队友统一放在 `Characters/`**：存档里的全部队伍成员——玩家角色和 DM 操控的同伴——都放在 `Saves/<存档>/Characters/<名字>.md`，仍由 `sheets/<id>.yaml` 生成。以前同伴放在 `NPCs/`（不可游玩角色），和“队伍成员”的身份不符。
+- **用数据区分玩家角色和同伴**：`sheets/<id>.yaml` 新增 `controller:` 字段，`player` 表示玩家角色，`dm` 表示 DM 操控的同伴。生成的角色卡在程序生成部分第一行显示「**操控**：玩家角色（player）」或「**操控**：DM 操控的同伴（companion）」。没有该字段的旧数据按位置和战斗块推断：还在 `NPCs/` 或 `kind: npc` 的算同伴，其余算玩家角色。
+- **新命令名 `bin/talkdnd companion random|sheet`**：`companion sheet <草稿号> --name <名字>` 把同伴写到 `Characters/<id>.md`（`kind: npc`，`controller: dm`），并加进 party。旧命令 `bin/talkdnd npc random|sheet` 继续可用，会提示已改名，写入位置同样是 `Characters/`。同伴不能占用玩家角色的 id（会报错，请换名字）。
+- `start` 摘要的「队伍」一节给每人标上［玩家角色］或［同伴（DM 操控）］；若有队友仍在 `NPCs/`，会给出警告。`bin/talkdnd known` 的队伍行写成「名字（id，玩家角色/同伴）：职业 等级…」。
+
+### 变更
+- 存档 schema 升到 **6**。`talkdnd start` / `talkdnd migrate` 遇到 schema 5 及以前的存档，会先整份备份到 `Saves/_backups/`，再做以下迁移：
+  - 只移动队友：`NPCs/` 里被 `sheets/*.yaml` 的 `file:` 指向的角色卡，以及战斗块 `side: party`、在 `combat/campaign.yaml` party 名单或 `party-state.yaml` 里的角色卡，移到 `Characters/`。
+  - `NPCs/_party.md`（同伴总览）移到 `Characters/_party.md`。总览里原来指向 `../Characters/` 的相对链接会改成同目录链接。
+  - 剧情 NPC（没有战斗块，或战斗块不在队伍一方）留在 `NPCs/`。`NPCs/` 文件夹保留，可以为空。
+  - `sheets/<id>.yaml` 只做文本级修改：改 `file:` 路径，并在下一行加 `controller:`，注释、未知字段和原有格式都保留。
+  - 已经生成过的角色卡（含程序生成部分）加上「操控」一行，其余内容不变。
+  - 完整性清单同步到新路径。迁移前就被手改过的文件，换到新路径后仍然标记，不会被迁移“洗白”。
+  - 会话日志记一行「存档结构迁移 schema 5→6 …；队友移到 Characters/：…」。
+  - 重复运行不会重复迁移。
+- 重名处理：如果 `Characters/` 里已有同名文件，两份都保留，移过来的那份改名为 `<原名>-companion.md`（`_party.md` 则为 `_party-companion.md`），对应 `sheets` 的 `file:` 同步修改，迁移报告给出警告，请人工核对。
+- `known` 的队伍列表改为列出 `Characters/` 里的所有角色卡，加上 party 名单里的成员。以前只列 `kind: pc`，所以用 `npc sheet` 生成的同伴（`kind: npc`）会被漏掉；`NPCs/` 里的剧情 NPC 不再算进队伍。
+- 同伴角色卡抬头的「玩家」一栏从「DM（同伴 NPC）」改为「DM（同伴，DM 操控）」。
+- `LetsPlay/AGENTS.md` 改用 `companion` 命令，开场前改读 `Characters/_party.md`。`docs/layout.md`、`chargen.md`、`narration.md`、`dice.md`、`combat.md`、`table-integrity.md`、`Saves/README.md`、示例存档（`example/save/`：同伴卡移进 `Characters/`，`NPCs/README.md` 说明只放剧情 NPC）和工具 README 同步更新。
+- 所有程序版本统一升到 0.9.0（talkdnd、combat-sim、talkdnd-dev）。
+
+### 修复
+- `known` 漏列 `kind: npc` 同伴的问题（见上）。
+- 原有测试全部通过。新增测试覆盖：schema 5→6 迁移（dry-run 不写文件；队友和 `_party.md` 移走、剧情 NPC 留下；`controller` 写入；内容不丢；完整性干净；备份；日志；幂等）、重名两份都保留、手改标记跟随到新路径、`companion sheet` 写到 `Characters/`、旧 `npc sheet` 仍可用并提示、同伴不能占用玩家角色 id、`known` 标明玩家角色/同伴。
+
+### 更新说明 / 迁移
+- **覆盖式更新**：下载新发布包，解压到临时位置，把包内 `TalkDND/` 文件夹里的全部内容复制到现在的游戏文件夹，覆盖同名文件。存档目录原样保留。不要把旧包的 `TalkDND/` 整个替换掉（会丢存档、规则书和冒险书）。
+- 更新后第一次 `talkdnd start` 会生成 schema 5→6 的迁移备份，把队友移到 `Characters/`，并在输出和会话日志里列出移动了哪些文件。确认无误后可删除 `Saves/_backups/` 里的旧备份。
+- 迁移后，同伴总览在 `Characters/_party.md`。DM 以后把新的剧情 NPC 写进 `NPCs/`，同伴一律放在 `Characters/`。
+- 已写好的旧命令不用改：`npc random`、`npc sheet` 仍然可用。
+
+### 已知限制
+- 没有专门修改 `controller` 的命令。同伴改由玩家操控（或反过来）时，目前只能由 DM 编辑 `sheets/<id>.yaml` 的 `controller:`，再用 `talkdnd integrity accept --reason "…"` 记录。
+- 判断 `NPCs/` 里的文件是不是队友，依据是 `sheets` 数据、party 名单、`party-state.yaml` 和战斗块的 `side: party`。如果一个剧情 NPC 也写成了 `side: party` 的战斗块（例如临时随队的向导），也会被当作队友移走。迁移报告会列出每个移动的文件，请核对。
+- 从未由程序生成过的旧角色卡（没有程序生成部分）要等下一次 `talkdnd char` 写入时，才会显示「操控」一行；`sheets/<id>.yaml` 里的 `controller:` 在迁移时就已写好。
+- 历史会话日志和旧的 `digest.md` 里提到的 `NPCs/...` 路径不会被改写（日志是历史记录）。`digest.md` 下次 `start` 时会重新生成。
+
 ## v0.8.0 — 2026-10-23
 
 ### 新功能
