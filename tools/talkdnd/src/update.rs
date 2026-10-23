@@ -155,7 +155,7 @@ pub fn is_user_data(path: &str) -> bool {
     let segments: Vec<&str> = path.split('/').collect();
     if segments
         .iter()
-        .any(|s| matches!(*s, "local" | "fixes" | ".md"))
+        .any(|s| matches!(*s, "local" | "fixes" | ".md" | "index"))
     {
         return true;
     }

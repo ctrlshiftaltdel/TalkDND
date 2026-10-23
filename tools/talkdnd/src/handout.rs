@@ -1,7 +1,7 @@
 //! Handouts: book images (maps, letters, items) shown to the players.
 //!
 //! The registry lives next to the locally converted book
-//! (`Adventures/…/.md/<Book>/handouts.yaml`, gitignored like the book) and is
+//! (`Adventures/<slug>/index/handouts.yaml`, gitignored like the book) and is
 //! built from pdf2md's `index.json` (maps, figures, art) and `img/`. Every
 //! entry is DM-only until the DM marks it player-safe; DM-only images are
 //! never exported. Shown handouts are copied to `Saves/<slot>/handouts/`,
@@ -92,22 +92,9 @@ struct ShownItem {
 
 // ---------- locating the adventure's converted books ----------
 
-fn md_dirs(parent: &Path) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = fs::read_dir(parent)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.join("index.json").is_file())
-        .collect();
-    v.sort();
-    v
-}
-
 /// Converted book folders of the save's adventure, or of `--book`
 /// (a path, or a book / adventure name).
 pub fn book_dirs(root: &Path, save: &Path, book: Option<&str>) -> Result<Vec<PathBuf>> {
-    let adv = root.join("Adventures");
     let want = match book {
         Some(b) => {
             let p = PathBuf::from(b);
@@ -115,30 +102,24 @@ pub fn book_dirs(root: &Path, save: &Path, book: Option<&str>) -> Result<Vec<Pat
                 if c.join("index.json").is_file() {
                     return Ok(vec![c]);
                 }
+                let idx: Vec<PathBuf> = crate::library::book_indexes(&c)
+                    .into_iter()
+                    .filter(|d| d.join("index.json").is_file())
+                    .collect();
+                if !idx.is_empty() {
+                    return Ok(idx);
+                }
             }
-            chargen::slug(b)
+            b.to_string()
         }
         None => crate::start::adventure_slug(save).context(
             "the save has no adventure; set it (`talkdnd chargen set adventure …`) or pass --book",
         )?,
     };
-    let mut out = md_dirs(&adv.join(&want).join(".md"));
-    let mut all: Vec<PathBuf> = md_dirs(&adv.join(".md"));
-    if let Ok(rd) = fs::read_dir(&adv) {
-        for e in rd.flatten() {
-            all.extend(md_dirs(&e.path().join(".md")));
-        }
-    }
-    for d in all {
-        let name = d
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        if chargen::slug(&name) == want && !out.contains(&d) {
-            out.push(d);
-        }
-    }
+    let out: Vec<PathBuf> = crate::library::adventure_indexes(root, &want)
+        .into_iter()
+        .filter(|d| d.join("index.json").is_file())
+        .collect();
     if out.is_empty() {
         bail!("no converted book for `{want}` under Adventures/ (run pdf2md first, or pass --book <folder>)");
     }
