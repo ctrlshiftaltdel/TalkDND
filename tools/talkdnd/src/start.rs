@@ -640,7 +640,12 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     let recent = crate::reveal::recent(save, 8);
     d += "\n## 玩家已知（`talkdnd known` 的压缩版；描述与选项只能从这里出发）\n\n";
     for line in crate::known::digest_lines(save) {
-        d += &format!("- {line}\n");
+        // Sub-items already start with "- "; indent them under their heading.
+        if line.starts_with("- ") {
+            d += &format!("  {line}\n");
+        } else {
+            d += &format!("- {line}\n");
+        }
     }
     if !recent.is_empty() {
         d += "\n### 最近揭示（提到专名前先 `talkdnd reveal check`）\n\n";

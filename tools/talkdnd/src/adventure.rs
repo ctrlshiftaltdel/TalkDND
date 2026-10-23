@@ -389,15 +389,28 @@ pub fn search(root: &Path, save_dir: &Path, query: &str, limit: usize) -> Result
     if let Some(line) = intake_line(path.parent().unwrap_or(Path::new("."))) {
         out.push(line);
     }
-    let mut hits = 0;
+    // Exact (normalised) hits first in page order, then garbled-start hits,
+    // marked so the DM can tell a likely match from a tolerant one.
+    let mut exact = Vec::new();
+    let mut fuzzy = Vec::new();
     for (page, line) in lookup_lines(&md, paged) {
-        if fuzzy_hit(&normalize_for_search(&line), &q) {
-            out.push(format!("p.{page}: {line}"));
-            hits += 1;
-            if limit > 0 && hits >= limit {
+        let n = normalize_for_search(&line);
+        if n.contains(&q) {
+            exact.push(format!("p.{page}: {line}"));
+            if limit > 0 && exact.len() >= limit {
                 break;
             }
+        } else if fuzzy_hit(&n, &q) {
+            fuzzy.push(format!("p.{page}: {line}（模糊）"));
         }
+    }
+    let mut hits = 0;
+    for l in exact.into_iter().chain(fuzzy) {
+        if limit > 0 && hits >= limit {
+            break;
+        }
+        out.push(l);
+        hits += 1;
     }
     if hits == 0 {
         out.push(format!(

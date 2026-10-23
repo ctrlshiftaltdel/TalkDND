@@ -8,7 +8,7 @@
 use crate::{check, handout, identify, original, progress, reveal};
 use std::path::Path;
 
-fn party_line(s: &check::Sheet) -> String {
+fn party_line(save_dir: &Path, s: &check::Sheet) -> String {
     let level = s.block.get("level").and_then(|v| v.as_i64()).unwrap_or(1);
     let hp = s
         .block
@@ -22,12 +22,32 @@ fn party_line(s: &check::Sheet) -> String {
         .and_then(|v| v.as_i64())
         .map(|v| v.to_string())
         .unwrap_or_else(|| "?".into());
-    let class = s
-        .block
-        .get("notes")
-        .and_then(|v| v.as_str())
-        .map(|n| n.split_whitespace().next().unwrap_or("").to_string())
-        .filter(|c| !c.is_empty())
+    // Class: structured sheet data first (sheets/<id>.yaml `info.class`),
+    // then the combat block, then the first word of its notes.
+    let from_sheet =
+        std::fs::read_to_string(save_dir.join("sheets").join(format!("{}.yaml", s.id)))
+            .ok()
+            .and_then(|t| serde_norway::from_str::<serde_norway::Value>(&t).ok())
+            .and_then(|v| {
+                v.get("info")
+                    .and_then(|i| i.get("class"))
+                    .and_then(|c| c.as_str())
+                    .map(str::to_string)
+            });
+    let class = from_sheet
+        .or_else(|| {
+            s.block
+                .get("class")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            s.block
+                .get("notes")
+                .and_then(|v| v.as_str())
+                .map(|n| n.split_whitespace().next().unwrap_or("").to_string())
+        })
+        .filter(|c| !c.trim().is_empty())
         .unwrap_or_else(|| "?".into());
     format!(
         "{}（{}）：{} {} 级，HP {}，AC {}",
@@ -59,7 +79,7 @@ pub fn lines(save_dir: &Path, compact: bool) -> Vec<String> {
             .and_then(|v| v.as_str())
             .is_none_or(|k| k.eq_ignore_ascii_case("pc"))
     }) {
-        out.push(format!("- {}", party_line(s)));
+        out.push(format!("- {}", party_line(save_dir, s)));
         listed += 1;
     }
     if listed == 0 {

@@ -65,7 +65,19 @@ impl PlayerMask {
         ) {
             return None;
         }
-        self.name_for_parts(&combatant.name, &combatant.creature)
+        let masked = self.name_for_parts(&combatant.name, &combatant.creature)?;
+        // "Wolf 1" / "Wolf 2" must stay distinguishable: carry the instance
+        // number over to the description ("一只中型野兽 #1").
+        let suffix = combatant
+            .name
+            .rsplit_once(' ')
+            .map(|(_, n)| n)
+            .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+            .filter(|n| !combatant.creature.display_name().ends_with(*n));
+        Some(match suffix {
+            Some(n) => format!("{masked} #{n}"),
+            None => masked,
+        })
     }
 
     /// Same as [`Self::name_for`] without a full combatant (tests, previews).

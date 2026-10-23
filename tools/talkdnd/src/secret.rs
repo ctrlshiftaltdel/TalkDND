@@ -24,7 +24,7 @@ use std::time::UNIX_EPOCH;
 
 pub const FILE: &str = "secret-terms.yaml";
 pub const CACHE: &str = "secret-terms.cache.json";
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ManualTerm {
@@ -376,7 +376,11 @@ pub fn proper_nouns(text: &str) -> Vec<String> {
 fn collect_uncached(save_dir: &Path, root: &Path) -> Vec<Term> {
     let mut map: BTreeMap<String, Term> = BTreeMap::new();
     let mut put = |term: &str, source: &str| {
-        let term = term.trim().trim_matches(['"', '\'', '“', '”']).trim();
+        // Markdown emphasis left over from conversion (`_Wharf_`, `**X**`).
+        let term = term
+            .trim()
+            .trim_matches(['"', '\'', '“', '”', '_', '*', '`'])
+            .trim();
         if term.chars().count() < 2 {
             return;
         }
@@ -428,7 +432,13 @@ fn collect_uncached(save_dir: &Path, root: &Path) -> Vec<Term> {
         for (section, dm_only) in adventure::secret_sections(root, save_dir) {
             let source = format!("冒险书：{}", section.heading);
             let title = clean_heading(&section.heading);
-            put(&title, &source);
+            // A one-word English heading ("Wharf", "Tavern") is too generic to
+            // be a secret on its own; names in DM-only bodies still count.
+            let title_core = title.trim_matches(['_', '*', '`', ' ']);
+            let one_ascii_word = title_core.is_ascii() && !title_core.contains(char::is_whitespace);
+            if !one_ascii_word {
+                put(&title, &source);
+            }
             if dm_only {
                 let body = section.text(&book);
                 for term in brackets(body) {
@@ -455,13 +465,35 @@ pub fn collect(save_dir: &Path, root: &Path) -> Vec<Term> {
     terms
 }
 
+/// Substring match; an English term must also sit on word boundaries
+/// ("Inn" does not match "inner"). Chinese terms match anywhere.
+fn contains_term(hay: &str, term: &str) -> bool {
+    if term.is_empty() {
+        return false;
+    }
+    let word = |c: char| c.is_ascii_alphanumeric();
+    let mut from = 0;
+    while let Some(pos) = hay[from..].find(term) {
+        let start = from + pos;
+        let end = start + term.len();
+        let left_ok =
+            !term.starts_with(word) || !hay[..start].chars().next_back().is_some_and(word);
+        let right_ok = !term.ends_with(word) || !hay[end..].chars().next().is_some_and(word);
+        if left_ok && right_ok {
+            return true;
+        }
+        from = start + term.chars().next().map_or(1, char::len_utf8);
+    }
+    false
+}
+
 /// Guard output for `text`: one line per unrevealed secret term found.
 /// Case-insensitive plain substring matching (Chinese included).
 pub fn guard_terms(save_dir: &Path, root: &Path, text: &str) -> Vec<String> {
     let hay = text.to_lowercase();
     collect(save_dir, root)
         .into_iter()
-        .filter(|t| hay.contains(&t.term.to_lowercase()))
+        .filter(|t| contains_term(&hay, &t.term.to_lowercase()))
         .map(|t| {
             format!(
                 "剧透词：{}（建议改写为玩家已知的说法）  [来源：{}]",
@@ -491,6 +523,15 @@ mod tests {
         fs::write(save_dir.join("Sessions/s.md"), "# log\n").unwrap();
         migrate::init(&save_dir).unwrap();
         r
+    }
+
+    #[test]
+    fn english_terms_need_word_boundaries_chinese_do_not() {
+        assert!(contains_term("meet the red hand tonight", "red hand"));
+        assert!(!contains_term("the inner hall", "inn"));
+        assert!(contains_term("to the inn, then", "inn"));
+        assert!(contains_term("你们发现了暗门后的密室", "密室"));
+        assert!(!contains_term("anything", ""));
     }
 
     #[test]

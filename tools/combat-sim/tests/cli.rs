@@ -718,6 +718,41 @@ fn player_view_masks_unidentified_monsters_and_restores_the_name() {
 }
 
 #[test]
+fn player_view_keeps_duplicate_monsters_apart() {
+    let state = TempState::new("player-mask-dup");
+    let save = std::env::temp_dir().join(format!(
+        "combat-sim-player-dup-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&save).unwrap();
+    let manifest =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/content/manifest.yaml");
+    let base = [
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--save",
+        save.to_str().unwrap(),
+        "--state",
+        state.path().to_str().unwrap(),
+    ];
+    let mut q = base.to_vec();
+    q.extend_from_slice(&["quick", "--foe", "dummy-a:2", "--party", "hero-a"]);
+    assert_success(&run_raw(&q), "quick encounter");
+    let mut p = base.to_vec();
+    p.extend_from_slice(&["--player", "status"]);
+    let player = run_raw(&p);
+    assert_success(&player, "player status");
+    let out = stdout(&player);
+    assert!(out.contains(" #1") && out.contains(" #2"), "{out}");
+    assert!(!out.contains("Dummy A"), "{out}");
+    let _ = fs::remove_dir_all(&save);
+}
+
+#[test]
 fn roll_is_appended_to_the_save_roll_log() {
     let save = std::env::temp_dir().join(format!(
         "combat-sim-roll-log-{}-{}",
