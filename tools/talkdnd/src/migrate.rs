@@ -4,7 +4,9 @@
 //! 1 = Markdown sheets only, 2 = structured `sheets/<id>.yaml`, 3 = versioned
 //! YAML files plus `save-meta.yaml`, 4 = the locked adventure-deviation
 //! settings (`deviation:`) in `save-meta.yaml`, 5 = per-save `settings:`
-//! (dice display, default on). `talkdnd start` and `talkdnd migrate` back the
+//! (dice display, default on), 6 = every party member (player characters and
+//! DM-run companions) in `Characters/` with a `controller:` field in
+//! `sheets/<id>.yaml`; `NPCs/` keeps only story NPCs. `talkdnd start` and `talkdnd migrate` back the
 //! whole save up into `Saves/_backups/` before writing, then run the
 //! migrations in order. A save from a newer talkdnd is refused: this binary
 //! cannot know its format.
@@ -25,7 +27,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "save-meta.yaml";
-pub const CURRENT_SCHEMA: u32 = 5;
+pub const CURRENT_SCHEMA: u32 = 6;
 pub const BACKUP_DIR: &str = "_backups";
 
 /// How far this save may deviate from the published adventure.
@@ -221,6 +223,12 @@ pub struct Report {
     pub deviation_default: bool,
     /// 4→5: the old save had no settings; dice display becomes on.
     pub settings_default: bool,
+    /// 5→6: companion sheets moved from NPCs/ to Characters/ ("old → new").
+    pub companions: Vec<String>,
+    /// 5→6: sheets/<id>.yaml files that got a `controller:` field ("id=controller").
+    pub controllers: Vec<String>,
+    /// 5→6: anything the DM should look at (name collisions, ...).
+    pub warnings: Vec<String>,
     pub log_text: Option<String>,
 }
 
@@ -250,6 +258,21 @@ impl Report {
                         .into(),
                 );
             }
+            if !self.companions.is_empty() {
+                v.push(format!(
+                    "会把队友从 NPCs/ 移到 Characters/：{}",
+                    self.companions.join("，")
+                ));
+            }
+            if !self.controllers.is_empty() {
+                v.push(format!(
+                    "会写入操控方 controller：{}",
+                    self.controllers.join(", ")
+                ));
+            }
+            for w in &self.warnings {
+                v.push(format!("注意：{w}"));
+            }
             return v;
         }
         let mut v = vec![format!("存档 schema {} → {}：迁移完成", self.from, self.to)];
@@ -268,6 +291,21 @@ impl Report {
         }
         if self.settings_default {
             v.push("桌面设置：骰子显示默认开（可用 `talkdnd settings dice off` 关闭）".into());
+        }
+        if !self.companions.is_empty() {
+            v.push(format!(
+                "队友已统一到 Characters/：{}",
+                self.companions.join("，")
+            ));
+        }
+        if !self.controllers.is_empty() {
+            v.push(format!(
+                "已写入操控方 controller（player = 玩家角色，dm = DM 操控的同伴）：{}",
+                self.controllers.join(", ")
+            ));
+        }
+        for w in &self.warnings {
+            v.push(format!("注意：{w}"));
         }
         if let Some(log) = &self.log_text {
             v.push(format!("已写入会话日志：{log}"));
@@ -304,6 +342,11 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
                 }
             }
         }
+        if from < 6 {
+            let plan = plan_companions(save);
+            report.companions = plan.moves.iter().map(|m| m.describe()).collect();
+            report.warnings = plan.warnings.clone();
+        }
         return Ok(report);
     }
 
@@ -332,6 +375,15 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         report.sheets = migrate_sheets(save, root)?;
     }
     add_versions(save, &dirty)?;
+    let moved = if from < 6 {
+        let r = move_companions(save)?;
+        report.companions = r.moves.iter().map(|m| m.describe()).collect();
+        report.controllers = r.controllers;
+        report.warnings = r.warnings;
+        r.moves
+    } else {
+        Vec::new()
+    };
 
     let mut meta = load(save)?.unwrap_or_default();
     meta.schema = CURRENT_SCHEMA;
@@ -373,6 +425,14 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             backup: backup.clone(),
         });
     }
+    if from < 6 {
+        meta.migrations.push(Migration {
+            from: from.max(5),
+            to: 6,
+            date: date.clone(),
+            backup: backup.clone(),
+        });
+    }
     write_meta(save, &meta)?;
 
     let deviation_note = if from < 4 {
@@ -385,8 +445,13 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     } else {
         ""
     };
+    let companion_note = if report.companions.is_empty() {
+        String::new()
+    } else {
+        format!("；队友移到 Characters/：{}", report.companions.join("，"))
+    };
     let text = format!(
-        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}",
+        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{companion_note}",
         chrono::Local::now().format("%H:%M")
     );
     if let Some(log) = save::latest_log(save) {
@@ -395,7 +460,311 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     }
 
     combat_sim::integrity::after_write(save, &before)?;
+    carry_dirty_flags(save, &moved, &dirty)?;
     Ok(report)
+}
+
+// ---------- 5→6: party companions move from NPCs/ to Characters/ ----------
+
+#[derive(Debug, Clone, PartialEq)]
+struct Move {
+    /// File names inside NPCs/ and Characters/.
+    from: String,
+    to: String,
+    /// sheets/<id>.yaml that points at the file, if any.
+    sheet: Option<PathBuf>,
+}
+
+impl Move {
+    fn describe(&self) -> String {
+        format!("NPCs/{} → Characters/{}", self.from, self.to)
+    }
+}
+
+#[derive(Debug, Default)]
+struct CompanionPlan {
+    moves: Vec<Move>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct CompanionResult {
+    moves: Vec<Move>,
+    controllers: Vec<String>,
+    warnings: Vec<String>,
+}
+
+/// `file:` value of a sheets/<id>.yaml text (first top-level `file:` line).
+fn sheet_file_field(text: &str) -> Option<String> {
+    text.lines().find_map(|l| {
+        l.strip_prefix("file:")
+            .map(|v| v.trim().trim_matches(['"', '\'']).replace('\\', "/"))
+    })
+}
+
+fn has_top_level(text: &str, key: &str) -> bool {
+    let prefix = format!("{key}:");
+    text.lines().any(|l| l.starts_with(&prefix))
+}
+
+/// A free name in Characters/ for `name`: the same name when free, else
+/// `<stem>-companion.md`, `<stem>-companion-2.md`, ...
+fn free_name(chars: &Path, name: &str, taken: &BTreeSet<String>) -> String {
+    let free = |n: &str| !chars.join(n).exists() && !taken.contains(n);
+    if free(name) {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), format!(".{e}")),
+        None => (name.to_string(), String::new()),
+    };
+    let mut cand = format!("{stem}-companion{ext}");
+    let mut n = 2;
+    while !free(&cand) {
+        cand = format!("{stem}-companion-{n}{ext}");
+        n += 1;
+    }
+    cand
+}
+
+/// Which NPCs/ files are party members. A file is a companion when a
+/// sheets/<id>.yaml points at it (the structured data exists only for party
+/// members), or when its combat block is on the party side / on the party
+/// list / in party-state. `_party.md` (the companion overview) moves too.
+/// Everything else (story NPCs, notes) stays in NPCs/.
+fn plan_companions(save: &Path) -> CompanionPlan {
+    let mut plan = CompanionPlan::default();
+    let npcs = save.join("NPCs");
+    if !npcs.is_dir() {
+        return plan;
+    }
+    let chars = save.join("Characters");
+    // NPCs/<name> -> sheet path
+    let mut by_sheet: std::collections::BTreeMap<String, PathBuf> = Default::default();
+    if let Ok(rd) = fs::read_dir(save.join("sheets")) {
+        let mut files: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        files.sort();
+        for f in files {
+            if f.extension().is_none_or(|x| x != "yaml") {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&f) else {
+                continue;
+            };
+            if let Some(name) = sheet_file_field(&text).and_then(|v| {
+                v.strip_prefix("NPCs/")
+                    .filter(|n| !n.contains('/'))
+                    .map(str::to_string)
+            }) {
+                by_sheet.insert(name, f);
+            }
+        }
+    }
+    let party: BTreeSet<String> = crate::start::party_ids(save).into_iter().collect();
+    let live: BTreeSet<String> =
+        PartyState::load(&save.join("combat").join(combat_sim::party::FILE_NAME))
+            .map(|ps| ps.members.keys().cloned().collect())
+            .unwrap_or_default();
+    let mut names: Vec<String> = fs::read_dir(&npcs)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    let mut taken = BTreeSet::new();
+    for name in names {
+        let is_overview = name == "_party.md";
+        let sheet = by_sheet.get(&name).cloned();
+        let companion = is_overview
+            || sheet.is_some()
+            || (name.ends_with(".md")
+                && fs::read_to_string(npcs.join(&name))
+                    .ok()
+                    .and_then(|t| crate::start::combat_block(&t))
+                    .is_some_and(|b| {
+                        let id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        b.get("side").and_then(|v| v.as_str()) == Some("party")
+                            || (!id.is_empty() && (party.contains(id) || live.contains(id)))
+                    }));
+        if !companion {
+            continue;
+        }
+        let to = free_name(&chars, &name, &taken);
+        if to != name {
+            plan.warnings.push(format!(
+                "Characters/{name} 已存在，NPCs/{name} 改名为 Characters/{to}（两份都保留，请人工核对）"
+            ));
+        }
+        taken.insert(to.clone());
+        plan.moves.push(Move {
+            from: name,
+            to,
+            sheet,
+        });
+    }
+    plan
+}
+
+/// Insert `- **操控**：…` as the first line of the generated part of a
+/// rendered sheet, exactly where `charsheet::render` puts it. Sheets that
+/// were never rendered (no generated part) get it on their next render.
+fn add_controller_line(md: &str, controller: &str) -> Option<String> {
+    let anchor = format!("{}\n\n## 角色选项\n\n", charsheet::BEGIN);
+    let at = md.find(&anchor)? + anchor.len();
+    if md[at..].starts_with("- **操控**：") {
+        return None;
+    }
+    Some(format!(
+        "{}{}{}",
+        &md[..at],
+        charsheet::controller_line(controller),
+        &md[at..]
+    ))
+}
+
+/// Move the companions, point their sheets at the new files and give every
+/// structured sheet a `controller:`. Text edits only (no serde round-trip), so
+/// comments, unknown fields and hand edits survive. Idempotent.
+fn move_companions(save: &Path) -> Result<CompanionResult> {
+    let plan = plan_companions(save);
+    let mut out = CompanionResult {
+        warnings: plan.warnings.clone(),
+        ..Default::default()
+    };
+    let npcs = save.join("NPCs");
+    let chars = save.join("Characters");
+    if !plan.moves.is_empty() {
+        fs::create_dir_all(&chars).with_context(|| format!("create {}", chars.display()))?;
+    }
+    for m in &plan.moves {
+        let src = npcs.join(&m.from);
+        let dest = chars.join(&m.to);
+        if dest.exists() {
+            bail!("{} already exists; not overwriting it", dest.display());
+        }
+        if m.from == "_party.md" {
+            // The overview's links were relative to NPCs/.
+            let text =
+                fs::read_to_string(&src).with_context(|| format!("read {}", src.display()))?;
+            let fixed = text
+                .replace("](../Characters/", "](")
+                .replace("`../Characters/", "`");
+            atomic_write(&dest, fixed.as_bytes())?;
+            fs::remove_file(&src).with_context(|| format!("remove {}", src.display()))?;
+        } else {
+            fs::rename(&src, &dest)
+                .with_context(|| format!("move {} to {}", src.display(), dest.display()))?;
+        }
+        if let Some(sheet) = &m.sheet {
+            let text = fs::read_to_string(sheet)?;
+            let old = format!("NPCs/{}", m.from);
+            let new = format!("Characters/{}", m.to);
+            let edited: Vec<String> = text
+                .lines()
+                .map(|l| {
+                    if l.starts_with("file:") && l.contains(&old) {
+                        l.replacen(&old, &new, 1)
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect();
+            let mut edited = edited.join("\n");
+            if text.ends_with('\n') {
+                edited.push('\n');
+            }
+            atomic_write(sheet, edited.as_bytes())?;
+        }
+        out.moves.push(m.clone());
+    }
+    let moved_sheets: BTreeSet<PathBuf> =
+        plan.moves.iter().filter_map(|m| m.sheet.clone()).collect();
+
+    // controller: for every structured sheet that lacks one.
+    let mut sheet_files: Vec<PathBuf> = fs::read_dir(save.join("sheets"))
+        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
+        .unwrap_or_default();
+    sheet_files.sort();
+    for f in sheet_files {
+        if f.extension().is_none_or(|x| x != "yaml") {
+            continue;
+        }
+        let text = fs::read_to_string(&f)?;
+        let Some(file) = sheet_file_field(&text) else {
+            continue;
+        };
+        let id = f
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let controller = if has_top_level(&text, "controller") {
+            text.lines()
+                .find_map(|l| l.strip_prefix("controller:"))
+                .map(|v| v.trim().trim_matches(['"', '\'']).to_string())
+                .unwrap_or_default()
+        } else {
+            let combat = serde_norway::from_str::<serde_norway::Value>(&text)
+                .ok()
+                .and_then(|v| v.get("combat").cloned())
+                .unwrap_or_default();
+            let c = if moved_sheets.contains(&f) {
+                charsheet::DM
+            } else {
+                charsheet::infer_controller(&file, &combat)
+            };
+            let mut edited = String::new();
+            let mut done = false;
+            for l in text.split_inclusive('\n') {
+                edited.push_str(l);
+                if !done && l.starts_with("file:") {
+                    if !l.ends_with('\n') {
+                        edited.push('\n');
+                    }
+                    edited.push_str(&format!("controller: {c}\n"));
+                    done = true;
+                }
+            }
+            atomic_write(&f, edited.as_bytes())?;
+            out.controllers.push(format!("{id}={c}"));
+            c.to_string()
+        };
+        // Rendered sheets show the controller in their generated part.
+        let md_path = save.join(&file);
+        if md_path.starts_with(&chars) && md_path.is_file() {
+            let md = fs::read_to_string(&md_path)?;
+            if let Some(new) = add_controller_line(&md, &controller) {
+                atomic_write(&md_path, new.as_bytes())?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A companion sheet the DM had hand-edited before the move stays flagged
+/// under its new path: the manifest keeps the old fingerprint.
+fn carry_dirty_flags(save: &Path, moved: &[Move], dirty: &BTreeSet<String>) -> Result<()> {
+    let Some(mut m) = combat_sim::integrity::load(save)? else {
+        return Ok(());
+    };
+    let mut changed = false;
+    for mv in moved {
+        let old = format!("NPCs/{}", mv.from);
+        if !dirty.contains(&old) || mv.from.starts_with('_') {
+            continue;
+        }
+        let new = format!("Characters/{}", mv.to);
+        if let Some(h) = m.files.remove(&old) {
+            m.files.insert(new, h);
+            changed = true;
+        }
+    }
+    if changed {
+        combat_sim::integrity::store(save, &m)?;
+    }
+    Ok(())
 }
 
 /// Recursive copy of the save, skipping machine-only directories.
@@ -522,11 +891,11 @@ mod tests {
         let root = root("v1");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (1, 5));
+        assert_eq!((report.from, report.to), (1, 6));
         assert!(report.deviation_default);
         assert_eq!(report.sheets, vec!["hero".to_string()]);
         assert!(charsheet::path(&save, "hero").is_file());
-        assert_eq!(meta(&save).schema, 5);
+        assert_eq!(meta(&save).schema, 6);
         assert_eq!(meta(&save).deviation.scope, 0);
         assert_eq!(meta(&save).deviation.ratio, None);
         assert!(meta(&save)
@@ -552,7 +921,7 @@ mod tests {
         assert!(!backups[0].join("_backups").exists());
 
         let log = fs::read_to_string(save.join("Sessions/2030-01-01-session-00.md")).unwrap();
-        assert!(log.contains("存档结构迁移 schema 1→5"), "{log}");
+        assert!(log.contains("存档结构迁移 schema 1→6"), "{log}");
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
 
@@ -576,7 +945,7 @@ mod tests {
         let root = root("dry");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, true).unwrap();
-        assert_eq!((report.from, report.to), (1, 5));
+        assert_eq!((report.from, report.to), (1, 6));
         assert!(report.dry_run && report.sheets == vec!["hero".to_string()]);
         assert!(!path(&save).is_file());
         assert!(!charsheet::path(&save, "hero").is_file());
@@ -605,8 +974,8 @@ mod tests {
         fs::write(save.join("progress.yaml"), edited).unwrap();
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (2, 5));
-        assert!(meta(&save).schema == 5);
+        assert_eq!((report.from, report.to), (2, 6));
+        assert!(meta(&save).schema == 6);
         let changes = combat_sim::integrity::changes(&save).unwrap();
         assert!(
             changes
@@ -699,20 +1068,20 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (3, 5));
+        assert_eq!((report.from, report.to), (3, 6));
         assert!(report.deviation_default);
         assert!(report
             .lines()
             .iter()
             .any(|l| l.contains("scope 0") && l.contains("偏离度")));
         let m = meta(&save);
-        assert_eq!(m.schema, 5);
+        assert_eq!(m.schema, 6);
         assert_eq!(m.deviation.scope, 0);
         assert_eq!(m.deviation.ratio, None);
         assert!(m.migrations.iter().any(|x| x.from == 3 && x.to == 4));
         assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
         let log = fs::read_to_string(save.join("Sessions/2030-04-05-session-00.md")).unwrap();
-        assert!(log.contains("schema 3→5"), "{log}");
+        assert!(log.contains("schema 3→6"), "{log}");
         assert!(log.contains("scope 0"), "{log}");
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
             .unwrap()
@@ -764,18 +1133,20 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (4, 5));
+        assert_eq!((report.from, report.to), (4, 6));
         assert!(!report.deviation_default);
         assert!(report.settings_default);
         let m = meta(&save);
-        assert_eq!(m.schema, 5);
+        assert_eq!(m.schema, 6);
         assert_eq!(m.deviation.scope, 2);
         assert_eq!(m.deviation.ratio, Some(15));
         assert!(m.settings.dice_display);
-        assert!(m.migrations.iter().all(|x| x.from == 4 && x.to == 5));
+        assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
+        assert!(m.migrations.iter().any(|x| x.from == 5 && x.to == 6));
+        assert_eq!(m.migrations.len(), 2);
         let log = fs::read_to_string(save.join("Sessions/2030-04-06-session-00.md")).unwrap();
         assert!(
-            log.contains("schema 4→5") && log.contains("骰子显示默认开"),
+            log.contains("schema 4→6") && log.contains("骰子显示默认开"),
             "{log}"
         );
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
@@ -795,6 +1166,168 @@ mod tests {
         let err = ensure(&save, &root, false).unwrap_err().to_string();
         assert!(err.contains("99") && err.contains("talkdnd"), "{err}");
         assert!(!root.join("Saves").join(BACKUP_DIR).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn v5_save(root: &Path, slot: &str) -> PathBuf {
+        let save = root.join("Saves").join(slot);
+        for d in ["Characters", "NPCs", "Sessions", "combat", "sheets"] {
+            fs::create_dir_all(save.join(d)).unwrap();
+        }
+        fs::write(save.join("Sessions/2030-05-01-session-00.md"), "# log\n").unwrap();
+        fs::write(
+            save.join("save-meta.yaml"),
+            "schema: 5\ntool: 0.8.0\ndeviation: {scope: 0, ratio: null}\nsettings: {dice_display: true}\nmigrations: []\n",
+        )
+        .unwrap();
+        fs::write(
+            save.join("combat/campaign.yaml"),
+            "characters: [../Characters, ../NPCs]\nparty: [hero, kel, mo]\n",
+        )
+        .unwrap();
+        fs::write(save.join("Characters/Hero.md"), SHEET).unwrap();
+        fs::write(
+            save.join("sheets/hero.yaml"),
+            "# TalkDND character data\nversion: 1\nid: hero\nname: Hero\nfile: Characters/Hero.md\nruleset: '2024'\ncombat:\n  id: hero\n  kind: pc\n  side: party\n",
+        )
+        .unwrap();
+        let kel_md = format!(
+            "# Kel——NPC 队友\n\nvoice notes\n\n{}\n\n## 角色选项\n\n- **背景**：—\n\n{}\n\n```combat yaml\nid: kel\nname: Kel\nkind: pc\nside: party\nhp: 9\nac: 13\n```\n",
+            charsheet::BEGIN,
+            charsheet::END
+        );
+        fs::write(save.join("NPCs/Kel-Stone.md"), &kel_md).unwrap();
+        fs::write(
+            save.join("sheets/kel.yaml"),
+            "# TalkDND character data\nversion: 1\nid: kel\nname: Kel\nfile: NPCs/Kel-Stone.md\nruleset: '2024'\ninfo:\n  class: cleric\ncombat:\n  id: kel\n  kind: pc\n  side: party\n",
+        )
+        .unwrap();
+        // A companion without structured data yet (party list + party side).
+        fs::write(
+            save.join("NPCs/mo.md"),
+            "# Mo\n\n```combat yaml\nid: mo\nname: Mo\nkind: npc\nside: party\nhp: 8\nac: 12\n```\n",
+        )
+        .unwrap();
+        // Story NPCs stay.
+        fs::write(save.join("NPCs/Barkeep.md"), "# Barkeep\n\nGruff.\n").unwrap();
+        fs::write(
+            save.join("NPCs/guard.md"),
+            "# Guard\n\n```combat yaml\nid: guard\nname: Guard\nkind: npc\nside: enemy\nhp: 11\nac: 16\n```\n",
+        )
+        .unwrap();
+        fs::write(
+            save.join("NPCs/_party.md"),
+            "# 小队\n\n| Hero | `../Characters/Hero.md` |\n| Kel | `Kel-Stone.md` |\n",
+        )
+        .unwrap();
+        combat_sim::integrity::ensure(&save).unwrap();
+        save
+    }
+
+    #[test]
+    fn v5_companions_move_to_characters_and_story_npcs_stay() {
+        let root = root("v5");
+        let save = v5_save(&root, "2030-05-01-01");
+        let kel_before = fs::read_to_string(save.join("NPCs/Kel-Stone.md")).unwrap();
+
+        let dry = ensure(&save, &root, true).unwrap();
+        assert_eq!((dry.from, dry.to), (5, 6));
+        assert_eq!(dry.companions.len(), 3, "{:?}", dry.companions);
+        assert!(save.join("NPCs/Kel-Stone.md").is_file());
+        assert!(!root.join("Saves").join(BACKUP_DIR).exists());
+
+        let report = ensure(&save, &root, false).unwrap();
+        assert_eq!((report.from, report.to), (5, 6));
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        for f in ["Kel-Stone.md", "mo.md", "_party.md"] {
+            assert!(save.join("Characters").join(f).is_file(), "{f}");
+            assert!(!save.join("NPCs").join(f).exists(), "{f}");
+        }
+        assert!(save.join("NPCs/Barkeep.md").is_file());
+        assert!(save.join("NPCs/guard.md").is_file());
+        // Content kept; only the controller line was added to the generated part.
+        let kel = fs::read_to_string(save.join("Characters/Kel-Stone.md")).unwrap();
+        assert_eq!(
+            kel.replace(&charsheet::controller_line(charsheet::DM), ""),
+            kel_before
+        );
+        assert!(kel.contains("- **操控**：DM 操控的同伴"));
+        let sheet = fs::read_to_string(save.join("sheets/kel.yaml")).unwrap();
+        assert!(sheet.starts_with("# TalkDND character data\n"), "{sheet}");
+        assert!(
+            sheet.contains("file: Characters/Kel-Stone.md\ncontroller: dm\n"),
+            "{sheet}"
+        );
+        let hero = fs::read_to_string(save.join("sheets/hero.yaml")).unwrap();
+        assert!(
+            hero.contains("file: Characters/Hero.md\ncontroller: player\n"),
+            "{hero}"
+        );
+        let overview = fs::read_to_string(save.join("Characters/_party.md")).unwrap();
+        assert!(overview.contains("`Hero.md`") && overview.contains("`Kel-Stone.md`"));
+        // The structured file still loads and resolves.
+        let cf: charsheet::CharFile = serde_norway::from_str(&sheet).unwrap();
+        assert_eq!(cf.controller(), charsheet::DM);
+        assert_eq!(meta(&save).schema, 6);
+        assert!(meta(&save)
+            .migrations
+            .iter()
+            .any(|m| m.from == 5 && m.to == 6));
+        assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
+        let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert!(backups[0].join("NPCs/Kel-Stone.md").is_file());
+        let log = fs::read_to_string(save.join("Sessions/2030-05-01-session-00.md")).unwrap();
+        assert!(
+            log.contains("schema 5→6") && log.contains("Characters/Kel-Stone.md"),
+            "{log}"
+        );
+
+        // Idempotent: a second run changes nothing.
+        let snap = combat_sim::integrity::snapshot(&save);
+        let again = ensure(&save, &root, false).unwrap();
+        assert!(again.already_current());
+        assert_eq!(snap, combat_sim::integrity::snapshot(&save));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn v5_name_collision_keeps_both_and_hand_edits_stay_flagged() {
+        let root = root("v5collide");
+        let save = v5_save(&root, "2030-05-02-01");
+        // A hand edit to the companion sheet before the migration.
+        let p = save.join("NPCs/Kel-Stone.md");
+        let edited = fs::read_to_string(&p).unwrap().replace("hp: 9", "hp: 99");
+        fs::write(&p, edited).unwrap();
+        // Something already sits at the target path.
+        fs::write(save.join("Characters/Kel-Stone.md"), "# other Kel\n").unwrap();
+        fs::write(save.join("Characters/_party.md"), "# old overview\n").unwrap();
+
+        let report = ensure(&save, &root, false).unwrap();
+        assert_eq!(report.warnings.len(), 2, "{:?}", report.warnings);
+        assert_eq!(
+            fs::read_to_string(save.join("Characters/Kel-Stone.md")).unwrap(),
+            "# other Kel\n"
+        );
+        assert!(
+            fs::read_to_string(save.join("Characters/Kel-Stone-companion.md"))
+                .unwrap()
+                .contains("hp: 99")
+        );
+        assert!(save.join("Characters/_party-companion.md").is_file());
+        assert!(fs::read_to_string(save.join("sheets/kel.yaml"))
+            .unwrap()
+            .contains("file: Characters/Kel-Stone-companion.md"));
+        let changes = combat_sim::integrity::changes(&save).unwrap();
+        assert!(
+            changes
+                .iter()
+                .any(|c| c.path() == "Characters/Kel-Stone-companion.md"),
+            "{changes:?}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -146,13 +146,32 @@ fn full_creation_flow() {
     // Companions.
     let out = ok(&r, &["--seed", "9", "npc", "random", "--count", "3"]);
     assert_eq!(out.matches("draft ").count(), 3);
-    ok(&r, &["npc", "sheet", "2", "--name", "Kel"]);
-    assert!(fs::read_to_string(save.join("NPCs/kel.md"))
+    let out = ok(&r, &["companion", "sheet", "2", "--name", "Kel"]);
+    assert!(out.contains("Characters/kel.md"), "{out}");
+    // Companions live in Characters/ next to the player's character.
+    assert!(fs::read_to_string(save.join("Characters/kel.md"))
         .unwrap()
         .contains("kind: npc"));
+    assert!(!save.join("NPCs/kel.md").exists());
     assert!(fs::read_to_string(save.join("combat/campaign.yaml"))
         .unwrap()
         .contains("party: [aria, kel]"));
+    // The old command name still works and also writes to Characters/.
+    let (good, out) = run(&r, &["npc", "sheet", "3", "--name", "Tam"]);
+    assert!(good, "{out}");
+    assert!(out.contains("now `talkdnd companion`"), "{out}");
+    assert!(save.join("Characters/tam.md").is_file());
+    // A companion may not take a player's character id.
+    assert!(!run(&r, &["companion", "sheet", "1", "--name", "Aria"]).0);
+    let known = ok(&r, &["known"]);
+    assert!(known.contains("Kel（kel，同伴）"), "{known}");
+    assert!(known.contains("Aria（aria，玩家角色）"), "{known}");
+    ok(&r, &["char", "kel", "batch", "item add rope"]);
+    let md = fs::read_to_string(save.join("Characters/kel.md")).unwrap();
+    assert!(md.contains("DM 操控的同伴"), "{md}");
+    assert!(fs::read_to_string(save.join("sheets/kel.yaml"))
+        .unwrap()
+        .contains("controller: dm"));
 
     // Log, checkpoint, start.
     ok(&r, &["log", "进入酒馆"]);
@@ -268,7 +287,7 @@ fn deviation_is_validated_locked_and_tamper_checked() {
     let save = r.join("Saves/2030-01-03-01");
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     assert!(
-        meta.contains("schema: 5") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
+        meta.contains("schema: 6") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
         "{meta}"
     );
     let out = ok(&r, &["original", "status"]);
@@ -353,13 +372,13 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     let out = ok(&r, &["start"]);
     assert!(out.contains("存档结构"), "{out}");
     assert!(
-        out.contains("schema 1 → 5") || out.contains("schema 1→5"),
+        out.contains("schema 1 → 6") || out.contains("schema 1→6"),
         "{out}"
     );
     assert!(save.join("sheets/hero.yaml").is_file());
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     assert!(
-        meta.contains("schema: 5") && meta.contains("scope: 0"),
+        meta.contains("schema: 6") && meta.contains("scope: 0"),
         "{meta}"
     );
     let backups: Vec<PathBuf> = fs::read_dir(r.join("Saves/_backups"))
@@ -369,7 +388,7 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     assert_eq!(backups.len(), 1);
     assert!(backups[0].join("Characters/hero.md").is_file());
     let log = fs::read_to_string(save.join("Sessions/2030-06-07-session-00-setup.md")).unwrap();
-    assert!(log.contains("存档结构迁移 schema 1→5"), "{log}");
+    assert!(log.contains("存档结构迁移 schema 1→6"), "{log}");
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
     assert!(ok(&r, &["start"]).contains("无需迁移"));
     assert_eq!(fs::read_dir(r.join("Saves/_backups")).unwrap().count(), 1);
@@ -424,7 +443,7 @@ fn migration_does_not_launder_a_hand_edit() {
     fs::write(&p, text).unwrap();
     let out = ok(&r, &["start"]);
     assert!(
-        out.contains("schema 2 → 5") || out.contains("schema 2→5"),
+        out.contains("schema 2 → 6") || out.contains("schema 2→6"),
         "{out}"
     );
     let out = ok(&r, &["check"]);

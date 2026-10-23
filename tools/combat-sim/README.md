@@ -66,7 +66,7 @@ TalkDND 的典型布局：
 LetsPlay/Rules/combat/{common,2014,2024}/  分层规则库：通用 + 按版本（状态、精通(仅2024)、法术、职业能力、怪物、AI 模板）
 LetsPlay/Adventures/<剧本>/combat/     冒险内容：场景、特殊生物、遭遇、机关
 LetsPlay/Saves/<存档>/Characters/      玩家角色卡（Markdown + combat 数据块）
-LetsPlay/Saves/<存档>/NPCs/            队友/重要 NPC 角色卡
+LetsPlay/Saves/<存档>/NPCs/            剧情 NPC（队友在 Characters/）
 LetsPlay/Saves/<存档>/combat/          清单与战斗状态文件
 ```
 

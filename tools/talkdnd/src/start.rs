@@ -247,6 +247,8 @@ struct Member {
     hp: String,
     ac: String,
     file: String,
+    /// `player` or `dm` (see `charsheet::controller_for`).
+    controller: &'static str,
 }
 
 pub(crate) fn combat_block(text: &str) -> Option<serde_norway::Value> {
@@ -281,8 +283,17 @@ fn members(save: &Path) -> Vec<Member> {
                         .to_string(),
                 })
             };
+            let id = get("id").unwrap_or_default();
+            let sheet = crate::check::Sheet {
+                id: id.clone(),
+                name: String::new(),
+                file: f.clone(),
+                block: y.clone(),
+            };
+            let controller = crate::charsheet::controller_for(save, &sheet);
             v.push(Member {
-                id: get("id").unwrap_or_default(),
+                controller,
+                id,
                 name: get("name").unwrap_or_default(),
                 hp: get("hp").unwrap_or("?".into()),
                 ac: get("ac").unwrap_or("?".into()),
@@ -602,17 +613,30 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     }
     d += "\n\n## 队伍（角色卡数据块，maxHP / AC）\n\n";
     let party = party_ids(save);
-    let ms = members(save);
+    let mut ms = members(save);
+    // Player characters first, then companions (stable: file order inside).
+    ms.sort_by_key(|m| m.controller == crate::charsheet::DM);
     for m in &ms {
         let mark = if party.contains(&m.id) {
             ""
         } else {
             "（不在 party）"
         };
+        let role = if m.controller == crate::charsheet::DM {
+            "同伴（DM 操控）"
+        } else {
+            "玩家角色"
+        };
         d += &format!(
-            "- {} `{}`：maxHP {}，AC {} — `{}`{mark}\n",
+            "- {} `{}`［{role}］：maxHP {}，AC {} — `{}`{mark}\n",
             m.name, m.id, m.hp, m.ac, m.file
         );
+        if m.file.starts_with("NPCs/") && party.contains(&m.id) {
+            warnings.push(format!(
+                "队友 `{}` 的角色卡还在 `{}`；队友应在 `Characters/`（`talkdnd migrate` 会移动）",
+                m.id, m.file
+            ));
+        }
     }
     for p in &party {
         if !ms.iter().any(|m| &m.id == p) {
@@ -632,7 +656,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     }
     timing.mark("members/party");
     d += "\n## 开场前再读（按需）\n\n";
-    d += "- `dm-secrets.md`（只给 DM）、`canon.md`、`NPCs/_party.md`（同伴声音）\n";
+    d += "- `dm-secrets.md`（只给 DM）、`canon.md`、`Characters/_party.md`（同伴声音与关系）；`NPCs/` 只放剧情 NPC\n";
     d += &adventure_lines(root, save);
     if save.join("house-rules.md").is_file() {
         d += "- `house-rules.md`：本存档开局前商定的房规（局中不改）\n";

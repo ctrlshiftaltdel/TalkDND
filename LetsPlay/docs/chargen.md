@@ -93,12 +93,12 @@ classes:
 weapons: []                # 新武器：{id, name, category: simple|martial, ranged, dice, v, type, properties, range, mastery}
 ```
 
-## 同伴 NPC
+## 同伴（DM 操控的队友）
 
 1. 先问玩家要几个同伴、要不要自己指定种族或职业（玩家指定的照办）。
-2. 随机部分用程序：`$T npc random --count 3`（按存档 ruleset；掷骰自动记日志）。
+2. 随机部分用程序：`$T companion random --count 3`（按存档 ruleset；掷骰自动记日志）。
 3. DM 为每个草稿补名字、来历、性格、说话方式，**整体给玩家看，确认或要求调整**。
-4. 玩家确认后：`$T npc sheet <草稿号> --name <名字> --personality "..."`，再把声音和关系写进 `NPCs/_party.md`。
+4. 玩家确认后：`$T companion sheet <草稿号> --name <名字> --personality "..."`（写到 `Characters/<名字>.md`，`controller: dm`），再把声音和关系写进 `Characters/_party.md`。旧命令名 `npc random` / `npc sheet` 仍可用。
 
 ## 开新局之后
 

@@ -1,6 +1,6 @@
 # Example Companion——角色卡
 
-- **玩家**：DM（同伴 NPC）
+- **玩家**：DM（同伴，DM 操控）
 - **规则**：2014
 - **冒险**：Keys from the Golden Vault
 - **等级**：barbarian 1　**种族**：human　**背景**：acolyte

@@ -60,6 +60,11 @@ pub struct CharFile {
     pub name: String,
     /// Markdown sheet path relative to the save (e.g. `Characters/Yier.md`).
     pub file: String,
+    /// Who runs this party member: `player` (a player's character) or `dm`
+    /// (a companion the DM plays). Both live in `Characters/`; the folder no
+    /// longer tells them apart. Missing on older files: see [`infer_controller`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<String>,
     pub ruleset: String,
     /// Free sheet fields: class, species, background, alignment, traits,
     /// ideals, bonds, flaws, appearance, backstory, allies, player.
@@ -113,6 +118,58 @@ pub struct CharFile {
     pub combat: Value,
 }
 
+/// `controller` value for a player's character.
+pub const PLAYER: &str = "player";
+/// `controller` value for a companion run by the DM.
+pub const DM: &str = "dm";
+
+/// Controller of a party member whose structured file has no `controller`
+/// yet: a sheet still under `NPCs/` or with `kind: npc` in its combat block
+/// is a DM-run companion, everything else is a player's character.
+pub fn infer_controller(file: &str, combat: &Value) -> &'static str {
+    let file = file.replace('\\', "/");
+    if file.starts_with("NPCs/") || combat.get("kind").and_then(|v| v.as_str()) == Some("npc") {
+        DM
+    } else {
+        PLAYER
+    }
+}
+
+/// Short Chinese label for a controller, used on sheets and in summaries.
+pub fn controller_label(c: &str) -> &'static str {
+    if c == DM {
+        "DM 操控的同伴（companion）"
+    } else {
+        "玩家角色（player）"
+    }
+}
+
+/// Controller of a sheet found on disk: `sheets/<id>.yaml` `controller`
+/// when present, else inferred from its path and combat block.
+pub fn controller_for(save_dir: &Path, s: &check::Sheet) -> &'static str {
+    let from_file = fs::read_to_string(path(save_dir, &s.id))
+        .ok()
+        .and_then(|t| serde_norway::from_str::<Value>(&t).ok())
+        .and_then(|v| {
+            v.get("controller")
+                .and_then(|c| c.as_str())
+                .map(str::to_string)
+        });
+    match from_file.as_deref() {
+        Some(DM) => DM,
+        Some(PLAYER) => PLAYER,
+        _ => {
+            let rel = s
+                .file
+                .strip_prefix(save_dir)
+                .unwrap_or(&s.file)
+                .to_string_lossy()
+                .replace('\\', "/");
+            infer_controller(&rel, &s.block)
+        }
+    }
+}
+
 pub fn path(save: &Path, id: &str) -> PathBuf {
     save.join("sheets").join(format!("{id}.yaml"))
 }
@@ -148,6 +205,14 @@ impl CharFile {
     fn set(&mut self, k: &str, v: Value) {
         if let Value::Mapping(m) = &mut self.combat {
             m.insert(Value::String(k.into()), v);
+        }
+    }
+    /// `player` or `dm`; see [`infer_controller`] for files without the field.
+    pub fn controller(&self) -> &'static str {
+        match self.controller.as_deref() {
+            Some(DM) => DM,
+            Some(PLAYER) => PLAYER,
+            _ => infer_controller(&self.file, &self.combat),
         }
     }
     pub fn class(&self) -> Option<String> {
@@ -405,6 +470,7 @@ pub fn migrate(save_dir: &Path, sheet: &check::Sheet, book: &Book) -> Result<Cha
         version: 1,
         id: sheet.id.clone(),
         name: sheet.name.clone(),
+        controller: Some(infer_controller(&rel, &block).to_string()),
         file: rel,
         ruleset: save::ruleset(save_dir),
         ac_base: get_i(&block, "ac").unwrap_or(10) as i32,
@@ -534,6 +600,14 @@ fn parse_char_file(p: &Path, text: &str) -> Result<CharFile> {
             cf.version
         );
     }
+    if let Some(c) = cf.controller.as_deref() {
+        if c != PLAYER && c != DM {
+            bail!(
+                "{}: controller must be `player` or `dm` (got `{c}`)",
+                p.display()
+            );
+        }
+    }
     Ok(cf)
 }
 
@@ -637,6 +711,7 @@ pub fn render_with(
     md += "\n\n";
     md += BEGIN;
     md += "\n\n## 角色选项\n\n";
+    md += &controller_line(cf.controller());
     let info = |k: &str| cf.info.get(k).cloned().unwrap_or_else(|| "—".into());
     if let Some(s) = &cf.fighting_style {
         let (n, e) = options::style(s)
@@ -778,6 +853,11 @@ fn item_display_name(it: &Item, ledger: Option<&crate::identify::Ledger>) -> Str
             }
         }
     }
+}
+
+/// The first line of the generated part: who runs this party member.
+pub fn controller_line(controller: &str) -> String {
+    format!("- **操控**：{}\n", controller_label(controller))
 }
 
 pub fn status_line(cf: &CharFile, m: Option<&Member>) -> String {
@@ -1094,6 +1174,9 @@ pub fn from_chargen(
     // The freshly written Markdown is the new build snapshot. Keep the old
     // tail (level-up records) unless the new sheet carries one.
     cf.file = fresh.file.clone();
+    if cf.controller.is_none() {
+        cf.controller = fresh.controller.clone();
+    }
     cf.ruleset = fresh.ruleset.clone();
     cf.body_md = fresh.body_md.clone();
     cf.combat = fresh.combat.clone();

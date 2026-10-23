@@ -76,6 +76,6 @@ $T log rolls --last 5       # 查看最近的掷骰记录
 
 不用自己算调整值：`talkdnd check <角色> <技能|属性|save:属性|init> [--dc N] [--adv|--dis] [--extra 1d4|+2]`。
 
-- 调整值从 `Characters/`、`NPCs/` 角色卡的战斗数据块读取（熟练技能用 `skills`，豁免用 `saves`，其余用属性调整值）。
+- 调整值从角色卡的战斗数据块读取。队友和玩家角色都在 `Characters/`，剧情 NPC 在 `NPCs/`（熟练技能用 `skills`，豁免用 `saves`，其余用属性调整值）。
 - 例：`talkdnd check Bruni perception --dc 15`、`talkdnd check bruni save:con --dis`、`talkdnd check Ilsa stealth --adv --extra 1d4`（神导术）。
 - 结果自动写进最新的会话日志。战斗中仍用 `combat-sim check/save`。

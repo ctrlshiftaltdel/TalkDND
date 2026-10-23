@@ -26,12 +26,12 @@
 10. **技能** → **语言与工具**（背景/种族给的自选项：`set languages …`、`set tools …`，没有写 none）→ **专长**（有的话：`set feats …`）→ **职业起始装备**（把选项念给玩家：2014 `set class-equipment a,b,a,a` 或 `gold`；2024 `set class-equipment A|B|C`）→ 选项里的「任选武器」等占位项让玩家说具体物品 `set equipment greatsword` → **法术**（非施法职业 none），每项单独问
 11. **名字** → **性格、理想、牵绊、缺点、阵营**：`set traits/ideals/bonds/flaws/alignment "<玩家的话>"`，每项问玩家
 12. **确认**：`$T chargen validate`（error 必须为 0）→ `$T chargen sheet` → 把角色卡给玩家看 → 玩家同意后 `$T chargen confirm`。之后角色数据由 `$T char` 维护
-13. **同伴 NPC**：问玩家要几个、有没有要求 → `$T npc random --count N` → DM 补名字、来历、性格 → **给玩家确认** → `$T npc sheet <号> --name <名字>`
+13. **同伴**（DM 操控的队友）：问玩家要几个、有没有要求 → `$T companion random --count N` → DM 补名字、来历、性格 → **给玩家确认** → `$T companion sheet <号> --name <名字>`（写到 `Characters/`）
 14. 写 `dm-secrets.md`，在会话日志写开场，进入第一个场景
 中途断了：`$T chargen status` 看下一步，接着问。`chargen sheet` 若打印 `warning: ... run \`...\``（缺非 SRD 数据），照抄执行；导入说明见 `docs/chargen.md`「本地规则书数据」。
 ## 接档
 1. `$T start [--save <存档名>]`：确认规则、跑战斗数据检查和存档校验、后台启动 PDF 转换，并输出 `Saves/<存档>/digest.md`。**先只读这份摘要。** 有校验警告先按「桌面诚信」处理。
-2. 开场前再读：`dm-secrets.md`、`NPCs/_party.md`、有的话 `house-rules.md`。`canon.md`、角色卡、冒险书章节用到时再查（冒险书按场景读）。
+2. 开场前再读：`dm-secrets.md`、`Characters/_party.md`、有的话 `house-rules.md`。`canon.md`、角色卡、冒险书章节用到时再查（冒险书按场景读）。
 3. 用简短的「前情提要」+ 当前场景开场，结尾给选项。
 ## 桌规（必须遵守）
 1. **只用存档 `ruleset` 那一版**：只查 `Rules/<版本>/` 的书和 `Rules/rulings.md`、`Rules/rulings-<版本>.md`。书没写时合理裁定，新的可复用裁定追加进 rulings 文件。`Rules/defaults/` 是出厂默认，不要写；`Rules/` 顶层的三份才是本机副本。

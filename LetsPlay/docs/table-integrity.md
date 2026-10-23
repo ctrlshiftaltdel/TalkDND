@@ -42,7 +42,7 @@
 
 ## 2. 存档校验（`integrity.yaml`）
 
-玩家也能看到存档文件，所以有可能直接改数据。每次程序写入存档后，都会在 `Saves/<存档>/integrity.yaml` 里记录关键文件的指纹：`progress.yaml`、`reveals.yaml`、`house-rules.md`、`save-meta.yaml`（含 `deviation:`）、`original.yaml`、`Characters/*.md`、`NPCs/*.md`（`_` 开头的除外）、`combat/*.yaml`、`sheets/*.yaml`。
+玩家也能看到存档文件，所以有可能直接改数据。每次程序写入存档后，都会在 `Saves/<存档>/integrity.yaml` 里记录关键文件的指纹：`progress.yaml`、`reveals.yaml`、`house-rules.md`、`save-meta.yaml`（含 `deviation:`）、`original.yaml`、`Characters/*.md`（玩家角色和同伴）、`NPCs/*.md`（剧情 NPC；两处都不含 `_` 开头的文件）、`combat/*.yaml`、`sheets/*.yaml`。
 
 - `talkdnd start` 和 `talkdnd check` 会比对指纹。文件被工具以外的方式改过时，就给出警告。
 - 剧本偏离度和原创台账也在保护范围内：手改 `save-meta.yaml` 的 `deviation:`、手改 `original.yaml`、台账条目类型/稀有度超出 scope、物品标了原创但没有台账记录，都会由 `talkdnd check` 报出来。规则见 `docs/deviation.md`。

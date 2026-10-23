@@ -91,7 +91,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ChargenCmd,
     },
-    /// Companion NPCs
+    /// Party companions run by the DM (written to Characters/, `controller: dm`)
+    Companion {
+        #[command(subcommand)]
+        cmd: NpcCmd,
+    },
+    /// Old name of `companion` (still works; companions now live in Characters/)
     Npc {
         #[command(subcommand)]
         cmd: NpcCmd,
@@ -99,7 +104,7 @@ enum Cmd {
     /// Ability/skill check or saving throw outside combat (modifier from the sheet; logged).
     /// Without arguments: save audit (integrity manifest + log reconciliation)
     Check {
-        /// Character id or name (Characters/ or NPCs/)
+        /// Character id or name (Characters/: PCs and companions; NPCs/: story NPCs)
         #[arg(requires = "what")]
         who: Option<String>,
         /// Skill id (perception), ability (wis), save:<ability> or init
@@ -535,7 +540,7 @@ enum NpcCmd {
         #[arg(long, default_value_t = 1)]
         count: usize,
     },
-    /// Write NPCs/<name>.md from draft N (after the player confirms) and add to party
+    /// Write Characters/<name>.md (controller: dm) from draft N (after the player confirms) and add to party
     Sheet {
         draft: usize,
         #[arg(long)]
@@ -854,7 +859,15 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             chargen_cmd(&s, cmd, rng, cli.seed.is_some())?
         }
-        Cmd::Npc { cmd } => npc_cmd(&root, cli.save.as_deref(), cmd, rng, cli.seed.is_some())?,
+        Cmd::Companion { cmd } => {
+            npc_cmd(&root, cli.save.as_deref(), cmd, rng, cli.seed.is_some())?
+        }
+        Cmd::Npc { cmd } => {
+            eprintln!(
+                "note: `talkdnd npc` is now `talkdnd companion`; companions are written to Characters/ (controller: dm). NPCs/ is only for story NPCs."
+            );
+            npc_cmd(&root, cli.save.as_deref(), cmd, rng, cli.seed.is_some())?
+        }
         Cmd::Check {
             who,
             what,
@@ -1651,7 +1664,7 @@ fn npc_cmd(
                     )?;
                 }
             }
-            println!("show these to the player; after they confirm, add name/personality with `npc sheet <draft> --name ...`");
+            println!("show these to the player; after they confirm, add name/personality with `companion sheet <draft> --name ...`");
         }
         NpcCmd::Sheet {
             draft,
@@ -1667,14 +1680,28 @@ fn npc_cmd(
             c.personality = personality;
             c.adventure = chargen::load(&s).ok().and_then(|x| x.adventure);
             let book = classdata::Book::load(c.rs(), Some(root))?;
-            let (id, md) = chargen::sheet_with(&c, "DM（同伴 NPC）", &book, Some(root))?;
+            let (id, md) = chargen::sheet_with(&c, "DM（同伴，DM 操控）", &book, Some(root))?;
             if !chargen::valid_id(&id) {
                 bail!("NPC name must give an id of lowercase letters, digits and hyphens (got `{id}`)");
             }
             let md = md.replacen("kind: pc", "kind: npc", 1);
-            atomic_write(s.join("NPCs").join(format!("{id}.md")), md.as_bytes())?;
+            let dest = s.join("Characters").join(format!("{id}.md"));
+            // Never overwrite a player's character with a companion of the same id.
+            let sheets = check::sheets(&s);
+            if let Some(other) = sheets.iter().find(|x| x.id == id) {
+                if charsheet::controller_for(&s, other) == charsheet::PLAYER {
+                    bail!(
+                        "`{id}` is already a player's character ({}); pick another companion name",
+                        rel(&s, &other.file)
+                    );
+                }
+            }
+            fs::create_dir_all(s.join("Characters"))?;
+            atomic_write(&dest, md.as_bytes())?;
             add_to_party(&s, &id)?;
-            println!("wrote NPCs/{id}.md; add backstory and voice to it and NPCs/_party.md");
+            println!(
+                "wrote Characters/{id}.md (companion, controller: dm); add backstory and voice to it and Characters/_party.md"
+            );
         }
     }
     Ok(())
