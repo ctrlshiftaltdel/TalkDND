@@ -172,7 +172,7 @@ def parse_pages(spec):
 
 
 def run(root, budget_seconds=None, budget_pages=None, book=None, pages=None, chunk_size=10,
-        ocr_engine="rapid", save=None, nice=True, only=False):
+        ocr_engine="rapid", save=None, nice=True, only=False, chapter_open=None):
     """Convert pending chunks in priority order until done or out of budget."""
     from .convert import Book
 
@@ -192,7 +192,8 @@ def run(root, budget_seconds=None, budget_pages=None, book=None, pages=None, chu
         wanted = parse_pages(pages)
         for pdf in pdfs:
             try:
-                b = Book(pdf, chunk_size=chunk_size, ocr_engine=ocr_engine)
+                b = Book(pdf, chunk_size=chunk_size, ocr_engine=ocr_engine,
+                         chapter_open=chapter_open)
             except Exception as err:  # corrupt / encrypted PDF
                 log(root, f"skip {os.path.basename(pdf)}: {err}")
                 continue
@@ -226,6 +227,25 @@ def repair_slug(s):
     return _slug(os.path.splitext(s)[0])
 
 
+def _intake_from(d, manifest):
+    """Intake audit from the manifest, else index.json, else audit.json."""
+    from .intake import from_manifest
+
+    a = from_manifest(manifest)
+    if a is not None:
+        return a
+    for name in ("index.json", "audit.json"):
+        try:
+            with open(os.path.join(d, name), encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        a = data.get("intake") if isinstance(data, dict) else None
+        if isinstance(a, dict):
+            return a
+    return None
+
+
 def status(root):
     rows = []
     for pdf in prioritise(root, scan(root)):
@@ -233,7 +253,8 @@ def status(root):
 
         d, stem = out_dir(pdf)
         row = {"pdf": os.path.relpath(pdf, root), "out": os.path.relpath(os.path.join(d, stem + ".md"), root),
-               "pages": None, "done": 0, "low": 0, "ocr": 0, "stale": False}
+               "pages": None, "done": 0, "low": 0, "ocr": 0, "stale": False,
+               "fallback": 0, "intake": None}
         try:
             with open(os.path.join(d, "manifest.json"), encoding="utf-8") as f:
                 m = json.load(f)
@@ -260,9 +281,15 @@ def status(root):
                                  if isinstance(i, dict) and i.get("quality") == "low")
                 row["ocr"] = sum(1 for i in pages.values()
                                  if isinstance(i, dict) and i.get("ocr"))
+                row["fallback"] = sum(
+                    1 for i in pages.values() if isinstance(i, dict)
+                    and ({"page-fallback", "cropbox-clamped", "page-error", "render-failed"}
+                         & set(i.get("flags", []))))
                 row["stale"] = m.get("size") != os.path.getsize(pdf)
             except (TypeError, AttributeError, KeyError, ValueError, OSError) as err:
                 row["error"] = f"invalid manifest: {err}"
+        if m is not None:
+            row["intake"] = _intake_from(d, m)
         rows.append(row)
     return rows
 

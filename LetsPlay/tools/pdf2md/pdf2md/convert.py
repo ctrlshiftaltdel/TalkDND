@@ -21,7 +21,7 @@ import re
 import sys
 import time
 
-from . import VERSION, fallback, headings, ocr, repair, tables
+from . import VERSION, fallback, headings, intake, ocr, repair, tables
 
 TEXT_MIN_CHARS = 40          # fewer text-layer characters -> OCR the page
 FIGURE_MAX_CHARS = 600       # figure page: little text ...
@@ -144,13 +144,14 @@ def chunk_key(a, b):
 class Book:
     """One PDF and its manifest."""
 
-    def __init__(self, pdf_path, chunk_size=10, ocr_engine="rapid"):
+    def __init__(self, pdf_path, chunk_size=10, ocr_engine="rapid", chapter_open=None):
         import pymupdf
 
         self.pdf = os.path.abspath(pdf_path)
         self.dir, self.stem = out_dir(self.pdf)
         self.manifest_path = os.path.join(self.dir, "manifest.json")
         self.ocr_engine = ocr_engine
+        self.chapter_open = (chapter_open or "").strip() or None
         st = os.stat(self.pdf)
         m = self._load()
         quick = m and m.get("size") == st.st_size and m.get("mtime") == int(st.st_mtime)
@@ -183,6 +184,7 @@ class Book:
             m["mtime"] = int(st.st_mtime)
         self.m = m
         self._hmap = None
+        intake.ensure(self.m, self.doc, self.chapter_open)
         self.save()
 
     # -------------------------------------------------------------- manifest
@@ -566,10 +568,12 @@ class Book:
         return []
 
     def write_index(self, md):
+        audit = intake.ensure(self.m, self.doc, self.chapter_open)
         idx = {"pdf": self.m["pdf"], "book": self.stem + ".md", "pages": pages_name(self.stem),
                "page_count": self.m["page_count"],
                "done_pages": self.done_pages(), "headings": [], "statblocks": [], "figures": [],
                "low_quality_pages": [], "ocr_pages": [],
+               "intake": audit, "chapters": audit.get("chapters", []),
                "statblock_checks": getattr(self, "_checks", [])}
         page = 0
         for line in md.split("\n"):
@@ -600,7 +604,23 @@ class Book:
         lines = [f"# Index: {self.stem}", "",
                  f"Read: [{reader}](<{reader}>) (no page anchors). Page lookup: [{book}](<{book}>). "
                  f"PDF: `{self.m['pdf']}` (authoritative). "
-                 f"{idx['done_pages']}/{idx['page_count']} pages converted.", "", "## Headings", ""]
+                 f"{idx['done_pages']}/{idx['page_count']} pages converted.", ""]
+        a = audit
+        lines += ["## Intake audit", "",
+                  f"- Text layer: {a['chars_total']} characters over {a['pages']} pages; "
+                  f"0-character pages: {a['zero_pages']}; "
+                  f"garbage: {a['garbage_rate'] * 100:.2f}%; "
+                  f"guess: {a['scanned_guess']}.",
+                  f"- Bookmarks: {a['bookmarks']}"
+                  + (f"; chapter starts: {len(a['chapters'])}" if a["chapters"] else "") + ".",
+                  f"- Verdict: **{a['verdict']}**"
+                  + (f" — {'; '.join(a['reasons'])}" if a["reasons"] else "") + ".", ""]
+        if a["chapters"]:
+            lines += ["## Chapter starts", ""]
+            lines += [f"- [{c['title']}](<{book}#p{c['page']}>) - p.{c['page']}"
+                      for c in a["chapters"]]
+            lines.append("")
+        lines += ["## Headings", ""]
         for h in idx["headings"]:
             lines.append("  " * (h["level"] - 1) + f"- [{h['text']}](<{book}#p{h['page']}>) - p.{h['page']}")
         checks = idx["statblock_checks"]
