@@ -29,6 +29,6 @@ def test_image_only_page_is_ocred_with_rapid(letsplay):
     m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
     page = m["pages"]["1"]
     assert page["ocr"] == "rapid" and page["ocr_conf"] > 0.5
-    md = (d / "Scanned.md").read_text(encoding="utf-8")
+    md = (d / "Scanned.pages.md").read_text(encoding="utf-8")
     assert "Goblin" in md and "treasure vault" in md.lower()
     assert "statblock" in page["flags"] and page["quality"] == "low"

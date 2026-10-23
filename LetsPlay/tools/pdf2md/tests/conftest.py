@@ -113,14 +113,15 @@ def make_cropbox_pdf(path, cropbox, media=(0, 0, 400, 500), text="The hero and t
 @pytest.fixture
 def letsplay(tmp_path, monkeypatch):
     root = tmp_path / "LetsPlay"
-    for d in ("Rules/2014", "Rules/2024", "Adventures/my-heist/combat", "Saves/2026-01-01-01/combat"):
+    for d in ("Rules/2014/old-rules", "Rules/2024/core-rules-2024", "Rules/2024/srd-test",
+              "Adventures/my-heist/combat", "Saves/2026-01-01-01/combat"):
         (root / d).mkdir(parents=True)
     (root / "Saves/2026-01-01-01/combat/campaign.yaml").write_text(
         'ruleset: "2024"\nadventures: [../../../Adventures/my-heist/combat]\n', encoding="utf-8")
-    make_text_pdf(str(root / "Rules/2024/Core Rules 2024.pdf"), pages=12)
-    make_text_pdf(str(root / "Rules/2024/SRD Test.pdf"), pages=3)
+    make_text_pdf(str(root / "Rules/2024/core-rules-2024/Core Rules 2024.pdf"), pages=12)
+    make_text_pdf(str(root / "Rules/2024/srd-test/SRD Test.pdf"), pages=3)
     make_text_pdf(str(root / "Adventures/my-heist/My Heist.pdf"), pages=4)
-    make_text_pdf(str(root / "Rules/2014/Old Rules.pdf"), pages=2)
+    make_text_pdf(str(root / "Rules/2014/old-rules/Old Rules.pdf"), pages=2)
     monkeypatch.setenv("PDF2MD_ROOT", str(root))
     monkeypatch.setenv("PDF2MD_WORDS", str(tmp_path / "none.txt"))
     return root

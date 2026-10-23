@@ -17,18 +17,17 @@ def test_priority_current_adventure_then_srd_then_ruleset(letsplay):
 
 
 def test_output_named_after_pdf_and_resumable(letsplay):
-    pdf = letsplay / "Rules/2024/Core Rules 2024.pdf"
+    pdf = letsplay / "Rules/2024/core-rules-2024/Core Rules 2024.pdf"
     root = str(letsplay)
     assert worker.run(root, budget_pages=4, chunk_size=5, book="Core Rules", nice=False) == 0
-    d = letsplay / "Rules/2024/.md/Core Rules 2024"
+    d = letsplay / "Rules/2024/core-rules-2024/index"
     m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
     assert list(m["chunks"]) == ["p0001-0005"]
     book = (d / "Core Rules 2024.pages.md").read_text(encoding="utf-8")
     assert '<a id="p1"></a>' in book and "not converted yet" in book
     assert "The PDF is authoritative" in book
-    reader = (d / "Core Rules 2024.md").read_text(encoding="utf-8")
-    assert "<a id=" not in reader and "<!-- PDF p." not in reader
-    assert "not converted yet" in reader and "Core Rules 2024.pages.md" in reader
+    # one Markdown edition only: no page-less reader copy
+    assert not (d / "Core Rules 2024.md").exists()
     # resume: finishes the rest without redoing chunk 1
     before = m["chunks"]["p0001-0005"]
     worker.run(root, book="Core Rules", chunk_size=5, nice=False)
@@ -60,14 +59,14 @@ def test_lock_blocks_second_worker(letsplay):
 
 def test_budget_zero_does_nothing(letsplay):
     worker.run(str(letsplay), budget_seconds=0, nice=False)
-    assert not (letsplay / "Adventures/my-heist/.md/My Heist/pages").exists()
+    assert not (letsplay / "Adventures/my-heist/index/pages").exists()
 
 
 def test_figure_page_linked_not_embedded(letsplay):
     make_map_pdf(str(letsplay / "Adventures/Maps.pdf"))
     worker.run(str(letsplay), book="Maps", budget_pages=1, nice=False)
     d = letsplay / "Adventures/.md/Maps"
-    md = (d / "Maps.md").read_text(encoding="utf-8")
+    md = (d / "Maps.pages.md").read_text(encoding="utf-8")
     assert "](img/p0001.webp)" in md and "base64" not in md
     assert (d / "img/p0001.webp").exists()
 
@@ -172,21 +171,71 @@ def _content_lines(md):
     return [ln for ln in md.split("\n") if ln.strip()]
 
 
-def test_reader_and_pages_editions_are_equal_without_anchors(letsplay):
-    worker.run(str(letsplay), book="Core Rules", chunk_size=5, nice=False)
-    d = letsplay / "Rules/2024/.md/Core Rules 2024"
-    pages = (d / "Core Rules 2024.pages.md").read_text(encoding="utf-8")
-    reader = (d / "Core Rules 2024.md").read_text(encoding="utf-8")
+def test_one_paged_edition_and_index_points_at_it(letsplay):
     import re
 
-    assert len(re.findall(r'<a id="p\d+"></a>', pages)) == 12 and "<a id=" not in reader
-    assert _content_lines(pages) == _content_lines(reader)
-    assert reader == convert.to_reader(pages, "Core Rules 2024")
+    worker.run(str(letsplay), book="Core Rules", chunk_size=5, nice=False)
+    d = letsplay / "Rules/2024/core-rules-2024/index"
+    pages = (d / "Core Rules 2024.pages.md").read_text(encoding="utf-8")
+    assert len(re.findall(r'<a id="p\d+"></a>', pages)) == 12
+    assert sorted(p.name for p in d.glob("*.md")) == ["Core Rules 2024.pages.md", "index.md",
+                                                     "proofread-report.md"]
+    stripped = convert.strip_anchors(pages)
+    assert "<!-- PDF p." not in stripped and _content_lines(pages) == _content_lines(stripped)
     idx = (d / "index.md").read_text(encoding="utf-8")
-    assert "Core Rules 2024.pages.md#p1" in idx and "[Core Rules 2024.md]" in idx
+    assert "Core Rules 2024.pages.md#p1" in idx and "[Core Rules 2024.md]" not in idx
+    assert json.loads((d / "index.json").read_text(encoding="utf-8"))["book"] == "Core Rules 2024.pages.md"
     assert cli.verify(str(letsplay), "Core Rules") == 0
-    (d / "Core Rules 2024.md").write_text(reader + "drift\n", encoding="utf-8")
+    (d / "Core Rules 2024.md").write_text("stray reader\n", encoding="utf-8")
     assert cli.verify(str(letsplay), "Core Rules") == 1
+
+
+def test_slug_and_out_dir_follow_the_book_folder_rule(tmp_path):
+    # Must match talkdnd's library::slug (Rust); see its slug_rule test.
+    assert convert.slug("Storm King's Thunder") == "storm-kings-thunder"
+    assert convert.slug("Keys from the Golden Vault") == "keys-from-the-golden-vault"
+    assert convert.slug("2024 Players Handbook v2") == "2024-players-handbook-v2"
+    assert convert.slug("SRD_CC_v5.2.1") == "srd-cc-v5-2-1"
+    assert convert.slug("  Café — Book!  ") == "caf-book"
+    assert convert.slug("龙与地下城").startswith("book-") and convert.slug("龙与地下城") != convert.slug("冒险")
+    book = tmp_path / "Adventures/storm-kings-thunder/Storm King's Thunder.pdf"
+    assert convert.out_dir(str(book)) == (str(tmp_path / "Adventures/storm-kings-thunder/index"),
+                                          "Storm King's Thunder")
+    loose = tmp_path / "Adventures/Storm King's Thunder.pdf"
+    assert convert.out_dir(str(loose)) == (str(tmp_path / "Adventures/.md/Storm King's Thunder"),
+                                           "Storm King's Thunder")
+
+
+def test_upgrade_from_050_redoes_nothing_and_drops_the_reader(letsplay):
+    worker.run(str(letsplay), book="Core Rules", chunk_size=5, nice=False)
+    d = letsplay / "Rules/2024/core-rules-2024/index"
+    pages = d / "Core Rules 2024.pages.md"
+    # what pdf2md 0.5.0 left behind: a reader copy and index files naming it
+    m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    m["tool"] = "0.5.0"
+    (d / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    (d / "Core Rules 2024.md").write_text("reader\n", encoding="utf-8")
+    idx = json.loads((d / "index.json").read_text(encoding="utf-8"))
+    idx["book"] = "Core Rules 2024.md"
+    (d / "index.json").write_text(json.dumps(idx), encoding="utf-8")
+    index_md = (d / "index.md").read_text(encoding="utf-8")
+    first, rest = index_md.split("\n", 1)
+    old_read = ("Read: [Core Rules 2024.md](<Core Rules 2024.md>) (no page anchors). "
+                "Page lookup: [Core Rules 2024.pages.md](<Core Rules 2024.pages.md>). ")
+    (d / "index.md").write_text(index_md.replace("Read: [Core Rules 2024.pages.md](<Core Rules 2024.pages.md>) "
+                                                 "(`<a id=\"pN\"></a>` = PDF page N). ", old_read),
+                                encoding="utf-8")
+    assert old_read in (d / "index.md").read_text(encoding="utf-8")
+    before = pages.stat().st_mtime_ns, pages.read_bytes()
+    chunks = dict(m["chunks"])
+    assert worker.run(str(letsplay), book="Core Rules", chunk_size=5, nice=False) == 0
+    m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    assert m["tool"] == convert.VERSION and m["chunks"] == chunks and not m.get("stale")
+    assert (pages.stat().st_mtime_ns, pages.read_bytes()) == before, "no reassembly"
+    assert not (d / "Core Rules 2024.md").exists()
+    assert json.loads((d / "index.json").read_text(encoding="utf-8"))["book"] == "Core Rules 2024.pages.md"
+    assert old_read not in (d / "index.md").read_text(encoding="utf-8")
+    assert not (d / "backups").exists()
 
 
 def test_upgrade_from_031_keeps_chunks_and_backs_up_fixes(letsplay, monkeypatch):
@@ -195,19 +244,19 @@ def test_upgrade_from_031_keeps_chunks_and_backs_up_fixes(letsplay, monkeypatch)
     monkeypatch.setattr(convert, "VERSION", "0.4.1")  # an assemble-only upgrade
 
     worker.run(str(letsplay), book="Core Rules", chunk_size=5, nice=False)
-    d = letsplay / "Rules/2024/.md/Core Rules 2024"
+    d = letsplay / "Rules/2024/core-rules-2024/index"
     m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
     fixes.write_fix(str(d / "fixes/p0002.md"), m["sha256"], "0.3.1", "fake", '<a id="p2"></a>\nFixed page two.')
     m["tool"] = "0.3.1"
     (d / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
-    b = convert.Book(str(letsplay / "Rules/2024/Core Rules 2024.pdf"), chunk_size=5)
+    b = convert.Book(str(letsplay / "Rules/2024/core-rules-2024/Core Rules 2024.pdf"), chunk_size=5)
     assert len(b.m["chunks"]) == 3 and not b.m.get("stale"), "0.4.1 redoes no chunk"
     b.close()
     # a real reconversion (older tool) backs up fixes first
     m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
     m["tool"] = "0.1.0"
     (d / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
-    convert.Book(str(letsplay / "Rules/2024/Core Rules 2024.pdf"), chunk_size=5).close()
+    convert.Book(str(letsplay / "Rules/2024/core-rules-2024/Core Rules 2024.pdf"), chunk_size=5).close()
     backups = list((d / "backups").glob("*-reconvert/fixes/p0002.md"))
     assert backups and "Fixed page two." in backups[0].read_text(encoding="utf-8")
     assert (d / "fixes/p0002.md").exists()
