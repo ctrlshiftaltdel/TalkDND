@@ -1199,7 +1199,7 @@ fn new_save(
     let rs = ruleset.clone().unwrap_or_else(|| "2024".into());
     let adv_slug = adventure
         .as_deref()
-        .map(|a| library::adventure_folder_name(&root, a));
+        .map(|a| library::adventure_folder_name(root, a));
     let adv_line = match &adv_slug {
         Some(a) => {
             fs::create_dir_all(root.join("Adventures").join(a).join("combat"))?;

@@ -40,4 +40,4 @@ Accepted pages that had a usable PDF text layer moved roughly **recall 0.73 → 
 
 - Review skips pages that already have an accepted fix; safe to stop and resume a background job after merging gate changes.
 - `apply` waits for the pdf2md worker lock before rebuilding `<book>.md`.
-- Corrected book text stays under local `.md/` trees and must never enter git, Issues, PRs or CI logs.
+- Corrected book text stays under local `index/` (legacy `.md/`) trees and must never enter git, Issues, PRs or CI logs.

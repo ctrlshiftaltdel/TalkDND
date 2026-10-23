@@ -4,6 +4,45 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v0.10.0 — 2026-10-23
+
+### 新功能
+- **书库统一标准：一本书一个文件夹**（#102）。冒险书放在 `Adventures/<slug>/`，里面是原始 PDF、pdf2md 转换结果 `index/` 和战斗数据 `combat/`；规则书放在 `Rules/<版本>/<slug>/`，里面是 PDF 和 `index/`。程序数据 `Rules/chargen/`、`Rules/combat/`、`Rules/defaults/`、`Rules/rulings*.md` 不是书，留在原处。
+- **slug 规则固定、可复现**（`talkdnd` 与 pdf2md 共用）：取 PDF 文件名（不含 `.pdf`），ASCII 字母和数字转小写保留；撇号 `'`、`’` 去掉；其余每一段连续字符变成一个 `-`；去掉首尾的 `-`。例：`Storm King's Thunder` → `storm-kings-thunder`，`SRD_CC_v5.2.1` → `srd-cc-v5-2-1`。书名里没有任何 ASCII 字母或数字时，用 `book-` 加 8 位十六进制哈希（FNV-1a 32 位）。详见 `LetsPlay/docs/layout.md`「书库」。
+- **自动整理书库**：每次 `bin/talkdnd start` 先整理一次；也可以手动运行新命令 `bin/talkdnd library tidy`（加 `--dry-run` 只报告、不改动）。
+  - 直接丢在 `Adventures/`、`Rules/2014/`、`Rules/2024/` 下的 PDF，以及放在名字不对的文件夹里的 PDF，连同旧版转换结果 `.md/<书名>/`，移进 `<slug>/` 和 `<slug>/index/`。名字不对、但里面已有 `combat/` 的整本书文件夹整体改名。
+  - 每一处移动都在输出里报告（「书库整理：已移动 A → B」），并记进 `.talkdnd/library-moves.yaml`，存档里引用旧路径的地方随之改写。
+  - 不知道版本的规则书（放在 `Rules/` 顶层或其他子目录）只提示放进 `Rules/2014/` 或 `Rules/2024/`，不移动。
+  - 从不删除书文件；目标位置已有同名文件时两份都保留并提示手动处理。可以重复运行，第二次不会再有改动。pdf2md 正在后台转换时不整理，等它结束后再运行。
+  - 手工放的 `.md` 文本不是标准格式，程序不读取，整理时会提示。
+- 新建存档（`new`）和 `chargen set adventure` 会沿用已有的书文件夹（例如书名带不带 `The` 都认同一本），不会再为同一本书建第二个文件夹。多卷冒险（如 A/B 两册）按卷各自一个文件夹，查书时自动合并。
+
+### 变更
+- **pdf2md 0.6.0：只生成一份 Markdown**。转换结果只保留页码版 `<书名>.pages.md`（`<a id="pN"></a>` = PDF 第 N 页），不再生成去掉锚点的阅读版 `<书名>.md`（两份逐行相同，只差锚点行）。`index.md` 的「Read:」和 `index.json` 的 `book` 都指向页码版。PDF 在书文件夹里时输出到 `<slug>/index/`，还没整理的 PDF 仍输出到旧位置 `.md/<书名>/`。
+- **升级不重转**：pdf2md 从 0.5.0 升级到 0.6.0 不重做任何分块，也不重新组装；只删除多余的阅读版、改写 `index.md`/`index.json` 的指向，并把 `manifest.json` 的版本记为 0.6.0。`talkdnd start` 整理书库时也会删除页码版旁多余的阅读版（先确认页码版存在且带页锚点），并报告删除了哪些文件、节省了多少字节。`pdf2md verify` 发现残留的阅读版会提示。
+- 所有读取书的地方改用新结构，同时继续兼容旧结构 `.md/<书名>/`：`adventure section`/`search`、`known`、`handout`（登记表移到 `Adventures/<slug>/index/handouts.yaml`）、`data status`/`data import`（从页码版导入，自动去掉锚点行，导入结果与之前逐字节相同）、`start` 摘要的「规则来源」（列页码版）。
+- combat-sim 加载冒险目录时跳过 pdf2md 输出目录 `index/`；书文件夹里有 `combat/` 时只读 `combat/`，没有 `combat/` 的书文件夹整个跳过。
+- 存档 schema 升到 **7**。`talkdnd start` / `talkdnd migrate` 遇到 schema 6 的存档，先整份备份到 `Saves/_backups/`，再把存档文本文件里指向书的旧路径（散放的 PDF、`.md/<书名>/…`、书库整理移动过的路径）改成新路径，同步更新存档完整性指纹，并在会话日志记一行。以后每次 `start` 也会把新的书库移动同步到存档。
+- **裁定文件不再“重复”**：`Rules/defaults/rulings*.md` 是随版本发布的出厂默认，每次更新覆盖，DM 不读也不改；`Rules/rulings*.md` 是本机副本，牌桌上只以它为准。`start` 同步时：副本缺失就复制；副本没改过（与上次复制的默认或任何历史出厂版本相同）就自动换成新默认；副本改过则保留，若默认也变了，提示你对照 `Rules/defaults/` 手动合并。以前没改过的旧副本也会被认出来并自动更新。
+- 文档改为只要求放 PDF，不再建议手工转 Markdown：`LetsPlay/README.md`、`Adventures/README.md`、`Rules/2014/README.md`、`Rules/2024/README.md`、`AGENTS.md`、`docs/layout.md`（新增「书库」「裁定文件」两节）、`docs/pdf2md.md`、`docs/chargen.md`、`docs/handouts.md`、`docs/narration.md`、`docs/deviation.md`，以及 pdf2md、talkdnd、combat-sim 的 README。
+- `talkdnd-dev check-leaks` 把书文件夹里的 pdf2md 输出（`index/` 下的 `*.pages.md`、`manifest.json`、`img/` 等）也当作不得入库的生成文件。
+- 所有程序版本统一升到 0.10.0（talkdnd、combat-sim、talkdnd-dev）；pdf2md 升到 0.6.0。
+
+### 修复
+- 同一本书可能出现两个文件夹（存档建的冒险文件夹和 PDF 所在文件夹名字不同）的问题：新建存档和整理都沿用已有的书文件夹。
+- 原有测试全部通过。新增测试覆盖：slug 规则、整理（dry-run 与实跑计划一致、散放 PDF 与旧 `.md/` 移入、带 `combat/` 的文件夹改名、未知版本只提示、手工 `.md` 只提示、重名两份都保留、幂等、阅读版删除并改写 `index.md`/`index.json`）、schema 6→7 迁移与之后的移动同步、旧结构仍可读、combat-sim 跳过书文件夹、裁定副本自动升级、pdf2md 0.6.0 输出位置和升级不重转。
+
+### 更新说明 / 迁移
+- **覆盖式更新**：下载新发布包，解压到临时位置，把包内 `TalkDND/` 文件夹里的全部内容复制到现在的游戏文件夹，覆盖同名文件。存档目录原样保留。不要把旧包的 `TalkDND/` 整个替换掉（会丢存档、规则书和冒险书）。
+- 更新后第一次 `bin/talkdnd start` 会整理书库并报告每一处移动和删除的阅读版（及节省的字节），然后把存档迁移到 schema 7（先备份）。想先看会动什么，可以先运行 `bin/talkdnd library tidy --dry-run`。
+- 已转好的书不会重新转换；后台 pdf2md 只做 0.6.0 的升级记录。
+- 以前手工放的 Markdown 书（例如 `Adventures/<书名>.md`、`Rules/2024/<书名>-2024.md`）程序不再读取，整理时会提示；确认有对应 PDF 后可以删除。
+
+### 已知限制
+- pdf2md 正在后台转换时，`start` 跳过本次整理（输出里会说明），下次再整理。
+- 名字里没有 ASCII 字母或数字的书，文件夹名是 `book-` 加哈希，不直观，但固定不变。
+- 书库整理只看 PDF；只有手工 Markdown、没有 PDF 的书不会被移动。
+
 ## v0.9.0 — 2026-10-23
 
 ### 新功能

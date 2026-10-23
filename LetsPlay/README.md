@@ -25,22 +25,30 @@ SRD 可在 Wizards of the Coast 官网免费下载：<https://dnd.wizards.com/re
 
 ### 2. 准备冒险书
 
-把你自己合法拥有的冒险书放进 `Adventures/`（一本一个文件，或一个文件夹）。冒险的战斗数据由 AI DM 按书建在 `Adventures/<slug>/combat/`。
+把你自己合法拥有的冒险书 PDF 放进 `Adventures/`。直接丢在 `Adventures/` 下也行：每次 `bin/talkdnd start`（或 `bin/talkdnd library tidy`）都会把它整理进它自己的文件夹 `Adventures/<slug>/`，并报告移动了什么。冒险的战斗数据由 AI DM 按书建在同一文件夹的 `combat/` 里。
 
 ### 3. 放置位置
 
+统一标准：**一本书一个文件夹**，文件夹名是书名的 slug（规则见 `docs/layout.md`）。
+
 ```
 Rules/
-  2014/  SRD_CC_v5.1.md   [Players-Handbook-2014.md  Dungeon-Masters-Guide-2014.md  Monster-Manual-2014.md]
-  2024/  SRD_CC_v5.2.1.md [Players-Handbook-2024.md  Dungeon-Masters-Guide-2024.md  Monster-Manual-2024.md]
+  2014/srd-cc-v5-1/
+    SRD_CC_v5.1.pdf                  # 你放的 PDF（权威来源）
+    index/                           # （自动生成）pdf2md 转换结果：SRD_CC_v5.1.pages.md、index.md、img/ …
+  2024/players-handbook-2024/
+    Players Handbook 2024.pdf        # 完整规则书（可选，自有）
+    index/
 Adventures/
-  Keys-from-the-Golden-Vault.md      # 你要跑的冒险书
-  keys-from-the-golden-vault/combat/ # （AI 自建）该冒险的场景、遭遇、怪物数据
+  keys-from-the-golden-vault/
+    Keys from the Golden Vault.pdf   # 你要跑的冒险书
+    index/                           # （自动生成）转换结果
+    combat/                          # （AI 自建）该冒险的场景、遭遇、怪物数据
 bin/
   combat-sim                         # 本机程序，不入库。Windows 文件名是 combat-sim.exe
 ```
 
-- **优先用转好的 Markdown / 纯文本**（AI 用关键词检索，又快又准）；PDF 也可以，但检索慢、可能有识别错误。
+- **只需要放 PDF**，不用自己转 Markdown；文字版由 pdf2md 自动生成在书文件夹的 `index/` 里。
 - 规则书、冒险书和存档除 README 外都在 `.gitignore` 中，不会被提交，只留在你本地。
 
 ### 4. 其他
@@ -50,7 +58,7 @@ bin/
 
 ## 书籍转文字（自动，后台）
 
-你只需要放 PDF。AI DM 会用 `tools/pdf2md` 在后台把 PDF 逐步转成可搜索的 Markdown（放在 PDF 旁边的隐藏目录 `.md/<PDF 文件名>/`），先转当前冒险，再转规则书；不会打断游戏，PDF 始终是权威来源。扫描版里没有文字层的页面会自动 OCR。
+你只需要放 PDF。AI DM 会用 `tools/pdf2md` 在后台把 PDF 逐步转成可搜索的 Markdown（放在书文件夹的 `index/` 里：`<书名>.pages.md`，`<a id="pN"></a>` = PDF 第 N 页），先转当前冒险，再转规则书；不会打断游戏，PDF 始终是权威来源。扫描版里没有文字层的页面会自动 OCR。
 
 第一次需要安装 [uv](https://docs.astral.sh/uv/)（AI DM 会按 `docs/pdf2md.md` 自己装），并联网下载依赖（约 500 MB，含 PyMuPDF 与 RapidOCR，不随本项目分发）。
 

@@ -185,6 +185,7 @@ $T char Aria item add "月刃" --original O-001      # 已登记的原创物品
 - 旧存档（schema 3 及以前）没有偏离度设定。`talkdnd start` / `talkdnd migrate` 会把整份存档备份到 `Saves/_backups/`，再写入 `scope: 0`、`ratio: null`，并在会话日志记一行。
 - schema 4 的旧存档在升级到 0.8.0 后迁移到 schema 5：新增 `settings: { dice_display: true }`，同样先备份并记日志；`original.yaml` 台账从版本 1 升到 2（新增空 `hidden`），旧条目不受影响。
 - schema 5 的旧存档在升级到 0.9.0 后迁移到 schema 6：队友（同伴）角色卡和 `_party.md` 从 `NPCs/` 移到 `Characters/`，`sheets/<id>.yaml` 加 `controller: player|dm`；偏离度不变，同样先备份并记日志。
+- schema 6 的旧存档在升级到 0.10.0 后迁移到 schema 7：存档文本里指向书的旧路径（`Adventures/<书名>.pdf`、`.md/<书名>/…`、书库整理移动过的路径）改成一书一文件夹的新路径（`Adventures/<slug>/`、`<slug>/index/`）；其余内容和偏离度不变，同样先备份、记日志并更新存档校验。
 - 旧存档就是 scope 0：只能补空白，不能登记原创。想要原创只能开新档。
 - 更新程序用覆盖式更新（见发布说明），存档目录原样保留。
 
