@@ -1,6 +1,6 @@
 [package]
 name = "talkdnd"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 description = "TalkDND play helper: start digest, new save, character creation, random companions, checkpoints"
 license = "MIT"

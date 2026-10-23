@@ -37,7 +37,8 @@ def scan(root):
     for rel in BOOK_DIRS:
         base = os.path.join(root, rel)
         for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            # `.md/` (legacy) and `index/` hold pdf2md output, never PDFs.
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d != "index")
             for name in sorted(filenames):
                 if name.lower().endswith(".pdf"):
                     found.append(os.path.join(dirpath, name))
@@ -471,7 +472,7 @@ def status(root):
         from .convert import out_dir
 
         d, stem = out_dir(pdf)
-        row = {"pdf": os.path.relpath(pdf, root), "out": os.path.relpath(os.path.join(d, stem + ".md"), root),
+        row = {"pdf": os.path.relpath(pdf, root), "out": os.path.relpath(os.path.join(d, stem + ".pages.md"), root),
                "pages": None, "done": 0, "low": 0, "ocr": 0, "stale": False,
                "fallback": 0, "intake": None}
         try:

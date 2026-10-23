@@ -139,23 +139,23 @@ def test_garbled_heading_is_reread_with_ocr(tmp_path, monkeypatch):
 def test_book_only_stops_after_that_book(letsplay):
     root = str(letsplay)
     assert worker.run(root, book="SRD Test", only=True, nice=False) == 0
-    assert (letsplay / "Rules/2024/.md/SRD Test/SRD Test.md").exists()
-    assert not (letsplay / "Rules/2024/.md/Core Rules 2024").exists()
+    assert (letsplay / "Rules/2024/srd-test/index/SRD Test.pages.md").exists()
+    assert not (letsplay / "Rules/2024/core-rules-2024/index").exists()
 
 
 def test_tool_upgrade_keeps_old_pages_readable(letsplay, monkeypatch):
     root = str(letsplay)
     worker.run(root, book="SRD Test", only=True, nice=False)
-    d = letsplay / "Rules/2024/.md/SRD Test"
+    d = letsplay / "Rules/2024/srd-test/index"
     monkeypatch.setattr(convert, "VERSION", "9.9.9")
-    b = convert.Book(str(letsplay / "Rules/2024/SRD Test.pdf"))
+    b = convert.Book(str(letsplay / "Rules/2024/srd-test/SRD Test.pdf"))
     assert b.pending() and b.m["stale"]
     md = b.assemble()
     assert "being redone" in md and '<a id="p1"></a>' in md
     worker.run(root, book="SRD Test", only=True, nice=False)
     m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
     assert m["tool"] == "9.9.9" and not m["stale"] and m["chunks"]
-    assert os.path.exists(d / "SRD Test.md")
+    assert os.path.exists(d / "SRD Test.pages.md") and not os.path.exists(d / "SRD Test.md")
 
 
 def test_fallback_keeps_headings(tmp_path):
@@ -175,12 +175,12 @@ def test_selective_upgrade_redoes_only_fallback_chunks(letsplay, monkeypatch):
     root = str(letsplay)
     monkeypatch.setattr(convert, "VERSION", "0.2.0")
     worker.run(root, book="Core Rules", only=True, chunk_size=5, nice=False)
-    d = letsplay / "Rules/2024/.md/Core Rules 2024"
+    d = letsplay / "Rules/2024/core-rules-2024/index"
     m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
     m["pages"]["7"]["fallback"] = "empty"
     (d / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
     monkeypatch.setattr(convert, "VERSION", "0.2.1")
-    b = convert.Book(str(letsplay / "Rules/2024/Core Rules 2024.pdf"))
+    b = convert.Book(str(letsplay / "Rules/2024/core-rules-2024/Core Rules 2024.pdf"))
     assert b.m["stale"] == ["p0006-0010"]
     assert sorted(b.m["chunks"]) == ["p0001-0005", "p0011-0012"]
 

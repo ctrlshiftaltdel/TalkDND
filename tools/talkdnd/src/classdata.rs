@@ -313,42 +313,20 @@ pub fn import_hint(root: Option<&Path>, rs: &str) -> String {
     if have_md {
         format!("run `talkdnd data import --ruleset {rs}`, then `talkdnd chargen sheet` again (see docs/chargen.md「本地规则书数据」)")
     } else {
-        format!("no converted Markdown for Rules/{rs} yet: run `uv run --project tools/pdf2md python -m pdf2md run --book \"Players Handbook\" --budget 300`, then `talkdnd data import --ruleset {rs}`; until then keep SRD data and fill the gap by hand (see docs/chargen.md「本地规则书数据」)")
+        format!("no converted Markdown for Rules/{rs} yet (Rules/{rs}/<slug>/index/<书名>.pages.md): run `uv run --project tools/pdf2md python -m pdf2md run --book \"Players Handbook\" --budget 300`, then `talkdnd data import --ruleset {rs}`; until then keep SRD data and fill the gap by hand (see docs/chargen.md「本地规则书数据」)")
     }
 }
 
-/// Full-rulebook Markdown for a ruleset: (reader editions, pages editions).
-/// Reader = `Rules/<rs>/.md/<book>/<book>.md` and ConvertPDF files directly
-/// in `Rules/<rs>/` (not README/rulings); pages = `<book>.pages.md`.
-pub fn rulebooks(rules: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let mut reader = md_files(rules);
-    reader.retain(|p| !p.to_string_lossy().contains("SRD"));
-    let pages: Vec<PathBuf> = reader
-        .iter()
-        .map(|f| f.with_extension("pages.md"))
-        .filter(|p| p.is_file())
-        .collect();
-    if let Ok(rd) = fs::read_dir(rules) {
-        let mut top: Vec<PathBuf> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.is_file()
-                    && p.extension().is_some_and(|x| x == "md")
-                    && !p.file_name().is_some_and(|n| {
-                        let n = n.to_string_lossy().to_lowercase();
-                        n == "readme.md" || n.starts_with("rulings")
-                    })
-            })
-            .collect();
-        top.sort();
-        reader.extend(top);
-    }
-    reader.retain(|p| {
+/// Full-rulebook Markdown for a ruleset: the paged Markdown of every
+/// converted book under `Rules/<rs>/<slug>/index/` (legacy `.md/<book>/`
+/// still read), without the SRD. `<a id="pN"></a>` anchors = PDF page N.
+pub fn rulebooks(rules: &Path) -> Vec<PathBuf> {
+    let mut v = md_files(rules);
+    v.retain(|p| {
         !p.file_name()
             .is_some_and(|n| n.to_string_lossy().contains("SRD"))
     });
-    (reader, pages)
+    v
 }
 
 /// Whether the local import is missing, made by an older importer, or older
@@ -422,22 +400,15 @@ pub fn run_import(root: &Path, rs: &str) -> Result<(PathBuf, usize, usize)> {
     Ok((out, subs, bgs))
 }
 
-/// Converted Markdown books under `Rules/<rs>/.md/<book>/<book>.md`.
+/// Converted books of one ruleset folder (`Rules/<rs>/`): the paged
+/// Markdown in each `<slug>/index/` (or a legacy `.md/<book>/`).
 pub fn md_files(rules: &Path) -> Vec<PathBuf> {
-    let mut v = Vec::new();
-    if let Ok(rd) = fs::read_dir(rules.join(".md")) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                let name = e.file_name().to_string_lossy().to_string();
-                let f = p.join(format!("{name}.md"));
-                if f.is_file() {
-                    v.push(f);
-                }
-            }
-        }
-    }
+    let mut v: Vec<PathBuf> = crate::library::category_indexes(rules)
+        .iter()
+        .filter_map(|(_, d)| crate::library::paged_markdown(d))
+        .collect();
     v.sort();
+    v.dedup();
     v
 }
 
@@ -1267,7 +1238,9 @@ pub fn import_markdown(rs: &str, srd: &Book, files: &[PathBuf]) -> Result<DataFi
     let class_ids: Vec<String> = srd.classes.keys().cloned().collect();
     let mut known: BTreeMap<(String, String), Vec<(i32, String)>> = BTreeMap::new();
     for f in files {
-        let text = fs::read_to_string(f)?;
+        // Page anchors are layout, not content: the importer parses the
+        // paged Markdown exactly like the old page-less reader edition.
+        let text = crate::library::read_text(f)?;
         for (id, b) in import_backgrounds(rs, &text) {
             out.backgrounds.entry(id).or_insert(b);
         }

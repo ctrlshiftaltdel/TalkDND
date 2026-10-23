@@ -1,10 +1,10 @@
 # 资料图（handout）
 
-给玩家看冒险书里的图：地图、信件、告示、重要物品。图来自本地用 pdf2md 转换的书（`Adventures/…/.md/<书名>/img/`），只在本地使用，绝不提交。
+给玩家看冒险书里的图：地图、信件、告示、重要物品。图来自本地用 pdf2md 转换的书（`Adventures/<slug>/index/img/`），只在本地使用，绝不提交。
 
 ## 数据
 
-- **登记表**：`Adventures/…/.md/<书名>/handouts.yaml`，和转换后的书放在一起（已被 gitignore）。第一次用 `handout` 命令时由 pdf2md 的 `index.json`（地图图注、插图、整页图）和 `img/` 自动生成；`$T handout build` 重新扫描，保留已有标记。
+- **登记表**：`Adventures/<slug>/index/handouts.yaml`，和转换后的书放在一起（已被 gitignore）。第一次用 `handout` 命令时由 pdf2md 的 `index.json`（地图图注、插图、整页图）和 `img/` 自动生成；`$T handout build` 重新扫描，保留已有标记。
 - 每条：`id`（图片文件名，如 `p0012-00`）、`img`、`page`、`kind`（map / art / figure）、`caption`（地图图注）、`area`（该页之前最近的章节或区域标题）、`visibility`（`dm` 或 `player`）、可选 `crop`（玩家可见区域）、`note`。
 - **默认全部「仅城主」**。只有图注写明玩家版（Player Version / 玩家）的地图自动标为 `player`。
 - **已展示**：`Saves/<存档>/handouts.yaml` 和 `Saves/<存档>/handouts/` 下导出的图（存档目录本来就不提交）。

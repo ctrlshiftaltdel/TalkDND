@@ -57,7 +57,7 @@ $T char <名字> item equip greatsword           # 装备武器/护甲后自动�
 
 ## 本地规则书数据
 
-**完整规则书优先，SRD 只兜底。** 玩家有完整规则书时，DM 查规则、法术、怪物、背景、专长先读 `Rules/<版本>/.md/<书名>/<书名>.md`（阅读版）或 `<书名>.pages.md`（分页版，查页码），`Rules/<版本>/` 下 ConvertPDF 生成的 `.md` 也算阅读版；书里找不到才看 SRD。`$T start` 摘要的「规则来源」和 `$T data status` 会列出这些文件。
+**完整规则书优先，SRD 只兜底。** 玩家有完整规则书时，DM 查规则、法术、怪物、背景、专长先读 `Rules/<版本>/<slug>/index/<书名>.pages.md`（pdf2md 生成的页码版，`<a id="pN"></a>` = PDF 第 N 页；没整理过的旧书在 `Rules/<版本>/.md/<书名>/`）；书里找不到才看 SRD。`$T start` 摘要的「规则来源」和 `$T data status` 会列出这些文件。
 
 仓库只带 SRD 数据（12 个职业 + 各自的 SRD 子职、SRD 武器、SRD 背景）。其他书里的子职、职业、武器、**背景（特性、技能、工具、语言数、装备、金币）**从你自己的书在本地生成，写到 `Rules/chargen/local/`（已 gitignore，**永不提交**）。程序运行时把它们叠加到 SRD 数据上。
 
@@ -70,7 +70,7 @@ $T char <名字> item equip greatsword           # 装备武器/护甲后自动�
 4. `talkdnd` 打印了 `warning: ... has no ... data`：**照抄它给出的命令执行**。
 
 **怎么做**：
-1. `$T data status --ruleset 2024`：看有没有转好的 Markdown（`Rules/2024/.md/<书名>/<书名>.md`）和已加载的本地文件。
+1. `$T data status --ruleset 2024`：看有没有转好的 Markdown（`Rules/2024/<slug>/index/<书名>.pages.md`）和已加载的本地文件。
 2. 有 Markdown：`$T data import --ruleset 2024` → 写 `Rules/chargen/local/imported-2024.yaml`，再重新 `$T chargen sheet`。
 3. 没有 Markdown（pdf2md 还没转完）：
    - 能开后台任务：后台跑 `uv run --project tools/pdf2md python -m pdf2md run`，不等它；

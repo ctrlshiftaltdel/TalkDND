@@ -6,7 +6,10 @@
 //! settings (`deviation:`) in `save-meta.yaml`, 5 = per-save `settings:`
 //! (dice display, default on), 6 = every party member (player characters and
 //! DM-run companions) in `Characters/` with a `controller:` field in
-//! `sheets/<id>.yaml`; `NPCs/` keeps only story NPCs. `talkdnd start` and `talkdnd migrate` back the
+//! `sheets/<id>.yaml`; `NPCs/` keeps only story NPCs, 7 = book paths in save
+//! files use the one-folder-per-book library (`Adventures/<slug>/`,
+//! `Rules/<edition>/<slug>/`, converted index in `index/`; see
+//! [`crate::library`]). `talkdnd start` and `talkdnd migrate` back the
 //! whole save up into `Saves/_backups/` before writing, then run the
 //! migrations in order. A save from a newer talkdnd is refused: this binary
 //! cannot know its format.
@@ -27,7 +30,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "save-meta.yaml";
-pub const CURRENT_SCHEMA: u32 = 6;
+pub const CURRENT_SCHEMA: u32 = 7;
 pub const BACKUP_DIR: &str = "_backups";
 
 /// How far this save may deviate from the published adventure.
@@ -229,6 +232,9 @@ pub struct Report {
     pub controllers: Vec<String>,
     /// 5→6: anything the DM should look at (name collisions, ...).
     pub warnings: Vec<String>,
+    /// 6→7: save files whose book paths were repointed to the
+    /// one-folder-per-book library (paths relative to the save).
+    pub books: Vec<String>,
     pub log_text: Option<String>,
 }
 
@@ -270,6 +276,12 @@ impl Report {
                     self.controllers.join(", ")
                 ));
             }
+            if !self.books.is_empty() {
+                v.push(format!(
+                    "会把书本路径改到一书一文件夹的新位置：{}",
+                    self.books.join(", ")
+                ));
+            }
             for w in &self.warnings {
                 v.push(format!("注意：{w}"));
             }
@@ -302,6 +314,12 @@ impl Report {
             v.push(format!(
                 "已写入操控方 controller（player = 玩家角色，dm = DM 操控的同伴）：{}",
                 self.controllers.join(", ")
+            ));
+        }
+        if !self.books.is_empty() {
+            v.push(format!(
+                "书本路径已改到一书一文件夹的新位置：{}",
+                self.books.join(", ")
             ));
         }
         for w in &self.warnings {
@@ -347,6 +365,9 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             report.companions = plan.moves.iter().map(|m| m.describe()).collect();
             report.warnings = plan.warnings.clone();
         }
+        if from < 7 {
+            report.books = repoint_names(save, &crate::library::plan_repoint(root, save));
+        }
         return Ok(report);
     }
 
@@ -384,6 +405,12 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     } else {
         Vec::new()
     };
+
+    if from < 7 {
+        let plan = crate::library::plan_repoint(root, save);
+        report.books = repoint_names(save, &plan);
+        apply_repoint(&plan)?;
+    }
 
     let mut meta = load(save)?.unwrap_or_default();
     meta.schema = CURRENT_SCHEMA;
@@ -433,6 +460,14 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             backup: backup.clone(),
         });
     }
+    if from < 7 {
+        meta.migrations.push(Migration {
+            from: from.max(6),
+            to: 7,
+            date: date.clone(),
+            backup: backup.clone(),
+        });
+    }
     write_meta(save, &meta)?;
 
     let deviation_note = if from < 4 {
@@ -450,8 +485,13 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     } else {
         format!("；队友移到 Characters/：{}", report.companions.join("，"))
     };
+    let books_note = if report.books.is_empty() {
+        String::new()
+    } else {
+        format!("；书本路径改到一书一文件夹：{}", report.books.join("，"))
+    };
     let text = format!(
-        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{companion_note}",
+        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{companion_note}{books_note}",
         chrono::Local::now().format("%H:%M")
     );
     if let Some(log) = save::latest_log(save) {
@@ -462,6 +502,66 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     combat_sim::integrity::after_write(save, &before)?;
     carry_dirty_flags(save, &moved, &dirty)?;
     Ok(report)
+}
+
+// ---------- 6→7: book paths follow the one-folder-per-book library ----------
+
+fn repoint_names(save: &Path, plan: &[(PathBuf, String)]) -> Vec<String> {
+    plan.iter()
+        .map(|(p, _)| {
+            p.strip_prefix(save)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect()
+}
+
+fn apply_repoint(plan: &[(PathBuf, String)]) -> Result<()> {
+    for (p, text) in plan {
+        atomic_write(p, text.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Keep a schema-7 save's book paths in step with later library tidies
+/// (`talkdnd start` runs it after [`ensure`]): when a book moved since the
+/// save was written, back the save up, rewrite the paths (text only) and
+/// refresh the integrity fingerprints of files that were clean before.
+/// `dry_run` only reports. Returns digest lines (empty when nothing changed).
+pub fn repoint_books(save: &Path, root: &Path, dry_run: bool) -> Result<Vec<String>> {
+    if detect(save)? < CURRENT_SCHEMA {
+        return Ok(Vec::new());
+    }
+    let plan = crate::library::plan_repoint(root, save);
+    if plan.is_empty() {
+        return Ok(Vec::new());
+    }
+    let names = repoint_names(save, &plan).join("，");
+    if dry_run {
+        return Ok(vec![format!(
+            "会更新书本路径（书已整理到新文件夹）：{names}"
+        )]);
+    }
+    let before = combat_sim::integrity::snapshot(save);
+    let slot = save
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "save".into());
+    let backup = backup_save(save, root, &slot, CURRENT_SCHEMA)?;
+    apply_repoint(&plan)?;
+    let text = format!(
+        "[{}] 书本路径更新（书库整理后，备份：{backup}）：{names}",
+        chrono::Local::now().format("%H:%M")
+    );
+    if let Some(log) = save::latest_log(save) {
+        save::append(&log, &format!("- {text}"))?;
+    }
+    combat_sim::integrity::after_write(save, &before)?;
+    Ok(vec![
+        format!("书本路径已更新：{names}"),
+        format!("更新前整份备份：`{backup}`"),
+    ])
 }
 
 // ---------- 5→6: party companions move from NPCs/ to Characters/ ----------
@@ -891,11 +991,11 @@ mod tests {
         let root = root("v1");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (1, 6));
+        assert_eq!((report.from, report.to), (1, 7));
         assert!(report.deviation_default);
         assert_eq!(report.sheets, vec!["hero".to_string()]);
         assert!(charsheet::path(&save, "hero").is_file());
-        assert_eq!(meta(&save).schema, 6);
+        assert_eq!(meta(&save).schema, 7);
         assert_eq!(meta(&save).deviation.scope, 0);
         assert_eq!(meta(&save).deviation.ratio, None);
         assert!(meta(&save)
@@ -921,7 +1021,7 @@ mod tests {
         assert!(!backups[0].join("_backups").exists());
 
         let log = fs::read_to_string(save.join("Sessions/2030-01-01-session-00.md")).unwrap();
-        assert!(log.contains("存档结构迁移 schema 1→6"), "{log}");
+        assert!(log.contains("存档结构迁移 schema 1→7"), "{log}");
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
 
@@ -945,7 +1045,7 @@ mod tests {
         let root = root("dry");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, true).unwrap();
-        assert_eq!((report.from, report.to), (1, 6));
+        assert_eq!((report.from, report.to), (1, 7));
         assert!(report.dry_run && report.sheets == vec!["hero".to_string()]);
         assert!(!path(&save).is_file());
         assert!(!charsheet::path(&save, "hero").is_file());
@@ -974,8 +1074,8 @@ mod tests {
         fs::write(save.join("progress.yaml"), edited).unwrap();
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (2, 6));
-        assert!(meta(&save).schema == 6);
+        assert_eq!((report.from, report.to), (2, 7));
+        assert!(meta(&save).schema == 7);
         let changes = combat_sim::integrity::changes(&save).unwrap();
         assert!(
             changes
@@ -1068,20 +1168,20 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (3, 6));
+        assert_eq!((report.from, report.to), (3, 7));
         assert!(report.deviation_default);
         assert!(report
             .lines()
             .iter()
             .any(|l| l.contains("scope 0") && l.contains("偏离度")));
         let m = meta(&save);
-        assert_eq!(m.schema, 6);
+        assert_eq!(m.schema, 7);
         assert_eq!(m.deviation.scope, 0);
         assert_eq!(m.deviation.ratio, None);
         assert!(m.migrations.iter().any(|x| x.from == 3 && x.to == 4));
         assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
         let log = fs::read_to_string(save.join("Sessions/2030-04-05-session-00.md")).unwrap();
-        assert!(log.contains("schema 3→6"), "{log}");
+        assert!(log.contains("schema 3→7"), "{log}");
         assert!(log.contains("scope 0"), "{log}");
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
             .unwrap()
@@ -1133,20 +1233,21 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (4, 6));
+        assert_eq!((report.from, report.to), (4, 7));
         assert!(!report.deviation_default);
         assert!(report.settings_default);
         let m = meta(&save);
-        assert_eq!(m.schema, 6);
+        assert_eq!(m.schema, 7);
         assert_eq!(m.deviation.scope, 2);
         assert_eq!(m.deviation.ratio, Some(15));
         assert!(m.settings.dice_display);
         assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
         assert!(m.migrations.iter().any(|x| x.from == 5 && x.to == 6));
-        assert_eq!(m.migrations.len(), 2);
+        assert!(m.migrations.iter().any(|x| x.from == 6 && x.to == 7));
+        assert_eq!(m.migrations.len(), 3);
         let log = fs::read_to_string(save.join("Sessions/2030-04-06-session-00.md")).unwrap();
         assert!(
-            log.contains("schema 4→6") && log.contains("骰子显示默认开"),
+            log.contains("schema 4→7") && log.contains("骰子显示默认开"),
             "{log}"
         );
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
@@ -1231,13 +1332,13 @@ mod tests {
         let kel_before = fs::read_to_string(save.join("NPCs/Kel-Stone.md")).unwrap();
 
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (5, 6));
+        assert_eq!((dry.from, dry.to), (5, 7));
         assert_eq!(dry.companions.len(), 3, "{:?}", dry.companions);
         assert!(save.join("NPCs/Kel-Stone.md").is_file());
         assert!(!root.join("Saves").join(BACKUP_DIR).exists());
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (5, 6));
+        assert_eq!((report.from, report.to), (5, 7));
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         for f in ["Kel-Stone.md", "mo.md", "_party.md"] {
             assert!(save.join("Characters").join(f).is_file(), "{f}");
@@ -1268,7 +1369,7 @@ mod tests {
         // The structured file still loads and resolves.
         let cf: charsheet::CharFile = serde_norway::from_str(&sheet).unwrap();
         assert_eq!(cf.controller(), charsheet::DM);
-        assert_eq!(meta(&save).schema, 6);
+        assert_eq!(meta(&save).schema, 7);
         assert!(meta(&save)
             .migrations
             .iter()
@@ -1282,7 +1383,7 @@ mod tests {
         assert!(backups[0].join("NPCs/Kel-Stone.md").is_file());
         let log = fs::read_to_string(save.join("Sessions/2030-05-01-session-00.md")).unwrap();
         assert!(
-            log.contains("schema 5→6") && log.contains("Characters/Kel-Stone.md"),
+            log.contains("schema 5→7") && log.contains("Characters/Kel-Stone.md"),
             "{log}"
         );
 
@@ -1328,6 +1429,69 @@ mod tests {
                 .any(|c| c.path() == "Characters/Kel-Stone-companion.md"),
             "{changes:?}"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn v6_book_paths_follow_the_library_and_later_moves() {
+        let root = root("v6books");
+        let save = root.join("Saves/slot");
+        fs::create_dir_all(save.join("Sessions")).unwrap();
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::write(save.join("Sessions/2030-05-01-session-00.md"), "# log\n").unwrap();
+        fs::write(
+            save.join("save-meta.yaml"),
+            "schema: 6\ntool: 0.9.0\ndeviation: {scope: 0, ratio: null}\nsettings: {dice_display: true}\nmigrations: []\n",
+        )
+        .unwrap();
+        fs::write(
+            save.join("combat/campaign.yaml"),
+            "adventures: [../../../Adventures/keys-from-the-golden-vault/combat]\n",
+        )
+        .unwrap();
+        fs::write(
+            save.join("dm-plan.md"),
+            "See `Adventures/keys-from-the-golden-vault/.md/Keys from the Golden Vault/index.md`.\n",
+        )
+        .unwrap();
+        let dry = ensure(&save, &root, true).unwrap();
+        assert_eq!((dry.from, dry.to), (6, 7));
+        assert_eq!(dry.books, vec!["dm-plan.md".to_string()]);
+        let report = ensure(&save, &root, false).unwrap();
+        assert_eq!(report.books, vec!["dm-plan.md".to_string()]);
+        assert!(report.backup.is_some());
+        let plan = fs::read_to_string(save.join("dm-plan.md")).unwrap();
+        assert!(
+            plan.contains("Adventures/keys-from-the-golden-vault/index/index.md"),
+            "{plan}"
+        );
+        // campaign.yaml already pointed at the right folder: untouched.
+        assert!(fs::read_to_string(save.join("combat/campaign.yaml"))
+            .unwrap()
+            .contains("Adventures/keys-from-the-golden-vault/combat"));
+        assert_eq!(meta(&save).schema, 7);
+        assert!(meta(&save)
+            .migrations
+            .iter()
+            .any(|m| m.from == 6 && m.to == 7));
+        // Nothing moved since: repoint is a no-op.
+        assert!(repoint_books(&save, &root, false).unwrap().is_empty());
+        // A later tidy renames the folder: the save follows on the next start.
+        fs::create_dir_all(root.join(".talkdnd")).unwrap();
+        fs::write(
+            root.join(crate::library::MOVES_FILE),
+            "moves:\n- from: Adventures/keys-from-the-golden-vault/\n  to: Adventures/golden-vault/\n",
+        )
+        .unwrap();
+        assert_eq!(crate::library::load_moves(&root).len(), 1);
+        let lines = repoint_books(&save, &root, true).unwrap();
+        assert!(lines[0].contains("combat/campaign.yaml"), "{lines:?}");
+        let lines = repoint_books(&save, &root, false).unwrap();
+        assert!(lines.iter().any(|l| l.contains("备份")), "{lines:?}");
+        assert!(fs::read_to_string(save.join("combat/campaign.yaml"))
+            .unwrap()
+            .contains("Adventures/golden-vault/combat"));
+        assert!(repoint_books(&save, &root, false).unwrap().is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 }

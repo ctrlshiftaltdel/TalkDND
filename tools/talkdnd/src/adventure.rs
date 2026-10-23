@@ -13,11 +13,11 @@
 //! garble its first 1-4 characters (scanned books often have a shadow at the
 //! gutter, e.g. `ne` for `One` or `..mown` for `known`).
 //!
-//! Converted books live in `Adventures/<slug>/.md/<Book>/` and are gitignored;
+//! Converted books live in `Adventures/<slug>/index/` and are gitignored;
 //! this module only ever reads them at play time.
 
 use crate::progress::{self, Progress};
-use crate::{original, save, start};
+use crate::{library, original, save, start};
 use anyhow::{anyhow, bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -101,56 +101,34 @@ pub fn sections(book: &str) -> Vec<Section> {
     out
 }
 
-/// The save's converted adventure book (reader version, else `index.md`).
+/// The save's converted adventure book: the paged Markdown
+/// (`Adventures/<slug>/index/<Book>.pages.md`, PDF page anchors), else
+/// `index.md`. Old layouts (`.md/<Book>/`) are still read until tidied.
 pub fn book_path(root: &Path, save_dir: &Path) -> Option<PathBuf> {
-    let slug = start::adventure_slug(save_dir)?;
-    let md = root.join("Adventures").join(&slug).join(".md");
-    let mut books: Vec<PathBuf> = fs::read_dir(md)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    books.sort();
-    for b in books {
-        let name = b.file_name()?.to_string_lossy().to_string();
-        let reader = b.join(format!("{name}.md"));
-        if reader.is_file() {
-            return Some(reader);
-        }
-        let index = b.join("index.md");
-        if index.is_file() {
-            return Some(index);
-        }
-    }
-    None
+    book_paths(root, save_dir).into_iter().next()
 }
 
-/// The page edition (page anchors, then `index.md`) used by `adventure search`.
-/// Search promises a PDF page number for every hit, so the reader edition
-/// (which has no anchors) is not used here.
-pub fn lookup_path(root: &Path, save_dir: &Path) -> Option<PathBuf> {
-    let slug = start::adventure_slug(save_dir)?;
-    let md = root.join("Adventures").join(&slug).join(".md");
-    let mut books: Vec<PathBuf> = fs::read_dir(md)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    books.sort();
-    for b in books {
-        let name = b.file_name()?.to_string_lossy().to_string();
-        let pages = b.join(format!("{name}.pages.md"));
-        if pages.is_file() {
-            return Some(pages);
-        }
-        let index = b.join("index.md");
-        if index.is_file() {
-            return Some(index);
+/// Every converted part of the save's adventure (a book split into several
+/// PDFs has one index per part), best match first.
+pub fn book_paths(root: &Path, save_dir: &Path) -> Vec<PathBuf> {
+    let Some(slug) = start::adventure_slug(save_dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for d in library::adventure_indexes(root, &slug) {
+        if let Some(p) = library::paged_markdown(&d) {
+            out.push(p);
+        } else if d.join("index.md").is_file() {
+            out.push(d.join("index.md"));
         }
     }
-    None
+    out
+}
+
+/// The page edition used by `adventure search` (same file as [`book_path`]:
+/// pdf2md now writes only the paged Markdown).
+pub fn lookup_path(root: &Path, save_dir: &Path) -> Option<PathBuf> {
+    book_path(root, save_dir)
 }
 
 /// Fold one string for query-time matching. Punctuation and whitespace are
@@ -369,39 +347,55 @@ fn intake_line(dir: &Path) -> Option<String> {
 
 /// `talkdnd adventure search <query>`: matching lines with PDF page numbers.
 pub fn search(root: &Path, save_dir: &Path, query: &str, limit: usize) -> Result<Vec<String>> {
-    let path = lookup_path(root, save_dir).ok_or_else(|| {
-        anyhow!(
-            "没有找到本存档冒险的页码版 Markdown（Adventures/<slug>/.md/<书名>/<书名>.pages.md 或 index.md）；先按 docs/pdf2md.md 转换 PDF"
-        )
-    })?;
+    let paths = book_paths(root, save_dir);
+    if paths.is_empty() {
+        bail!(
+            "没有找到本存档冒险的页码版 Markdown（Adventures/<slug>/index/<书名>.pages.md）；先按 docs/pdf2md.md 转换 PDF"
+        );
+    }
     let q = normalize_for_search(query);
     if q.is_empty() {
         bail!("搜索词去掉标点后为空");
     }
-    let md = fs::read_to_string(&path).unwrap_or_default();
-    if md.trim().is_empty() {
-        bail!("{} is empty", path.display());
-    }
-    let paged = path
-        .file_name()
-        .is_some_and(|n| n.to_string_lossy().ends_with(".pages.md"));
+    let multi = paths.len() > 1;
     let mut out = Vec::new();
-    if let Some(line) = intake_line(path.parent().unwrap_or(Path::new("."))) {
-        out.push(line);
-    }
     // Exact (normalised) hits first in page order, then garbled-start hits,
     // marked so the DM can tell a likely match from a tolerant one.
     let mut exact = Vec::new();
     let mut fuzzy = Vec::new();
-    for (page, line) in lookup_lines(&md, paged) {
-        let n = normalize_for_search(&line);
-        if n.contains(&q) {
-            exact.push(format!("p.{page}: {line}"));
-            if limit > 0 && exact.len() >= limit {
-                break;
+    for path in &paths {
+        let md = fs::read_to_string(path).unwrap_or_default();
+        if md.trim().is_empty() {
+            if !multi {
+                bail!("{} is empty", path.display());
             }
-        } else if fuzzy_hit(&n, &q) {
-            fuzzy.push(format!("p.{page}: {line}（模糊）"));
+            continue;
+        }
+        let paged = path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().ends_with(".pages.md"));
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let part = if multi {
+            format!("{}，", library::index_stem(dir))
+        } else {
+            String::new()
+        };
+        if let Some(line) = intake_line(dir) {
+            out.push(format!("{part}{line}"));
+        }
+        for (page, line) in lookup_lines(&md, paged) {
+            let n = normalize_for_search(&line);
+            if n.contains(&q) {
+                exact.push(format!("{part}p.{page}: {line}"));
+                if limit > 0 && exact.len() >= limit {
+                    break;
+                }
+            } else if fuzzy_hit(&n, &q) {
+                fuzzy.push(format!("{part}p.{page}: {line}（模糊）"));
+            }
+        }
+        if limit > 0 && exact.len() >= limit {
+            break;
         }
     }
     let mut hits = 0;
@@ -421,13 +415,22 @@ pub fn search(root: &Path, save_dir: &Path, query: &str, limit: usize) -> Result
     Ok(out)
 }
 
+/// The adventure's paged Markdown (all parts joined, in order) and the first
+/// part's path.
 pub fn read_book(root: &Path, save_dir: &Path) -> Result<(PathBuf, String)> {
     let path = book_path(root, save_dir).ok_or_else(|| {
         anyhow!(
-            "没有找到本存档冒险的本地 Markdown（Adventures/<slug>/.md/<书名>/）；先按 docs/pdf2md.md 转换 PDF，或用 `talkdnd chargen set adventure \"<书名>\"` 确认冒险"
+            "没有找到本存档冒险的本地 Markdown（Adventures/<slug>/index/<书名>.pages.md）；先按 docs/pdf2md.md 转换 PDF，或用 `talkdnd chargen set adventure \"<书名>\"` 确认冒险"
         )
     })?;
-    let text = fs::read_to_string(&path).unwrap_or_default();
+    let mut text = String::new();
+    for p in book_paths(root, save_dir) {
+        let part = fs::read_to_string(&p).unwrap_or_default();
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text += &part;
+    }
     if text.trim().is_empty() {
         bail!("{} is empty", path.display());
     }
@@ -673,10 +676,10 @@ mod tests {
             "# Hero\n\n```combat yaml\nid: hero\nname: Hero\nlevel: 1\nhp: 10\n```\n",
         )
         .unwrap();
-        let book = r.join("Adventures/test-adventure/.md/Test Book");
+        let book = r.join("Adventures/test-adventure/index");
         fs::create_dir_all(&book).unwrap();
         fs::write(
-            book.join("Test Book.md"),
+            book.join("Test Book.pages.md"),
             "# Test Book\n\nintro\n\n## Chapter 1: First Job\n\n### The Inn\n\nfirst body\n\n### The Cellar\n\ncellar body\n\n## Chapter 2: Second Job\n\nsecond body\n\n## DM Notes\n\n- The butler is [[Red Mask]]\n",
         )
         .unwrap();
@@ -742,7 +745,7 @@ mod tests {
     }
 
     fn write_pages(r: &Path, body: &str) -> PathBuf {
-        let book = r.join("Adventures/test-adventure/.md/Test Book");
+        let book = r.join("Adventures/test-adventure/index");
         fs::create_dir_all(&book).unwrap();
         let pages = book.join("Test Book.pages.md");
         fs::write(&pages, body).unwrap();
@@ -808,7 +811,11 @@ mod tests {
     fn search_falls_back_to_index_md_pages() {
         let r = root("search-index");
         let save = r.join("Saves/2030-01-01-01");
-        let book = r.join("Adventures/test-adventure/.md/Test Book");
+        let book = r.join("Adventures/test-adventure/index");
+        // A converted index without the paged Markdown: search reads the
+        // page numbers from index.md.
+        fs::remove_file(book.join("Test Book.pages.md")).unwrap();
+        fs::write(book.join("index.json"), "{}").unwrap();
         fs::write(
             book.join("index.md"),
             "# Index: Test Book\n\n## Headings\n\n- [Final Flight](<Test Book.pages.md#p9>) - p.9\n",

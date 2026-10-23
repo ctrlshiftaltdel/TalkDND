@@ -255,11 +255,8 @@ def verify(root, book=None):
             problems.append("page anchors out of order or duplicated")
         if set(anchors) != {int(p) for p in m["pages"]}:
             problems.append("anchors do not match converted pages")
-        from .convert import to_reader
-
-        reader = os.path.join(d, stem + ".md")
-        if not os.path.exists(reader) or open(reader, encoding="utf-8").read() != to_reader(md, stem):
-            problems.append("reader edition out of sync with the pages edition")
+        if os.path.exists(os.path.join(d, stem + ".md")):
+            problems.append(f"redundant page-less {stem}.md (pdf2md < 0.6); `talkdnd library tidy` removes it")
         bad = tables.check_tables(md)
         low = sum(1 for i in m["pages"].values() if i.get("quality") == "low")
         print(f"{stem}: {len(anchors)}/{m['page_count']} pages, {low} low-quality, "

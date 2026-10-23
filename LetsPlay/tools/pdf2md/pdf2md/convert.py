@@ -1,10 +1,12 @@
-"""Incremental, resumable conversion of one PDF into hidden Markdown output.
+"""Incremental, resumable conversion of one PDF into Markdown output.
 
-Layout for ``<dir>/<Stem>.pdf``::
+One folder per book (see ``docs/layout.md``): ``Adventures/<slug>/<Stem>.pdf``
+or ``Rules/<edition>/<slug>/<Stem>.pdf``, where ``<slug>`` is :func:`slug` of
+the PDF name. The output sits next to the PDF::
 
-    <dir>/.md/<Stem>/
-        <Stem>.md        reader edition: same text, no page anchors (play from this)
-        <Stem>.pages.md  lookup edition: page anchors <a id="pN"></a> (index, review, fixes)
+    <slug>/index/
+        <Stem>.pages.md  the one Markdown edition: page anchors <a id="pN"></a>
+                         (= PDF page N); play, lookup, review and fixes all use it
         index.md         headings / stat blocks / figures -> pages
         index.json
         manifest.json    hash, chunk + page status, quality flags
@@ -58,24 +60,48 @@ SELECTIVE_UPGRADES = {
     ("0.3.1", "0.4.1"): lambda info: False,
     # 0.5.0 adds the image stage (art cut out of scanned pages, maps at ~1600 px):
     # every chunk is redone; fixes/ are backed up first and keep their text.
+    # 0.6.0 only changes the output layout (one folder per book, `index/`) and
+    # drops the page-less reader edition: no chunk is redone, nothing reassembled.
+    ("0.5.0", "0.6.0"): lambda info: False,
 }
 
 ANCHOR_LINE_RE = re.compile(r'^<a id="p\d+"></a>\n?|^<!-- PDF p\.\d+ -->', re.M)
-ANCHOR_NOTE = "> Each page starts with `<a id=\"pN\"></a>` where N is the PDF page number."
 
 
 def pages_name(stem):
     return stem + ".pages.md"
 
 
-def to_reader(pages_md, stem):
-    """Reader edition: the lookup edition without page anchors / page comments.
-    Everything else is identical (checked by tests)."""
-    md = pages_md.replace(
-        ANCHOR_NOTE,
-        f"> Reader edition (no page anchors). PDF page lookup: `{pages_name(stem)}` and `index.md`.")
-    md = ANCHOR_LINE_RE.sub("", md)
-    return re.sub(r"\n{3,}", "\n\n", md)
+def strip_anchors(pages_md):
+    """The paged Markdown without page anchors / page comments (for parsers
+    that do not care about page numbers; nothing is written to disk)."""
+    return re.sub(r"\n{3,}", "\n\n", ANCHOR_LINE_RE.sub("", pages_md))
+
+
+INDEX_DIR = "index"
+LEGACY_DIR = ".md"
+
+
+def slug(name):
+    """Book folder name: identical to talkdnd's ``library::slug`` (Rust).
+    ASCII letters/digits lowercased, apostrophes dropped, other runs -> one
+    ``-``; a name without ASCII letters/digits -> ``book-<FNV-1a hex>``."""
+    out = []
+    for ch in name.strip():
+        if ch in "'\u2019":
+            continue
+        if ch.isascii() and ch.isalnum():
+            out.append(ch.lower())
+        elif out and out[-1] != "-":
+            out.append("-")
+    s = "".join(out).rstrip("-")
+    if s:
+        return s
+    h = 0x811C9DC5
+    for b in name.strip().encode("utf-8"):
+        h ^= b
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return "book-%08x" % h
 
 
 def _chunk_pages(key):
@@ -84,9 +110,16 @@ def _chunk_pages(key):
 
 
 def out_dir(pdf_path):
+    """``(<book folder>/index, stem)`` for a PDF in its own book folder
+    (folder name == slug of the PDF name); otherwise the legacy
+    ``<dir>/.md/<Stem>`` (a loose PDF that `talkdnd library tidy` has not
+    moved yet, or a second PDF sharing a folder)."""
     pdf_path = os.path.abspath(pdf_path)
     stem = os.path.splitext(os.path.basename(pdf_path))[0]
-    return os.path.join(os.path.dirname(pdf_path), ".md", stem), stem
+    parent = os.path.dirname(pdf_path)
+    if os.path.basename(parent) == slug(stem):
+        return os.path.join(parent, INDEX_DIR), stem
+    return os.path.join(parent, LEGACY_DIR, stem), stem
 
 
 def sha256_file(path):
@@ -186,6 +219,7 @@ class Book:
         self._hmap = None
         intake.ensure(self.m, self.doc, self.chapter_open)
         self.save()
+        self._drop_reader()
 
     # -------------------------------------------------------------- manifest
     def _load(self):
@@ -209,6 +243,38 @@ class Book:
             p = os.path.join(self.dir, name)
             if os.path.exists(p):
                 os.remove(p)
+
+    def _drop_reader(self):
+        """pdf2md < 0.6 also wrote a page-less ``<Stem>.md``. Once the paged
+        edition exists it is redundant: remove it and point index.md /
+        index.json at the paged edition, without reassembling anything."""
+        pages = os.path.join(self.dir, pages_name(self.stem))
+        reader = os.path.join(self.dir, self.stem + ".md")
+        if not os.path.exists(pages):
+            return
+        if os.path.exists(reader):
+            os.remove(reader)
+        idx_md = os.path.join(self.dir, "index.md")
+        try:
+            with open(idx_md, encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            text = None
+        if text is not None:
+            book = pages_name(self.stem)
+            old = f"Read: [{self.stem}.md](<{self.stem}.md>) (no page anchors). Page lookup: [{book}](<{book}>). "
+            if old in text:
+                _write_atomic(idx_md, text.replace(
+                    old, f"Read: [{book}](<{book}>) (`<a id=\"pN\"></a>` = PDF page N). "))
+        idx_json = os.path.join(self.dir, "index.json")
+        try:
+            with open(idx_json, encoding="utf-8") as f:
+                idx = json.load(f)
+        except (OSError, ValueError):
+            idx = None
+        if isinstance(idx, dict) and idx.get("book") == self.stem + ".md":
+            idx["book"] = pages_name(self.stem)
+            _write_atomic(idx_json, json.dumps(idx, indent=1, ensure_ascii=False))
 
     def save(self):
         self.m["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -630,7 +696,7 @@ class Book:
         _write_atomic(os.path.join(self.dir, "proofread-report.md"),
                       proofread.report(self.stem, log).encode("utf-8"))
         _write_atomic(os.path.join(self.dir, pages_name(self.stem)), md)
-        _write_atomic(os.path.join(self.dir, self.stem + ".md"), to_reader(md, self.stem))
+        self._drop_reader()
         self.write_index(md)
         return md
 
@@ -651,7 +717,7 @@ class Book:
 
     def write_index(self, md):
         audit = intake.ensure(self.m, self.doc, self.chapter_open)
-        idx = {"pdf": self.m["pdf"], "book": self.stem + ".md", "pages": pages_name(self.stem),
+        idx = {"pdf": self.m["pdf"], "book": pages_name(self.stem), "pages": pages_name(self.stem),
                "page_count": self.m["page_count"],
                "done_pages": self.done_pages(), "headings": [], "statblocks": [], "figures": [],
                "low_quality_pages": [], "ocr_pages": [],
@@ -681,10 +747,9 @@ class Book:
             if i.get("ocr"):
                 idx["ocr_pages"].append(p)
         _write_atomic(os.path.join(self.dir, "index.json"), json.dumps(idx, indent=1, ensure_ascii=False))
-        reader = self.stem + ".md"
         book = pages_name(self.stem)
         lines = [f"# Index: {self.stem}", "",
-                 f"Read: [{reader}](<{reader}>) (no page anchors). Page lookup: [{book}](<{book}>). "
+                 f"Read: [{book}](<{book}>) (`<a id=\"pN\"></a>` = PDF page N). "
                  f"PDF: `{self.m['pdf']}` (authoritative). "
                  f"{idx['done_pages']}/{idx['page_count']} pages converted.", ""]
         a = audit

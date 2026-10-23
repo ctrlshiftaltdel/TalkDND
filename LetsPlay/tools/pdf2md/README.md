@@ -13,7 +13,9 @@ uv run --project tools/pdf2md python -m pdf2md verify
 uv run --project tools/pdf2md python -m pdf2md render "<book>" <pdf-page>
 ```
 
-`Foo.pdf` produces `.md/Foo/` next to it: `Foo.md` (page anchors `<a id="pN"></a>`, N = PDF page), `index.md` / `index.json`, `manifest.json`, `pages/` chunks, and `img/` page images for maps and figures.
+Books live one per folder (`Adventures/<slug>/`, `Rules/<edition>/<slug>/`; `talkdnd start` / `talkdnd library tidy` moves loose PDFs there). `<slug>/Foo.pdf` produces `<slug>/index/`: `Foo.pages.md` (the only Markdown edition; page anchors `<a id="pN"></a>`, N = PDF page), `index.md` / `index.json`, `manifest.json`, `pages/` chunks, and `img/` page images for maps and figures. A PDF that is not in its own book folder yet still gets the legacy `.md/Foo/` next to it. The slug (shared with `talkdnd`): ASCII letters and digits lowercased, `'` and `’` dropped, every other run of characters becomes one `-`, ends trimmed; a name with no ASCII letter or digit becomes `book-<FNV-1a 32 hex>`.
+
+Since 0.6.0 there is no page-less reader copy (`Foo.md`). Upgrading from 0.5.0 redoes no chunks and reassembles nothing: it deletes an existing redundant `Foo.md`, points `index.md` and `index.json` at `Foo.pages.md`, and records 0.6.0 in `manifest.json`. `verify` flags a leftover reader copy.
 
 - **Incremental:** 10-page chunks, written atomically. `manifest.json` stores the PDF's SHA-256, so a changed PDF starts over and an unchanged one resumes.
 - **Tool upgrades:** when the pdf2md version changes, an unchanged PDF keeps its old pages (marked as being redone) and is reconverted chunk by chunk, so the book stays readable. Upgrades listed in `SELECTIVE_UPGRADES` redo only the chunks they affect (0.2.0 → 0.2.1 and 0.2.1 → 0.2.2: pages that used the text-layer fallback; 0.2.2 judges fallback headings against the page's body font size instead of fixed point sizes; 0.2.2 → 0.2.3: OCR and fallback pages, where sentence-like headings are demoted to text).
@@ -41,7 +43,7 @@ uv run --project tools/pdf2md python -m pdf2md review --book NAME [--page 12,30-
 uv run --project tools/pdf2md python -m pdf2md apply [--book NAME]
 ```
 
-- `audit` scores every page against the PDF text layer and writes `.md/<stem>/audit.json` worst-first.
+- `audit` scores every page against the PDF text layer and writes `<slug>/index/audit.json` worst-first.
 - `fixes/pNNNN.md` overrides page N when the book is assembled (header: PDF sha256 + tool version; ignored for another PDF).
 - `review` runs an agent on a page and keeps the result when scores do not regress. A small recall drop (≤ 0.05) is allowed on structured / stat-block pages when unknown/1k improves, word count stays ≥ 90%, and badness does not worsen; hard reject if unknown/1k rises or words fall below 50%. Otherwise the output goes to `fixes/rejected/`. `--rejudge` re-scores rejected files with the current gate (no agent). Grok Build defaults to 60 max turns and retries once on max-turns with a short prompt; set `PDF2MD_GROK_MODEL` to pick a model. Lessons and thresholds: `docs/LESSONS.md`.
 - `apply` rebuilds the book now (only when no worker holds the lock).

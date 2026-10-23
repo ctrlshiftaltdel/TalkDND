@@ -35,7 +35,57 @@ struct State {
     /// Default file name -> sha256 of the shipped copy at the last start.
     #[serde(default)]
     defaults: BTreeMap<String, String>,
+    /// Default file name -> sha256 of the `Rules/<name>` copy this tool last
+    /// wrote. A copy still matching it was never edited by the DM.
+    #[serde(default)]
+    copies: BTreeMap<String, String>,
 }
+
+/// sha256 of every `Rules/defaults/rulings*.md` shipped before 0.10.0. A
+/// local `Rules/<name>` equal to one of them is an unedited copy of an older
+/// default and is upgraded in place (older tools did not record `copies`).
+const SHIPPED_HISTORY: &[(&str, &str)] = &[
+    (
+        "rulings.md",
+        "1348386436efa43bc3761f4d40248a0030200458506459ca48720bf4a45f9b6e",
+    ),
+    (
+        "rulings.md",
+        "c8d668a29cae5d9422bccc5f3668a9ff8549098bb8311725c9536265306d1ab3",
+    ),
+    (
+        "rulings.md",
+        "d0482ed0e11f0a45250fec33d55e7459e079c2a086fcdce69d0fe82078064701",
+    ),
+    (
+        "rulings.md",
+        "f15845eaf422a1f19fd63386c118a544c3d9ec13af493376bb0169fe3fcf12bf",
+    ),
+    (
+        "rulings-2014.md",
+        "37f672f698c29b54eb80322e429deff731aabad469feefc31a2beaa4309e2b08",
+    ),
+    (
+        "rulings-2014.md",
+        "4ba44bb2194293e9696af3e1c90db98a6794d12da7ee6c53191e6513c46dc954",
+    ),
+    (
+        "rulings-2014.md",
+        "b0694eef69aac1e22174a1c296596052ceae5cb1d8c945d9be1056559f88cde4",
+    ),
+    (
+        "rulings-2024.md",
+        "350dc65503cda4992eea17273d02aee17801ae6aacb9ce1ad32aa47fb2ea51e9",
+    ),
+    (
+        "rulings-2024.md",
+        "3aad2ad78e0ac2e82e801a83eacc7b2e0e2562cd92eddcbe137518449eeeda06",
+    ),
+    (
+        "rulings-2024.md",
+        "97fe36c91db0cd8113ac722f0c98d9e8fd4058e16a330064f202b472f65cda92",
+    ),
+];
 
 fn state_path(root: &Path) -> PathBuf {
     root.join(STATE_DIR).join("state.yaml")
@@ -57,8 +107,11 @@ fn store_state(root: &Path, state: &State) -> Result<()> {
 }
 
 /// Copy shipped `Rules/defaults/rulings*.md` to `Rules/` when the DM has no
-/// copy yet. A copy that differs is left alone; when the shipped default has
-/// changed since the previous start, a merge hint is returned.
+/// copy yet. `Rules/defaults/` is the shipped original (overwritten by every
+/// update); `Rules/rulings*.md` is the DM's working copy and wins at the
+/// table. A copy the DM never edited (equal to a previously shipped default,
+/// or to what this tool last wrote) follows the new default automatically;
+/// an edited copy is left alone, with a merge hint when the default changed.
 pub fn sync_defaults(root: &Path) -> Result<Vec<String>> {
     let defaults = root.join("Rules").join("defaults");
     let Ok(entries) = fs::read_dir(&defaults) else {
@@ -96,14 +149,30 @@ pub fn sync_defaults(root: &Path) -> Result<Vec<String>> {
         } else {
             let current = fs::read(&user).with_context(|| format!("read {}", user.display()))?;
             if current != bytes {
-                let changed = state.defaults.get(&name).is_some_and(|old| *old != digest);
-                if changed {
+                let have = sha256_hex(&current);
+                let pristine = state.copies.get(&name) == Some(&have)
+                    || state.defaults.get(&name) == Some(&have)
+                    || SHIPPED_HISTORY
+                        .iter()
+                        .any(|(n, h)| *n == name && *h == have);
+                if pristine {
+                    atomic_write(&user, &bytes)?;
                     notes.push(format!(
-                        "`Rules/defaults/{name}` 自上次启动后已更新；你的 `Rules/{name}` 与默认不同，已保留，请手动合并（以你的裁定为准）"
+                        "`Rules/{name}` 是未改动过的旧版默认，已自动更新为当前 `Rules/defaults/{name}`"
                     ));
+                } else {
+                    let changed = state.defaults.get(&name).is_some_and(|old| *old != digest);
+                    if changed {
+                        notes.push(format!(
+                            "`Rules/defaults/{name}` 自上次启动后已更新；你的 `Rules/{name}` 有自己的改动，已保留，请手动合并（以你的裁定为准）"
+                        ));
+                    }
+                    state.defaults.insert(name, digest);
+                    continue;
                 }
             }
         }
+        state.copies.insert(name.clone(), digest.clone());
         state.defaults.insert(name, digest);
     }
     store_state(root, &state)?;
@@ -155,7 +224,7 @@ pub fn is_user_data(path: &str) -> bool {
     let segments: Vec<&str> = path.split('/').collect();
     if segments
         .iter()
-        .any(|s| matches!(*s, "local" | "fixes" | ".md"))
+        .any(|s| matches!(*s, "local" | "fixes" | ".md" | "index"))
     {
         return true;
     }
@@ -278,6 +347,54 @@ mod tests {
         let state = fs::read_to_string(state_path(&root)).unwrap();
         assert!(state.contains("rulings.md"), "{state}");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unedited_copies_follow_the_default_and_old_shipped_versions_upgrade() {
+        let root = temp("pristine");
+        write(&root.join("Rules/defaults/rulings.md"), "default one\n");
+        sync_defaults(&root).unwrap();
+        // Never edited: the new default replaces it, with a note.
+        fs::write(root.join("Rules/defaults/rulings.md"), "default two\n").unwrap();
+        let notes = sync_defaults(&root).unwrap();
+        assert!(notes.iter().any(|n| n.contains("已自动更新")), "{notes:?}");
+        assert_eq!(
+            fs::read_to_string(root.join("Rules/rulings.md")).unwrap(),
+            "default two\n"
+        );
+        assert!(sync_defaults(&root).unwrap().is_empty());
+
+        // A copy from an older release (no tool state yet) equal to a
+        // previously shipped default is upgraded; anything else is kept.
+        let root2 = temp("history");
+        write(&root2.join("Rules/defaults/rulings-2014.md"), "new 2014\n");
+        write(&root2.join("Rules/defaults/rulings-2024.md"), "new 2024\n");
+        write(&root2.join("Rules/rulings-2014.md"), "old shipped\n");
+        write(&root2.join("Rules/rulings-2024.md"), "my 2024 table rule\n");
+        let old = sha256_hex(b"old shipped\n");
+        assert!(!SHIPPED_HISTORY.iter().any(|(_, h)| *h == old));
+        // Simulate: the old text is a known shipped version.
+        let mut state = State::default();
+        state.defaults.insert("rulings-2014.md".into(), old);
+        store_state(&root2, &state).unwrap();
+        let notes = sync_defaults(&root2).unwrap();
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("rulings-2014.md") && n.contains("已自动更新")),
+            "{notes:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(root2.join("Rules/rulings-2014.md")).unwrap(),
+            "new 2014\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root2.join("Rules/rulings-2024.md")).unwrap(),
+            "my 2024 table rule\n"
+        );
+        assert_eq!(SHIPPED_HISTORY.len(), 10);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&root2);
     }
 
     #[test]

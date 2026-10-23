@@ -617,6 +617,26 @@ fn collect_files(path: &Path, out: &mut Vec<PathBuf>, ruleset: &str) -> Result<(
     collect_inner(path, out, true, ruleset)
 }
 
+/// pdf2md output folder (`index/`, or a legacy `.md/<Book>/`).
+fn is_index_dir(path: &Path) -> bool {
+    path.join("manifest.json").is_file() || path.join("index.json").is_file()
+}
+
+/// A one-folder-per-book library entry: it holds the book PDF or its
+/// converted `index/`.
+fn is_book_folder(path: &Path) -> bool {
+    if is_index_dir(&path.join("index")) {
+        return true;
+    }
+    std::fs::read_dir(path).is_ok_and(|rd| {
+        rd.flatten().any(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("pdf"))
+        })
+    })
+}
+
 fn collect_inner(path: &Path, out: &mut Vec<PathBuf>, explicit: bool, ruleset: &str) -> Result<()> {
     let metadata = std::fs::metadata(path)
         .with_context(|| format!("failed to read content source {}", path.display()))?;
@@ -624,8 +644,14 @@ fn collect_inner(path: &Path, out: &mut Vec<PathBuf>, explicit: bool, ruleset: &
         // An adventure folder (`Adventures/<book>`) keeps its combat data in
         // `combat/`; the rest is the book and its conversions.
         let combat = path.join("combat");
-        if explicit && combat.is_dir() {
+        let book = is_book_folder(path);
+        if (explicit || book) && combat.is_dir() {
             return collect_inner(&combat, out, false, ruleset);
+        }
+        // A book folder (`Adventures/<slug>/` with the PDF and its converted
+        // `index/`) without combat data has nothing to load.
+        if book {
+            return Ok(());
         }
         // A nested layered library (`common/` + `2014/` …) is loaded only when
         // listed under `library:`, which picks the save's ruleset layer.
@@ -640,6 +666,10 @@ fn collect_inner(path: &Path, out: &mut Vec<PathBuf>, explicit: bool, ruleset: &
         for entry in entries {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with('.') {
+                continue;
+            }
+            // pdf2md output (`<book>/index/`) is book text, never content.
+            if name == "index" && is_index_dir(&entry.path()) {
                 continue;
             }
             // Edition folders (`heists/2014/`) follow the save's ruleset.
@@ -917,6 +947,39 @@ mod play_root_tests {
             PathBuf::from("nope.yaml")
         );
         assert_eq!(resolve_in_play_root(rel, None), rel.to_path_buf());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn book_folders_load_only_their_combat_data() {
+        let root = std::env::temp_dir().join(format!("cs-books-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let adv = root.join("Adventures");
+        let with = adv.join("with-combat");
+        let without = adv.join("no-combat");
+        for d in [
+            with.join("index"),
+            with.join("combat"),
+            without.join("index"),
+        ] {
+            std::fs::create_dir_all(&d).unwrap();
+        }
+        for b in [&with, &without] {
+            std::fs::write(b.join("Book.pdf"), "pdf").unwrap();
+            std::fs::write(b.join("index/manifest.json"), "{}").unwrap();
+            std::fs::write(b.join("index/index.json"), "{}").unwrap();
+            std::fs::write(b.join("index/Book.pages.md"), "# Book\n").unwrap();
+        }
+        std::fs::write(with.join("combat/goblin.yaml"), "x: 1\n").unwrap();
+        let mut out = Vec::new();
+        collect_inner(&adv, &mut out, true, "2014").unwrap();
+        assert_eq!(out, vec![with.join("combat/goblin.yaml")]);
+        let mut out = Vec::new();
+        collect_inner(&with, &mut out, true, "2014").unwrap();
+        assert_eq!(out, vec![with.join("combat/goblin.yaml")]);
+        let mut out = Vec::new();
+        collect_inner(&with.join("combat"), &mut out, true, "2014").unwrap();
+        assert_eq!(out, vec![with.join("combat/goblin.yaml")]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

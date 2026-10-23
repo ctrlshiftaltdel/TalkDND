@@ -12,6 +12,7 @@ pub mod data;
 pub mod handout;
 pub mod identify;
 pub mod known;
+pub mod library;
 pub mod migrate;
 pub mod npc;
 pub mod options;
@@ -126,6 +127,11 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         text: Vec<String>,
     },
+    /// Book library (Adventures/, Rules/<edition>/): one folder per book
+    Library {
+        #[command(subcommand)]
+        cmd: LibraryCmd,
+    },
     /// Local rulebook data (non-SRD classes, subclasses, weapons; gitignored)
     Data {
         #[command(subcommand)]
@@ -237,6 +243,17 @@ enum Cmd {
     Options {
         #[arg(long, default_value = "2024")]
         ruleset: String,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum LibraryCmd {
+    /// Move loose book PDFs (and their converted index) into
+    /// `Adventures/<slug>/` or `Rules/<edition>/<slug>/`; also run by `start`
+    Tidy {
+        /// Only report what would move; change nothing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -521,7 +538,7 @@ enum DataCmd {
         #[arg(long, default_value = "2024")]
         ruleset: String,
     },
-    /// Build Rules/chargen/local/imported-<ruleset>.yaml from converted Markdown (.md/)
+    /// Build Rules/chargen/local/imported-<ruleset>.yaml from the converted paged Markdown (Rules/<edition>/<slug>/index/)
     Import {
         #[arg(long, default_value = "2024")]
         ruleset: String,
@@ -565,7 +582,8 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         | Cmd::Migrate { .. }
         | Cmd::Integrity { .. }
         | Cmd::Options { .. }
-        | Cmd::Data { .. } => None,
+        | Cmd::Data { .. }
+        | Cmd::Library { .. } => None,
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
     };
     let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
@@ -1053,6 +1071,13 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
         }
         Cmd::Options { ruleset } => print_options(&ruleset),
         Cmd::Data { cmd } => data_cmd(&root, cmd)?,
+        Cmd::Library {
+            cmd: LibraryCmd::Tidy { dry_run },
+        } => {
+            for l in library::tidy(&root, dry_run)?.lines() {
+                println!("{l}");
+            }
+        }
     }
     Ok(())
 }
@@ -1172,7 +1197,9 @@ fn new_save(
         fs::create_dir_all(dir.join(d))?;
     }
     let rs = ruleset.clone().unwrap_or_else(|| "2024".into());
-    let adv_slug = adventure.as_deref().map(chargen::slug);
+    let adv_slug = adventure
+        .as_deref()
+        .map(|a| library::adventure_folder_name(root, a));
     let adv_line = match &adv_slug {
         Some(a) => {
             fs::create_dir_all(root.join("Adventures").join(a).join("combat"))?;
@@ -1380,8 +1407,9 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                     c.ruleset = Some(v);
                 }
                 "adventure" => {
-                    let s = chargen::slug(&v);
+                    let mut s = chargen::slug(&v);
                     if let Some(root) = save.parent().and_then(|p| p.parent()) {
+                        s = library::adventure_folder_name(root, &v);
                         fs::create_dir_all(root.join("Adventures").join(&s).join("combat"))?;
                     }
                     set_campaign_line(
@@ -1717,16 +1745,16 @@ fn data_cmd(root: &Path, cmd: DataCmd) -> Result<()> {
                 "ruleset {ruleset}: {} classes (SRD + local)",
                 b.classes.len()
             );
-            let (reader, pages) = classdata::rulebooks(&root.join("Rules").join(&ruleset));
-            if reader.is_empty() {
+            let books = classdata::rulebooks(&root.join("Rules").join(&ruleset));
+            if books.is_empty() {
                 println!("rules source: SRD only (no full-rulebook Markdown found)");
             } else {
                 println!("rules source: FULL RULEBOOKS (local) — read these first; SRD is only a fallback");
-                for f in &reader {
-                    println!("  reader: {}", rel(root, f));
-                }
-                for f in &pages {
-                    println!("  pages:  {}", rel(root, f));
+                for f in &books {
+                    println!(
+                        "  book (paged, <a id=\"pN\"></a> = PDF page N): {}",
+                        rel(root, f)
+                    );
                 }
             }
             if classdata::import_stale(root, &ruleset) {

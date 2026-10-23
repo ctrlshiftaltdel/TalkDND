@@ -309,9 +309,9 @@ fn members(save: &Path) -> Vec<Member> {
 
 /// Rules source for the digest; imports book data when it is missing or stale.
 fn rules_source_line(root: &Path, rs: &str) -> String {
-    let (reader, pages) = crate::classdata::rulebooks(&root.join("Rules").join(rs));
-    if reader.is_empty() {
-        return format!("- 规则来源：仅 SRD（Rules/{rs}/ 下没有完整规则书 Markdown；见 docs/chargen.md「本地规则书数据」）\n");
+    let books = crate::classdata::rulebooks(&root.join("Rules").join(rs));
+    if books.is_empty() {
+        return format!("- 规则来源：仅 SRD（Rules/{rs}/ 下没有转换好的完整规则书；见 docs/chargen.md「本地规则书数据」）\n");
     }
     let mut s = String::new();
     if crate::classdata::import_stale(root, rs) {
@@ -320,23 +320,9 @@ fn rules_source_line(root: &Path, rs: &str) -> String {
             Err(e) => s += &format!("- 本地规则书数据：自动导入失败（{e}）；手动运行 `talkdnd data import --ruleset {rs}`\n"),
         }
     }
-    let rel = |p: &std::path::PathBuf| {
-        p.strip_prefix(root)
-            .unwrap_or(p)
-            .to_string_lossy()
-            .replace('\\', "/")
-    };
     s += &format!(
-        "- 规则来源：**完整规则书优先**（SRD 只在书里找不到时兜底）。阅读版：{}{}\n",
-        reader.iter().map(rel).collect::<Vec<_>>().join("；"),
-        if pages.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "；分页版（查页码）：{}",
-                pages.iter().map(rel).collect::<Vec<_>>().join("；")
-            )
-        }
+        "- 规则来源：**完整规则书优先**（SRD 只在书里找不到时兜底）。页码版（`<a id=\"pN\"></a>` = PDF 第 N 页）：{}\n",
+        books.iter().map(|p| rel_root(root, p)).collect::<Vec<_>>().join("；"),
     );
     s
 }
@@ -457,29 +443,27 @@ fn rel_root(root: &Path, p: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// The digest's adventure-book lines: the slug's folder, its PDFs, and its
-/// converted Markdown index when it exists.
+/// The digest's adventure-book lines: the book folder(s), PDFs and the
+/// paged Markdown index when it exists.
 fn adventure_lines(root: &Path, save: &Path) -> String {
     let Some(slug) = adventure_slug(save) else {
         return "- 冒险书：还没设置（`talkdnd chargen set adventure \"<书名>\"`）\n".into();
     };
-    let dir = root.join("Adventures").join(&slug);
-    let mut out = format!("- 冒险书：`Adventures/{slug}/`\n");
-    let mut pdfs: Vec<PathBuf> = Vec::new();
-    if let Ok(rd) = fs::read_dir(&dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            let is_pdf = p
-                .extension()
-                .map(|x| x.to_string_lossy().eq_ignore_ascii_case("pdf"))
-                .unwrap_or(false);
-            if is_pdf {
-                pdfs.push(p);
-            }
-        }
-    }
-    pdfs.sort();
-    let mds = book_mds(&dir.join(".md"));
+    let folders = crate::library::adventure_folders(root, &slug);
+    let mut out = if folders.is_empty() {
+        format!("- 冒险书：`Adventures/{slug}/`\n")
+    } else {
+        format!(
+            "- 冒险书：{}\n",
+            folders
+                .iter()
+                .map(|d| format!("`{}/`", rel_root(root, d)))
+                .collect::<Vec<_>>()
+                .join("、")
+        )
+    };
+    let pdfs = crate::library::adventure_pdfs(root, &slug);
+    let mds = book_mds(&crate::library::adventure_indexes(root, &slug));
     for p in &mds {
         out += &format!("  - Markdown：`{}`\n", rel_root(root, p));
     }
@@ -488,37 +472,26 @@ fn adventure_lines(root: &Path, save: &Path) -> String {
     }
     if mds.is_empty() {
         if pdfs.is_empty() {
-            out += "  - 这里还没有 PDF；把冒险书 PDF 放进这个目录\n";
+            out += &format!("  - 这里还没有 PDF；把冒险书 PDF 放进 `Adventures/`（`talkdnd start` 会自动整理到 `Adventures/{slug}/`）\n");
         } else {
-            out += "  - Markdown 还没转换：先查上面的 PDF（转换后索引在 `.md/<书名>/index.md`）\n";
+            out += "  - Markdown 还没转换：先查上面的 PDF（转换后索引在同一文件夹的 `index/<书名>.pages.md`）\n";
         }
     }
     out
 }
 
-/// Each converted book's main Markdown (`.md/<book>/<book>.md`) and its
-/// `index.md` (headings, maps, stat blocks). Pages, fixes and review files
-/// are working files and stay out of the digest.
-fn book_mds(md_root: &Path) -> Vec<PathBuf> {
-    let mut books: Vec<PathBuf> = fs::read_dir(md_root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    books.sort();
+/// Each converted book's paged Markdown (`index/<book>.pages.md`, PDF page
+/// anchors) and its `index.md` (headings, maps, stat blocks). Page chunks,
+/// fixes and review files are working files and stay out of the digest.
+fn book_mds(indexes: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for b in books {
-        let name = b
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        for f in [b.join(format!("{name}.md")), b.join("index.md")] {
-            if f.is_file() {
-                out.push(f);
-            }
+    for d in indexes {
+        if let Some(p) = crate::library::paged_markdown(d) {
+            out.push(p);
+        }
+        let idx = d.join("index.md");
+        if idx.is_file() {
+            out.push(idx);
         }
     }
     out
@@ -532,6 +505,15 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         .to_string_lossy()
         .to_string();
     let rs = save::ruleset(save);
+    // Tidy the book library before pdf2md starts (it skips itself while a
+    // worker is converting) and before anything reads a book path.
+    let tidy = match crate::library::tidy(root, false) {
+        Ok(r) => r.lines(),
+        Err(e) => vec![format!(
+            "书库整理失败：{e:#}（书本文件没有删除；可运行 `talkdnd library tidy --dry-run` 查看）"
+        )],
+    };
+    timing.mark("library_tidy");
     let (ok, check) = content_check(root, save);
     timing.mark("content_check");
     let pdf = if opts.pdf2md {
@@ -541,6 +523,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     };
     timing.mark("kick_pdf2md");
     let migration = crate::migrate::ensure(save, root, false)?;
+    let repoint = crate::migrate::repoint_books(save, root, false)?;
     timing.mark("migrate");
     let default_notes = crate::update::sync_defaults(root)?;
     timing.mark("sync_defaults");
@@ -592,6 +575,12 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     }
     d += "\n## 存档结构\n\n";
     for line in migration.lines() {
+        d += &format!("- {line}\n");
+    }
+    for line in &repoint {
+        d += &format!("- {line}\n");
+    }
+    for line in &tidy {
         d += &format!("- {line}\n");
     }
     for line in &default_notes {
@@ -747,11 +736,18 @@ mod tests {
             serde_json::json!({ "adventure": "Curse of Strahd" }).to_string(),
         )
         .unwrap();
+        // Old layout (pdf2md 0.5 `.md/<Book>/` with a page-less reader):
+        // `start` tidies it into `index/` and drops the redundant reader.
         let adv = root.join("Adventures/curse-of-strahd");
         fs::create_dir_all(adv.join(".md/Curse of Strahd")).unwrap();
         fs::write(adv.join("Curse of Strahd.pdf"), "pdf").unwrap();
         fs::write(adv.join(".md/Curse of Strahd/index.md"), "# index").unwrap();
         fs::write(adv.join(".md/Curse of Strahd/Curse of Strahd.md"), "# book").unwrap();
+        fs::write(
+            adv.join(".md/Curse of Strahd/Curse of Strahd.pages.md"),
+            "# book\n\n<a id=\"p1\"></a>\n<!-- PDF p.1 -->\ntext\n",
+        )
+        .unwrap();
         for f in [
             "fixes/p0001.md",
             "review/p0002.md",
@@ -769,10 +765,19 @@ mod tests {
             "{d}"
         );
         assert!(
-            d.contains("Markdown：`Adventures/curse-of-strahd/.md/Curse of Strahd/index.md`"),
+            d.contains("书库整理：已移动 `Adventures/curse-of-strahd/.md/Curse of Strahd/` → `Adventures/curse-of-strahd/index/`"),
             "{d}"
         );
-        assert!(d.contains("Curse of Strahd/Curse of Strahd.md`"), "{d}");
+        assert!(
+            d.contains("Markdown：`Adventures/curse-of-strahd/index/index.md`"),
+            "{d}"
+        );
+        assert!(
+            d.contains("Markdown：`Adventures/curse-of-strahd/index/Curse of Strahd.pages.md`"),
+            "{d}"
+        );
+        assert!(!adv.join("index/Curse of Strahd.md").exists());
+        assert!(!adv.join(".md").exists());
         for bad in ["fixes/", "review/", "pages/", "proofread-report"] {
             assert!(!d.contains(bad), "{bad} listed:\n{d}");
         }

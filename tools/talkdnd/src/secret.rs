@@ -601,10 +601,10 @@ mod tests {
         .unwrap();
         let track_first = "version: 1\ntrack:\n  - {name: First Job, level: 1}\n  - {name: Second Job, level: 3}\n";
         fs::write(save.join("progress.yaml"), track_first).unwrap();
-        let book = r.join("Adventures/test-adventure/.md/Test Book");
+        let book = r.join("Adventures/test-adventure/index");
         fs::create_dir_all(&book).unwrap();
         fs::write(
-            book.join("Test Book.md"),
+            book.join("Test Book.pages.md"),
             "# Test Book\n\n## Chapter 1: First Job\n\nfirst body\n\n## Chapter 2: Second Job\n\nsecond body\n",
         )
         .unwrap();
