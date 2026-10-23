@@ -613,7 +613,9 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     }
     d += "\n\n## 队伍（角色卡数据块，maxHP / AC）\n\n";
     let party = party_ids(save);
-    let ms = members(save);
+    let mut ms = members(save);
+    // Player characters first, then companions (stable: file order inside).
+    ms.sort_by_key(|m| m.controller == crate::charsheet::DM);
     for m in &ms {
         let mark = if party.contains(&m.id) {
             ""

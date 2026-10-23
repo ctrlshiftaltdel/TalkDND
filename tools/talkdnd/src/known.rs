@@ -83,10 +83,13 @@ pub fn lines(save_dir: &Path, compact: bool) -> Vec<String> {
     // campaign party list. Story NPCs in NPCs/ are not party members.
     let party = crate::start::party_ids(save_dir);
     let chars_dir = save_dir.join("Characters");
-    for s in sheets
+    let mut members: Vec<&check::Sheet> = sheets
         .iter()
         .filter(|s| s.file.starts_with(&chars_dir) || party.contains(&s.id))
-    {
+        .collect();
+    // Player characters first, then companions.
+    members.sort_by_key(|s| crate::charsheet::controller_for(save_dir, s) == crate::charsheet::DM);
+    for s in members {
         out.push(format!("- {}", party_line(save_dir, s)));
         listed += 1;
     }
