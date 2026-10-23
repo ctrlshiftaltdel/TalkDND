@@ -8,13 +8,13 @@
 
 ### 新功能
 - **按场景读冒险书**：新增 `bin/talkdnd adventure section <章节|地点|关键词> [--list] [--reason "<原因>"]`。程序在本地转换好的冒险 Markdown（`Adventures/<slug>/.md/<书名>/<书名>.md`）里按 Markdown 标题切分，只打印标题匹配的那一节（含它的子标题），不再把整本书倒出来。`--list` 只列标题，不显示正文。章节是否“超前”按存档的冒险进度轨和当前章节判断：超出当前进度默认拒绝；确有必要时加 `--reason`，程序会打印该节并在会话日志记「超前阅读」。标为 DM-only 的小节同样要 `--reason`。没有本地 Markdown 时给出转换/设置冒险的提示。`adventure section` 的标题匹配也做了查询时归一化（大小写、引号、标点、连字、断行连字符），不修改源 Markdown。
-- **冒险按页搜索**：新增 `bin/talkdnd adventure search "<词或短语>" [--limit 20]`（别名 `find`），在页码版 `<书名>.pages.md` 中逐行查找，每个命中带 `p.<PDF 页码>`。查询时归一化大小写、弯/直引号、撇号、标点、空白、连字（`ﬁ`→`fi`）和跨行连字符（`exam-` + `ple`→`example`），每行开头允许丢 1–4 个字符（扫描页边遮挡），因此 `known` 能命中 `..mown`。只读 Markdown，不重写书；`--limit 0` 不限条数。
+- **冒险按页搜索**：新增 `bin/talkdnd adventure search "<词或短语>" [--limit 20]`（别名 `find`），在页码版 `<书名>.pages.md` 中逐行查找，每个命中带 `p.<PDF 页码>`；精确命中在前，行首容错命中标「（模糊）」。查询时归一化大小写、弯/直引号、撇号、标点、空白、连字（`ﬁ`→`fi`）和跨行连字符（`exam-` + `ple`→`example`），每行开头允许丢 1–4 个字符（扫描页边遮挡），因此 `known` 能命中 `..mown`。只读 Markdown，不重写书；`--limit 0` 不限条数。
 - **pdf2md 开书体检与章节起点**：转换一本书时统计文字层字符数、0 字页、乱码率、扫描/数字版判断与书签数，给出 `text layer usable` / `OCR needed` 结论，写入 `manifest.json`、`index.json`，并在 `index.md` 的「Intake audit」「Chapter starts」两节展示；重复运行结果不变。CropBox 超出 MediaBox 的页会先复制单页并夹取副本的 CropBox 再读文字层，原 PDF 不动，不会仅因此误报 `OCR needed`。`pdf2md status` 与 `adventure search`/`section` 会显示简短结论。没有书签的书可用 `--chapter-open "<每章开头短语>"` 或 `PDF2MD_CHAPTER_OPEN` 识别章节起点，结果存进 intake 元数据；`pdf2md audit --chapter-open` 同样生效。命令示例：`uv run --project tools/pdf2md python -m pdf2md run --chapter-open "The Adventure Begins"`、`uv run --project tools/pdf2md python -m pdf2md audit --book "书名" --chapter-open "The Adventure Begins"`。
 - **玩家已知清单 `bin/talkdnd known`**：汇总 `reveals.yaml` 的已揭示事实、`handouts.yaml` 已展示资料图、`identified.yaml` 已识别怪物/物品、已出场或隐藏面已揭示的原创内容、队伍角色卡基础信息、当前章节与地点。`bin/talkdnd scene "<地点>"` 把当前场景写进 `progress.yaml`、记日志并自动打印完整 `known`；`bin/talkdnd start` 的摘要里也带压缩版。
 - **秘密词与防剧透检查**：
   - `bin/talkdnd secret add <词> [--chapter N] [--note "…"]`、`secret list`、`secret remove <词>`，手动秘密词只存在 `Saves/<存档>/secret-terms.yaml`（已 gitignore）。
   - 自动来源：`dm-secrets.md` 与 `dm-plan.md` 里的 `- term: X` / `[[X]]`、当前进度之后的章节标题、DM-only 小节的标题/`[[词]]`/连续大写英文专名、原创内容 `--hidden`。已出现在 `reveals.yaml` 里的词自动排除。
-  - `bin/talkdnd guard "<草稿>"`（或 stdin / `-`）做不区分大小写的子串匹配，每个命中打印「剧透词：X（建议改写为玩家已知的说法；来源：…）」；有命中退出码 1，干净为 0。清单缓存在 `secret-terms.cache.json`，源文件变化后自动失效，检查很快。
+  - `bin/talkdnd guard "<草稿>"`（或 stdin / `-`）不区分大小写：英文按整词、中文按子串匹配，每个命中打印「剧透词：X（建议改写为玩家已知的说法；来源：…）」；有命中退出码 1，干净为 0。清单缓存在 `secret-terms.cache.json`，源文件变化后自动失效，检查很快。
 - **怪物/物品名称遮蔽**：
   - 新增 `bin/talkdnd identify <东西> [--how check|reveal|lore] [--reason "…"]`，把识别记进 `Saves/<存档>/identified.yaml`；`bin/talkdnd identify --appearance <东西> "<描述>"` 可设置识别前对玩家使用的描述。
   - combat-sim 的 `status`、`log`、`simulate` 支持全局 `--player`：未识别怪物显示 appearance 或默认的「体型 + 类型」描述（如“一只大型野兽”），已识别的恢复真名，PC/同伴 NPC 永远显示真名。DM 视图不加 `--player`。
@@ -52,7 +52,7 @@
 - `adventure search` 是逐行子串/前缀模糊匹配，不是语义检索；只查页码版，扫描页 OCR 把词认错时仍可能漏。命中多时用 `--limit`，`--limit 0` 会输出全部命中。
 - 章节起点短语按“每页第一行开头”匹配，短语太常见会误把正文页当章节；先 `--list` 或看 `index.md` 的「Chapter starts」核对。CropBox 夹取只作用于转换/渲染和体检时的单页副本，原始 PDF 不会被修改。
 - “超前章节”靠进度轨名称、章节编号和当前队伍等级推断；没有进度轨的自制冒险不会阻止任何章节，DM 仍要自觉按场景读。
-- `guard` 是子串提醒，不是语义判断；改写过的泄密说法可能漏掉，查到同名词也不一定是剧透。已揭示的词靠 `reveals.yaml` 排除，DM 忘了记录时仍会误报。
+- `guard` 是英文整词/中文子串提醒，不是语义判断；改写过的泄密说法可能漏掉，查到同名词也不一定是剧透。已揭示的词靠 `reveals.yaml` 排除，DM 忘了记录时仍会误报。
 - 秘密词中的中文只从 `- term:`、`[[…]]`、章节标题和原文中的标记收集；不会自动从任意中文段落里猜专名。需要检查的中文词请显式标记。
 - 名称遮蔽只覆盖 combat-sim 的 `status`/`log`/`simulate` 文本和 `--player` JSON；攻击、伤害等逐条命令的输出仍是 DM 视图。不要把 DM 视图直接投给玩家。
 - 骰子显示关闭只是叙述约定，程序不会阻止 DM 说出数字；所有掷骰仍会记录在 `rolls.log`（战斗状态命令只记录带骰式的行），DM 不能以“关显示”为由跳过掷骰。

@@ -488,7 +488,8 @@ fn contains_term(hay: &str, term: &str) -> bool {
 }
 
 /// Guard output for `text`: one line per unrevealed secret term found.
-/// Case-insensitive plain substring matching (Chinese included).
+/// Case-insensitive; English terms need word boundaries, Chinese terms match
+/// as substrings.
 pub fn guard_terms(save_dir: &Path, root: &Path, text: &str) -> Vec<String> {
     let hay = text.to_lowercase();
     collect(save_dir, root)

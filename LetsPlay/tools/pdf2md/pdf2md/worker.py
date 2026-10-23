@@ -104,20 +104,27 @@ def prioritise(root, pdfs, save=None, first=None):
 
 
 # ------------------------------------------------------------------ lock
+# Windows byte-range locks block reads from other handles, so lock one byte far
+# beyond the owner record: the record stays readable for diagnostics and tests.
+_NT_LOCK_OFFSET = 1 << 30
+
+
 def _try_lock(fd):
     """Take an exclusive OS lock on `fd` without blocking. False when taken."""
     if os.name == "nt":  # pragma: no cover - Windows
         import msvcrt
 
         try:
-            os.lseek(fd, 0, os.SEEK_SET)
-            if os.fstat(fd).st_size == 0:
-                os.write(fd, b"\n")
-            os.lseek(fd, 0, os.SEEK_SET)
+            os.lseek(fd, _NT_LOCK_OFFSET, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
             return True
         except OSError:
             return False
+        finally:
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+            except OSError:
+                pass
     import fcntl
 
     try:
@@ -132,7 +139,7 @@ def _unlock(fd):
         import msvcrt
 
         try:
-            os.lseek(fd, 0, os.SEEK_SET)
+            os.lseek(fd, _NT_LOCK_OFFSET, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
         except OSError:
             pass
@@ -323,6 +330,21 @@ class Lock:
             return
         self.fd = None
         self._mark_released(fd)
+        if os.name == "nt":  # pragma: no cover - Windows
+            # An open file cannot be deleted on Windows: close first, then
+            # remove. If another worker opened it in between, the remove fails
+            # (its handle is open) and its lock is untouched; a leftover file
+            # carries `released: true` and is taken over as stale.
+            _unlock(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+            return
         if _same_file(fd, self.path):
             try:
                 os.remove(self.path)
