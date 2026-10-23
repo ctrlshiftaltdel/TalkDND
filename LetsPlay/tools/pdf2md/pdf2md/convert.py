@@ -243,6 +243,31 @@ class Book:
                 _write_atomic(path, json.dumps(self._hmap))
         return self._hmap
 
+    def page(self, p, info=None):
+        """Open page `p` with an out-of-bounds CropBox clamped to its MediaBox."""
+        return prepare_page(self.doc[p], info)
+
+    def prepare_pages(self, pages, info):
+        """Re-open each page with its clamp applied; drop (and record) broken pages."""
+        ok = []
+        for p in pages:
+            try:
+                self.page(p, info[p])
+            except Exception as err:  # the page object itself cannot be loaded
+                self._page_error(p, info[p], err)
+            else:
+                ok.append(p)
+        return ok
+
+    @staticmethod
+    def _page_error(p, entry, err):
+        entry["page_error"] = str(err)
+        flags = entry.setdefault("flags", [])
+        if "page-error" not in flags:
+            flags.append("page-error")
+        entry["quality"] = "low"
+        print(f"warning: PDF p.{p + 1}: page fallback: {err}", file=sys.stderr)
+
     # -------------------------------------------------------------- one chunk
     def convert_chunk(self, a, b):
         import pymupdf4llm
@@ -250,10 +275,15 @@ class Book:
         t0 = time.time()
         text_pages, ocr_pages, info = [], [], {}
         for p in range(a, b):
-            page = self.doc[p]
-            chars = len(page.get_text("text").strip())
-            cover = _image_cover(page)
-            info[p] = {"chars": chars, "flags": []}
+            info[p] = {"chars": 0, "flags": []}
+            try:
+                page = self.page(p, info[p])
+                chars = len(page.get_text("text").strip())
+                cover = _image_cover(page)
+            except Exception as err:  # corrupt page / CropBox that cannot be repaired
+                self._page_error(p, info[p], err)
+                continue
+            info[p]["chars"] = chars
             if chars < TEXT_MIN_CHARS:
                 ocr_pages.append(p)
             else:
@@ -264,6 +294,11 @@ class Book:
                 info[p]["flags"].append("scan")  # art is inside the page bitmap: image stage
         md_by_page = {}
         if text_pages:
+            # `set_cropbox` updates the page inside `self.doc`, and pymupdf4llm
+            # reads that same document, so clamped pages keep their fix. Re-open
+            # them once so a page that broke after the first pass is dropped
+            # instead of aborting the whole chunk.
+            text_pages = self.prepare_pages(text_pages, info)
             with _quiet():
                 chunks = pymupdf4llm.to_markdown(
                     self.doc, pages=text_pages, page_chunks=True, write_images=True,
@@ -273,9 +308,11 @@ class Book:
                 pno = ch["metadata"]["page_number"] - 1
                 md_by_page[pno] = self.place_images(ch["text"], pno, info[pno])
         for p in ocr_pages:
-            page = self.doc[p]
             try:
-                pix = safe_pixmap(page, OCR_DPI)
+                # Same clamp as the text path: a CropBox outside the MediaBox
+                # must not make OCR (or its page) fail.
+                page = self.page(p, info[p])
+                pix = safe_pixmap(page, OCR_DPI, info[p])
                 engine = ocr.get_engine(self.ocr_engine)
                 text, conf = ocr.lines_to_markdown(engine.read(pix.tobytes("png")), pix.width)
             except RuntimeError as err:  # pymupdf render limits
@@ -286,6 +323,9 @@ class Book:
                 text, conf = "", 0.0
                 info[p]["flags"].append("ocr-unavailable")
                 print(f"warning: {err}", file=sys.stderr)
+            except Exception as err:  # a broken page must not stop the chunk
+                text, conf = "", 0.0
+                self._page_error(p, info[p], err)
             md_by_page[p] = text
             info[p]["ocr"] = self.ocr_engine
             info[p]["ocr_conf"] = round(conf, 3)
@@ -300,9 +340,14 @@ class Book:
             if p in text_pages:
                 from . import spaced
 
-                body, k = spaced.restore(body, self.doc[p])
-                if k:
-                    info[p]["spaced_headings"] = k
+                try:
+                    page = self.page(p, info[p])
+                except Exception as err:
+                    self._page_error(p, info[p], err)
+                else:
+                    body, k = spaced.restore(body, page)
+                    if k:
+                        info[p]["spaced_headings"] = k
             if p in text_pages and self.adventure:
                 body = self.adventure_layout(p, body, info[p])
             if "scan" in info[p]["flags"]:
@@ -310,12 +355,13 @@ class Book:
             q = page_quality(body, info[p])
             info[p]["quality"] = q
             if "figure" in info[p]["flags"]:
-                rel = self.render_page(p)
+                rel = self.render_page(p, info=info[p])
                 if rel:
                     body = (body + "\n\n" if body else "") + \
                         f"![Map or illustration, PDF p.{p + 1}]({rel}) (open the PDF page for full detail)"
                 else:
-                    info[p]["flags"].append("render-failed")
+                    if "render-failed" not in info[p]["flags"]:
+                        info[p]["flags"].append("render-failed")
             note = ""
             if q == "low":
                 note = f"\n> Low-quality extraction ({', '.join(info[p]['flags']) or 'check'}): use PDF p.{p + 1}.\n"
@@ -333,7 +379,11 @@ class Book:
     def check_text_page(self, p, body, hmap, info):
         """Fall back to the plain text layer when the layout extractor lost, repeated
         or interleaved text; re-read garbled headings."""
-        page = self.doc[p]
+        try:
+            page = self.page(p, info)
+        except Exception as err:
+            self._page_error(p, info, err)
+            return body
         ref = fallback.column_text(page)
         reason = None
         if len(fallback.words(ref)) >= 30:
@@ -362,7 +412,11 @@ class Book:
         """Read-aloud panels as `>` quotes; room-key headings the text layer lost."""
         from . import rooms
 
-        page = self.doc[p]
+        try:
+            page = self.page(p, info)
+        except Exception as err:
+            self._page_error(p, info, err)
+            return body
         try:
             body, n = rooms.mark_readaloud(body, rooms.boxed_text(page))
         except RuntimeError:
@@ -371,7 +425,7 @@ class Book:
             info["readaloud"] = n
         if ROOM_REF_RE.search(body):
             try:
-                pix = safe_pixmap(page, ROOM_OCR_DPI)
+                pix = safe_pixmap(page, ROOM_OCR_DPI, info)
                 lines = ocr.get_engine(self.ocr_engine).read(pix.tobytes("png"))
                 body, k = rooms.add_missing_rooms(body, rooms.ocr_rooms(lines, pix.width))
                 if k:
@@ -456,7 +510,11 @@ class Book:
         img/pNNNN-aK.webp (~1000 px), placed after the paragraph above them."""
         from . import figures
 
-        page = self.doc[p]
+        try:
+            page = self.page(p, info)
+        except Exception as err:
+            self._page_error(p, info, err)
+            return body
         try:
             an = figures.analyse(page)
             if figures.full_page_art(page, an[0], an[1]):
@@ -480,20 +538,34 @@ class Book:
                                                "placed": where})
         return body
 
-    def render_page(self, p, dpi=None):
+    def render_page(self, p, dpi=None, info=None):
         """Write img/pNNNN.webp (longest side ~1600 px unless `dpi` is given) and
         return its path relative to the book folder (None when it cannot be rendered)."""
         from .figures import MAP_SIDE
 
         name = "p%04d.webp" % (p + 1)
         path = os.path.join(self.dir, "img", name)
+        stored = info is None
+        if stored:
+            info = self.m.get("pages", {}).get(str(p + 1))
+            if not isinstance(info, dict):
+                info = {}
+        try:
+            page = self.page(p, info)
+        except Exception as err:
+            self._page_error(p, info, err)
+            self._save_rendered_info(p, info, stored)
+            return None
         if dpi is None:
-            r = self.doc[p].rect
+            r = page.rect
             dpi = max(36, min(300, int(MAP_SIDE * 72 / max(r.width, r.height, 1))))
         try:
-            pix = safe_pixmap(self.doc[p], dpi)
+            pix = safe_pixmap(page, dpi, info)
         except RuntimeError as err:
+            if "render-failed" not in info.setdefault("flags", []):
+                info["flags"].append("render-failed")
             print(f"warning: PDF p.{p + 1}: cannot render: {err}", file=sys.stderr)
+            self._save_rendered_info(p, info, stored)
             return None
         try:
             from PIL import Image
@@ -507,7 +579,17 @@ class Book:
             path = path.replace(".webp", ".png")
             data = pix.tobytes("png")
         _write_atomic(path, data)
+        self._save_rendered_info(p, info, stored)
         return "img/" + name
+
+    def _save_rendered_info(self, p, info, stored):
+        """Persist flags from a standalone `pdf2md render` (never invent a page entry)."""
+        if not stored or not info.get("flags"):
+            return
+        pages = self.m.setdefault("pages", {})
+        if str(p + 1) in pages:
+            pages[str(p + 1)] = info
+            self.save()
 
     # -------------------------------------------------------------- assemble
     def assemble(self):
@@ -650,8 +732,68 @@ class Book:
         _write_atomic(os.path.join(self.dir, "index.md"), "\n".join(lines))
 
 
-def safe_pixmap(page, dpi):
-    """get_pixmap with the dpi lowered for huge pages; RuntimeError if it still fails."""
+CROP_EPS = 0.5
+
+
+def _within(inner, outer, eps=CROP_EPS):
+    return (inner.x0 >= outer.x0 - eps and inner.y0 >= outer.y0 - eps
+            and inner.x1 <= outer.x1 + eps and inner.y1 <= outer.y1 + eps)
+
+
+def prepare_page(page, info=None):
+    """Clamp a CropBox outside its MediaBox and record fallbacks.
+
+    A PDF may carry a CropBox larger than the MediaBox (bad producer) or a page
+    whose geometry cannot be read at all. We use the intersection when it is
+    non-empty, else the full MediaBox, and never let one bad page stop a chunk.
+    Flags go to the manifest page entry and from there to status/audit.
+    """
+    import pymupdf
+
+    info = info if info is not None else {}
+    flags = info.setdefault("flags", [])
+    try:
+        mb = pymupdf.Rect(page.mediabox)
+        cb = pymupdf.Rect(page.cropbox)
+        if cb.is_empty or not _within(cb, mb):
+            fixed = pymupdf.Rect(cb) & mb
+            if fixed.is_empty:
+                fixed, kind = mb, "empty"
+            else:
+                kind = "clamped"
+            try:
+                page.set_cropbox(fixed)
+            except Exception:
+                # The CropBox itself is broken: show the full MediaBox instead.
+                try:
+                    page.set_cropbox(mb)
+                except Exception:
+                    pass
+                kind = "mediabox"
+            info["cropbox"] = kind
+            flag = "page-fallback" if kind == "mediabox" else "cropbox-clamped"
+            if flag not in flags:
+                flags.append(flag)
+        return page
+    except Exception as err:  # a page that raises on geometry
+        info["page_error"] = str(err)
+        if "page-error" not in flags:
+            flags.append("page-error")
+        try:
+            page.set_cropbox(pymupdf.Rect(page.mediabox))
+        except Exception:
+            pass
+        return page
+
+
+def safe_pixmap(page, dpi, info=None):
+    """get_pixmap with the dpi lowered for huge pages; RuntimeError if it still fails.
+
+    As a last resort the full MediaBox is rendered: a corrupt CropBox must not
+    cost the page its figure/OCR image.
+    """
+    import pymupdf
+
     w, h = page.rect.width / 72, page.rect.height / 72
     if w * h * dpi * dpi > MAX_PIXELS:
         dpi = max(18, int((MAX_PIXELS / (w * h)) ** 0.5))
@@ -659,9 +801,18 @@ def safe_pixmap(page, dpi):
         try:
             return page.get_pixmap(dpi=dpi)
         except Exception as err:  # pymupdf raises FzErrorLimit / MemoryError subclasses
-            if dpi <= 18:
+            if dpi > 18:
+                dpi = max(18, dpi // 2)
+                continue
+            try:
+                pix = page.get_pixmap(dpi=dpi, clip=pymupdf.Rect(page.mediabox))
+            except Exception:
                 raise RuntimeError(str(err)) from err
-            dpi = max(18, dpi // 2)
+            if info is not None:
+                flags = info.setdefault("flags", [])
+                if "page-fallback" not in flags:
+                    flags.append("page-fallback")
+            return pix
 
 
 def postprocess(md, hmap):
@@ -692,7 +843,7 @@ def page_quality(body, info):
         flags.append("low-yield")
     if "ocr-unavailable" in flags or (not body.strip() and "figure" not in flags):
         flags.append("empty")
-    bad = {"statblock", "table", "ocr-low-conf", "low-yield", "empty", "render-failed"}
+    bad = {"statblock", "table", "ocr-low-conf", "low-yield", "empty", "render-failed", "page-error"}
     return "low" if bad & set(flags) else "ok"
 
 

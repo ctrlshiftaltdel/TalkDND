@@ -17,7 +17,10 @@ def build_heading_map(doc, pages=None):
     """{normalised text: level}. Level 1 = chapter, 2 = section, 3 = subsection."""
     raw = {}
     for i in pages if pages is not None else range(doc.page_count):
-        d = doc[i].get_text("dict")
+        try:
+            d = doc[i].get_text("dict")
+        except Exception:  # a corrupt page must not lose the whole heading map
+            continue
         for b in d["blocks"]:
             if b.get("type") != 0:
                 continue

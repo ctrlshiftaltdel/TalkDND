@@ -67,6 +67,49 @@ def make_map_pdf(path):
     out.save(path)
 
 
+def make_cropbox_pdf(path, cropbox, media=(0, 0, 400, 500), text="The hero and the goblin guard the treasure vault."):
+    """A one-page PDF with a deliberately out-of-bounds /CropBox (raw objects).
+
+    PyMuPDF refuses to create such a CropBox through its API, so the test
+    writes the page dictionary itself. The PDF carries a normal text layer.
+    """
+    lines = [text, "The goblin waits in the dark.", "The hero holds the map.", "A trap guards the lower hall."]
+    parts = ["BT /F1 12 Tf 72 250 Td"]
+    for i, line in enumerate(lines):
+        if i:
+            parts.append("0 -18 Td")
+        parts.append("(%s) Tj" % line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)"))
+    parts.append("ET")
+    stream = " ".join(parts).encode()
+    mb = "[%g %g %g %g]" % media
+    cb = "[%g %g %g %g]" % cropbox
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            "<< /Type /Page /Parent 2 0 R /MediaBox %s /CropBox %s "
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>" % (mb, cb)
+        ).encode(),
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for i, obj in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % i + obj + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for off in offsets[1:]:
+        out += b"%010d 00000 n \n" % off
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    with open(path, "wb") as f:
+        f.write(out)
+
+
 @pytest.fixture
 def letsplay(tmp_path, monkeypatch):
     root = tmp_path / "LetsPlay"

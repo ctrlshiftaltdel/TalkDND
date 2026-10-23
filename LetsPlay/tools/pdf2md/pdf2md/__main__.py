@@ -101,7 +101,12 @@ def main(argv=None):
 
         pdf = _find(root, args.book)
         b = Book(pdf)
-        print(os.path.join(b.dir, b.render_page(args.page - 1)))
+        rel = b.render_page(args.page - 1)
+        b.close()
+        if not rel:
+            print(f"cannot render PDF p.{args.page}", file=sys.stderr)
+            return 1
+        print(os.path.join(b.dir, rel))
         return 0
     if args.cmd == "contact-sheet":
         return contact_sheets(root, args.book)
