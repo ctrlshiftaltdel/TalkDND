@@ -2,6 +2,11 @@
 
 import json
 import os
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
 
 import pytest
 
@@ -56,6 +61,153 @@ def test_status_accepts_a_good_manifest(tmp_path):
     row = worker.status(str(root))[0]
     assert "error" not in row
     assert row["pages"] == 2 and row["done"] == 2 and row["low"] == 1 and row["ocr"] == 1
+
+
+def test_status_counts_page_fallbacks(tmp_path):
+    root = tmp_path / "LetsPlay"
+    _book(
+        root,
+        json.dumps(
+            {
+                "page_count": 3,
+                "pages": {
+                    "1": {"flags": ["cropbox-clamped"]},
+                    "2": {"flags": ["page-error"]},
+                    "3": {"flags": ["render-failed"]},
+                },
+            }
+        ),
+    )
+    row = worker.status(str(root))[0]
+    assert row["fallback"] == 3
+
+
+def _lock_root(tmp_path):
+    root = tmp_path / "LetsPlay"
+    root.mkdir()
+    return str(root)
+
+
+def test_lock_exactly_one_winner_across_threads(tmp_path):
+    root = _lock_root(tmp_path)
+    barrier = threading.Barrier(2)
+    results = []
+
+    def attempt():
+        barrier.wait()
+        lock = worker.Lock(root)
+        results.append((lock, lock.acquire()))
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sum(ok for _, ok in results) == 1
+    for lock, ok in results:
+        if ok:
+            lock.release()
+    # Release allows the next owner.
+    lock = worker.Lock(root)
+    assert lock.acquire()
+    lock.release()
+    assert not (tmp_path / "LetsPlay/.pdf2md/worker.lock").exists()
+
+
+def test_a_live_lock_is_not_stolen_or_removed(tmp_path):
+    root = _lock_root(tmp_path)
+    first = worker.Lock(root)
+    assert first.acquire()
+    path = Path(first.path)
+    owner = path.read_text(encoding="utf-8")
+    try:
+        second = worker.Lock(root)
+        assert not second.acquire()
+        assert path.exists() and path.read_text(encoding="utf-8") == owner
+        # A live owner without our OS lock (an older worker) is also respected.
+        assert not worker.Lock(root).acquire()
+    finally:
+        first.release()
+    assert not path.exists()
+
+
+def test_a_dead_owner_lock_is_replaced(tmp_path):
+    root = _lock_root(tmp_path)
+    state = Path(root) / ".pdf2md"
+    state.mkdir()
+    path = state / "worker.lock"
+    old = time.time() - worker.LOCK_STALE_SECONDS - 5
+    path.write_text(
+        json.dumps({"pid": 999999, "started": old, "updated": old}), encoding="utf-8"
+    )
+    os.utime(path, (old, old))
+    lock = worker.Lock(root)
+    assert lock.acquire()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["pid"] == os.getpid() and data["updated"] > old
+    lock.release()
+
+
+def test_an_old_lock_is_replaced_even_if_the_pid_is_live(tmp_path):
+    root = _lock_root(tmp_path)
+    state = Path(root) / ".pdf2md"
+    state.mkdir()
+    path = state / "worker.lock"
+    old = time.time() - worker.LOCK_STALE_SECONDS - 5
+    path.write_text(
+        json.dumps({"pid": os.getpid(), "started": old, "updated": old}),
+        encoding="utf-8",
+    )
+    os.utime(path, (old, old))
+    lock = worker.Lock(root)
+    assert lock.acquire()
+    lock.release()
+
+
+def test_a_live_legacy_lock_file_is_not_stolen(tmp_path):
+    root = _lock_root(tmp_path)
+    state = Path(root) / ".pdf2md"
+    state.mkdir()
+    path = state / "worker.lock"
+    now = time.time()
+    path.write_text(
+        json.dumps({"pid": os.getpid(), "started": now, "updated": now}),
+        encoding="utf-8",
+    )
+    assert not worker.Lock(root).acquire()
+    assert path.exists()
+    path.unlink()
+
+
+def test_lock_is_visible_to_another_process(tmp_path):
+    root = _lock_root(tmp_path)
+    package = Path(__file__).resolve().parents[1]
+    code = (
+        "import sys\n"
+        "from pdf2md.worker import Lock\n"
+        "print('busy' if not Lock(sys.argv[1]).acquire() else 'free')\n"
+    )
+    lock = worker.Lock(root)
+    assert lock.acquire()
+    try:
+        busy = subprocess.run(
+            [sys.executable, "-c", code, root],
+            cwd=str(package),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert busy.returncode == 0 and busy.stdout.strip() == "busy"
+    finally:
+        lock.release()
+    free = subprocess.run(
+        [sys.executable, "-c", code, root],
+        cwd=str(package),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert free.returncode == 0 and free.stdout.strip() == "free"
 
 
 def test_write_atomic_flushes_and_leaves_no_temp(tmp_path, monkeypatch):

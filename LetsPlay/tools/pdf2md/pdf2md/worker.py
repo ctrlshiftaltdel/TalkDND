@@ -104,36 +104,209 @@ def prioritise(root, pdfs, save=None, first=None):
 
 
 # ------------------------------------------------------------------ lock
-class Lock:
-    def __init__(self, root):
-        self.path = os.path.join(state_dir(root), "worker.lock")
+def _try_lock(fd):
+    """Take an exclusive OS lock on `fd` without blocking. False when taken."""
+    if os.name == "nt":  # pragma: no cover - Windows
+        import msvcrt
 
-    def acquire(self):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
         try:
-            age = time.time() - os.path.getmtime(self.path)
-            if age < LOCK_STALE_SECONDS:
-                return False
-            os.remove(self.path)
+            os.lseek(fd, 0, os.SEEK_SET)
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\n")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock(fd):
+    if os.name == "nt":  # pragma: no cover - Windows
+        import msvcrt
+
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
         except OSError:
             pass
-        try:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            return False
-        with os.fdopen(fd, "w") as f:
-            f.write(str(os.getpid()))
-        return True
+        return
+    import fcntl
 
-    def touch(self):
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+def _same_file(fd, path):
+    """True when `path` still names the inode behind `fd` (no unlink/replace race)."""
+    try:
+        a, b = os.fstat(fd), os.stat(path)
+    except OSError:
+        return False
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+
+def _pid_alive(pid):
+    """Best-effort liveness check for a lock-file owner pid."""
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":  # pragma: no cover - Windows
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OSError, OverflowError):
+        return False
+
+
+def _read_owner(fd):
+    """Owner record from the lock file (JSON, or the old bare-pid format)."""
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        raw = os.read(fd, 4096).decode("utf-8", "replace").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except ValueError:
+        try:
+            return {"pid": int(raw.split()[0])}
+        except (ValueError, IndexError):
+            return None
+
+
+def _owner_stale(owner, path):
+    """Stale = owner is dead, released, or older than LOCK_STALE_SECONDS."""
+    if not owner or owner.get("released"):
+        return True
+    pid = owner.get("pid")
+    if not isinstance(pid, int) or not _pid_alive(pid):
+        return True
+    updated = owner.get("updated", owner.get("started"))
+    if not isinstance(updated, (int, float)):
+        try:
+            updated = os.path.getmtime(path)
+        except OSError:
+            return True
+    return time.time() - float(updated) >= LOCK_STALE_SECONDS
+
+
+class Lock:
+    """Cross-process worker lock: an OS file lock plus a diagnostic owner record.
+
+    `acquire` never removes a live lock and has no remove-then-create window.
+    The OS lock (``flock`` on POSIX, ``msvcrt.locking`` on Windows) is held for
+    the object's lifetime; a crashed process releases it automatically, and a
+    stale file is replaced after checking its owner pid and age. The file is
+    unlinked only while its inode is still locked, so a second worker cannot end
+    up holding the same path with a different inode.
+    """
+
+    def __init__(self, root):
+        self.path = os.path.join(state_dir(root), "worker.lock")
+        self.fd = None
+
+    def _write_owner(self, fd, started):
+        now = time.time()
+        data = json.dumps({"pid": os.getpid(), "started": started, "updated": now})
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, data.encode("utf-8"))
+        os.fsync(fd)
         try:
             os.utime(self.path, None)
         except OSError:
             pass
 
-    def release(self):
+    def acquire(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        for _ in range(3):  # retry only when the path was unlinked under us
+            try:
+                fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
+            except OSError:
+                return False
+            if not _try_lock(fd):
+                os.close(fd)
+                return False
+            if not _same_file(fd, self.path):
+                _unlock(fd)
+                os.close(fd)
+                continue
+            owner = _read_owner(fd)
+            if owner is not None and not _owner_stale(owner, self.path):
+                # A live owner without our OS lock (e.g. an older pdf2md):
+                # never steal it.
+                _unlock(fd)
+                os.close(fd)
+                return False
+            try:
+                self._write_owner(fd, time.time())
+            except OSError:
+                _unlock(fd)
+                os.close(fd)
+                return False
+            self.fd = fd
+            return True
+        return False
+
+    def touch(self):
+        if self.fd is None:
+            return
         try:
-            os.remove(self.path)
+            os.lseek(self.fd, 0, os.SEEK_SET)
+            raw = os.read(self.fd, 4096).decode("utf-8", "replace")
+            owner = json.loads(raw) if raw else {}
+            if not isinstance(owner, dict):
+                owner = {}
+            started = owner.get("started", time.time())
+            self._write_owner(self.fd, started)
+        except (OSError, ValueError):
+            pass
+
+    def release(self):
+        fd = self.fd
+        if fd is None:
+            return
+        self.fd = None
+        if _same_file(fd, self.path):
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+        _unlock(fd)
+        try:
+            os.close(fd)
         except OSError:
             pass
 
