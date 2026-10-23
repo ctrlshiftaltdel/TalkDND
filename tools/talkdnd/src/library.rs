@@ -673,11 +673,39 @@ impl Tidy<'_> {
             let bytes = fs::metadata(&reader).map(|m| m.len()).unwrap_or(0);
             if !self.dry_run {
                 fs::remove_file(&reader).with_context(|| format!("remove {}", reader.display()))?;
+                point_index_at_pages(&d, &stem)?;
             }
             self.report.readers.push((rel(self.root, &reader), bytes));
         }
         Ok(())
     }
+}
+
+/// After the reader edition is gone, point `index.md`'s "Read:" line and
+/// `index.json`'s `book` at the paged edition (what pdf2md 0.6.0 writes).
+fn point_index_at_pages(dir: &Path, stem: &str) -> Result<()> {
+    let pages = format!("{stem}.pages.md");
+    let index_md = dir.join("index.md");
+    if let Ok(text) = fs::read_to_string(&index_md) {
+        let old = format!(
+            "Read: [{stem}.md](<{stem}.md>) (no page anchors). Page lookup: [{pages}](<{pages}>). "
+        );
+        if text.contains(&old) {
+            let new = format!("Read: [{pages}](<{pages}>) (`<a id=\"pN\"></a>` = PDF page N). ");
+            combat_sim::fsutil::atomic_write(&index_md, text.replace(&old, &new).as_bytes())?;
+        }
+    }
+    let index_json = dir.join("index.json");
+    if let Ok(text) = fs::read_to_string(&index_json) {
+        if let Ok(serde_json::Value::Object(mut idx)) = serde_json::from_str(&text) {
+            if idx.get("book").and_then(|b| b.as_str()) == Some(&format!("{stem}.md")) {
+                idx.insert("book".into(), serde_json::Value::String(pages));
+                let out = serde_json::to_string_pretty(&idx)?;
+                combat_sim::fsutil::atomic_write(&index_json, out.as_bytes())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Bring `Adventures/` and `Rules/<edition>/` to one folder per book.
@@ -916,7 +944,17 @@ mod tests {
             &d.join(format!("{stem}.md")),
             "# Book\n\n## Heading\n\nText.\n",
         );
-        write(&d.join("index.json"), "{}");
+        write(
+            &d.join("index.json"),
+            &format!("{{\"book\": \"{stem}.md\", \"pages\": \"{stem}.pages.md\"}}"),
+        );
+        write(
+            &d.join("index.md"),
+            &format!(
+                "# Index\n\nRead: [{stem}.md](<{stem}.md>) (no page anchors). \
+                 Page lookup: [{stem}.pages.md](<{stem}.pages.md>). PDF: `{stem}.pdf`.\n"
+            ),
+        );
         write(&d.join("pages/p0001-0001.md"), "x");
     }
 
@@ -1016,6 +1054,16 @@ mod tests {
             "reader removed"
         );
         assert!(!adv.join(".md").exists());
+        let idx_md = fs::read_to_string(skt.join("index/index.md")).unwrap();
+        assert!(
+            idx_md.contains("Read: [Storm King's Thunder.pages.md]") && idx_md.contains("PDF: `"),
+            "{idx_md}"
+        );
+        let idx_json = fs::read_to_string(skt.join("index/index.json")).unwrap();
+        assert!(
+            idx_json.contains("\"book\": \"Storm King's Thunder.pages.md\""),
+            "{idx_json}"
+        );
         let kgv = adv.join("keys-from-the-golden-vault");
         assert!(kgv.join("index/manifest.json").is_file());
         assert!(kgv.join("combat/creatures.yaml").is_file());
