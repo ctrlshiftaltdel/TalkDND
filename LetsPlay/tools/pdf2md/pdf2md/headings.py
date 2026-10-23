@@ -2,7 +2,7 @@
 
 import re
 
-from . import repair
+from . import repair, textutil
 
 HEADING_FONT_EXCLUDE = ("angsana", "segoe", "symbol", "wingding")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
@@ -17,7 +17,10 @@ def build_heading_map(doc, pages=None):
     """{normalised text: level}. Level 1 = chapter, 2 = section, 3 = subsection."""
     raw = {}
     for i in pages if pages is not None else range(doc.page_count):
-        d = doc[i].get_text("dict")
+        try:
+            d = doc[i].get_text("dict")
+        except Exception:  # a corrupt page must not lose the whole heading map
+            continue
         for b in d["blocks"]:
             if b.get("type") != 0:
                 continue
@@ -28,7 +31,7 @@ def build_heading_map(doc, pages=None):
                 if any(x in spans[0]["font"].lower() for x in HEADING_FONT_EXCLUDE):
                     continue
                 size = max(s["size"] for s in spans)
-                txt = "".join(s["text"] for s in spans).strip()
+                txt = textutil.line_text(line).strip()
                 if len(txt) < 2 or len(txt) > 80:
                     continue
                 if size < 12.2 and not (8.7 <= size <= 9.4 and "bold" in spans[0]["font"].lower()):

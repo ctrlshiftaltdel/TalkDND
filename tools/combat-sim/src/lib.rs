@@ -13,6 +13,7 @@ pub mod engine;
 pub mod fsutil;
 pub mod integrity;
 pub mod party;
+pub mod player;
 pub mod roll;
 pub mod sim;
 pub mod space;

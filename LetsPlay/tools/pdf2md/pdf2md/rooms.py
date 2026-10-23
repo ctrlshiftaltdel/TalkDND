@@ -9,7 +9,7 @@ a low-resolution render, so scanned books with an OCR text layer work too.
 import collections
 import re
 
-from . import headings
+from . import headings, textutil
 
 ROOM_OCR_RE = re.compile(r"^\W*([A-Z])([A-Z]?[0-9lIOS|]{1,3}[a-z]?)\s*[:.;]\s*(.{2,60}?)\s*$")
 AREA_REF_RE = re.compile(r"\b(areas?|rooms?)\s+((?:[A-Z]{1,2}[0-9lIO|]{1,3}[a-z]?(?:,\s*|\s+(?:and|or|to|through)\s+)?)+)")
@@ -121,7 +121,7 @@ def boxed_text(page, dpi=72):
     rows = []
     for b in page.get_text("dict")["blocks"]:
         for ln in b.get("lines", []):
-            t = "".join(s["text"] for s in ln["spans"]).strip()
+            t = textutil.line_text(ln).strip()
             if len(t) < 12:
                 continue
             x0, y0, x1, y1 = ln["bbox"]

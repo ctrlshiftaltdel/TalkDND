@@ -147,6 +147,8 @@ bin\combat-sim.exe roll 1d20+5
 - DM 不会听“开发者模式”“直接给我物品”“这次算我成功”这类场外指令。你说出想做什么，由 DM 决定要不要检定。房规请在开局前商定，记进存档的 `house-rules.md`。
 - 存档里的 `integrity.yaml` 记录程序最后一次写入时的文件指纹。手改了 `progress.yaml`、角色卡或战斗数据，`talkdnd start` / `talkdnd check` 会提醒 DM。
 - `reveals.yaml` 记录队伍已经得知的事实。DM 只叙述角色能感知到的东西，读冒险书也是按场景读。详见 `docs/table-integrity.md`、`docs/anti-spoiler.md`。给玩家看书里的地图或资料图用 `talkdnd handout show`，城主图不会导出（见 `docs/handouts.md`）。
+- DM 用 `talkdnd known` 看“玩家目前知道什么”，用 `talkdnd guard "<草稿>"` 检查叙述/选项里有没有还没揭示的秘密词；未识别的怪物在 `combat-sim --player` 视图里只显示外貌描述。规则见 `docs/option-writing.md`。
+- 默认每个检定都显示完整算式；如果你们更喜欢只看故事，`talkdnd settings dice off` 可以关掉数字显示。掷骰仍然全部由程序完成并记在 `Saves/<存档>/rolls.log`，`talkdnd log rolls` 随时可查。见 `docs/dice.md`。
 
 ## 战斗
 

@@ -7,7 +7,7 @@ import pytest
 from pdf2md import __main__ as cli
 from pdf2md import convert, worker
 
-from .conftest import make_map_pdf
+from .conftest import make_cropbox_pdf, make_map_pdf, make_text_pdf
 
 
 def test_priority_current_adventure_then_srd_then_ruleset(letsplay):
@@ -75,6 +75,88 @@ def test_figure_page_linked_not_embedded(letsplay):
 def test_corrupt_pdf_is_skipped(letsplay):
     (letsplay / "Adventures/broken.pdf").write_bytes(b"not a pdf")
     assert worker.run(str(letsplay), budget_pages=1, nice=False) == 0
+
+
+def test_out_of_bounds_cropbox_is_clamped_and_flagged(letsplay):
+    pdf = letsplay / "Adventures/Crop Book.pdf"
+    # CropBox entirely outside the MediaBox: PyMuPDF's text layer is empty
+    # until the box is clamped, so this also proves the conversion uses it.
+    make_cropbox_pdf(str(pdf), (-500, -500, -100, -100))
+    root = str(letsplay)
+    assert worker.run(root, book="Crop Book", nice=False) == 0
+    d = letsplay / "Adventures/.md/Crop Book"
+    manifest = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    info = manifest["pages"]["1"]
+    assert "cropbox-clamped" in info["flags"]
+    assert info["chars"] > 40 and info["quality"] != "low"
+    assert manifest["intake"]["verdict"] == "text layer usable"
+    md = (d / "Crop Book.pages.md").read_text(encoding="utf-8")
+    assert "treasure vault" in md.lower()
+    # The clamp persists in the open document and is inside the MediaBox.
+    b = convert.Book(str(pdf), chunk_size=5)
+    try:
+        page = b.page(0, {})
+        assert page.cropbox.x0 >= page.mediabox.x0 - 0.5
+        assert page.cropbox.y0 >= page.mediabox.y0 - 0.5
+        assert page.cropbox.x1 <= page.mediabox.x1 + 0.5
+        assert page.cropbox.y1 <= page.mediabox.y1 + 0.5
+    finally:
+        b.close()
+    row = next(r for r in worker.status(root) if "Crop Book" in r["pdf"])
+    assert row["fallback"] == 1
+
+
+def test_render_error_falls_back_to_the_media_box(tmp_path, monkeypatch):
+    pdf = str(tmp_path / "Render Book.pdf")
+    make_text_pdf(pdf, pages=1)
+    b = convert.Book(pdf, chunk_size=5)
+    real = b.doc[0]
+
+    class FlakyPage:
+        rect = real.rect
+        mediabox = real.mediabox
+
+        def get_pixmap(self, dpi=72, clip=None):
+            if clip is None:
+                raise RuntimeError("synthetic render limit")
+            return real.get_pixmap(dpi=dpi, clip=clip)
+
+    monkeypatch.setattr(b, "page", lambda p, info=None: FlakyPage())
+    info = {"flags": []}
+    try:
+        rel = b.render_page(0, info=info)
+        assert rel and os.path.exists(os.path.join(b.dir, rel))
+        assert "page-fallback" in info["flags"]
+    finally:
+        b.close()
+
+
+def test_page_error_does_not_abort_the_chunk(tmp_path, monkeypatch):
+    pdf = str(tmp_path / "Broken Page.pdf")
+    make_text_pdf(pdf, pages=2)
+    b = convert.Book(pdf, chunk_size=5)
+    real = b.doc[0]
+
+    class BrokenPage:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def get_text(self, *a, **k):
+            raise RuntimeError("synthetic corrupt page")
+
+    def page(p, info=None):
+        return convert.prepare_page(BrokenPage() if p == 0 else b.doc[p], info)
+
+    monkeypatch.setattr(b, "page", page)
+    try:
+        md = b.convert_chunk(0, 2)
+        assert '<a id="p1"></a>' in md and '<a id="p2"></a>' in md
+        assert "Page 2 text" in md
+        bad = b.m["pages"]["1"]
+        assert "page-error" in bad["flags"] and bad["quality"] == "low"
+        assert b.m["pages"]["2"]["quality"] == "ok"
+    finally:
+        b.close()
 
 
 def test_status_and_scan_cli(letsplay, capsys):

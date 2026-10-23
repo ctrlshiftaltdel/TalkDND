@@ -547,6 +547,19 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         d += &format!("- 战役：{name}\n");
     }
     d += &format!("- content check：{check}\n- pdf2md：{pdf}\n");
+    d += &format!(
+        "- 骰子显示：{}（{}；掷骰始终由程序完成并记入 `rolls.log`）\n",
+        if crate::settings::dice_display(save) {
+            "开"
+        } else {
+            "关"
+        },
+        if crate::settings::dice_display(save) {
+            "展示完整算式"
+        } else {
+            "只叙述结果，不报骰值/DC/修正；`talkdnd log rolls` 可查"
+        }
+    );
     d += &rules_source_line(root, &rs);
     timing.mark("rules_source_line");
     if !ok {
@@ -625,12 +638,20 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         d += "- `house-rules.md`：本存档开局前商定的房规（局中不改）\n";
     }
     let recent = crate::reveal::recent(save, 8);
-    d += "\n## 已揭示（reveals.yaml 最近几条；提到专名或剧情事实前先 `talkdnd reveal check`）\n\n";
-    if recent.is_empty() {
-        d += "- （还没有记录：角色得知新事实时 `talkdnd reveal add`）\n";
+    d += "\n## 玩家已知（`talkdnd known` 的压缩版；描述与选项只能从这里出发）\n\n";
+    for line in crate::known::digest_lines(save) {
+        // Sub-items already start with "- "; indent them under their heading.
+        if line.starts_with("- ") {
+            d += &format!("  {line}\n");
+        } else {
+            d += &format!("- {line}\n");
+        }
     }
-    for r in recent {
-        d += &format!("- {}\n", truncate(&r, 200));
+    if !recent.is_empty() {
+        d += "\n### 最近揭示（提到专名前先 `talkdnd reveal check`）\n\n";
+        for r in recent {
+            d += &format!("- {}\n", truncate(&r, 200));
+        }
     }
     match crate::audit::audit(save) {
         Ok(r) => {

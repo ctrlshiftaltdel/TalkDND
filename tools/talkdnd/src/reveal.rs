@@ -109,6 +109,52 @@ pub fn add(save: &Path, fact: &str, source: &str, tags: &[String]) -> Result<Str
     Ok(line)
 }
 
+/// Is `term` part of anything the party has already learned? Plain
+/// case-insensitive substring over facts and tags (the same matching `check`
+/// uses). Used to drop already-revealed secret terms from `guard`.
+pub fn is_revealed(save: &Path, term: &str) -> bool {
+    let t = term.trim().to_lowercase();
+    if t.is_empty() {
+        return false;
+    }
+    let Ok(l) = load(save) else {
+        return false;
+    };
+    l.facts.iter().any(|f| {
+        f.fact.to_lowercase().contains(&t) || f.tags.iter().any(|x| x.to_lowercase().contains(&t))
+    })
+}
+
+/// `talkdnd reveal add --original O-001`: record that the hidden aspect of a
+/// registered original element has been revealed. The tag is the source of
+/// truth for `known`, `secret` and the leak check.
+pub fn add_original(save: &Path, id: &str, fact: Option<&str>, source: &str) -> Result<String> {
+    let id = id.trim();
+    let ledger = crate::original::load(save)?;
+    let entry = ledger
+        .entries
+        .iter()
+        .find(|e| e.id.eq_ignore_ascii_case(id))
+        .ok_or_else(|| anyhow::anyhow!("原创台账里没有 `{id}`"))?;
+    if entry.hidden.is_none() {
+        anyhow::bail!(
+            "原创 {} 没有登记隐藏面（`original add --hidden`）",
+            entry.id
+        );
+    }
+    let text = fact
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("原创 {}「{}」的隐藏面已揭示", entry.id, entry.name));
+    add(
+        save,
+        &text,
+        source,
+        &[format!("original:{}", entry.id.to_ascii_lowercase())],
+    )
+}
+
 fn fmt(f: &Fact) -> String {
     let mut s = format!("#{} {}", f.n, f.fact);
     if !f.source.is_empty() {

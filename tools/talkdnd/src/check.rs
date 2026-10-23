@@ -196,6 +196,7 @@ pub fn run(
             ),
         )?;
     }
+    crate::rolls::append(save_dir, &sheet.name, &label, &text, seeded)?;
     Ok(line)
 }
 

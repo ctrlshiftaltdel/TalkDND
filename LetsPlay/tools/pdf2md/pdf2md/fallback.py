@@ -13,7 +13,7 @@
 import collections
 import re
 
-from . import repair
+from . import repair, textutil
 
 _W = re.compile(r"[a-z]+(?:'[a-z]+)?")
 
@@ -36,7 +36,7 @@ def _lines(page):
         if blk.get("type") != 0:
             continue
         for ln in blk["lines"]:
-            t = "".join(sp["text"] for sp in ln["spans"]).strip()
+            t = textutil.line_text(ln).strip()
             if t:
                 size = max(sp["size"] for sp in ln["spans"])
                 bold = "bold" in ln["spans"][0]["font"].lower()

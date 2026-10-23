@@ -1,5 +1,6 @@
 //! End-to-end tests for the v2 command-line interface.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -633,4 +634,196 @@ fn party_state_carries_hp_between_encounters_and_rests() {
     );
     assert_eq!(before, std::fs::read_to_string(&party_file).unwrap());
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn player_view_masks_unidentified_monsters_and_restores_the_name() {
+    let state = TempState::new("player-mask");
+    let save = std::env::temp_dir().join(format!(
+        "combat-sim-player-save-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&save).unwrap();
+    fs::write(
+        save.join("identified.yaml"),
+        "version: 1\nentries:\n  - {name: Dummy A, identified: false, appearance: 一只木制假人}\n",
+    )
+    .unwrap();
+    let manifest =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/content/manifest.yaml");
+    let quick = run_raw(&[
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--save",
+        save.to_str().unwrap(),
+        "--state",
+        state.path().to_str().unwrap(),
+        "quick",
+        "--foe",
+        "dummy-a",
+        "--party",
+        "hero-a",
+    ]);
+    assert_success(&quick, "quick encounter");
+    let dm = run_raw(&[
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--save",
+        save.to_str().unwrap(),
+        "--state",
+        state.path().to_str().unwrap(),
+        "status",
+    ]);
+    assert_success(&dm, "dm status");
+    assert!(stdout(&dm).contains("Dummy A"), "{}", stdout(&dm));
+    let player = run_raw(&[
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--save",
+        save.to_str().unwrap(),
+        "--state",
+        state.path().to_str().unwrap(),
+        "--player",
+        "status",
+    ]);
+    assert_success(&player, "player status");
+    assert!(
+        stdout(&player).contains("一只木制假人"),
+        "{}",
+        stdout(&player)
+    );
+    assert!(!stdout(&player).contains("Dummy A"), "{}", stdout(&player));
+    fs::write(
+        save.join("identified.yaml"),
+        "version: 1\nentries:\n  - {name: Dummy A, identified: true}\n",
+    )
+    .unwrap();
+    let named = run_raw(&[
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--save",
+        save.to_str().unwrap(),
+        "--state",
+        state.path().to_str().unwrap(),
+        "--player",
+        "status",
+    ]);
+    assert_success(&named, "identified status");
+    assert!(stdout(&named).contains("Dummy A"), "{}", stdout(&named));
+    let _ = fs::remove_dir_all(&save);
+}
+
+#[test]
+fn player_view_keeps_duplicate_monsters_apart() {
+    let state = TempState::new("player-mask-dup");
+    let save = std::env::temp_dir().join(format!(
+        "combat-sim-player-dup-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&save).unwrap();
+    let manifest =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/content/manifest.yaml");
+    let base = [
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--save",
+        save.to_str().unwrap(),
+        "--state",
+        state.path().to_str().unwrap(),
+    ];
+    let mut q = base.to_vec();
+    q.extend_from_slice(&["quick", "--foe", "dummy-a:2", "--party", "hero-a"]);
+    assert_success(&run_raw(&q), "quick encounter");
+    let mut p = base.to_vec();
+    p.extend_from_slice(&["--player", "status"]);
+    let player = run_raw(&p);
+    assert_success(&player, "player status");
+    let out = stdout(&player);
+    assert!(out.contains(" #1") && out.contains(" #2"), "{out}");
+    assert!(!out.contains("Dummy A"), "{out}");
+    let _ = fs::remove_dir_all(&save);
+}
+
+#[test]
+fn roll_is_appended_to_the_save_roll_log() {
+    let save = std::env::temp_dir().join(format!(
+        "combat-sim-roll-log-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&save).unwrap();
+    let output = run_raw(&[
+        "--save",
+        save.to_str().unwrap(),
+        "roll",
+        "1d20+3",
+        "--dc",
+        "15",
+    ]);
+    assert_success(&output, "roll");
+    let log = fs::read_to_string(save.join("rolls.log")).unwrap();
+    assert!(log.contains("combat-sim 1d20+3"), "{log}");
+    assert!(log.contains("1d20("), "{log}");
+    let _ = fs::remove_dir_all(&save);
+}
+
+#[test]
+fn state_command_rolls_are_appended_without_narration() {
+    let state = TempState::new("state-roll-log");
+    let save = std::env::temp_dir().join(format!(
+        "combat-sim-state-roll-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&save).unwrap();
+    let manifest =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/content/manifest.yaml");
+    let base = vec![
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "--save",
+        save.to_str().unwrap(),
+        "--state",
+        state.path().to_str().unwrap(),
+    ];
+    let quick = {
+        let mut v = base.clone();
+        v.extend_from_slice(&["quick", "--foe", "dummy-a", "--party", "hero-a"]);
+        run_raw(&v)
+    };
+    assert_success(&quick, "quick encounter");
+    let damage = {
+        let mut v = base.clone();
+        v.extend_from_slice(&["damage", "Dummy A", "1d6+1", "--type", "fire"]);
+        run_raw(&v)
+    };
+    assert_success(&damage, "damage command");
+    let log = fs::read_to_string(save.join("rolls.log")).unwrap();
+    assert!(log.contains("combat-sim combat"), "{log}");
+    assert!(log.contains("1d6("), "{log}");
+    let before = log.lines().count();
+    // A condition change has no dice notation and must not grow the roll log.
+    let condition = {
+        let mut v = base;
+        v.extend_from_slice(&["condition", "add", "Dummy A", "dazed"]);
+        run_raw(&v)
+    };
+    assert_success(&condition, "condition command");
+    let log = fs::read_to_string(save.join("rolls.log")).unwrap();
+    assert_eq!(log.lines().count(), before, "{log}");
+    let _ = fs::remove_dir_all(&save);
 }

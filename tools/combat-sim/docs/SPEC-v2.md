@@ -309,7 +309,7 @@ where unavoidable, e.g. `unconscious` only via data-config default string — pr
 
 ## 11. Additions found while writing the real content (binding)
 - Every content item (creature, attack, ability, condition, mastery, scene, zone, object, trigger,
-  encounter, template) may carry optional `name`, `notes`, `manual`, `source`, `todo: [..]`, `description`.
+  encounter, template) may carry optional `name`, `notes`, `manual`, `source`, `todo: [..]`, `description`, `appearance` (player-facing description used until `talkdnd identify` records the real name).
 - Creature: `tags: [..]`; `side` may be any string (e.g. `party`, `enemy`, `rampage`); every side
   is hostile to every other side. Combat ends when ≤1 side has active (non-dormant, conscious)
   members. Encounter member fields: `creature, count, zone, pos, side, dormant, ai, name`.

@@ -264,6 +264,12 @@ Original content goes into the DM-only `Saves/<slot>/original.yaml` before it ap
 
 Alternative considered: a global setting or a setter command. Rejected because deviation is a deliberate per-campaign decision and must not be relaxed mid-play.
 
+### 2026-10-23 — Information discipline, secret guard and dice display (v0.8.0)
+
+The DM now reads converted adventures one heading at a time (`talkdnd adventure section`; future/DM-only sections need a logged `--reason`), builds narration and options only from `talkdnd known`, and checks drafts with `talkdnd guard` against local secret terms (`dm-secrets.md`, `dm-plan.md`, future chapter headings, original `--hidden`, manual terms). Unidentified monsters/items are shown to players by appearance (`talkdnd identify`, combat-sim `--player`), while DM views keep real names. Per-save `settings.dice_display` (default on, changeable mid-game and logged) controls whether dice values, DCs and modifiers are spoken; every roll stays program-made and lands in `rolls.log`. `LetsPlay/AGENTS.md` stays at 150 lines; details live in `option-writing.md`, `anti-spoiler.md` and `dice.md`.
+
+Alternative considered: rely on DM discipline alone. Rejected: the new tools make the information boundary checkable without blocking play, and the DM can still proceed with a logged reason where a scene must be read ahead.
+
 ## Change history
 
 | Date | Change |
@@ -282,6 +288,7 @@ Alternative considered: a global setting or a setter command. Rejected because d
 | 2026-10-21 | DM guide split: short `LetsPlay/AGENTS.md` (player commands 开新局 / 继续游戏 / 存档, mandatory step-by-step character creation, core rules) plus `LetsPlay/docs/`. No CLAUDE.md / GEMINI.md pointers (current agents read AGENTS.md). |
 | 2026-10-21 | chargen validation: adventure start-level step, 2014 level-1 subclass rule, armor proficiency from class+subclass, cantrip/spell count checks, species traits in the sheet and combat yaml. |
 | 2026-10-22 | Per-save adventure deviation (scope 0–2, ratio 5–25%) locked in `save-meta.yaml` schema 4; DM-only `original.yaml` ledger with scope/rarity/chapter-budget checks; `char item add` source check; `start`/`check` surfacing; v0.7.0. |
+| 2026-10-23 | v0.8.0 information discipline: scene-scoped reading, known list, secret terms/guard, hidden original aspects, player-facing name masking, option-writing rules, per-save dice display and roll log; schema 5. |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 

@@ -45,6 +45,15 @@ Rules/2024/.md/Player's Handbook 2024/img/p0123-a1.webp                # 从扫�
 2. 以下情况一律打开 PDF 对应页核对：`index.md` 列为低质量的页、正文里带 `> ⚠ Stat block check` 的**数据块**（`index.md` 的 Stat blocks 一节标 ✓ 的数据块数值自洽，可直接用 Markdown）、表格看起来错位、文字明显缺漏，以及所有**地图**（用 PDF 或 `img/` 下的图片）。
 3. 书还没转到那一页：直接查 PDF。**PDF 永远是权威来源**；Markdown 只是便于检索的副本。
 
+## 0.8.0：按页搜索、开书体检、章节起点与坏页兜底
+
+- **按页搜索**：`bin/talkdnd adventure search "<词或短语>" [--limit 20]`（别名 `find`）在冒险的页码版 `<书名>.pages.md` 里逐行查找，每个命中打印 `p.<PDF 页码>: 该行`；精确（归一化后）命中排在前面，行首容错命中标「（模糊）」；`--limit 0` 不限条数。匹配只在查询时做归一化：忽略大小写、弯/直引号、撇号、标点、空白、连字符断行（`exam-` 换行 `ple` 当作 `example`）和连字（`ﬁ`→`fi`）；每行开头允许丢 1–4 个字符或糊掉（扫描书页边常见），所以 `known` 也能命中 `..mown`。**只读，不改动源 Markdown**，也不改阅读版；找不到页码版时提示先转换。`adventure section <词>` 查找标题也使用同一套归一化，`--list` 仍然只列标题。
+- **开书体检（intake audit）**：第一次打开/转换一本书时，`pdf2md` 统计文字层字符数、0 字页、乱码率、扫描/数字版判断和书签数，给出 `text layer usable` 或 `OCR needed` 结论，写入 `manifest.json` 的 `intake` 和 `index.json` 的 `intake`/`chapters`；同一 PDF 重复运行结果不变。如果某页 CropBox 超出 MediaBox、原始文字层读成空页，体检只复制这一页，把副本的 CropBox 夹到 MediaBox 后再读文字层，不改动原 PDF，所以不会仅因这个毛病误报 `OCR needed`。`pdf2md status` 每本书显示一行 `intake: ...` 和 `page fallback N`；`adventure search`/`section` 开头也会显示简短结论。完整结果在 `index.md` 的「Intake audit」「Chapter starts」两节，以及 `pdf2md audit` 写出的 `audit.json`（含 `fallback_pages`）。
+- **没有书签的书**：运行或审核时加 `--chapter-open "<每章开头都会出现的短语>"`，或设环境变量 `PDF2MD_CHAPTER_OPEN`，例如 `uv run --project tools/pdf2md python -m pdf2md run --chapter-open "The Adventure Begins"`。程序按“每页第一行以该短语开头”（文本层前 80 个字符内）找章节起点，忽略大小写、标点和空白，存进 `intake.chapter_open` 与 `intake.chapters`，并出现在 `index.md` 的「Chapter starts」。传入短语时以短语为准；没传时用书签；两者都没有就留空。已有结果在不传该参数时保留，传入不同短语会重新识别。`pdf2md audit --chapter-open "…"` 也会写入审计结果。
+- **CropBox 与坏页兜底**：有些 PDF 的 CropBox 超出 MediaBox，文字层会像空页一样读不出来，整页图/OCR 也可能失败。转换前会把 CropBox 夹到 MediaBox（有交集用交集，没有交集用整页），并对坏页逐个兜底，不让一页错误中断整个分块。manifest 的页条目会记 `cropbox-clamped`、`page-fallback`（退回整页）、`page-error`（页本身读不了）、`render-failed`（图渲染失败）；`pdf2md status` 的 `page fallback N` 和 `pdf2md audit` 的 `fallback_pages` 会统计它们。看到这些标记时，查书以 PDF 对应页为准；正文仍会保留页锚点，后续页继续转换。
+- **单转换进程的锁**：`worker.lock` 现在用操作系统文件锁（POSIX `flock`、Windows `msvcrt.locking`）整个进程持有，文件里同时写 `pid`、`started`、`updated` 方便诊断。没有“先删后建”的空窗：两个 `pdf2md run` 同时启动只有一个拿到锁；死进程留下的锁（pid 不存在）或超过 600 秒没更新的锁会被自动接管，活着的进程的锁不会被抢。释放锁前会先写 `released: true`（保留 pid/started）；Windows 上文件暂时删不掉时，留下的锁文件也会被下次启动视为陈旧直接接管。`pdf2md run` 拿不到锁时打印 `another pdf2md worker is running; exiting` 并返回 3；`pdf2md apply` 拿不到锁时提示下次组装时应用修正并返回 1。正常退出会删除锁文件。
+- **报告文件**：`manifest.json`（分块/页状态与 intake）、`index.json`/`index.md`（标题、地图、插图、数据块检查、intake、章节起点）、`audit.json`（逐页评分与 `fallback_pages`）、`proofread-report.md`（校对改动）都只留在本地 `.md/<书名>/` 下，不入库、不贴到 issue/PR。
+
 ## 0.3.0：校对、原位图片、房间与地图索引
 
 - **校对规则**（移植自 ConvertPDF，只改正文，不碰页锚点、`<!-- -->` 标记、图片和链接、行内代码、表格和标题）：

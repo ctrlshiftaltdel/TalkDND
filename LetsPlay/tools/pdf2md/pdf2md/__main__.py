@@ -23,6 +23,8 @@ def main(argv=None):
     r.add_argument("--pages", help="with --book: PDF pages first, e.g. 12-20,31")
     r.add_argument("--chunk", type=int, default=10, help="pages per chunk (new books only)")
     r.add_argument("--ocr-engine", choices=ocr.ENGINES, default=os.environ.get("PDF2MD_OCR", "rapid"))
+    r.add_argument("--chapter-open", default=os.environ.get("PDF2MD_CHAPTER_OPEN"),
+                   help="recurring chapter-opening phrase for books without bookmarks (e.g. \"The Adventure Begins\")")
     r.add_argument("--no-nice", action="store_true")
     sub.add_parser("status", help="show progress")
     v = sub.add_parser("verify", help="check converted books; exit 1 on structural problems")
@@ -32,9 +34,11 @@ def main(argv=None):
     g.add_argument("page", type=int, help="PDF page number (1-based)")
     cs = sub.add_parser("contact-sheet", help="review/contact-NN.webp: 4x4 thumbnails of a book's images")
     cs.add_argument("--book")
-    a = sub.add_parser("audit", help="score every converted page against the PDF text layer (audit.json)")
+    a = sub.add_parser("audit", help="intake audit + score every converted page against the PDF text layer (audit.json)")
     a.add_argument("--book")
     a.add_argument("--threshold", type=float, default=25)
+    a.add_argument("--chapter-open", default=os.environ.get("PDF2MD_CHAPTER_OPEN"),
+                   help="recurring chapter-opening phrase for books without bookmarks")
     q = sub.add_parser("fix-queue", help="pages that need review, worst first")
     q.add_argument("--book")
     q.add_argument("--limit", type=int, default=20)
@@ -71,8 +75,10 @@ def main(argv=None):
     if args.cmd == "run":
         return worker.run(root, budget_seconds=args.budget, budget_pages=args.budget_pages, book=args.book, only=args.only,
                           pages=args.pages, chunk_size=args.chunk, ocr_engine=args.ocr_engine,
-                          nice=not args.no_nice)
+                          nice=not args.no_nice, chapter_open=args.chapter_open)
     if args.cmd == "status":
+        from . import intake
+
         rows = worker.write_status(root)
         for row in rows:
             if row.get("error"):
@@ -80,7 +86,13 @@ def main(argv=None):
                 continue
             total = row["pages"] if row["pages"] is not None else "?"
             flag = " (PDF changed: will restart)" if row["stale"] else ""
-            print(f"{row['done']:>4}/{total:<4} low {row['low']:<3} ocr {row['ocr']:<3} {row['pdf']}{flag}")
+            extra = []
+            if row.get("intake"):
+                extra.append(intake.brief(row["intake"]))
+            if row.get("fallback"):
+                extra.append(f"page fallback {row['fallback']}")
+            tail = "  [" + "; ".join(extra) + "]" if extra else ""
+            print(f"{row['done']:>4}/{total:<4} low {row['low']:<3} ocr {row['ocr']:<3} {row['pdf']}{flag}{tail}")
         return 0
     if args.cmd == "verify":
         return verify(root, args.book)
@@ -89,7 +101,12 @@ def main(argv=None):
 
         pdf = _find(root, args.book)
         b = Book(pdf)
-        print(os.path.join(b.dir, b.render_page(args.page - 1)))
+        rel = b.render_page(args.page - 1)
+        b.close()
+        if not rel:
+            print(f"cannot render PDF p.{args.page}", file=sys.stderr)
+            return 1
+        print(os.path.join(b.dir, rel))
         return 0
     if args.cmd == "contact-sheet":
         return contact_sheets(root, args.book)
@@ -143,7 +160,7 @@ def reviewcmd(root, args):
     import json
     from concurrent.futures import ThreadPoolExecutor
 
-    from . import audit, repair, review
+    from . import audit, intake, repair, review
 
     repair.load_words(os.path.join(worker.state_dir(root), "words_alpha.txt"))
     rc = 0
@@ -164,10 +181,14 @@ def reviewcmd(root, args):
             print("rebuilt", os.path.basename(pdf))
             continue
         bv = audit.BookView(pdf)
-        rows = audit.audit_book(bv, getattr(args, "threshold", 25))
+        rows = audit.audit_book(bv, getattr(args, "threshold", 25),
+                                chapter_open=getattr(args, "chapter_open", None))
         if args.cmd == "audit":
-            sm = json.load(open(os.path.join(bv.dir, "audit.json"), encoding="utf-8"))["summary"]
-            print(f"{bv.stem}: {sm['pages']} pages, {sm['need_review']} need review, {sm['fixed']} fixed")
+            data = json.load(open(os.path.join(bv.dir, "audit.json"), encoding="utf-8"))
+            sm = data["summary"]
+            print(f"{bv.stem}: {sm['pages']} pages, {sm['need_review']} need review, "
+                  f"{sm['fixed']} fixed, {sm.get('fallback_pages', 0)} page fallbacks")
+            print(f"{bv.stem}: {intake.brief(data.get('intake'))}")
         elif args.cmd == "fix-queue":
             for r in [r for r in rows if r["review"] and not r["fixed"]][:args.limit]:
                 print(f"{bv.stem} p.{r['page']:<4} badness {r['badness']:<6} recall {r['recall']} "

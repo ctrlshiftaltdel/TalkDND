@@ -30,9 +30,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "original.yaml";
-const LEDGER_VERSION: u32 = 1;
+const LEDGER_VERSION: u32 = 2;
 /// Track-less saves still need a chapter label for the ledger.
 pub const UNCHAPTERED: &str = "未分章";
+/// Local long-term DM plan (never committed).
+pub const PLAN_FILE: &str = "dm-plan.md";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -199,6 +201,11 @@ pub struct Entry {
     pub chapter: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// DM-only hidden aspect introduced by this element (schema 2). It is a
+    /// secret term source and must not appear in player-visible text until
+    /// `talkdnd reveal add --original O-xxx` records the reveal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<String>,
     /// The idea came from a player; adopted player hooks count as original.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub player_hook: bool,
@@ -244,11 +251,11 @@ pub fn load(save_dir: &Path) -> Result<Ledger> {
     Ok(ledger)
 }
 
-fn store(save_dir: &Path, ledger: &Ledger) -> Result<()> {
+pub(crate) fn store(save_dir: &Path, ledger: &Ledger) -> Result<()> {
     let mut current = ledger.clone();
     current.version = LEDGER_VERSION;
     let text = format!(
-        "# TalkDND original-content ledger (DM only; players must never see this).\n# Register with `talkdnd original add` before introducing the element.\n{}",
+        "# TalkDND original-content ledger (DM only; players must never see this).\n# Register with `talkdnd original add` before introducing the element. `hidden:` is DM-only.\n{}",
         serde_norway::to_string(&current)?
     );
     atomic_write(path(save_dir), text.as_bytes())
@@ -372,6 +379,8 @@ pub struct New<'a> {
     /// `None` only for non-item types (defaults to common).
     pub rarity: Option<&'a str>,
     pub note: &'a str,
+    /// DM-only hidden aspect (secret term source until revealed).
+    pub hidden: &'a str,
     pub player_hook: bool,
 }
 
@@ -449,6 +458,7 @@ pub fn add(save_dir: &Path, new: &New<'_>) -> Result<Vec<String>> {
         rarity: rarity.id().to_string(),
         chapter: ctx.chapter.clone(),
         note: new.note.trim().to_string(),
+        hidden: Some(new.hidden.trim().to_string()).filter(|h| !h.is_empty()),
         player_hook: new.player_hook,
         logged: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
     };
@@ -520,6 +530,13 @@ pub fn list(save_dir: &Path) -> Result<Vec<String>> {
             if e.player_hook {
                 s += "  [玩家钩子]";
             }
+            if e.hidden.is_some() {
+                s += if revealed(save_dir, &e.id) {
+                    "  [隐藏面已揭示]"
+                } else {
+                    "  [有隐藏面]"
+                };
+            }
             if !e.note.is_empty() {
                 s += &format!("  — {}", e.note);
             }
@@ -527,6 +544,122 @@ pub fn list(save_dir: &Path) -> Result<Vec<String>> {
             s
         })
         .collect())
+}
+
+/// Has this original element's hidden aspect been revealed? The reveal ledger
+/// records it as a tag (`original:O-001`), written by
+/// `talkdnd reveal add --original O-001`.
+pub fn revealed(save_dir: &Path, id: &str) -> bool {
+    let wanted = format!("original:{}", id.trim().to_ascii_lowercase());
+    reveal::load(save_dir)
+        .map(|l| {
+            l.facts
+                .iter()
+                .any(|f| f.tags.iter().any(|t| t.eq_ignore_ascii_case(&wanted)))
+        })
+        .unwrap_or(false)
+}
+
+/// Entries the players have met: no hidden aspect, or the hidden aspect has
+/// been revealed. Used by `talkdnd known` (never print the ledger itself).
+pub fn known_entries(save_dir: &Path) -> Vec<Entry> {
+    let Ok(ledger) = load(save_dir) else {
+        return Vec::new();
+    };
+    ledger
+        .entries
+        .into_iter()
+        .filter(|e| e.hidden.is_none() || revealed(save_dir, &e.id))
+        .collect()
+}
+
+/// Create the local long-term plan file (`Saves/<slot>/dm-plan.md`, DM only,
+/// gitignored) from a template when it does not exist yet.
+pub fn plan(save_dir: &Path) -> Result<String> {
+    let p = save_dir.join(PLAN_FILE);
+    if p.is_file() {
+        return Ok(format!(
+            "DM 长期计划已在 `{}`；只给 DM 看，不要提交",
+            p.display()
+        ));
+    }
+    let text = "# DM 长期计划（只给 DM；已 gitignore，不要提交）\n\n\
+本文件写本档的长期计划、伏笔和后续安排。`talkdnd secret` 会从本文件收集\n\
+`- term: <词>` 行和 `[[<词>]]` 标记，作为防剧透检查的秘密词；\n\
+例如：`- term: 馆长的真名` 或 `幕后黑手是 [[红面具]]`。\n\n\
+## 计划\n\n\
+# - term: <秘密词>（把行首的 # 去掉才生效）\n\n\
+## 伏笔与回收\n\n";
+    atomic_write(&p, text.as_bytes())?;
+    Ok(format!(
+        "已创建 `{}`（只给 DM，已 gitignore；用 `- term: X` 或 `[[X]]` 标记秘密词）",
+        p.display()
+    ))
+}
+
+fn log_text(save_dir: &Path) -> String {
+    let mut out = String::new();
+    let Ok(rd) = fs::read_dir(save_dir.join("Sessions")) else {
+        return out;
+    };
+    let mut files: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "md")
+                && !p
+                    .file_name()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("README.md"))
+        })
+        .collect();
+    files.sort();
+    for f in files {
+        if let Ok(t) = fs::read_to_string(f) {
+            out.push_str(&t.to_lowercase());
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// `talkdnd check`: registered hidden aspects that appear verbatim in session
+/// logs without a reveal record. Deliberately only the DM's own registered
+/// text — never a scan of the adventure book.
+pub fn leak_warnings(save_dir: &Path) -> Vec<String> {
+    let Ok(ledger) = load(save_dir) else {
+        return Vec::new();
+    };
+    let logs = log_text(save_dir);
+    if logs.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for e in ledger.entries.iter().filter(|e| e.hidden.is_some()) {
+        if revealed(save_dir, &e.id) {
+            continue;
+        }
+        let hidden = e.hidden.as_deref().unwrap_or("").trim();
+        let mut terms = vec![hidden.to_string()];
+        let mut rest = hidden;
+        while let Some(start) = rest.find("[[") {
+            let after = &rest[start + 2..];
+            let Some(end) = after.find("]]") else {
+                break;
+            };
+            terms.push(after[..end].trim().to_string());
+            rest = &after[end + 2..];
+        }
+        let hit = terms
+            .iter()
+            .filter(|t| t.chars().count() >= 2)
+            .find(|t| logs.contains(&t.to_lowercase()));
+        if let Some(term) = hit {
+            out.push(format!(
+                "原创 {}「{}」的隐藏面（出现：{}）出现在会话日志里，但没有揭示记录；若玩家已经知道，运行 `talkdnd reveal add --original {}`（否则把它从玩家可见文本里删掉）",
+                e.id, e.name, term, e.id
+            ));
+        }
+    }
+    out
 }
 
 /// DM-facing status: scope, caps, chapter budget and campaign total. Used by
@@ -854,6 +987,7 @@ pub fn audit(save_dir: &Path, dev: &Deviation) -> Vec<String> {
             Some(_) => {}
         }
     }
+    w.extend(leak_warnings(save_dir));
     w
 }
 
@@ -924,6 +1058,7 @@ mod tests {
                 name,
                 rarity,
                 note: "",
+                hidden: "",
                 player_hook: false,
             },
         )
@@ -1057,6 +1192,61 @@ mod tests {
     }
 
     #[test]
+    fn hidden_aspects_are_secret_and_leaks_are_flagged() {
+        let d = save_dir("hidden", 2, Some(25));
+        canon(&d, 20, 0);
+        super::add(
+            &d,
+            &New {
+                kind: "npc",
+                name: "Guide",
+                rarity: None,
+                note: "",
+                hidden: "Guide is [[Red Mask]]",
+                player_hook: false,
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(d.join(FILE)).unwrap();
+        assert!(
+            text.contains("version: 2") && text.contains("hidden:"),
+            "{text}"
+        );
+        // A hidden entry is not "introduced" until its hidden aspect is revealed.
+        assert!(!known_entries(&d).iter().any(|e| e.id == "O-001"));
+        assert!(!revealed(&d, "O-001"));
+        // The DM's own plan template and terms are parsed; a leak is flagged.
+        fs::write(
+            d.join("Sessions/s1.md"),
+            "# log\n- [20:00] 玩家听见有人叫出 Red Mask\n",
+        )
+        .unwrap();
+        let leaks = leak_warnings(&d);
+        assert!(
+            leaks
+                .iter()
+                .any(|w| w.contains("O-001") && w.contains("Red Mask")),
+            "{leaks:?}"
+        );
+        let dev = deviation(&d).unwrap();
+        assert!(audit(&d, &dev).join("\n").contains("O-001"));
+        // Revealing the hidden aspect clears the leak and lists it in `known`.
+        crate::reveal::add_original(&d, "O-001", None, "test reveal").unwrap();
+        assert!(revealed(&d, "O-001"));
+        assert!(known_entries(&d).iter().any(|e| e.id == "O-001"));
+        assert!(leak_warnings(&d).is_empty());
+        assert!(list(&d).unwrap().join("\n").contains("隐藏面已揭示"));
+        // The plan file is created once, with only commented term examples.
+        let msg = plan(&d).unwrap();
+        assert!(
+            msg.contains("dm-plan.md") && d.join(PLAN_FILE).is_file(),
+            "{msg}"
+        );
+        assert!(plan(&d).unwrap().contains("长期计划"));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn audit_finds_tampering_and_unknown_original_items() {
         let d = save_dir("audit", 1, Some(15));
         let mut ledger = Ledger::default();
@@ -1067,6 +1257,7 @@ mod tests {
             rarity: "legendary".into(),
             chapter: UNCHAPTERED.into(),
             note: String::new(),
+            hidden: None,
             player_hook: false,
             logged: String::new(),
         });

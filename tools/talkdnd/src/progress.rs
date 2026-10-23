@@ -62,6 +62,10 @@ pub struct Progress {
     /// built-in one for the save's adventure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub track: Vec<TrackStep>,
+    /// Current scene/location label, recorded by `talkdnd scene` and shown by
+    /// `talkdnd known` / `talkdnd start`. Additive; older ledgers lack it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -871,6 +875,7 @@ pub fn level_up(
         "avg" | "average" => (i64::from(die / 2 + 1), format!("average {}", die / 2 + 1)),
         "roll" => {
             let r = roll_command(&format!("1d{die}"), RollMode::Normal, None, false, rng)?;
+            crate::rolls::append(save_dir, &s.name, "升级生命骰", &r.text, seeded)?;
             (r.total as i64, r.text)
         }
         n => {
@@ -1037,6 +1042,25 @@ pub fn level_up(
         &format!("升级{tag}：{} {old}→{new}，HP +{gain}（{how}）", s.name),
     )?;
     Ok(r)
+}
+
+/// `talkdnd scene <name>`: record the current scene/location in the save and
+/// log it. Also printed by `talkdnd known` and `talkdnd start`.
+pub fn set_scene(save_dir: &Path, scene: &str) -> Result<String> {
+    let scene = scene.trim();
+    if scene.is_empty() {
+        bail!("scene name is empty");
+    }
+    let mut p = Progress::load(save_dir)?;
+    p.scene = Some(scene.to_string());
+    p.store(save_dir)?;
+    let line = format!("场景：{scene}");
+    log(save_dir, &line)?;
+    Ok(line)
+}
+
+pub fn scene(save_dir: &Path) -> Option<String> {
+    Progress::load(save_dir).ok().and_then(|p| p.scene)
 }
 
 pub enum LootOp<'a> {

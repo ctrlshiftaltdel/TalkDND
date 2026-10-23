@@ -16,7 +16,7 @@ import json
 import os
 import re
 
-from . import fallback, repair, tables
+from . import fallback, intake, repair, tables
 
 REF_MAX_UNKNOWN = 60  # text layers worse than this (unknown words per 1k) are not used for recall
 ANCHOR_RE = re.compile(r'<a id="p(\d+)"></a>')
@@ -99,26 +99,37 @@ def needs_review(s, threshold=25):
     return s["badness"] >= threshold or "statblock" in s["flags"]
 
 
-def audit_book(book, threshold=25):
-    """book: convert.Book. Writes audit.json and returns the list of page rows."""
+FALLBACK_FLAGS = {"page-fallback", "cropbox-clamped", "page-error", "render-failed"}
+
+
+def audit_book(book, threshold=25, chapter_open=None):
+    """book: convert.Book / audit.BookView. Writes audit.json and returns page rows."""
     md_path = os.path.join(book.dir, book.stem + ".pages.md")
     with open(md_path, encoding="utf-8") as f:
         pages = split_pages(f.read())
+    ia = intake.from_manifest(book.m)
+    phrase = (chapter_open or "").strip()
+    if not ia or (phrase and phrase != ia.get("chapter_open", "")):
+        ia = intake.audit_doc(book.doc, phrase or None)
     rows = []
     for p, md in pages.items():
         if p > book.doc.page_count:
             continue
         info = book.m["pages"].get(str(p), {})
-        s = score_page(book.doc[p - 1].get_text(), md, info)
+        page = book.page(p - 1) if hasattr(book, "page") else book.doc[p - 1]
+        s = score_page(page.get_text(), md, info)
         s["page"] = p
         s["fixed"] = os.path.exists(fix_path(book, p))
         s["review"] = needs_review(s, threshold)
         rows.append(s)
     rows.sort(key=lambda r: -r["badness"])
     summary = {"pages": len(rows), "need_review": sum(r["review"] for r in rows),
-               "fixed": sum(r["fixed"] for r in rows), "threshold": threshold}
+               "fixed": sum(r["fixed"] for r in rows), "threshold": threshold,
+               "fallback_pages": sum(1 for r in rows if FALLBACK_FLAGS & set(r.get("flags", []))),
+               "verdict": ia["verdict"]}
     with open(os.path.join(book.dir, "audit.json"), "w", encoding="utf-8") as f:
-        json.dump({"pdf": book.m["pdf"], "tool": book.m["tool"], "summary": summary, "pages": rows}, f, indent=1)
+        json.dump({"pdf": book.m["pdf"], "tool": book.m["tool"], "intake": ia,
+                   "summary": summary, "pages": rows}, f, indent=1)
     return rows
 
 

@@ -58,6 +58,16 @@ pub struct Cli {
     #[arg(long = "campaign", global = true, value_name = "FILE")]
     pub campaign: Option<PathBuf>,
 
+    /// Player-facing view: unidentified monsters show an appearance
+    /// description instead of their real name (status/log/simulate).
+    #[arg(long, global = true)]
+    pub player: bool,
+
+    /// Save folder (identified.yaml, rolls.log). Defaults to TALKDND_SAVE or
+    /// the folder above the campaign's combat/ directory.
+    #[arg(long, global = true, value_name = "DIR")]
+    pub save: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -462,6 +472,8 @@ pub fn run() -> Result<()> {
         adventure,
         chars,
         campaign,
+        player,
+        save,
         command,
     } = Cli::parse();
 
@@ -471,6 +483,8 @@ pub fn run() -> Result<()> {
         characters: chars,
         campaign,
     };
+    let save = crate::player::save_dir(save.as_deref(), sources.campaign_path().as_deref());
+    let mask = crate::player::PlayerMask::load(save.as_deref());
 
     match command {
         Command::New {
@@ -499,7 +513,7 @@ pub fn run() -> Result<()> {
             dis,
         } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let surprise = state.content.rules.surprise.clone().unwrap_or_default();
                 let surprise_dis = surprise
                     .initiative_disadvantage
@@ -558,7 +572,9 @@ pub fn run() -> Result<()> {
                 Ok(())
             })
         }
-        Command::Status => print_status(&state_path(&sources, state.as_deref()), json),
+        Command::Status => {
+            print_status(&state_path(&sources, state.as_deref()), json, player, &mask)
+        }
         Command::Attack {
             attacker,
             target,
@@ -570,7 +586,7 @@ pub fn run() -> Result<()> {
             nonlethal,
         } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let attacker = canonical_name(state, &attacker)?;
                 warn_out_of_turn(state, &attacker, lines);
                 let target = canonical_name(state, &target)?;
@@ -592,7 +608,7 @@ pub fn run() -> Result<()> {
             nonlethal,
         } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let target = canonical_name(state, &target)?;
                 state.nonlethal_active = nonlethal;
                 engine::damage(
@@ -613,7 +629,7 @@ pub fn run() -> Result<()> {
             slot,
         } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let target = canonical_name(state, &target)?;
                 let from = from
                     .as_deref()
@@ -633,7 +649,7 @@ pub fn run() -> Result<()> {
             dis,
         } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
                 engine::save(
                     state,
@@ -655,7 +671,7 @@ pub fn run() -> Result<()> {
             bonus,
         } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
                 engine::check(
                     state,
@@ -682,45 +698,46 @@ pub fn run() -> Result<()> {
                 .map(|_| state_path(&sources, state.as_deref()));
             let mode = RollMode::from_flags(adv, dis);
             let mut outcome = None;
-            match path {
-                Some(path) if path.exists() && !json => {
-                    run_state_command(&path, seed, |_state, rng, lines| {
-                        engine::roll_expression(&expression, mode, dc, crit, rng, lines).map(|_| ())
-                    })?;
-                }
-                Some(path) if path.exists() => {
-                    run_state_command_quiet(&path, seed, |_state, rng, lines| {
-                        outcome = Some(engine::roll_expression(
-                            &expression,
-                            mode,
-                            dc,
-                            crit,
-                            rng,
-                            lines,
-                        )?);
-                        Ok(())
-                    })?;
-                }
-                _ => {
-                    let mut lines = Vec::new();
-                    let mut rng = make_rng(seed);
-                    let result = engine::roll_expression(
+            let mut output_lines = Vec::new();
+            let state_file = path.filter(|p| p.exists());
+            let rolled_in_state = state_file.is_some();
+            if let Some(path) = state_file {
+                run_state_command_quiet(&path, save.as_deref(), seed, |_state, rng, lines| {
+                    outcome = Some(engine::roll_expression(
                         &expression,
                         mode,
                         dc,
                         crit,
-                        rng.as_mut(),
-                        &mut lines,
-                    )?;
-                    if json {
-                        outcome = Some(result);
-                    } else {
-                        print_lines(&lines);
-                    }
-                }
+                        rng,
+                        lines,
+                    )?);
+                    output_lines = lines.clone();
+                    Ok(())
+                })?;
+            } else {
+                let mut rng = make_rng(seed);
+                outcome = Some(engine::roll_expression(
+                    &expression,
+                    mode,
+                    dc,
+                    crit,
+                    rng.as_mut(),
+                    &mut output_lines,
+                )?);
             }
-            if let Some(outcome) = outcome {
-                println!("{}", serde_json::to_string_pretty(&outcome)?);
+            if json {
+                if let Some(outcome) = &outcome {
+                    println!("{}", serde_json::to_string_pretty(outcome)?);
+                }
+            } else {
+                print_lines(&output_lines);
+            }
+            let text = outcome
+                .as_ref()
+                .map(|o| o.text.clone())
+                .unwrap_or_else(|| output_lines.join(" "));
+            if !rolled_in_state {
+                crate::player::append_roll(save.as_deref(), &expression, &text);
             }
             Ok(())
         }
@@ -737,7 +754,7 @@ pub fn run() -> Result<()> {
             force,
         } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
                 check_turn(state, &who, &ability, force, lines)?;
                 let options = UseOptions {
@@ -766,7 +783,7 @@ pub fn run() -> Result<()> {
             force,
         } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
                 check_turn(state, &who, &ability, force, lines)?;
                 let options = UseOptions {
@@ -797,7 +814,7 @@ pub fn run() -> Result<()> {
                 save_ends,
             } => {
                 let path = state_path(&sources, state.as_deref());
-                run_state_command(&path, seed, |state, rng, lines| {
+                run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                     let who = canonical_name(state, &who)?;
                     let save_ends = match save_ends {
                         Some(text) => {
@@ -836,7 +853,7 @@ pub fn run() -> Result<()> {
             }
             ConditionCommand::Remove { who, condition } => {
                 let path = state_path(&sources, state.as_deref());
-                run_state_command(&path, seed, |state, _rng, lines| {
+                run_state_command(&path, save.as_deref(), seed, |state, _rng, lines| {
                     let who = canonical_name(state, &who)?;
                     engine::remove_condition(state, &who, &condition, lines)
                 })
@@ -868,7 +885,7 @@ pub fn run() -> Result<()> {
                 engine::MoveTarget::Zone(zone.unwrap())
             };
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
                 warn_out_of_turn(state, &who, lines);
                 engine::move_to(state, &who, &target, no_oa, rng, lines)
@@ -880,7 +897,7 @@ pub fn run() -> Result<()> {
             option,
         } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
                 warn_out_of_turn(state, &who, lines);
                 engine::interact(state, &who, &object, option, rng, lines)
@@ -889,21 +906,23 @@ pub fn run() -> Result<()> {
         Command::Scene => print_scene(&state_path(&sources, state.as_deref())),
         Command::Deathsave { who } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let who = canonical_name(state, &who)?;
                 engine::death_save(state, &who, rng, lines)
             })
         }
         Command::Next => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 engine::next_turn(state, rng, lines)
             })
         }
-        Command::Log { tail } => print_log(&state_path(&sources, state.as_deref()), tail),
+        Command::Log { tail } => {
+            print_log(&state_path(&sources, state.as_deref()), tail, player, &mask)
+        }
         Command::Rest { kind, who, hd } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let who = if who.eq_ignore_ascii_case("all") {
                     "all".to_string()
                 } else {
@@ -914,7 +933,7 @@ pub fn run() -> Result<()> {
         }
         Command::Activate { name } => {
             let path = state_path(&sources, state.as_deref());
-            run_state_command(&path, seed, |state, rng, lines| {
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 engine::activate(state, &name, rng, lines)
             })
         }
@@ -932,6 +951,8 @@ pub fn run() -> Result<()> {
             state.as_deref(),
             seed,
             json,
+            player,
+            &mask,
             encounter,
             party,
             from_state,
@@ -1193,7 +1214,12 @@ fn resolve_party(sources: &ContentSources, party: Option<String>) -> Result<Vec<
     )
 }
 
-fn run_state_command<F>(state_path: &Path, seed: Option<u64>, action: F) -> Result<()>
+fn run_state_command<F>(
+    state_path: &Path,
+    save: Option<&Path>,
+    seed: Option<u64>,
+    action: F,
+) -> Result<()>
 where
     F: FnOnce(&mut EncounterState, &mut dyn DiceRng, &mut Vec<String>) -> Result<()>,
 {
@@ -1207,12 +1233,18 @@ where
         .save(state_path)
         .with_context(|| format!("failed to save state {}", state_path.display()))?;
     write_party_state(&state)?;
+    crate::player::append_combat_lines(save, &lines);
     print_lines(&lines);
     Ok(())
 }
 
 /// Like [`run_state_command`] but does not print the log lines.
-fn run_state_command_quiet<F>(state_path: &Path, seed: Option<u64>, action: F) -> Result<()>
+fn run_state_command_quiet<F>(
+    state_path: &Path,
+    save: Option<&Path>,
+    seed: Option<u64>,
+    action: F,
+) -> Result<()>
 where
     F: FnOnce(&mut EncounterState, &mut dyn DiceRng, &mut Vec<String>) -> Result<()>,
 {
@@ -1225,7 +1257,9 @@ where
     state
         .save(state_path)
         .with_context(|| format!("failed to save state {}", state_path.display()))?;
-    write_party_state(&state)
+    write_party_state(&state)?;
+    crate::player::append_combat_lines(save, &lines);
+    Ok(())
 }
 
 fn write_party_state(state: &EncounterState) -> Result<()> {
@@ -1527,6 +1561,8 @@ fn run_simulate(
     state_name: Option<&Path>,
     seed: Option<u64>,
     json: bool,
+    player: bool,
+    mask: &crate::player::PlayerMask,
     encounter: Option<String>,
     party: Option<String>,
     from_state: Option<PathBuf>,
@@ -1578,6 +1614,11 @@ fn run_simulate(
         );
     }
     let ai = Ai::prepare(&state);
+    let replacements = if player {
+        mask.replacements(&state)
+    } else {
+        Vec::new()
+    };
     let mut rng = make_rng(seed);
     if runs == 1 {
         let meta: Vec<(String, String, i32)> = state
@@ -1632,12 +1673,38 @@ fn run_simulate(
         };
         if json {
             let output = SimRunOutput { log, summary };
+            let mut value =
+                serde_json::to_value(&output).context("failed to serialize simulation")?;
+            if player {
+                if let Some(lines) = value.get_mut("log").and_then(|v| v.as_array_mut()) {
+                    for line in lines {
+                        if let Some(text) = line.as_str().map(str::to_string) {
+                            *line = serde_json::Value::String(mask.line(&text, &replacements));
+                        }
+                    }
+                }
+                if let Some(list) = value
+                    .get_mut("summary")
+                    .and_then(|v| v.get_mut("combatants"))
+                    .and_then(|v| v.as_array_mut())
+                {
+                    for c in list {
+                        if let Some(name) =
+                            c.get("name").and_then(|v| v.as_str()).map(str::to_string)
+                        {
+                            c["name"] = serde_json::Value::String(mask.line(&name, &replacements));
+                        }
+                    }
+                }
+            }
             println!(
                 "{}",
-                serde_json::to_string_pretty(&output).context("failed to serialize simulation")?
+                serde_json::to_string_pretty(&value).context("failed to serialize simulation")?
             );
         } else {
-            print_lines(&log);
+            for line in &log {
+                println!("{}", mask.line(line, &replacements));
+            }
             println!("Result: {}", summary.outcome);
             println!("Rounds: {}", summary.rounds);
             let hp_text = summary
@@ -1655,7 +1722,12 @@ fn run_simulate(
                 } else {
                     format!("{}/{}", combatant.hp, combatant.max_hp)
                 };
-                println!("  {} ({}): {}", combatant.name, combatant.side, status);
+                println!(
+                    "  {} ({}): {}",
+                    mask.line(&combatant.name, &replacements),
+                    combatant.side,
+                    status
+                );
             }
         }
         return Ok(());
@@ -1708,7 +1780,7 @@ fn run_simulate(
         for creature in &report.creatures {
             println!(
                 "  {} ({}): avg HP {:.1}/{}  down {:.1}%  dead {:.1}%",
-                creature.name,
+                mask.line(&creature.name, &replacements),
                 creature.side,
                 creature.avg_hp,
                 creature.max_hp,
@@ -1768,32 +1840,56 @@ fn print_lines(lines: &[String]) {
 // Read-only commands and status JSON
 // ---------------------------------------------------------------------------
 
-fn print_status(state_path: &Path, json: bool) -> Result<()> {
+fn print_status(
+    state_path: &Path,
+    json: bool,
+    player: bool,
+    mask: &crate::player::PlayerMask,
+) -> Result<()> {
     let state = EncounterState::load(state_path)
         .with_context(|| format!("failed to load state {}", state_path.display()))?;
     if json {
         let output = StatusOutput::from_state(&state);
+        let mut value = serde_json::to_value(&output).context("failed to serialize status JSON")?;
+        if player {
+            crate::player::mask_status_json(&mut value, &state, mask);
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&output).context("failed to serialize status JSON")?
+            serde_json::to_string_pretty(&value).context("failed to serialize status JSON")?
         );
     } else {
+        let replacements = if player {
+            mask.replacements(&state)
+        } else {
+            Vec::new()
+        };
         for line in engine::status_lines(&state) {
-            println!("{line}");
+            println!("{}", mask.line(&line, &replacements));
         }
     }
     Ok(())
 }
 
-fn print_log(state_path: &Path, tail: Option<usize>) -> Result<()> {
+fn print_log(
+    state_path: &Path,
+    tail: Option<usize>,
+    player: bool,
+    mask: &crate::player::PlayerMask,
+) -> Result<()> {
     let state = EncounterState::load(state_path)
         .with_context(|| format!("failed to load state {}", state_path.display()))?;
     let start = match tail {
         Some(tail) => state.log.len().saturating_sub(tail),
         None => 0,
     };
+    let replacements = if player {
+        mask.replacements(&state)
+    } else {
+        Vec::new()
+    };
     for line in &state.log[start..] {
-        println!("{line}");
+        println!("{}", mask.line(line, &replacements));
     }
     Ok(())
 }

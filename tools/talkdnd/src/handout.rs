@@ -520,6 +520,21 @@ pub fn show(
     Ok(lines)
 }
 
+/// Handouts already shown to the players (id, caption, date, file).
+pub fn shown_lines(save: &Path) -> Vec<String> {
+    let sp = save.join(SHOWN);
+    let shown: Shown = if sp.is_file() {
+        serde_norway::from_str(&fs::read_to_string(&sp).unwrap_or_default()).unwrap_or_default()
+    } else {
+        Shown::default()
+    };
+    shown
+        .shown
+        .iter()
+        .map(|x| format!("{} {}（{}）→ {}", x.id, x.caption, x.date, x.file))
+        .collect()
+}
+
 pub fn list(root: &Path, save: &Path, book: Option<&str>, dm: bool) -> Result<Vec<String>> {
     if !dm {
         let sp = save.join(SHOWN);
