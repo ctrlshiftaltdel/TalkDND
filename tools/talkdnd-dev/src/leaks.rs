@@ -60,10 +60,35 @@ pub fn is_leak(root: &Path, rel: &str) -> bool {
         || generated_tree(rel)
 }
 
-/// pdf2md output (`.md/`), its state (`.pdf2md/`) and Python environments (`.venv/`).
+/// pdf2md output (`<book>/index/`, legacy `.md/`), its state (`.pdf2md/`) and
+/// Python environments (`.venv/`).
 pub fn generated_tree(path: &str) -> bool {
-    path.split('/')
-        .any(|segment| matches!(segment, ".md" | ".pdf2md" | ".venv"))
+    let segments: Vec<&str> = path.split('/').collect();
+    segments
+        .iter()
+        .any(|segment| matches!(*segment, ".md" | ".pdf2md" | ".venv"))
+        || segments
+            .windows(2)
+            .any(|w| w[0] == "index" && pdf2md_output(w[1]))
+}
+
+/// A file or folder pdf2md writes inside a book's `index/`.
+fn pdf2md_output(name: &str) -> bool {
+    name.ends_with(".pages.md")
+        || matches!(
+            name,
+            "manifest.json"
+                | "index.json"
+                | "headings.json"
+                | "audit.json"
+                | "handouts.yaml"
+                | "proofread-report.md"
+                | "pages"
+                | "img"
+                | "fixes"
+                | "review"
+                | "backups"
+        )
 }
 
 fn git_ls_files(root: &Path) -> Result<Vec<String>, String> {

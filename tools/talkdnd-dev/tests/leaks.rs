@@ -217,6 +217,10 @@ fn pdf2md_output_and_environments_are_leaks() {
     assert!(generated_tree("LetsPlay/Adventures/x/.md/X/img/p0001.webp"));
     assert!(generated_tree("LetsPlay/.pdf2md/status.json"));
     assert!(generated_tree("LetsPlay/tools/pdf2md/.venv/pyvenv.cfg"));
+    assert!(generated_tree("LetsPlay/Adventures/x/index/X.pages.md"));
+    assert!(generated_tree("LetsPlay/Rules/2024/x/index/img/p0001.webp"));
+    assert!(generated_tree("Rules/2014/x/index/manifest.json"));
+    assert!(!generated_tree("docs/index/README.md"));
     assert!(!generated_tree("LetsPlay/tools/pdf2md/pdf2md/convert.py"));
     assert!(!generated_tree("LetsPlay/README.md"));
 }
