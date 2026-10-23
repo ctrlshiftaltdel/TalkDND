@@ -23,6 +23,8 @@ import re
 import numpy as np
 from PIL import Image, ImageFilter
 
+from . import textutil
+
 CELL = 4.0
 TEXT_PAD = 2.0
 DILATE_CELLS = 2
@@ -66,7 +68,7 @@ def text_lines(page):
         if blk.get("type") != 0:
             continue
         for ln in blk.get("lines", []):
-            t = "".join(s["text"] for s in ln["spans"]).strip()
+            t = textutil.line_text(ln).strip()
             if t:
                 out.append((tuple(ln["bbox"]), t))
     return out

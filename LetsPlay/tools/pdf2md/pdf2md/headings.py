@@ -2,7 +2,7 @@
 
 import re
 
-from . import repair
+from . import repair, textutil
 
 HEADING_FONT_EXCLUDE = ("angsana", "segoe", "symbol", "wingding")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
@@ -28,7 +28,7 @@ def build_heading_map(doc, pages=None):
                 if any(x in spans[0]["font"].lower() for x in HEADING_FONT_EXCLUDE):
                     continue
                 size = max(s["size"] for s in spans)
-                txt = "".join(s["text"] for s in spans).strip()
+                txt = textutil.line_text(line).strip()
                 if len(txt) < 2 or len(txt) > 80:
                     continue
                 if size < 12.2 and not (8.7 <= size <= 9.4 and "bold" in spans[0]["font"].lower()):
