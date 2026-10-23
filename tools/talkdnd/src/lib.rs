@@ -327,6 +327,17 @@ enum AdventureCmd {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Search the page edition and print every match with its PDF page number.
+    /// Fuzzy at query time: case, quotes, ligatures, punctuation, hyphenated
+    /// line breaks, and 1-4 missing/garbled characters at the start of a line.
+    #[command(alias = "find")]
+    Search {
+        /// Words or phrase to find
+        query: Vec<String>,
+        /// Maximum matching lines (0 = all)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -645,6 +656,9 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                     list,
                     reason,
                 } => adventure::section(&root, &s, &query.join(" "), list, reason.as_deref())?,
+                AdventureCmd::Search { query, limit } => {
+                    adventure::search(&root, &s, &query.join(" "), limit)?
+                }
             };
             for l in lines {
                 println!("{l}");

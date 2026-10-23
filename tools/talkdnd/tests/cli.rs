@@ -827,6 +827,35 @@ fn guard_secret_known_and_dice_settings() {
 }
 
 #[test]
+fn adventure_search_returns_pdf_pages_fuzzily() {
+    let r = root("advsearch");
+    ok(
+        &r,
+        &[
+            "new",
+            "--date",
+            "2030-08-02",
+            "--scope",
+            "0",
+            "--adventure",
+            "Test Book",
+        ],
+    );
+    let book = r.join("Adventures/test-book/.md/Test Book");
+    fs::create_dir_all(&book).unwrap();
+    fs::write(
+        book.join("Test Book.pages.md"),
+        "# Test Book\n\n<a id=\"p4\"></a>\n<!-- PDF p.4 -->\n..mown to the hero’s ﬁnal exam-\nple.\n",
+    )
+    .unwrap();
+    let out = ok(&r, &["adventure", "search", "known"]);
+    assert!(out.contains("p.4:"), "{out}");
+    let out = ok(&r, &["adventure", "search", "hero's final example"]);
+    assert!(out.contains("p.4:") && out.contains("example"), "{out}");
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
 fn adventure_section_refuses_ahead_and_logs_with_reason() {
     let r = root("adventure");
     ok(

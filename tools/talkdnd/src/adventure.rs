@@ -4,9 +4,17 @@
 //! prints only the block under the matching heading and refuses (unless
 //! `--reason` is given and logged) to print a chapter that is ahead of the
 //! party's progress track. `--list` prints headings without any body text.
+//! `talkdnd adventure search` finds lines in the page edition and prints the
+//! PDF page number of every hit.
 //!
-//! Converted books live in `Adventures/<slug>/.md/<Book>/<Book>.md` and are
-//! gitignored; this module only ever reads them at play time.
+//! Matching is fuzzy at query time only: the stored Markdown is never rewritten.
+//! Case, curly/straight quotes, ligatures, punctuation, whitespace and
+//! hyphenated line breaks are normalised on both sides; a line may also lose or
+//! garble its first 1-4 characters (scanned books often have a shadow at the
+//! gutter, e.g. `ne` for `One` or `..mown` for `known`).
+//!
+//! Converted books live in `Adventures/<slug>/.md/<Book>/` and are gitignored;
+//! this module only ever reads them at play time.
 
 use crate::progress::{self, Progress};
 use crate::{original, save, start};
@@ -118,6 +126,288 @@ pub fn book_path(root: &Path, save_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The page edition (page anchors, then `index.md`) used by `adventure search`.
+/// Search promises a PDF page number for every hit, so the reader edition
+/// (which has no anchors) is not used here.
+pub fn lookup_path(root: &Path, save_dir: &Path) -> Option<PathBuf> {
+    let slug = start::adventure_slug(save_dir)?;
+    let md = root.join("Adventures").join(&slug).join(".md");
+    let mut books: Vec<PathBuf> = fs::read_dir(md)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    books.sort();
+    for b in books {
+        let name = b.file_name()?.to_string_lossy().to_string();
+        let pages = b.join(format!("{name}.pages.md"));
+        if pages.is_file() {
+            return Some(pages);
+        }
+        let index = b.join("index.md");
+        if index.is_file() {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// Fold one string for query-time matching. Punctuation and whitespace are
+/// dropped; case, quotes, ligatures and hyphenated line breaks are normalised.
+pub fn normalize_for_search(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if matches!(c, '-' | '\u{2010}' | '\u{2011}') {
+            // "exam-\nple" -> "example"; also allow "exam- \r\nple".
+            let mut j = i + 1;
+            while j < chars.len() && matches!(chars[j], ' ' | '\t') {
+                j += 1;
+            }
+            if j < chars.len() && (chars[j] == '\n' || chars[j] == '\r') {
+                i = j + 1;
+                continue;
+            }
+        }
+        match c {
+            '\u{00ad}' => {}
+            '\u{FB00}' => out.push_str("ff"),
+            '\u{FB01}' => out.push_str("fi"),
+            '\u{FB02}' => out.push_str("fl"),
+            '\u{FB03}' => out.push_str("ffi"),
+            '\u{FB04}' => out.push_str("ffl"),
+            '\u{FB05}' | '\u{FB06}' => out.push_str("st"),
+            // Curly quotes, apostrophes, dashes and other punctuation vanish.
+            c if c.is_alphanumeric() => out.extend(c.to_lowercase()),
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Does `line` contain `query` (both already normalised), allowing the line to
+/// have lost or garbled its first 1-4 characters?
+fn fuzzy_hit(line: &str, query: &str) -> bool {
+    if query.is_empty() {
+        return false;
+    }
+    if line.contains(query) {
+        return true;
+    }
+    let q: Vec<char> = query.chars().collect();
+    for k in 1..=4.min(q.len()) {
+        // A two-letter residue is too weak for k > 1; keep it only for a
+        // single missing/garbled first character.
+        let min_len = if k == 1 { 2 } else { 3 };
+        let rest: String = q[k..].iter().collect();
+        if rest.chars().count() < min_len {
+            continue;
+        }
+        if let Some(pos) = line.find(&rest) {
+            if line[..pos].chars().count() <= 4 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn ends_hyphen(s: &str) -> bool {
+    s.chars()
+        .last()
+        .is_some_and(|c| matches!(c, '-' | '\u{2010}' | '\u{2011}'))
+}
+
+fn starts_lower(s: &str) -> bool {
+    s.chars().next().is_some_and(|c| c.is_lowercase())
+}
+
+/// Group physical lines into logical lines, undoing hyphenated line breaks.
+fn logical_lines<'a, I: IntoIterator<Item = &'a str>>(lines: I) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for raw in lines {
+        let line = raw.trim();
+        if line.is_empty() {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        if !cur.is_empty() && ends_hyphen(&cur) && starts_lower(line) {
+            cur.pop();
+            cur.push_str(line);
+        } else {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            cur.push_str(line);
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn anchor_page(line: &str) -> Option<usize> {
+    let start = line.find("<a id=\"p")? + "<a id=\"p".len();
+    let digits: String = line[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
+fn index_page(line: &str) -> Option<usize> {
+    for pat in ["#p", "p."] {
+        for (i, _) in line.match_indices(pat) {
+            let start = i + pat.len();
+            let digits: String = line[start..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if let Ok(n) = digits.parse() {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+fn is_page_meta(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("<a id=")
+        || t.starts_with("<!-- PDF p.")
+        || t.starts_with("> Low-quality extraction (")
+}
+
+/// `(PDF page, logical line)` pairs from the page edition. Page 0 means an
+/// `index.md` line where no page could be parsed (never returned by search).
+fn lookup_lines(md: &str, paged: bool) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    if paged {
+        let mut page = 0usize;
+        let mut block: Vec<&str> = Vec::new();
+        let flush = |page: usize, block: &mut Vec<&str>, out: &mut Vec<(usize, String)>| {
+            if page > 0 {
+                for line in logical_lines(block.drain(..)) {
+                    out.push((page, line));
+                }
+            } else {
+                block.clear();
+            }
+        };
+        for raw in md.lines() {
+            if let Some(n) = anchor_page(raw) {
+                flush(page, &mut block, &mut out);
+                page = n;
+                continue;
+            }
+            if is_page_meta(raw) {
+                continue;
+            }
+            block.push(raw);
+        }
+        flush(page, &mut block, &mut out);
+    } else {
+        for raw in md.lines() {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with("Read:") {
+                continue;
+            }
+            if let Some(page) = index_page(line) {
+                out.push((page, line.to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Short intake-audit line read from `index.json` / `manifest.json`.
+fn intake_line(dir: &Path) -> Option<String> {
+    for name in ["index.json", "manifest.json"] {
+        let Ok(text) = fs::read_to_string(dir.join(name)) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(a) = v.get("intake").or_else(|| v.get("audit")) else {
+            continue;
+        };
+        let Some(verdict) = a.get("verdict").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        let get = |k: &str| a.get(k).and_then(|x| x.as_u64());
+        let mut bits = Vec::new();
+        if let Some(n) = get("bookmarks") {
+            bits.push(format!("书签 {n}"));
+        }
+        if let (Some(z), Some(p)) = (get("zero_pages"), get("pages")) {
+            bits.push(format!("0 字页 {z}/{p}"));
+        }
+        if let Some(r) = a.get("garbage_rate").and_then(|x| x.as_f64()) {
+            bits.push(format!("乱码 {:.2}%", r * 100.0));
+        }
+        if let Some(ch) = a.get("chapters").and_then(|x| x.as_array()) {
+            bits.push(format!("章节起点 {}", ch.len()));
+        }
+        let detail = if bits.is_empty() {
+            String::new()
+        } else {
+            format!("（{}）", bits.join("，"))
+        };
+        return Some(format!("文字层：{verdict}{detail}"));
+    }
+    None
+}
+
+/// `talkdnd adventure search <query>`: matching lines with PDF page numbers.
+pub fn search(root: &Path, save_dir: &Path, query: &str, limit: usize) -> Result<Vec<String>> {
+    let path = lookup_path(root, save_dir).ok_or_else(|| {
+        anyhow!(
+            "没有找到本存档冒险的页码版 Markdown（Adventures/<slug>/.md/<书名>/<书名>.pages.md 或 index.md）；先按 docs/pdf2md.md 转换 PDF"
+        )
+    })?;
+    let q = normalize_for_search(query);
+    if q.is_empty() {
+        bail!("搜索词去掉标点后为空");
+    }
+    let md = fs::read_to_string(&path).unwrap_or_default();
+    if md.trim().is_empty() {
+        bail!("{} is empty", path.display());
+    }
+    let paged = path
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().ends_with(".pages.md"));
+    let mut out = Vec::new();
+    if let Some(line) = intake_line(path.parent().unwrap_or(Path::new("."))) {
+        out.push(line);
+    }
+    let mut hits = 0;
+    for (page, line) in lookup_lines(&md, paged) {
+        if fuzzy_hit(&normalize_for_search(&line), &q) {
+            out.push(format!("p.{page}: {line}"));
+            hits += 1;
+            if limit > 0 && hits >= limit {
+                break;
+            }
+        }
+    }
+    if hits == 0 {
+        out.push(format!(
+            "没有找到含「{}」的正文行；试试更短的词，或用 `talkdnd adventure section --list` 看标题（不显示正文）",
+            query.trim()
+        ));
+    }
+    Ok(out)
+}
+
 pub fn read_book(root: &Path, save_dir: &Path) -> Result<(PathBuf, String)> {
     let path = book_path(root, save_dir).ok_or_else(|| {
         anyhow!(
@@ -221,22 +511,21 @@ pub fn dm_only(section: &Section) -> bool {
 }
 
 fn find_section<'a>(sections: &'a [Section], query: &str) -> Option<&'a Section> {
-    let q = query.trim().to_lowercase();
+    let q = normalize_for_search(query);
     if q.is_empty() {
         return None;
     }
+    let heading = |s: &&Section| normalize_for_search(&s.heading);
     sections
         .iter()
-        .find(|s| s.heading.to_lowercase() == q)
+        .find(|s| heading(s) == q)
+        .or_else(|| sections.iter().find(|s| fuzzy_hit(&heading(s), &q)))
         .or_else(|| {
-            sections
-                .iter()
-                .find(|s| s.heading.to_lowercase().contains(&q))
-        })
-        .or_else(|| {
-            sections
-                .iter()
-                .find(|s| s.path.iter().any(|h| h.to_lowercase().contains(&q)))
+            sections.iter().find(|s| {
+                s.path
+                    .iter()
+                    .any(|h| fuzzy_hit(&normalize_for_search(h), &q))
+            })
         })
 }
 
@@ -248,13 +537,17 @@ pub fn section(
     list: bool,
     reason: Option<&str>,
 ) -> Result<Vec<String>> {
-    let (_, book) = read_book(root, save_dir)?;
+    let (path, book) = read_book(root, save_dir)?;
     let sections = sections(&book);
     if sections.is_empty() {
         bail!("冒险 Markdown 里没有 Markdown 标题，无法按场景定位");
     }
+    let audit = intake_line(path.parent().unwrap_or(Path::new(".")));
     if list {
         let mut out = Vec::new();
+        if let Some(line) = audit {
+            out.push(line);
+        }
         for s in &sections {
             let mark = if dm_only(s) { " [DM-only]" } else { "" };
             out.push(format!(
@@ -286,6 +579,9 @@ pub fn section(
         );
     }
     let mut out = vec![format!("# {}", found.path.join(" / "))];
+    if let Some(line) = audit {
+        out.push(line);
+    }
     if let Some(ch) = &ahead {
         out.push(format!(
             "（超前阅读：{ch}；原因：{}）",
@@ -429,6 +725,97 @@ mod tests {
             out.contains("first body") && !out.contains("second body"),
             "{out}"
         );
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    fn write_pages(r: &Path, body: &str) -> PathBuf {
+        let book = r.join("Adventures/test-adventure/.md/Test Book");
+        fs::create_dir_all(&book).unwrap();
+        let pages = book.join("Test Book.pages.md");
+        fs::write(&pages, body).unwrap();
+        pages
+    }
+
+    #[test]
+    fn search_is_fuzzy_and_reports_pdf_pages() {
+        let r = root("search");
+        let save = r.join("Saves/2030-01-01-01");
+        write_pages(
+            &r,
+            "# Test Book\n\n\
+             <a id=\"p1\"></a>\n<!-- PDF p.1 -->\nOne morning the exam-\nple was clear.\n\n\
+             <a id=\"p2\"></a>\n<!-- PDF p.2 -->\n..mown to all, the “hero’s” ﬁnal ﬂight.\n\n\
+             <a id=\"p3\"></a>\n<!-- PDF p.3 -->\nThe vault is below.\n\n\
+             <a id=\"p4\"></a>\n<!-- PDF p.4 -->\nne does not wait.\n\n\
+             <a id=\"p5\"></a>\n<!-- PDF p.5 -->\nult of the old keep.\n\n\
+             <a id=\"p6\"></a>\n<!-- PDF p.6 -->\nsure lies beneath.\n",
+        );
+        let hits = |q: &str| search(&r, &save, q, 0).unwrap().join("\n");
+        // hyphenated line break
+        let out = hits("example");
+        assert!(
+            out.contains("p.1: One morning the example was clear."),
+            "{out}"
+        );
+        // scanned gutter shadow taking the first two letters of "known"
+        let out = hits("known");
+        assert!(out.contains("p.2:"), "{out}");
+        // curly quotes + ligatures + punctuation/whitespace
+        let out = hits("hero's final flight");
+        assert!(out.contains("p.2:"), "{out}");
+        let out = hits("hero’s  ﬁnal-flight");
+        assert!(out.contains("p.2:"), "{out}");
+        // 1 missing leading character ("One" -> "ne")
+        let out = hits("one");
+        assert!(out.contains("p.4:"), "{out}");
+        // 3 missing leading characters ("vault" -> "ult")
+        let out = hits("vault");
+        assert!(out.contains("p.5:") && out.contains("p.3:"), "{out}");
+        // 4 missing leading characters ("treasure" -> "sure")
+        let out = hits("treasure");
+        assert!(out.contains("p.6:"), "{out}");
+        // every hit carries a PDF page number
+        let all = hits("the");
+        for line in all.lines() {
+            assert!(line.starts_with("p."), "no page number: {line}");
+        }
+        // limit
+        assert_eq!(
+            search(&r, &save, "the", 1)
+                .unwrap()
+                .iter()
+                .filter(|l| l.starts_with("p."))
+                .count(),
+            1
+        );
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn search_falls_back_to_index_md_pages() {
+        let r = root("search-index");
+        let save = r.join("Saves/2030-01-01-01");
+        let book = r.join("Adventures/test-adventure/.md/Test Book");
+        fs::write(
+            book.join("index.md"),
+            "# Index: Test Book\n\n## Headings\n\n- [Final Flight](<Test Book.pages.md#p9>) - p.9\n",
+        )
+        .unwrap();
+        let out = search(&r, &save, "final flight", 0).unwrap().join("\n");
+        assert!(out.contains("p.9:"), "{out}");
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn section_headings_match_fuzzily_without_rewriting_the_book() {
+        let r = root("fuzzy-head");
+        let save = r.join("Saves/2030-01-01-01");
+        let (_, book) = read_book(&r, &save).unwrap();
+        let s = sections(&book);
+        assert_eq!(find_section(&s, "theinn").unwrap().heading, "The Inn");
+        assert_eq!(find_section(&s, "he Cellar").unwrap().heading, "The Cellar");
+        // The stored text is untouched: only the query is normalised.
+        assert!(book.contains("### The Cellar"));
         let _ = fs::remove_dir_all(&r);
     }
 
