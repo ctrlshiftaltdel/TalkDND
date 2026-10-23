@@ -7,7 +7,7 @@
 ## v0.10.0 — 2026-10-23
 
 ### 新功能
-- **书库统一标准：一本书一个文件夹**（#102）。冒险书放在 `Adventures/<slug>/`，里面是原始 PDF、pdf2md 转换结果 `index/` 和战斗数据 `combat/`；规则书放在 `Rules/<版本>/<slug>/`，里面是 PDF 和 `index/`。程序数据 `Rules/chargen/`、`Rules/combat/`、`Rules/defaults/`、`Rules/rulings*.md` 不是书，留在原处。
+- **书库统一标准：一本书一个文件夹**（#103）。冒险书放在 `Adventures/<slug>/`，里面是原始 PDF、pdf2md 转换结果 `index/` 和战斗数据 `combat/`；规则书放在 `Rules/<版本>/<slug>/`，里面是 PDF 和 `index/`。程序数据 `Rules/chargen/`、`Rules/combat/`、`Rules/defaults/`、`Rules/rulings*.md` 不是书，留在原处。
 - **slug 规则固定、可复现**（`talkdnd` 与 pdf2md 共用）：取 PDF 文件名（不含 `.pdf`），ASCII 字母和数字转小写保留；撇号 `'`、`’` 去掉；其余每一段连续字符变成一个 `-`；去掉首尾的 `-`。例：`Storm King's Thunder` → `storm-kings-thunder`，`SRD_CC_v5.2.1` → `srd-cc-v5-2-1`。书名里没有任何 ASCII 字母或数字时，用 `book-` 加 8 位十六进制哈希（FNV-1a 32 位）。详见 `LetsPlay/docs/layout.md`「书库」。
 - **自动整理书库**：每次 `bin/talkdnd start` 先整理一次；也可以手动运行新命令 `bin/talkdnd library tidy`（加 `--dry-run` 只报告、不改动）。
   - 直接丢在 `Adventures/`、`Rules/2014/`、`Rules/2024/` 下的 PDF，以及放在名字不对的文件夹里的 PDF，连同旧版转换结果 `.md/<书名>/`，移进 `<slug>/` 和 `<slug>/index/`。名字不对、但里面已有 `combat/` 的整本书文件夹整体改名。
