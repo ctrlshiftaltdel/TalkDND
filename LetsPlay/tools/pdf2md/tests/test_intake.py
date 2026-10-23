@@ -7,7 +7,7 @@ import pymupdf
 from pdf2md import __main__ as cli
 from pdf2md import intake, worker
 
-from .conftest import make_image_only_pdf
+from .conftest import make_cropbox_pdf, make_image_only_pdf
 
 
 def _text_pdf(path, lines, toc=None):
@@ -55,6 +55,23 @@ def test_scanned_book_needs_ocr(tmp_path):
     assert a["scanned"] is True and a["scanned_guess"] == "scanned"
     assert a["zero_pages"] == a["pages"]
     assert a["verdict"] == "OCR needed" and a["reasons"]
+
+
+def test_out_of_bounds_cropbox_is_read_from_a_clamped_copy(tmp_path):
+    pdf = tmp_path / "Crop.pdf"
+    make_cropbox_pdf(str(pdf), (-500, -500, -100, -100))
+    doc = pymupdf.open(str(pdf))
+    try:
+        assert doc[0].get_text("text").strip() == ""
+        before = tuple(doc[0].cropbox)
+        a = intake.audit_doc(doc)
+        # The audit never mutates the original document (its CropBox stays invalid).
+        assert tuple(doc[0].cropbox) == before
+    finally:
+        doc.close()
+    assert a["pages"] == 1
+    assert a["chars_total"] > 0 and a["zero_pages"] == 0
+    assert a["verdict"] == "text layer usable"
 
 
 def test_garbage_characters_need_ocr():

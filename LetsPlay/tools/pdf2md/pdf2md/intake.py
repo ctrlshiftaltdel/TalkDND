@@ -24,13 +24,64 @@ def _norm(text):
     return _NORM.sub("", text.lower())
 
 
+CROP_EPS = 0.5
+
+
+def _outside(inner, outer, eps=CROP_EPS):
+    return (inner.is_empty or inner.x0 < outer.x0 - eps or inner.y0 < outer.y0 - eps
+            or inner.x1 > outer.x1 + eps or inner.y1 > outer.y1 + eps)
+
+
+def _clamped_page_text(doc, i):
+    """Text of one page read from a copy whose CropBox was clamped to its MediaBox.
+
+    A CropBox outside the MediaBox hides the text layer, but PyMuPDF refuses to
+    restore the invalid box after changing it. We therefore never touch `doc`:
+    only a page with empty raw text and an empty/outside CropBox is copied, and
+    the copy is closed afterwards. Normal and scanned pages are not copied.
+    """
+    import pymupdf
+
+    try:
+        page = doc[i]
+        mb = pymupdf.Rect(page.mediabox)
+        cb = pymupdf.Rect(page.cropbox)
+    except Exception:
+        return ""
+    if not _outside(cb, mb):
+        return ""
+    copy = pymupdf.open()
+    try:
+        copy.insert_pdf(doc, from_page=i, to_page=i)
+        page = copy[0]
+        mb = pymupdf.Rect(page.mediabox)
+        fixed = pymupdf.Rect(page.cropbox) & mb
+        if fixed.is_empty:
+            fixed = mb
+        try:
+            page.set_cropbox(fixed)
+        except Exception:
+            try:
+                page.set_cropbox(mb)
+            except Exception:
+                pass
+        return page.get_text("text") or ""
+    except Exception:
+        return ""
+    finally:
+        copy.close()
+
+
 def _page_texts(doc):
     out = []
     for i in range(doc.page_count):
         try:
-            out.append(doc[i].get_text("text") or "")
+            text = doc[i].get_text("text") or ""
         except Exception:  # a broken page is recorded, not fatal
-            out.append("")
+            text = ""
+        if not text.strip():
+            text = _clamped_page_text(doc, i) or text
+        out.append(text)
     return out
 
 

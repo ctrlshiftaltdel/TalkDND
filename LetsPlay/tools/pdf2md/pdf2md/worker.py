@@ -237,12 +237,15 @@ class Lock:
         self.path = os.path.join(state_dir(root), "worker.lock")
         self.fd = None
 
-    def _write_owner(self, fd, started):
+    def _write_owner(self, fd, started, released=False, pid=None):
         now = time.time()
-        data = json.dumps({"pid": os.getpid(), "started": started, "updated": now})
+        data = {"pid": os.getpid() if pid is None else pid, "started": started, "updated": now}
+        if released:
+            data["released"] = True
+        raw = json.dumps(data)
         os.lseek(fd, 0, os.SEEK_SET)
         os.ftruncate(fd, 0)
-        os.write(fd, data.encode("utf-8"))
+        os.write(fd, raw.encode("utf-8"))
         os.fsync(fd)
         try:
             os.utime(self.path, None)
@@ -294,11 +297,32 @@ class Lock:
         except (OSError, ValueError):
             pass
 
+    def _mark_released(self, fd):
+        """Write `released: true` before unlinking (Windows may keep the file)."""
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            raw = os.read(fd, 4096).decode("utf-8", "replace")
+        except OSError:
+            raw = ""
+        try:
+            owner = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            owner = {}
+        if not isinstance(owner, dict):
+            owner = {}
+        started = owner.get("started", time.time())
+        pid = owner.get("pid", os.getpid())
+        try:
+            self._write_owner(fd, started, released=True, pid=pid)
+        except OSError:
+            pass
+
     def release(self):
         fd = self.fd
         if fd is None:
             return
         self.fd = None
+        self._mark_released(fd)
         if _same_file(fd, self.path):
             try:
                 os.remove(self.path)

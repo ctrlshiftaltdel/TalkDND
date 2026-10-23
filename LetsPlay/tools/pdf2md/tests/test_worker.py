@@ -179,6 +179,48 @@ def test_a_live_legacy_lock_file_is_not_stolen(tmp_path):
     path.unlink()
 
 
+def test_a_released_live_pid_lock_is_replaced(tmp_path):
+    root = _lock_root(tmp_path)
+    state = Path(root) / ".pdf2md"
+    state.mkdir()
+    path = state / "worker.lock"
+    now = time.time()
+    path.write_text(
+        json.dumps(
+            {"pid": os.getpid(), "started": now, "updated": now, "released": True}
+        ),
+        encoding="utf-8",
+    )
+    lock = worker.Lock(root)
+    assert lock.acquire()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["pid"] == os.getpid() and not data.get("released")
+    lock.release()
+
+
+def test_release_marks_the_file_released_when_remove_fails(tmp_path, monkeypatch):
+    root = _lock_root(tmp_path)
+    lock = worker.Lock(root)
+    assert lock.acquire()
+    path = Path(lock.path)
+    real_remove = os.remove
+
+    def busy_remove(target):
+        if os.path.abspath(target) == os.path.abspath(lock.path):
+            raise OSError("file is in use")
+        return real_remove(target)
+
+    monkeypatch.setattr(worker.os, "remove", busy_remove)
+    lock.release()
+    assert path.exists()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["pid"] == os.getpid() and data["released"] is True
+    # A leftover released file must not block the next owner.
+    nxt = worker.Lock(root)
+    assert nxt.acquire()
+    nxt.release()
+
+
 def test_lock_is_visible_to_another_process(tmp_path):
     root = _lock_root(tmp_path)
     package = Path(__file__).resolve().parents[1]

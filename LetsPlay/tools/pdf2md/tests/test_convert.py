@@ -89,6 +89,7 @@ def test_out_of_bounds_cropbox_is_clamped_and_flagged(letsplay):
     info = manifest["pages"]["1"]
     assert "cropbox-clamped" in info["flags"]
     assert info["chars"] > 40 and info["quality"] != "low"
+    assert manifest["intake"]["verdict"] == "text layer usable"
     md = (d / "Crop Book.pages.md").read_text(encoding="utf-8")
     assert "treasure vault" in md.lower()
     # The clamp persists in the open document and is inside the MediaBox.
