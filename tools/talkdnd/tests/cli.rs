@@ -268,7 +268,7 @@ fn deviation_is_validated_locked_and_tamper_checked() {
     let save = r.join("Saves/2030-01-03-01");
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     assert!(
-        meta.contains("schema: 4") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
+        meta.contains("schema: 5") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
         "{meta}"
     );
     let out = ok(&r, &["original", "status"]);
@@ -353,13 +353,13 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     let out = ok(&r, &["start"]);
     assert!(out.contains("存档结构"), "{out}");
     assert!(
-        out.contains("schema 1 → 4") || out.contains("schema 1→4"),
+        out.contains("schema 1 → 5") || out.contains("schema 1→5"),
         "{out}"
     );
     assert!(save.join("sheets/hero.yaml").is_file());
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     assert!(
-        meta.contains("schema: 4") && meta.contains("scope: 0"),
+        meta.contains("schema: 5") && meta.contains("scope: 0"),
         "{meta}"
     );
     let backups: Vec<PathBuf> = fs::read_dir(r.join("Saves/_backups"))
@@ -369,7 +369,7 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     assert_eq!(backups.len(), 1);
     assert!(backups[0].join("Characters/hero.md").is_file());
     let log = fs::read_to_string(save.join("Sessions/2030-06-07-session-00-setup.md")).unwrap();
-    assert!(log.contains("存档结构迁移 schema 1→4"), "{log}");
+    assert!(log.contains("存档结构迁移 schema 1→5"), "{log}");
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
     assert!(ok(&r, &["start"]).contains("无需迁移"));
     assert_eq!(fs::read_dir(r.join("Saves/_backups")).unwrap().count(), 1);
@@ -424,7 +424,7 @@ fn migration_does_not_launder_a_hand_edit() {
     fs::write(&p, text).unwrap();
     let out = ok(&r, &["start"]);
     assert!(
-        out.contains("schema 2 → 4") || out.contains("schema 2→4"),
+        out.contains("schema 2 → 5") || out.contains("schema 2→5"),
         "{out}"
     );
     let out = ok(&r, &["check"]);
@@ -768,5 +768,122 @@ fn handouts_player_safe_only() {
         .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
         .collect::<String>();
     assert!(log.contains("资料：MAP 1.1"), "{log}");
+    let _ = fs::remove_dir_all(&r);
+}
+
+fn run_input(root: &Path, args: &[&str], input: &str) -> (bool, String) {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_talkdnd"))
+        .arg("--root")
+        .arg(root)
+        .args(args)
+        .env("TALKDND_NO_PDF2MD", "1")
+        .env("TALKDND_COMBAT_SIM", root.join("no-such-combat-sim"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let s =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    (out.status.success(), s)
+}
+
+#[test]
+fn guard_secret_known_and_dice_settings() {
+    let r = root("guard");
+    ok(&r, &["new", "--date", "2030-07-01", "--scope", "0"]);
+    let save = r.join("Saves/2030-07-01-01");
+    assert!(ok(&r, &["settings"]).contains("骰子显示：开"));
+    assert!(!ok(&r, &["settings", "dice", "off"]).contains("开"));
+    assert!(ok(&r, &["settings"]).contains("骰子显示：关"));
+    let log = fs::read_to_string(save.join("Sessions/2030-07-01-session-00-setup.md")).unwrap();
+    assert!(log.contains("骰子显示：关"), "{log}");
+    ok(&r, &["scene", "舞厅"]);
+    assert!(ok(&r, &["known"]).contains("当前场景：舞厅"));
+    ok(&r, &["secret", "add", "Red Mask", "--chapter", "2"]);
+    assert!(ok(&r, &["secret", "list"]).contains("Red Mask"));
+    let (good, out) = run(&r, &["guard", "The Red Mask waits"]);
+    assert!(!good, "guard should exit 1: {out}");
+    assert!(out.contains("剧透词：Red Mask"), "{out}");
+    let (good, out) = run(&r, &["guard", "A quiet street"]);
+    assert!(good && out.contains("clean"), "{out}");
+    let (good, out) = run_input(&r, &["guard", "-"], "Meet Red Mask");
+    assert!(!good && out.contains("剧透词"), "{out}");
+    let (good, out) = run_input(&r, &["guard"], "Meet Red Mask");
+    assert!(!good && out.contains("剧透词"), "{out}");
+    assert!(ok(&r, &["log", "rolls"]).contains("还没有掷骰记录"));
+    ok(&r, &["secret", "remove", "red mask"]);
+    assert!(run(&r, &["guard", "The Red Mask waits"]).0);
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn adventure_section_refuses_ahead_and_logs_with_reason() {
+    let r = root("adventure");
+    ok(
+        &r,
+        &[
+            "new",
+            "--date",
+            "2030-08-01",
+            "--scope",
+            "0",
+            "--adventure",
+            "Test Book",
+        ],
+    );
+    let save = r.join("Saves/2030-08-01-01");
+    fs::write(
+        save.join("progress.yaml"),
+        "version: 1\ntrack:\n  - {name: First Job, level: 1}\n  - {name: Second Job, level: 3}\n",
+    )
+    .unwrap();
+    let book = r.join("Adventures/test-book/.md/Test Book");
+    fs::create_dir_all(&book).unwrap();
+    fs::write(
+        book.join("Test Book.md"),
+        "# Test Book\n\nintro\n\n## Chapter 1: First Job\n\nfirst body\n\n## Chapter 2: Second Job\n\nsecond body\n\n## DM Notes\n\nA secret [[Red Mask]]\n",
+    )
+    .unwrap();
+    let list = ok(&r, &["adventure", "section", "--list"]);
+    assert!(
+        list.contains("Chapter 2: Second Job") && !list.contains("second body"),
+        "{list}"
+    );
+    let (good, out) = run(&r, &["adventure", "section", "Second Job"]);
+    assert!(!good && out.contains("--reason"), "{out}");
+    let (good, out) = run(
+        &r,
+        &[
+            "adventure",
+            "section",
+            "Second Job",
+            "--reason",
+            "player skipped ahead",
+        ],
+    );
+    assert!(
+        good && out.contains("second body") && out.contains("超前阅读"),
+        "{out}"
+    );
+    let log = fs::read_to_string(save.join("Sessions/2030-08-01-session-00-setup.md")).unwrap();
+    assert!(
+        log.contains("超前阅读") && log.contains("player skipped ahead"),
+        "{log}"
+    );
+    let (good, out) = run(&r, &["adventure", "section", "First Job"]);
+    assert!(
+        good && out.contains("first body") && !out.contains("second body"),
+        "{out}"
+    );
     let _ = fs::remove_dir_all(&r);
 }

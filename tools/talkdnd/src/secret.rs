@@ -1,0 +1,646 @@
+//! Secret terms and the pre-narration guard (`talkdnd guard`).
+//!
+//! Terms come from local, DM-only sources:
+//! - `Saves/<slot>/dm-secrets.md`: `- term: X` lines and `[[X]]` markers;
+//! - `Saves/<slot>/dm-plan.md`: the same syntax;
+//! - the locally converted adventure: headings of chapters ahead of progress,
+//!   plus headings and DM-only-section proper nouns / `[[X]]` terms;
+//! - hidden aspects of registered original content (`original add --hidden`);
+//! - manual entries (`talkdnd secret add`).
+//!
+//! Anything already in `reveals.yaml` is dropped. The merged list is cached in
+//! `Saves/<slot>/secret-terms.cache.json`, keyed by the mtimes of every source.
+//! Nothing here is ever committed: saves are gitignored.
+
+use crate::adventure;
+use crate::{original, reveal};
+use anyhow::{bail, Result};
+use combat_sim::fsutil::atomic_write;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
+
+pub const FILE: &str = "secret-terms.yaml";
+pub const CACHE: &str = "secret-terms.cache.json";
+const CACHE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ManualTerm {
+    pub term: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter: Option<u32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    #[serde(default)]
+    pub added: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Manual {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub terms: Vec<ManualTerm>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Term {
+    pub term: String,
+    pub source: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Cache {
+    version: u32,
+    key: String,
+    terms: Vec<Term>,
+}
+
+fn manual_path(save_dir: &Path) -> PathBuf {
+    save_dir.join(FILE)
+}
+
+fn load_manual(save_dir: &Path) -> Result<Manual> {
+    let p = manual_path(save_dir);
+    if !p.is_file() {
+        return Ok(Manual::default());
+    }
+    let m: Manual = serde_norway::from_str(&fs::read_to_string(&p)?)
+        .map_err(|e| anyhow::anyhow!("invalid {}: {e}", p.display()))?;
+    if m.version > 1 {
+        bail!(
+            "{}: unsupported secret terms version {} (this talkdnd supports 1)",
+            p.display(),
+            m.version
+        );
+    }
+    Ok(m)
+}
+
+fn store_manual(save_dir: &Path, m: &Manual) -> Result<()> {
+    let mut current = m.clone();
+    current.version = 1;
+    let text = format!(
+        "# TalkDND secret terms (DM only; players must never see this).\n# Add with `talkdnd secret add`, remove with `talkdnd secret remove`.\n{}",
+        serde_norway::to_string(&current)?
+    );
+    atomic_write(manual_path(save_dir), text.as_bytes())
+}
+
+fn invalidate(save_dir: &Path) {
+    let _ = fs::remove_file(save_dir.join(CACHE));
+}
+
+pub fn add(save_dir: &Path, term: &str, chapter: Option<u32>, note: &str) -> Result<String> {
+    let term = term.trim();
+    if term.is_empty() {
+        bail!("秘密词不能为空");
+    }
+    let mut m = load_manual(save_dir)?;
+    if m.terms.iter().any(|t| t.term.eq_ignore_ascii_case(term)) {
+        bail!("秘密词「{term}」已经在列表里");
+    }
+    m.terms.push(ManualTerm {
+        term: term.to_string(),
+        chapter,
+        note: note.trim().to_string(),
+        added: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+    });
+    store_manual(save_dir, &m)?;
+    invalidate(save_dir);
+    Ok(format!(
+        "已加入秘密词「{term}」{}{}（只存在本存档，已 gitignore）",
+        chapter.map(|c| format!("，第 {c} 章")).unwrap_or_default(),
+        if note.trim().is_empty() {
+            String::new()
+        } else {
+            format!("，备注：{}", note.trim())
+        }
+    ))
+}
+
+pub fn remove(save_dir: &Path, term: &str) -> Result<String> {
+    let term = term.trim();
+    let mut m = load_manual(save_dir)?;
+    let before = m.terms.len();
+    m.terms.retain(|t| !t.term.eq_ignore_ascii_case(term));
+    if m.terms.len() == before {
+        bail!(
+            "手动秘密词里没有「{term}」；自动收集的词（dm-secrets.md、dm-plan.md、冒险书、原创隐藏面）不能单独删除，请改对应来源"
+        );
+    }
+    store_manual(save_dir, &m)?;
+    invalidate(save_dir);
+    Ok(format!("已移除秘密词「{term}」"))
+}
+
+/// Manual plus computed terms, already filtered against `reveals.yaml`.
+pub fn list(save_dir: &Path, root: &Path) -> Vec<Term> {
+    collect(save_dir, root)
+}
+
+/// `talkdnd secret list`: term and where it came from.
+pub fn list_lines(save_dir: &Path, root: &Path) -> Vec<String> {
+    let terms = list(save_dir, root);
+    if terms.is_empty() {
+        return vec!["（还没有秘密词；用 `talkdnd secret add <词>` 或写 dm-secrets.md）".into()];
+    }
+    terms
+        .iter()
+        .map(|t| format!("{}  （{}）", t.term, t.source))
+        .collect()
+}
+
+fn stamp(path: &Path) -> String {
+    match fs::metadata(path) {
+        Ok(m) => {
+            let nanos = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("{nanos}:{}", m.len())
+        }
+        Err(_) => "missing".to_string(),
+    }
+}
+
+fn cache_key(save_dir: &Path, root: &Path) -> String {
+    let mut parts: Vec<String> = [
+        "dm-secrets.md",
+        original::PLAN_FILE,
+        FILE,
+        original::FILE,
+        reveal::FILE,
+    ]
+    .iter()
+    .map(|name| {
+        let p = save_dir.join(name);
+        format!("{}={}", p.display(), stamp(&p))
+    })
+    .collect();
+    // `adventure::ahead_of_progress` depends on the track and party level.
+    // These files are small; include a content hash so a same-size rewrite on
+    // a coarse-mtime filesystem cannot leave a stale cache behind.
+    let progress = save_dir.join(crate::progress::FILE);
+    parts.push(format!("{}={}", progress.display(), deep_stamp(&progress)));
+    for p in sheet_files(save_dir) {
+        parts.push(format!("{}={}", p.display(), deep_stamp(&p)));
+    }
+    if let Some(book) = adventure::book_path(root, save_dir) {
+        parts.push(format!("{}={}", book.display(), stamp(&book)));
+    }
+    parts.join("|")
+}
+
+fn deep_stamp(path: &Path) -> String {
+    let quick = stamp(path);
+    match fs::read(path) {
+        Ok(bytes) => {
+            use sha2::{Digest, Sha256};
+            let mut hash = Sha256::new();
+            hash.update(&bytes);
+            format!("{quick}:{:x}", hash.finalize())
+        }
+        Err(_) => quick,
+    }
+}
+
+/// Character/NPC Markdown files that supply the party level for the
+/// ahead-of-progress check (path plus mtime/size and a content hash; saves
+/// have few small files).
+fn sheet_files(save_dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for dir in ["Characters", "NPCs"] {
+        let Ok(rd) = fs::read_dir(save_dir.join(dir)) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "md"))
+            .collect();
+        files.sort();
+        out.extend(files);
+    }
+    out
+}
+
+fn load_cache(save_dir: &Path, key: &str) -> Option<Vec<Term>> {
+    let text = fs::read_to_string(save_dir.join(CACHE)).ok()?;
+    let cache: Cache = serde_json::from_str(&text).ok()?;
+    (cache.version == CACHE_VERSION && cache.key == key).then_some(cache.terms)
+}
+
+fn store_cache(save_dir: &Path, key: &str, terms: &[Term]) {
+    let cache = Cache {
+        version: CACHE_VERSION,
+        key: key.to_string(),
+        terms: terms.to_vec(),
+    };
+    if let Ok(text) = serde_json::to_string(&cache) {
+        let _ = atomic_write(save_dir.join(CACHE), text.as_bytes());
+    }
+}
+
+/// Extract `- term: X` and `[[X]]` terms from a DM notes file. Lines starting
+/// with `#` are comments (the plan template ships commented examples).
+pub fn parse_marked_terms(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        for prefix in ["- term:", "- term：", "- 秘密词:", "- 秘密词："] {
+            if let Some(rest) = t.strip_prefix(prefix) {
+                let term = rest
+                    .split(" #")
+                    .next()
+                    .unwrap_or(rest)
+                    .trim()
+                    .trim_matches(['"', '\'', '“', '”'])
+                    .trim();
+                if !term.is_empty() {
+                    out.push(term.to_string());
+                }
+            }
+        }
+        out.extend(brackets(t));
+    }
+    out
+}
+
+fn brackets(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("]]") else {
+            break;
+        };
+        let term = after[..end].trim();
+        if !term.is_empty() {
+            out.push(term.to_string());
+        }
+        rest = &after[end + 2..];
+    }
+    out
+}
+
+/// A heading without its chapter/part numbering: `Chapter 3: The Vault` →
+/// `The Vault`, `第3章：密室` → `密室`.
+pub fn clean_heading(heading: &str) -> String {
+    let h = heading.trim().trim_start_matches('#').trim();
+    let lower = h.to_lowercase();
+    for prefix in ["chapter", "part"] {
+        if lower.starts_with(prefix) {
+            let rest = &h[prefix.len()..];
+            let rest = rest.trim_start_matches(|c: char| {
+                c.is_ascii_digit() || c.is_whitespace() || c == '.' || c == ':'
+            });
+            if let Some((_, tail)) = rest.split_once([':', '：']) {
+                return tail.trim().to_string();
+            }
+            return rest.trim().to_string();
+        }
+    }
+    if let Some(i) = h.find('第') {
+        if let Some(j) = h[i..].find('章') {
+            let tail = h[i + j + '章'.len_utf8()..].trim_start_matches([':', '：', ' ', '、', '.']);
+            if !tail.is_empty() {
+                return tail.to_string();
+            }
+        }
+    }
+    let digits = h.chars().take_while(char::is_ascii_digit).count();
+    if digits > 0
+        && h[digits..]
+            .chars()
+            .next()
+            .is_some_and(|c| c == '.' || c == '、' || c == ' ')
+    {
+        return h[digits..].trim_start_matches(['.', '、', ' ']).to_string();
+    }
+    h.to_string()
+}
+
+const STOP_WORDS: &[&str] = &[
+    "the", "a", "an", "and", "or", "but", "if", "in", "on", "at", "to", "of", "for", "with",
+    "from", "by", "as", "is", "are", "was", "were", "this", "that", "these", "those", "it", "its",
+    "he", "she", "they", "you", "your", "their", "his", "her", "chapter", "part", "dm", "player",
+    "when", "while", "after", "before", "during", "each", "every", "no", "not", "all", "any",
+    "both", "read", "note", "notes", "secret", "secrets", "only", "use", "using", "then", "there",
+    "here", "what", "which", "who", "how", "why", "can", "will", "would", "should",
+];
+
+/// Conservative proper-noun extraction for DM-only sections: runs of two or
+/// more capitalised words (English). Chinese terms should be marked with
+/// `[[...]]`; arbitrary 2-8 character CJK runs would flood the guard.
+pub fn proper_nouns(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        let words: Vec<&str> = line
+            .split(|c: char| !(c.is_alphabetic() || c == '\'' || c == '-'))
+            .filter(|w| !w.is_empty())
+            .collect();
+        let mut run: Vec<&str> = Vec::new();
+        let flush = |run: &mut Vec<&str>, out: &mut Vec<String>| {
+            if run.len() >= 2 {
+                out.push(run.join(" "));
+            }
+            run.clear();
+        };
+        for w in words {
+            let first = w.chars().next().unwrap_or('a');
+            let stop = STOP_WORDS.contains(&w.to_lowercase().as_str());
+            if first.is_uppercase() && !stop {
+                run.push(w);
+                if run.len() >= 5 {
+                    flush(&mut run, &mut out);
+                }
+            } else {
+                flush(&mut run, &mut out);
+            }
+        }
+        flush(&mut run, &mut out);
+    }
+    out
+}
+
+fn collect_uncached(save_dir: &Path, root: &Path) -> Vec<Term> {
+    let mut map: BTreeMap<String, Term> = BTreeMap::new();
+    let mut put = |term: &str, source: &str| {
+        let term = term.trim().trim_matches(['"', '\'', '“', '”']).trim();
+        if term.chars().count() < 2 {
+            return;
+        }
+        map.entry(term.to_lowercase()).or_insert_with(|| Term {
+            term: term.to_string(),
+            source: source.to_string(),
+        });
+    };
+    for file in ["dm-secrets.md", original::PLAN_FILE] {
+        if let Ok(text) = fs::read_to_string(save_dir.join(file)) {
+            for term in parse_marked_terms(&text) {
+                put(&term, file);
+            }
+        }
+    }
+    if let Ok(manual) = load_manual(save_dir) {
+        for t in &manual.terms {
+            let mut source = "手动".to_string();
+            if let Some(ch) = t.chapter {
+                source += &format!("，第 {ch} 章");
+            }
+            if !t.note.is_empty() {
+                source += &format!("，{}", t.note);
+            }
+            put(&t.term, &source);
+        }
+    }
+    if let Ok(ledger) = original::load(save_dir) {
+        for e in &ledger.entries {
+            let Some(hidden) = e.hidden.as_deref() else {
+                continue;
+            };
+            if original::revealed(save_dir, &e.id) {
+                continue;
+            }
+            let source = format!("原创 {} 隐藏面", e.id);
+            // The whole sentence catches a verbatim copy; [[terms]] and
+            // proper nouns catch a paraphrase that names the secret.
+            put(hidden, &source);
+            for term in brackets(hidden) {
+                put(&term, &source);
+            }
+            for term in proper_nouns(hidden) {
+                put(&term, &source);
+            }
+        }
+    }
+    if let Ok((_, book)) = adventure::read_book(root, save_dir) {
+        for (section, dm_only) in adventure::secret_sections(root, save_dir) {
+            let source = format!("冒险书：{}", section.heading);
+            let title = clean_heading(&section.heading);
+            put(&title, &source);
+            if dm_only {
+                let body = section.text(&book);
+                for term in brackets(body) {
+                    put(&term, &source);
+                }
+                for term in proper_nouns(body) {
+                    put(&term, &source);
+                }
+            }
+        }
+    }
+    map.into_values()
+        .filter(|t| !reveal::is_revealed(save_dir, &t.term))
+        .collect()
+}
+
+pub fn collect(save_dir: &Path, root: &Path) -> Vec<Term> {
+    let key = cache_key(save_dir, root);
+    if let Some(terms) = load_cache(save_dir, &key) {
+        return terms;
+    }
+    let terms = collect_uncached(save_dir, root);
+    store_cache(save_dir, &key, &terms);
+    terms
+}
+
+/// Guard output for `text`: one line per unrevealed secret term found.
+/// Case-insensitive plain substring matching (Chinese included).
+pub fn guard_terms(save_dir: &Path, root: &Path, text: &str) -> Vec<String> {
+    let hay = text.to_lowercase();
+    collect(save_dir, root)
+        .into_iter()
+        .filter(|t| hay.contains(&t.term.to_lowercase()))
+        .map(|t| {
+            format!(
+                "剧透词：{}（建议改写为玩家已知的说法）  [来源：{}]",
+                t.term, t.source
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::migrate;
+
+    fn root(tag: &str) -> PathBuf {
+        let r = std::env::temp_dir().join(format!("talkdnd-secret-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&r);
+        let save_dir = r.join("Saves/2030-01-01-01");
+        for d in ["Sessions", "combat", "Characters"] {
+            fs::create_dir_all(save_dir.join(d)).unwrap();
+        }
+        fs::write(
+            save_dir.join("combat/campaign.yaml"),
+            "party: []\nruleset: \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(save_dir.join("Sessions/s.md"), "# log\n").unwrap();
+        migrate::init(&save_dir).unwrap();
+        r
+    }
+
+    #[test]
+    fn parses_marked_terms_and_ignores_comments() {
+        let text = "# - term: hidden comment\n- term: Red Mask\nA clue about [[Silver Key]].\n# [[Not This]]\n";
+        let terms = parse_marked_terms(text);
+        assert_eq!(terms, vec!["Red Mask", "Silver Key"]);
+        assert_eq!(clean_heading("Chapter 2: Second Job"), "Second Job");
+        assert_eq!(clean_heading("第3章：密室"), "密室");
+        assert_eq!(clean_heading("2. The Vault"), "The Vault");
+        let nouns = proper_nouns("The butler is Red Mask and Lady Vex.\n");
+        assert!(nouns.iter().any(|n| n == "Red Mask"), "{nouns:?}");
+        assert!(nouns.iter().any(|n| n == "Lady Vex"), "{nouns:?}");
+    }
+
+    #[test]
+    fn guard_flags_clean_and_excluded_terms() {
+        let r = root("guard");
+        let save = r.join("Saves/2030-01-01-01");
+        fs::write(
+            save.join("dm-secrets.md"),
+            "# secrets\n- term: Red Mask\n- term: 密室\n",
+        )
+        .unwrap();
+        add(&save, "Silver Key", Some(2), "prop").unwrap();
+        let hits = guard_terms(
+            &save,
+            &r,
+            "The Red Mask waits in the 密室 with the Silver Key.",
+        );
+        assert_eq!(hits.len(), 3, "{hits:?}");
+        assert!(hits
+            .iter()
+            .all(|h| h.starts_with("剧透词：") && h.contains("建议改写")));
+        assert!(guard_terms(&save, &r, "A quiet street.").is_empty());
+        // Case-insensitive Latin matching.
+        assert_eq!(guard_terms(&save, &r, "RED MASK").len(), 1);
+        // Revealed terms are dropped, and the cache is invalidated.
+        crate::reveal::add(&save, "红面具就是 Red Mask", "test", &[]).unwrap();
+        let hits = guard_terms(&save, &r, "Red Mask");
+        assert!(hits.is_empty(), "{hits:?}");
+        let listed = list_lines(&save, &r).join("\n");
+        assert!(
+            listed.contains("密室") && !listed.contains("Red Mask"),
+            "{listed}"
+        );
+        assert!(remove(&save, "silver key").unwrap().contains("移除"));
+        assert!(remove(&save, "silver key").is_err());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn cache_invalidates_when_progress_or_party_level_changes() {
+        let r = root("cache");
+        let save = r.join("Saves/2030-01-01-01");
+        fs::create_dir_all(save.join("Characters")).unwrap();
+        fs::write(
+            save.join("combat/campaign.yaml"),
+            "party: [hero]\nruleset: \"2014\"\nadventures: [../../../Adventures/test-adventure/combat]\n",
+        )
+        .unwrap();
+        fs::write(
+            save.join("Characters/Hero.md"),
+            "# Hero\n\n```combat yaml\nid: hero\nname: Hero\nlevel: 1\nhp: 10\n```\n",
+        )
+        .unwrap();
+        let track_first = "version: 1\ntrack:\n  - {name: First Job, level: 1}\n  - {name: Second Job, level: 3}\n";
+        fs::write(save.join("progress.yaml"), track_first).unwrap();
+        let book = r.join("Adventures/test-adventure/.md/Test Book");
+        fs::create_dir_all(&book).unwrap();
+        fs::write(
+            book.join("Test Book.md"),
+            "# Test Book\n\n## Chapter 1: First Job\n\nfirst body\n\n## Chapter 2: Second Job\n\nsecond body\n",
+        )
+        .unwrap();
+
+        let has = |terms: Vec<Term>| terms.iter().any(|t| t.term == "Second Job");
+        assert!(
+            has(collect(&save, &r)),
+            "future chapter heading should be a secret term"
+        );
+
+        // A progress-only change (Second Job is now the current chapter) must
+        // invalidate the cache even though every DM/book file is untouched.
+        fs::write(
+            save.join("progress.yaml"),
+            "version: 1\ntrack:\n  - {name: First Job, level: 1}\n  - {name: Second Job, level: 1}\n",
+        )
+        .unwrap();
+        assert!(
+            !has(collect(&save, &r)),
+            "progress change must invalidate the cache"
+        );
+
+        // Restore the track, then change only the party level: Second Job is
+        // current at level 5, so it is no longer ahead.
+        fs::write(save.join("progress.yaml"), track_first).unwrap();
+        assert!(has(collect(&save, &r)));
+        fs::write(
+            save.join("Characters/Hero.md"),
+            "# Hero\n\n```combat yaml\nid: hero\nname: Hero\nlevel: 5\nhp: 40\n```\n",
+        )
+        .unwrap();
+        assert!(
+            !has(collect(&save, &r)),
+            "party level change must invalidate the cache"
+        );
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn original_hidden_aspects_feed_the_guard_until_revealed() {
+        let r = root("orig");
+        let save = r.join("Saves/2030-01-01-01");
+        fs::write(
+            save.join("save-meta.yaml"),
+            "schema: 5\ntool: test\ndeviation: {scope: 2, ratio: 25}\nsettings: {dice_display: true}\n",
+        )
+        .unwrap();
+        fs::write(
+            save.join("Characters/Hero.md"),
+            "# Hero\n\n```combat yaml\nid: hero\nname: Hero\nlevel: 5\nhp: 20\n```\n",
+        )
+        .unwrap();
+        let mut progress = String::from("version: 1\nxp_log:\n");
+        for i in 0..20 {
+            progress.push_str(&format!(
+                "- {{date: '2026-01-01 10:{i:02}', category: quest, reason: unit{i}, each: 1, to: [hero]}}\n"
+            ));
+        }
+        fs::write(save.join("progress.yaml"), progress).unwrap();
+        original::add(
+            &save,
+            &original::New {
+                kind: "npc",
+                name: "Guide",
+                rarity: None,
+                note: "",
+                hidden: "Guide is [[Red Mask]]",
+                player_hook: false,
+            },
+        )
+        .unwrap();
+        let hits = guard_terms(&save, &r, "You meet Red Mask");
+        assert!(hits.iter().any(|h| h.contains("Red Mask")), "{hits:?}");
+        crate::reveal::add_original(&save, "O-001", None, "test").unwrap();
+        assert!(guard_terms(&save, &r, "You meet Red Mask").is_empty());
+        assert!(original::known_entries(&save)
+            .iter()
+            .any(|e| e.id == "O-001"));
+        let _ = fs::remove_dir_all(&r);
+    }
+}

@@ -4,6 +4,49 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v0.8.0 — 2026-10-23
+
+### 新功能
+- **按场景读冒险书**：新增 `bin/talkdnd adventure section <章节|地点|关键词> [--list] [--reason "<原因>"]`。程序在本地转换好的冒险 Markdown（`Adventures/<slug>/.md/<书名>/<书名>.md`）里按 Markdown 标题切分，只打印标题匹配的那一节（含它的子标题），不再把整本书倒出来。`--list` 只列标题，不显示正文。章节是否“超前”按存档的冒险进度轨和当前章节判断：超出当前进度默认拒绝；确有必要时加 `--reason`，程序会打印该节并在会话日志记「超前阅读」。标为 DM-only 的小节同样要 `--reason`。没有本地 Markdown 时给出转换/设置冒险的提示。
+- **玩家已知清单 `bin/talkdnd known`**：汇总 `reveals.yaml` 的已揭示事实、`handouts.yaml` 已展示资料图、`identified.yaml` 已识别怪物/物品、已出场或隐藏面已揭示的原创内容、队伍角色卡基础信息、当前章节与地点。`bin/talkdnd scene "<地点>"` 把当前场景写进 `progress.yaml`、记日志并自动打印完整 `known`；`bin/talkdnd start` 的摘要里也带压缩版。
+- **秘密词与防剧透检查**：
+  - `bin/talkdnd secret add <词> [--chapter N] [--note "…"]`、`secret list`、`secret remove <词>`，手动秘密词只存在 `Saves/<存档>/secret-terms.yaml`（已 gitignore）。
+  - 自动来源：`dm-secrets.md` 与 `dm-plan.md` 里的 `- term: X` / `[[X]]`、当前进度之后的章节标题、DM-only 小节的标题/`[[词]]`/连续大写英文专名、原创内容 `--hidden`。已出现在 `reveals.yaml` 里的词自动排除。
+  - `bin/talkdnd guard "<草稿>"`（或 stdin / `-`）做不区分大小写的子串匹配，每个命中打印「剧透词：X（建议改写为玩家已知的说法；来源：…）」；有命中退出码 1，干净为 0。清单缓存在 `secret-terms.cache.json`，源文件变化后自动失效，检查很快。
+- **怪物/物品名称遮蔽**：
+  - 新增 `bin/talkdnd identify <东西> [--how check|reveal|lore] [--reason "…"]`，把识别记进 `Saves/<存档>/identified.yaml`；`bin/talkdnd identify --appearance <东西> "<描述>"` 可设置识别前对玩家使用的描述。
+  - combat-sim 的 `status`、`log`、`simulate` 支持全局 `--player`：未识别怪物显示 appearance 或默认的「体型 + 类型」描述（如“一只大型野兽”），已识别的恢复真名，PC/同伴 NPC 永远显示真名。DM 视图不加 `--player`。
+  - 存档位置从 `--campaign` 指向的 `<存档>/combat/campaign.yaml` 推导，也可用 `--save Saves/<存档>` 或环境变量 `TALKDND_SAVE` 指定。
+- **原创内容隐藏面**：`bin/talkdnd original add … --hidden "<隐藏面>"`，隐藏面只写 `original.yaml`（DM-only），并进入 `guard` 的秘密词清单。`bin/talkdnd reveal add --original O-001 [--source "…"]` 记录隐藏面已揭示（自动加 `original:o-001` 标签；不写事实文本时自动生成一条揭示记录）。`bin/talkdnd original plan` 创建 `Saves/<存档>/dm-plan.md` 长期计划模板（只给 DM，已 gitignore）。`bin/talkdnd check` 会报告已登记隐藏面（或其 `[[词]]`）原样出现在会话日志里、却没有揭示记录的情况。
+- **骰子显示开关**：`bin/talkdnd settings` 查看，`bin/talkdnd settings dice on|off` 切换；默认开，局中可改，每次改动写会话日志，`bin/talkdnd start` 显示当前设置。关闭后 DM 只叙述结果，不报骰值/DC/修正/HP 数字；所有骰子仍由程序掷并记录。
+- **掷骰日志**：`Saves/<存档>/rolls.log` 追加记录 `talkdnd check`、`chargen roll`、起始金币、`npc random`、`level-up --hp roll`、`combat-sim roll`，以及 combat-sim 战斗状态命令（`attack`、`cast`、`use`、`save`、`check`、`damage`、`init`、`deathsave`、`rest` 等）中带骰式的行。只含骰式的行会写入，条件/叙述行不会，战斗 state 日志不变。`bin/talkdnd log rolls [--last N]` 随时查看。`combat-sim roll` 加 `--save` 或 `TALKDND_SAVE` 即写入同一份日志。
+- **选项写法与防剧透文档**：新增 `LetsPlay/docs/option-writing.md`，给出“只从 `known` 出发、不报未公开 DC/做法、未发现内容不进选项、模糊情报保持模糊”的规则，以及三个改写自劫案式冒险的正误示例（只揭示机关被触发却报 DC、把未发现的暗门写进选项、拿粗略草图认定哪扇门有警报）。`LetsPlay/AGENTS.md` 压到 150 行并加入对应摘要；`docs/anti-spoiler.md`、`docs/dice.md`、`docs/combat.md`、`docs/deviation.md`、`docs/layout.md` 同步更新。
+
+### 变更
+- 存档 schema 升到 **5**：`save-meta.yaml` 新增 `settings: { dice_display: true }`。旧存档（schema 4 及以前）在 `talkdnd start` / `talkdnd migrate` 时先整份备份到 `Saves/_backups/`，再迁移、写会话日志；骰子显示默认为开，可随时切换。重复运行不会重复迁移。
+- `original.yaml` 台账版本升到 **2**：新增可选 `hidden:` 字段。版本 1 的台账仍可直接读；迁移或下一次 `original` 写入时升到 2，旧条目 `hidden` 为空，不丢数据。
+- `progress.yaml` 新增可选 `scene:` 字段（当前场景/地点），旧存档无需迁移。
+- 所有程序版本统一升到 0.8.0（talkdnd、combat-sim、talkdnd-dev）。
+- combat-sim 的 creature 数据新增可选 `appearance:` 字段（`deny_unknown_fields` 下仍兼容旧数据），并与 `base:` 继承合并。
+
+### 修复
+- 无行为修复；本版主要是新功能与文档。建卡、战斗、迁移、校验、资料图和偏离度流程保持兼容（原有测试全部通过，并新增覆盖：guard 命中/干净/已揭示排除/stdin/退出码、名称遮蔽与识别、`known` 内容、超前阅读拒绝与 `--reason` 日志、骰子设置切换、schema 4→5 迁移、原创 `--hidden` 进入 guard 与日志泄漏检查）。
+
+### 更新说明 / 迁移
+- **覆盖式更新**：下载新发布包，解压到临时位置，把包内 `TalkDND/` 文件夹里的全部内容复制到现在的游戏文件夹，覆盖同名文件。存档目录原样保留。不要把旧包的 `TalkDND/` 整个替换掉（会丢存档、规则书和冒险书）。
+- 更新后第一次 `talkdnd start` 会生成 schema 4→5 的迁移备份，并在会话日志写「存档结构迁移 schema 4→5 …；骰子显示默认开」。确认无误后可删除 `Saves/_backups/` 里的旧备份。
+- 新文件 `identified.yaml`、`secret-terms.yaml`、`rolls.log`、`dm-plan.md` 都只在存档里按需创建，均已 gitignore；不要提交。
+- 已经写好的旧命令不用改；`original add` 不带 `--hidden` 时行为与 0.7.0 相同。
+
+### 已知限制
+- `adventure section` 依赖本地转换后的 Markdown，并且只按 Markdown 标题切分；PDF 没转换、标题层级混乱或一本书有多个 `.md` 子目录时，可能找不到想要的小节。先看 `--list`，必要时查 `index.md` 或 PDF。
+- “超前章节”靠进度轨名称、章节编号和当前队伍等级推断；没有进度轨的自制冒险不会阻止任何章节，DM 仍要自觉按场景读。
+- `guard` 是子串提醒，不是语义判断；改写过的泄密说法可能漏掉，查到同名词也不一定是剧透。已揭示的词靠 `reveals.yaml` 排除，DM 忘了记录时仍会误报。
+- 秘密词中的中文只从 `- term:`、`[[…]]`、章节标题和原文中的标记收集；不会自动从任意中文段落里猜专名。需要检查的中文词请显式标记。
+- 名称遮蔽只覆盖 combat-sim 的 `status`/`log`/`simulate` 文本和 `--player` JSON；攻击、伤害等逐条命令的输出仍是 DM 视图。不要把 DM 视图直接投给玩家。
+- 骰子显示关闭只是叙述约定，程序不会阻止 DM 说出数字；所有掷骰仍会记录在 `rolls.log`（战斗状态命令只记录带骰式的行），DM 不能以“关显示”为由跳过掷骰。
+- `identified.yaml`、`secret-terms.yaml`、`rolls.log` 不在 `integrity.yaml` 的指纹清单里；它们是 DM 工具数据，手改不会触发存档校验警告。
+
 ## v0.7.0 — 2026-10-22
 
 ### 新功能

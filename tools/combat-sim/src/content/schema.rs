@@ -563,6 +563,10 @@ pub struct Creature {
     pub source: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// Player-facing description used until the party identifies the creature
+    /// (`talkdnd identify --appearance` can override it in the save).
+    #[serde(default)]
+    pub appearance: Option<String>,
 }
 
 impl Creature {
@@ -609,6 +613,7 @@ impl Creature {
         replace!(todo);
         replace!(source);
         replace!(description);
+        replace!(appearance);
         self.id = child.id;
         self.base = child.base;
     }

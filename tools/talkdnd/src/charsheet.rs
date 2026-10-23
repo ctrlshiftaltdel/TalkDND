@@ -621,6 +621,18 @@ fn md_list(v: &[String]) -> String {
 }
 
 pub fn render(cf: &CharFile, m: Option<&Member>) -> String {
+    render_with(cf, m, None)
+}
+
+/// Render the player-facing sheet. `ledger` supplies unidentified item
+/// appearances: the structured `Item.name` and `Item.original` stay unchanged,
+/// only the Markdown inventory table is masked. DM-facing commands still show
+/// the real inventory.
+pub fn render_with(
+    cf: &CharFile,
+    m: Option<&Member>,
+    ledger: Option<&crate::identify::Ledger>,
+) -> String {
     let mut md = cf.body_md.trim_end().to_string();
     md += "\n\n";
     md += BEGIN;
@@ -694,7 +706,7 @@ pub fn render(cf: &CharFile, m: Option<&Member>) -> String {
             }
             md += &format!(
                 "| {} | {} | {} |\n",
-                it.name,
+                item_display_name(it, ledger),
                 it.qty,
                 if st.is_empty() {
                     "—".into()
@@ -729,6 +741,43 @@ pub fn render(cf: &CharFile, m: Option<&Member>) -> String {
         md += "\n";
     }
     md
+}
+
+/// Player-facing inventory name. An unidentified item with a registered
+/// original id shows its appearance (or a generic fallback); everything else
+/// keeps its real name.
+fn item_display_name(it: &Item, ledger: Option<&crate::identify::Ledger>) -> String {
+    let Some(ledger) = ledger else {
+        return if it.original.is_some() {
+            "一件未鉴定的物品".into()
+        } else {
+            it.name.clone()
+        };
+    };
+    let original = it.original.as_deref().unwrap_or("");
+    match crate::identify::lookup(ledger, &[it.name.as_str(), original]) {
+        Some(e) if e.identified => it.name.clone(),
+        Some(e) => e
+            .appearance
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                if it.original.is_some() {
+                    "一件未鉴定的物品".into()
+                } else {
+                    it.name.clone()
+                }
+            }),
+        None => {
+            if it.original.is_some() {
+                "一件未鉴定的物品".into()
+            } else {
+                it.name.clone()
+            }
+        }
+    }
 }
 
 pub fn status_line(cf: &CharFile, m: Option<&Member>) -> String {
@@ -795,7 +844,8 @@ pub fn commit(save_dir: &Path, cf: &CharFile, ps: &PartyState) -> Result<()> {
     if pp.parent().is_some_and(|d| d.is_dir()) {
         ps.save(&pp)?;
     }
-    let md = render(cf, ps.members.get(&cf.id));
+    let ledger = crate::identify::load(save_dir).ok();
+    let md = render_with(cf, ps.members.get(&cf.id), ledger.as_ref());
     atomic_write(markdown_path(save_dir, &cf.file)?, md.as_bytes())?;
     Ok(())
 }
@@ -2518,6 +2568,50 @@ mod tests {
         assert!(armor_of("half plate").unwrap().0 == "half-plate");
         assert!(armor_of("rope").is_none());
         assert_eq!(add_flat("1d8+3", 2), "1d8+5");
+    }
+
+    #[test]
+    fn unidentified_original_item_uses_appearance_in_the_player_sheet() {
+        let d = std::env::temp_dir().join(format!("talkdnd-itemmask-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        for sub in ["Characters", "combat"] {
+            fs::create_dir_all(d.join(sub)).unwrap();
+        }
+        fs::write(
+            d.join("identified.yaml"),
+            "version: 1\nentries:\n  - {name: Moonblade, identified: false, appearance: 一把没有光泽的弯刀}\n",
+        )
+        .unwrap();
+        let mut c = cf("2014");
+        c.inventory.push(Item {
+            name: "Moonblade".into(),
+            original: Some("O-001".into()),
+            ..Default::default()
+        });
+        c.inventory.push(Item {
+            name: "Silver Key".into(),
+            original: Some("O-002".into()),
+            ..Default::default()
+        });
+        let ps = PartyState::default();
+        commit(&d, &c, &ps).unwrap();
+        let md = fs::read_to_string(d.join("Characters/Tess.md")).unwrap();
+        assert!(md.contains("一把没有光泽的弯刀"), "{md}");
+        assert!(!md.contains("Moonblade"), "{md}");
+        assert!(md.contains("一件未鉴定的物品"), "{md}");
+        assert!(!md.contains("Silver Key"), "{md}");
+        let stored = fs::read_to_string(d.join("sheets/tess.yaml")).unwrap();
+        assert!(stored.contains("name: Moonblade"), "{stored}");
+        assert!(stored.contains("name: Silver Key"), "{stored}");
+
+        crate::identify::identify(&d, "Moonblade", "check", None).unwrap();
+        commit(&d, &c, &ps).unwrap();
+        let md = fs::read_to_string(d.join("Characters/Tess.md")).unwrap();
+        assert!(md.contains("Moonblade"), "{md}");
+        assert!(!md.contains("一把没有光泽的弯刀"), "{md}");
+        assert!(md.contains("一件未鉴定的物品"), "{md}");
+        assert!(!md.contains("Silver Key"), "{md}");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

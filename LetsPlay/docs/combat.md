@@ -68,6 +68,21 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 
 没有现成遭遇时不用写 YAML：`combat-sim --campaign <存档>/combat/campaign.yaml --state q quick --foe goblin:4 --foe wolf:2@near --distance 40 --light dim`。5 行网格，队伍在 `near`，敌人默认在 `far`。2014 存档可直接用 `Rules/combat/2014/srd/` 里的全部 SRD 5.1 怪物和法术（`content list --kind creature`）。
 
+## 玩家视图：未识别怪物的名称遮蔽
+
+`status`、`log`、`simulate` 默认是 DM 视图，显示真实名字。要给玩家看同一份内容时加 `--player`：
+
+```
+$CS --campaign "$COMBAT_SIM_CAMPAIGN" --player log --tail 20
+$CS --campaign "$COMBAT_SIM_CAMPAIGN" --player status
+```
+
+- 未识别的怪物显示 `appearance`（creature 数据里的字段），或 `$T identify --appearance <东西> "<描述>"` 写的覆盖值，否则用「一只大型野兽」这样的体型+类型描述。
+- 识别后用 `$T identify <东西>` 记录，`identified.yaml` 里 `identified: true` 的条目恢复真名；PC 和同伴 NPC 永远显示真名。
+- `identified.yaml` 默认从 `--campaign` 指向的存档（`<存档>/combat/campaign.yaml` 的上一级）读取；也可以加 `--save Saves/<存档>` 或设 `TALKDND_SAVE`。
+- `combat-sim roll` 的每次掷骰也会追加到 `<存档>/rolls.log`（同上定位存档），`$T log rolls` 可查。
+- 战斗状态命令（`attack`、`cast`、`use`、`save`、`check`、`damage`、`init`、`deathsave`、`rest` 等）产生的掷骰行也会自动追加到同一份 `rolls.log`；只写入含骰式（如 `1d20(`、`1d6(`）的行，条件/叙述行不写入，战斗 state 日志保持原样。
+
 ## 经验、升级与战利品
 
 账本在 `Saves/<存档>/progress.yaml`（XP、每人钱袋与物品、公共 `party` 钱袋），每次变动都记一行到会话日志。

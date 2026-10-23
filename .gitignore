@@ -41,6 +41,11 @@ LetsPlay/Saves/*
 Saves/*
 !Saves/README.md
 **/dm-secrets.md
+**/dm-plan.md
+**/secret-terms.yaml
+**/secret-terms.cache.json
+**/identified.yaml
+**/rolls.log
 
 # --- Build artifacts / tool state ---
 tools/combat-sim/target/

@@ -42,7 +42,7 @@ $T new --ruleset 2014 --scope 2 --ratio 15
 台账在 `Saves/<存档>/original.yaml`，**只给 DM 看**，不要贴给玩家，也不要提交到 git。每个条目：
 
 ```yaml
-version: 1
+version: 2
 entries:
   - id: O-001
     type: encounter
@@ -50,6 +50,7 @@ entries:
     rarity: uncommon
     chapter: The Stygian Gambit
     note: 玩家在酒馆惹到的人来报复
+    hidden: 伏击者是 [[红面具]] 的手下
     player_hook: true
     logged: 2026-10-22 21:10
 ```
@@ -63,6 +64,15 @@ $T original add --type encounter --name "断桥伏击" --rarity uncommon --note 
 # 物品必须给稀有度
 $T original add --type item --name "月刃" --rarity rare --note "旧王室遗物"
 
+# 隐藏面（只给 DM；会进入防剧透秘密词清单）
+$T original add --type npc --name "馆长" --hidden "馆长是 [[红面具]] 的内应"
+
+# 创建长期计划模板（只给 DM，已 gitignore）
+$T original plan
+
+# 玩家已经知道隐藏面后，记一条揭示
+$T reveal add --original O-001 --source "调查检定 18"
+
 # 看全部登记（DM 屏幕）
 $T original list
 
@@ -73,6 +83,8 @@ $T original status
 - **先登记再引入**：没登记的原创内容不能出现在叙事里。`talkdnd check` 会尽量检查手改痕迹，但 DM 的自觉是第一道防线。
 - 采用了玩家提出的点子（玩家钩子）也算原创，登记时加 `--hook player`；这不改变预算。
 - 条目 id 自动编号 `O-001`、`O-002`……不要手改。
+- `hidden` 是 DM 的隐藏面（幕后关系、真实动机、还没被发现的伏笔）。它只在 `original.yaml` 里，玩家永远看不到；会进入 `talkdnd guard` 的秘密词清单。玩家已经知道后用 `$T reveal add --original O-001` 记录，`original list` 会标「隐藏面已揭示」，`$T check` 也不再把它算作泄漏。`talkdnd known` 把没有 `hidden` 的条目视为已出场，有 `hidden` 的到揭示后才列入。
+- `dm-plan.md` 是本地长期计划（`$T original plan` 创建，已 gitignore），用 `- term: <词>` 或 `[[<词>]]` 标记关键秘密；这些词同样进入 `guard` 清单。不要把它贴给玩家或提交。
 - `type` 只能是 `encounter`、`npc`、`item`、`location`、`sidequest`（也接受「遭遇」「NPC」「物品」「地点」「支线」）。
 - `rarity` 只能是 `common`、`uncommon`、`rare`、`very-rare`、`legendary`。非物品条目不给时按 `common`；物品必须给。
 
@@ -163,13 +175,15 @@ $T char Aria item add "月刃" --original O-001      # 已登记的原创物品
 - `save-meta.yaml` 在工具以外被改过（包括手改 `deviation:`）；
 - `original.yaml` 在工具以外被改过；
 - 台账条目的类型/稀有度超出当前 scope 或队伍等级上限（例如手改成支线、传奇物品）；
-- 角色卡物品带 `original:` 标记，但台账里没有对应条目，或对应条目不是物品。
+- 角色卡物品带 `original:` 标记，但台账里没有对应条目，或对应条目不是物品；
+- 已登记的原创 `hidden` 文本（或其 `[[词]]`）原样出现在会话日志里，却没有 `reveal add --original O-xxx` 记录。
 
 看到这些警告：先跳出角色问玩家/核对日志；确实是 DM 自己改的，用 `$T integrity accept --reason "…"` 记录原因。不要为了「通过检查」删掉台账或改 `save-meta.yaml`。
 
 ## 9. 迁移与旧存档
 
 - 旧存档（schema 3 及以前）没有偏离度设定。`talkdnd start` / `talkdnd migrate` 会把整份存档备份到 `Saves/_backups/`，再写入 `scope: 0`、`ratio: null`，并在会话日志记一行。
+- schema 4 的旧存档在升级到 0.8.0 后迁移到 schema 5：新增 `settings: { dice_display: true }`，同样先备份并记日志；`original.yaml` 台账从版本 1 升到 2（新增空 `hidden`），旧条目不受影响。
 - 旧存档就是 scope 0：只能补空白，不能登记原创。想要原创只能开新档。
 - 更新程序用覆盖式更新（见发布说明），存档目录原样保留。
 
@@ -178,4 +192,5 @@ $T char Aria item add "月刃" --original O-001      # 已登记的原创物品
 - 章节靠队伍等级和进度轨推断；自制冒险没有 `track` 时全部算 `未分章`，预算按整场战役累计。
 - 正典计数是「记录条数」，不是剧情重要性；DM 可以通过正常记 `xp add` / `reveal add` 推进计数，但不能为了腾预算灌水。
 - 名称来源检查只覆盖规则数据里的武器、护甲、盾牌和常见装备；魔法物品、书里特有装备需要 `--canon` 或登记原创。
-- 存档校验是防手滑，不是防作弊的安全边界；台账和摘要都只应给 DM 看。
+- 隐藏面泄漏检查是逐字/子串匹配，只检查会话日志，不扫描冒险书；改写过的泄密说法可能漏掉，DM 的纪律仍是第一道防线。
+- 存档校验是防手滑，不是防作弊的安全边界；`original.yaml`、`dm-plan.md` 和摘要都只给 DM 看。

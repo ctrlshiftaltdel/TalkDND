@@ -2,6 +2,7 @@
 //! resume digest, new save skeleton, character creation, random companions,
 //! checkpoints and log entries. All dice go through combat-sim's engine.
 
+pub mod adventure;
 pub mod audit;
 pub mod chargen;
 pub mod charsheet;
@@ -9,13 +10,18 @@ pub mod check;
 pub mod classdata;
 pub mod data;
 pub mod handout;
+pub mod identify;
+pub mod known;
 pub mod migrate;
 pub mod npc;
 pub mod options;
 pub mod original;
 pub mod progress;
 pub mod reveal;
+pub mod rolls;
 pub mod save;
+pub mod secret;
+pub mod settings;
 pub mod start;
 pub mod update;
 
@@ -111,7 +117,10 @@ enum Cmd {
     /// Append a `## 存档点` section to the newest session log (text from args or stdin)
     Checkpoint { text: Vec<String> },
     /// Append one timestamped line to the newest session log
-    Log { text: Vec<String> },
+    Log {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        text: Vec<String>,
+    },
     /// Local rulebook data (non-SRD classes, subclasses, weapons; gitignored)
     Data {
         #[command(subcommand)]
@@ -154,6 +163,47 @@ enum Cmd {
     Original {
         #[command(subcommand)]
         cmd: OriginalCmd,
+    },
+    /// Read one scene of the locally imported adventure (never the whole book)
+    Adventure {
+        #[command(subcommand)]
+        cmd: AdventureCmd,
+    },
+    /// What the players currently know (facts, handouts, identified names,
+    /// met original content, party, chapter/location)
+    Known,
+    /// Record the current scene/location and print `known`
+    Scene { name: Vec<String> },
+    /// Secret terms for the spoiler guard (DM only, stored in the save)
+    Secret {
+        #[command(subcommand)]
+        cmd: SecretCmd,
+    },
+    /// Check a draft narration/option list for unrevealed secret terms
+    /// (text from args or stdin; exit code 1 when anything is flagged)
+    Guard {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        text: Vec<String>,
+    },
+    /// Record that the players identified a monster/item, or set the
+    /// player-facing appearance used until they do
+    Identify {
+        /// Creature/item name or id
+        thing: Option<String>,
+        /// How they learned it: check (investigation/perception), reveal
+        /// (magic/truth) or lore (research/hearsay)
+        #[arg(long, default_value = "reveal", value_parser = ["check", "reveal", "lore"])]
+        how: String,
+        #[arg(long)]
+        reason: Option<String>,
+        /// Override the player-facing description: --appearance <thing> "<描述>"
+        #[arg(long, num_args = 2, value_names = ["THING", "DESCRIPTION"])]
+        appearance: Option<Vec<String>>,
+    },
+    /// Table settings (dice display) and `log rolls`
+    Settings {
+        #[command(subcommand)]
+        cmd: Option<SettingsCmd>,
     },
     /// Revealed-knowledge ledger (what the party has actually learned)
     Reveal {
@@ -248,6 +298,9 @@ enum OriginalCmd {
         rarity: Option<String>,
         #[arg(long, default_value = "")]
         note: String,
+        /// DM-only hidden aspect (secret term source until revealed)
+        #[arg(long, default_value = "")]
+        hidden: String,
         /// The idea came from a player: `--hook player` (adopted player hooks
         /// count as original)
         #[arg(long, value_name = "SOURCE", value_parser = ["player"])]
@@ -257,6 +310,46 @@ enum OriginalCmd {
     List,
     /// Show the deviation settings, caps and the current chapter budget
     Status,
+    /// Create Saves/<slot>/dm-plan.md (DM-only long-term plan template)
+    Plan,
+}
+
+#[derive(Subcommand, Clone)]
+enum AdventureCmd {
+    /// Print one heading-delimited section; `--list` lists headings only
+    Section {
+        /// Heading, chapter or area search
+        query: Vec<String>,
+        /// List section headings only (no body text)
+        #[arg(long)]
+        list: bool,
+        /// Read a section beyond progress anyway (logged)
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum SecretCmd {
+    /// Add a manual secret term (stored only in this save)
+    Add {
+        term: Vec<String>,
+        /// Chapter number this secret belongs to (optional)
+        #[arg(long)]
+        chapter: Option<u32>,
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// List every unrevealed secret term and its source
+    List,
+    /// Remove a manual secret term
+    Remove { term: Vec<String> },
+}
+
+#[derive(Subcommand, Clone)]
+enum SettingsCmd {
+    /// Show or change dice display: `settings dice on|off`
+    Dice { value: Option<String> },
 }
 
 #[derive(Subcommand, Clone)]
@@ -270,6 +363,10 @@ enum RevealCmd {
         /// Tags such as npc:<id>, place:<id> (repeatable)
         #[arg(long)]
         tag: Vec<String>,
+        /// Mark the hidden aspect of this original entry as revealed
+        /// (`reveal add --original O-001`; fact is optional then)
+        #[arg(long)]
+        original: Option<String>,
     },
     /// List revealed facts
     List {
@@ -519,6 +616,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                     name,
                     rarity,
                     note,
+                    hidden,
                     hook,
                 } => original::add(
                     &s,
@@ -527,21 +625,145 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                         name: &name,
                         rarity: rarity.as_deref(),
                         note: &note,
+                        hidden: &hidden,
                         player_hook: hook.is_some(),
                     },
                 )?,
                 OriginalCmd::List => original::list(&s)?,
                 OriginalCmd::Status => original::status_lines(&s)?,
+                OriginalCmd::Plan => vec![original::plan(&s)?],
             };
             for l in lines {
                 println!("{l}");
             }
         }
+        Cmd::Adventure { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let lines = match cmd {
+                AdventureCmd::Section {
+                    query,
+                    list,
+                    reason,
+                } => adventure::section(&root, &s, &query.join(" "), list, reason.as_deref())?,
+            };
+            for l in lines {
+                println!("{l}");
+            }
+        }
+        Cmd::Known => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            for l in known::lines(&s, false) {
+                println!("{l}");
+            }
+        }
+        Cmd::Scene { name } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            for l in known::scene_change(&s, &name.join(" "))? {
+                println!("{l}");
+            }
+        }
+        Cmd::Secret { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let lines = match cmd {
+                SecretCmd::Add {
+                    term,
+                    chapter,
+                    note,
+                } => vec![secret::add(&s, &term.join(" "), chapter, &note)?],
+                SecretCmd::List => secret::list_lines(&s, &root),
+                SecretCmd::Remove { term } => vec![secret::remove(&s, &term.join(" "))?],
+            };
+            for l in lines {
+                println!("{l}");
+            }
+        }
+        Cmd::Guard { text } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let mut draft = text.join(" ");
+            if draft.trim().is_empty() || draft.trim() == "-" {
+                draft.clear();
+                std::io::stdin().read_to_string(&mut draft)?;
+            }
+            if draft.trim().is_empty() {
+                bail!("guard needs text as arguments or on stdin");
+            }
+            let hits = secret::guard_terms(&s, &root, &draft);
+            if hits.is_empty() {
+                println!("guard: clean（没有发现未揭示的秘密词）");
+            } else {
+                for h in &hits {
+                    println!("{h}");
+                }
+                println!(
+                    "guard: {} 个未揭示秘密词；改写为玩家已知的说法后再叙述",
+                    hits.len()
+                );
+                std::process::exit(1);
+            }
+        }
+        Cmd::Identify {
+            thing,
+            how,
+            reason,
+            appearance,
+        } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            let line = if let Some(pair) = appearance {
+                if pair.len() != 2 {
+                    bail!("--appearance needs <thing> \"<description>\"");
+                }
+                identify::set_appearance(&s, &pair[0], &pair[1])?
+            } else {
+                let thing = thing
+                    .filter(|t| !t.trim().is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("identify needs a name or --appearance"))?;
+                identify::identify(&s, &thing, &how, reason.as_deref())?
+            };
+            println!("{line}");
+        }
+        Cmd::Settings { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            match cmd {
+                None => {
+                    for l in settings::lines(&s) {
+                        println!("{l}");
+                    }
+                }
+                Some(SettingsCmd::Dice { value }) => {
+                    match settings::parse_dice(value.as_deref())? {
+                        None => {
+                            for l in settings::lines(&s) {
+                                println!("{l}");
+                            }
+                        }
+                        Some(on) => {
+                            for l in settings::set_dice(&root, &s, on, None)? {
+                                println!("{l}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Cmd::Reveal { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             let lines = match cmd {
-                RevealCmd::Add { fact, source, tag } => {
-                    vec![reveal::add(&s, &fact.join(" "), &source, &tag)?]
+                RevealCmd::Add {
+                    fact,
+                    source,
+                    tag,
+                    original,
+                } => {
+                    if let Some(id) = original {
+                        vec![reveal::add_original(
+                            &s,
+                            &id,
+                            Some(&fact.join(" ")),
+                            &source,
+                        )?]
+                    } else {
+                        vec![reveal::add(&s, &fact.join(" "), &source, &tag)?]
+                    }
                 }
                 RevealCmd::List { tag } => reveal::list(&s, tag.as_deref())?,
                 RevealCmd::Check { term } => reveal::check(&s, &term.join(" "))?,
@@ -774,6 +996,25 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
         }
         Cmd::Log { text } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            if text.first().is_some_and(|t| t == "rolls") {
+                let mut last = None;
+                let mut args = text.iter().skip(1);
+                while let Some(a) = args.next() {
+                    match a.as_str() {
+                        "--last" | "-n" => {
+                            let n = args
+                                .next()
+                                .ok_or_else(|| anyhow::anyhow!("--last needs a number"))?;
+                            last = Some(n.parse::<usize>().context("--last must be a number")?);
+                        }
+                        other => bail!("unknown `log rolls` option `{other}`"),
+                    }
+                }
+                for l in rolls::show(&s, last) {
+                    println!("{l}");
+                }
+                return Ok(());
+            }
             let body = text.join(" ");
             if body.trim().is_empty() {
                 bail!("log text is empty");
@@ -1041,6 +1282,13 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
             }
             let (pool, texts) = chargen::roll_pool(rng)?;
             log_rolls(save, "PC", &texts, seeded)?;
+            rolls::append(
+                save,
+                "PC",
+                "属性生成（6×4d6dl1）",
+                &texts.join("  "),
+                seeded,
+            )?;
             for t in &texts {
                 println!("{t}");
             }
@@ -1187,6 +1435,7 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                     let r = options::class_equipment(c.rs(), &cls, &v, rng)?;
                     if let Some(t) = &r.roll {
                         println!("starting gold: {t}");
+                        rolls::append(save, "PC", "起始金币", t, seeded)?;
                         if let Some(log) = save::latest_log(save) {
                             save::append(
                                 &log,
@@ -1379,6 +1628,13 @@ fn npc_cmd(
                     let draft = serde_json::to_string_pretty(&n.creation)?;
                     atomic_write(d.join(format!("{num}.json")), draft.as_bytes())?;
                     log_rolls(s, &format!("同伴草稿 {num}"), &n.roll_texts, seeded)?;
+                    rolls::append(
+                        s,
+                        &format!("同伴草稿 {num}"),
+                        "属性生成",
+                        &n.roll_texts.join("  "),
+                        seeded,
+                    )?;
                 }
             }
             println!("show these to the player; after they confirm, add name/personality with `npc sheet <draft> --name ...`");

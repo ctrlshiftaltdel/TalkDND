@@ -3,10 +3,11 @@
 //! The schema number describes the on-disk layout of a save:
 //! 1 = Markdown sheets only, 2 = structured `sheets/<id>.yaml`, 3 = versioned
 //! YAML files plus `save-meta.yaml`, 4 = the locked adventure-deviation
-//! settings (`deviation:`) in `save-meta.yaml`. `talkdnd start` and
-//! `talkdnd migrate` back the whole save up into `Saves/_backups/` before
-//! writing, then run the migrations in order. A save from a newer talkdnd is
-//! refused: this binary cannot know its format.
+//! settings (`deviation:`) in `save-meta.yaml`, 5 = per-save `settings:`
+//! (dice display, default on). `talkdnd start` and `talkdnd migrate` back the
+//! whole save up into `Saves/_backups/` before writing, then run the
+//! migrations in order. A save from a newer talkdnd is refused: this binary
+//! cannot know its format.
 //!
 //! Migrations only update the integrity manifest for files that were clean
 //! before; a file the DM had already hand-edited stays flagged.
@@ -24,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "save-meta.yaml";
-pub const CURRENT_SCHEMA: u32 = 4;
+pub const CURRENT_SCHEMA: u32 = 5;
 pub const BACKUP_DIR: &str = "_backups";
 
 /// How far this save may deviate from the published adventure.
@@ -106,6 +107,26 @@ pub struct Migration {
     pub backup: String,
 }
 
+/// Per-save table settings. They are changeable mid-game (unlike the locked
+/// deviation) and every change is written to the session log.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Settings {
+    /// Read dice values, DCs and modifiers aloud. Off = narrate outcomes only;
+    /// the programs still roll and log every die (`rolls.log`).
+    #[serde(default = "dice_on")]
+    pub dice_display: bool,
+}
+
+fn dice_on() -> bool {
+    true
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { dice_display: true }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SaveMeta {
     pub schema: u32,
@@ -114,6 +135,9 @@ pub struct SaveMeta {
     /// Locked when the save is created; see [`Deviation`].
     #[serde(default)]
     pub deviation: Deviation,
+    /// Changeable table settings (schema 5+; older saves default to dice on).
+    #[serde(default)]
+    pub settings: Settings,
     #[serde(default)]
     pub migrations: Vec<Migration>,
 }
@@ -171,12 +195,13 @@ pub fn init_with_deviation(save: &Path, deviation: &Deviation) -> Result<()> {
         schema: CURRENT_SCHEMA,
         tool: env!("CARGO_PKG_VERSION").to_string(),
         deviation: deviation.clone(),
+        settings: Settings::default(),
         migrations: Vec::new(),
     };
     write_meta(save, &meta)
 }
 
-fn write_meta(save: &Path, meta: &SaveMeta) -> Result<()> {
+pub(crate) fn write_meta(save: &Path, meta: &SaveMeta) -> Result<()> {
     let text = format!(
         "# TalkDND save schema metadata (written by talkdnd; do not edit).\n# Backups from migrations live in Saves/_backups/.\n{}",
         serde_norway::to_string(meta)?
@@ -194,6 +219,8 @@ pub struct Report {
     pub sheets: Vec<String>,
     /// 3→4: the old save had no deviation; it becomes scope 0 (no deviation).
     pub deviation_default: bool,
+    /// 4→5: the old save had no settings; dice display becomes on.
+    pub settings_default: bool,
     pub log_text: Option<String>,
 }
 
@@ -217,6 +244,12 @@ impl Report {
             if self.deviation_default {
                 v.push("会写入剧本偏离度：scope 0（不偏离）、无比例（旧存档没有设置过）".into());
             }
+            if self.settings_default {
+                v.push(
+                    "会写入桌面设置：骰子显示开（默认；可随时用 `talkdnd settings dice off` 关闭）"
+                        .into(),
+                );
+            }
             return v;
         }
         let mut v = vec![format!("存档 schema {} → {}：迁移完成", self.from, self.to)];
@@ -232,6 +265,9 @@ impl Report {
         }
         if self.deviation_default {
             v.push("剧本偏离度：旧存档未设置，按 scope 0（不偏离）、无比例处理".into());
+        }
+        if self.settings_default {
+            v.push("桌面设置：骰子显示默认开（可用 `talkdnd settings dice off` 关闭）".into());
         }
         if let Some(log) = &self.log_text {
             v.push(format!("已写入会话日志：{log}"));
@@ -257,6 +293,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         to: CURRENT_SCHEMA,
         dry_run,
         deviation_default: from < 4,
+        settings_default: from < 5,
         ..Default::default()
     };
     if dry_run {
@@ -320,12 +357,22 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             backup: backup.clone(),
         });
     }
-    meta.migrations.push(Migration {
-        from: from.max(3),
-        to: 4,
-        date,
-        backup: backup.clone(),
-    });
+    if from < 4 {
+        meta.migrations.push(Migration {
+            from: from.max(3),
+            to: 4,
+            date: date.clone(),
+            backup: backup.clone(),
+        });
+    }
+    if from < 5 {
+        meta.migrations.push(Migration {
+            from: from.max(4),
+            to: 5,
+            date: date.clone(),
+            backup: backup.clone(),
+        });
+    }
     write_meta(save, &meta)?;
 
     let deviation_note = if from < 4 {
@@ -333,8 +380,13 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     } else {
         ""
     };
+    let settings_note = if from < 5 {
+        "；骰子显示默认开"
+    } else {
+        ""
+    };
     let text = format!(
-        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}",
+        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}",
         chrono::Local::now().format("%H:%M")
     );
     if let Some(log) = save::latest_log(save) {
@@ -403,9 +455,11 @@ fn migrate_sheets(save: &Path, root: &Path) -> Result<Vec<String>> {
 }
 
 /// 2→3: rewrite the YAML files through their stores so they carry `version: 1`
-/// (additive; older files still load). Files already dirty in the integrity
-/// manifest are left untouched so hand edits, comments and unknown fields are
-/// not lost; they stay flagged and version 0 is still accepted.
+/// (additive; older files still load). Only files untouched since the integrity
+/// baseline are rewritten (the original ledger becomes version 2, still
+/// additive). Files already dirty in the integrity manifest are left untouched
+/// so hand edits, comments and unknown fields are not lost; they stay flagged
+/// and version 0 is still accepted.
 fn add_versions(save: &Path, dirty: &BTreeSet<String>) -> Result<()> {
     if Progress::path(save).is_file() && !dirty.contains("progress.yaml") {
         let progress = Progress::load(save)?;
@@ -414,6 +468,11 @@ fn add_versions(save: &Path, dirty: &BTreeSet<String>) -> Result<()> {
     if save.join(reveal::FILE).is_file() && !dirty.contains(reveal::FILE) {
         let ledger = reveal::load(save)?;
         reveal::store(save, &ledger)?;
+    }
+    let original_rel = crate::original::FILE;
+    if save.join(original_rel).is_file() && !dirty.contains(original_rel) {
+        let ledger = crate::original::load(save)?;
+        crate::original::store(save, &ledger)?;
     }
     let party = save.join("combat").join(combat_sim::party::FILE_NAME);
     let party_rel = format!("combat/{}", combat_sim::party::FILE_NAME);
@@ -463,11 +522,11 @@ mod tests {
         let root = root("v1");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (1, 4));
+        assert_eq!((report.from, report.to), (1, 5));
         assert!(report.deviation_default);
         assert_eq!(report.sheets, vec!["hero".to_string()]);
         assert!(charsheet::path(&save, "hero").is_file());
-        assert_eq!(meta(&save).schema, 4);
+        assert_eq!(meta(&save).schema, 5);
         assert_eq!(meta(&save).deviation.scope, 0);
         assert_eq!(meta(&save).deviation.ratio, None);
         assert!(meta(&save)
@@ -478,6 +537,10 @@ mod tests {
             .migrations
             .iter()
             .any(|m| m.from == 3 && m.to == 4));
+        assert!(meta(&save)
+            .migrations
+            .iter()
+            .any(|m| m.from == 4 && m.to == 5));
 
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
             .unwrap()
@@ -489,7 +552,7 @@ mod tests {
         assert!(!backups[0].join("_backups").exists());
 
         let log = fs::read_to_string(save.join("Sessions/2030-01-01-session-00.md")).unwrap();
-        assert!(log.contains("存档结构迁移 schema 1→4"), "{log}");
+        assert!(log.contains("存档结构迁移 schema 1→5"), "{log}");
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
 
@@ -513,7 +576,7 @@ mod tests {
         let root = root("dry");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, true).unwrap();
-        assert_eq!((report.from, report.to), (1, 4));
+        assert_eq!((report.from, report.to), (1, 5));
         assert!(report.dry_run && report.sheets == vec!["hero".to_string()]);
         assert!(!path(&save).is_file());
         assert!(!charsheet::path(&save, "hero").is_file());
@@ -542,8 +605,8 @@ mod tests {
         fs::write(save.join("progress.yaml"), edited).unwrap();
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (2, 4));
-        assert!(meta(&save).schema == 4);
+        assert_eq!((report.from, report.to), (2, 5));
+        assert!(meta(&save).schema == 5);
         let changes = combat_sim::integrity::changes(&save).unwrap();
         assert!(
             changes
@@ -636,19 +699,20 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (3, 4));
+        assert_eq!((report.from, report.to), (3, 5));
         assert!(report.deviation_default);
         assert!(report
             .lines()
             .iter()
             .any(|l| l.contains("scope 0") && l.contains("偏离度")));
         let m = meta(&save);
-        assert_eq!(m.schema, 4);
+        assert_eq!(m.schema, 5);
         assert_eq!(m.deviation.scope, 0);
         assert_eq!(m.deviation.ratio, None);
         assert!(m.migrations.iter().any(|x| x.from == 3 && x.to == 4));
+        assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
         let log = fs::read_to_string(save.join("Sessions/2030-04-05-session-00.md")).unwrap();
-        assert!(log.contains("schema 3→4"), "{log}");
+        assert!(log.contains("schema 3→5"), "{log}");
         assert!(log.contains("scope 0"), "{log}");
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
             .unwrap()
@@ -656,6 +720,69 @@ mod tests {
             .collect();
         assert_eq!(backups.len(), 1);
         assert!(backups[0].join("save-meta.yaml").is_file());
+        assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn original_ledger_is_bumped_to_version_two_additively() {
+        let root = root("origv2");
+        let save = root.join("Saves/2030-04-07-01");
+        fs::create_dir_all(save.join("Sessions")).unwrap();
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::write(save.join("Sessions/s1.md"), "# log\n").unwrap();
+        fs::write(
+            save.join("save-meta.yaml"),
+            "schema: 4\ntool: 0.7.0\ndeviation: {scope: 0, ratio: null}\nmigrations: []\n",
+        )
+        .unwrap();
+        fs::write(
+            save.join("original.yaml"),
+            "version: 1\nentries:\n  - {id: O-001, type: npc, name: Guide, rarity: common, chapter: 未分章}\n",
+        )
+        .unwrap();
+        ensure(&save, &root, false).unwrap();
+        let text = fs::read_to_string(save.join("original.yaml")).unwrap();
+        assert!(text.contains("version: 2"), "{text}");
+        let ledger = crate::original::load(&save).unwrap();
+        assert_eq!(ledger.entries.len(), 1);
+        assert_eq!(ledger.entries[0].name, "Guide");
+        assert!(ledger.entries[0].hidden.is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migrates_a_v4_save_and_turns_dice_display_on() {
+        let root = root("v4");
+        let save = root.join("Saves/2030-04-06-01");
+        fs::create_dir_all(save.join("Sessions")).unwrap();
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::write(save.join("Sessions/2030-04-06-session-00.md"), "# log\n").unwrap();
+        fs::write(
+            save.join("save-meta.yaml"),
+            "schema: 4\ntool: 0.7.0\ndeviation: {scope: 2, ratio: 15}\nmigrations: []\n",
+        )
+        .unwrap();
+        let report = ensure(&save, &root, false).unwrap();
+        assert_eq!((report.from, report.to), (4, 5));
+        assert!(!report.deviation_default);
+        assert!(report.settings_default);
+        let m = meta(&save);
+        assert_eq!(m.schema, 5);
+        assert_eq!(m.deviation.scope, 2);
+        assert_eq!(m.deviation.ratio, Some(15));
+        assert!(m.settings.dice_display);
+        assert!(m.migrations.iter().all(|x| x.from == 4 && x.to == 5));
+        let log = fs::read_to_string(save.join("Sessions/2030-04-06-session-00.md")).unwrap();
+        assert!(
+            log.contains("schema 4→5") && log.contains("骰子显示默认开"),
+            "{log}"
+        );
+        let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1);
         assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
         let _ = fs::remove_dir_all(&root);
     }
