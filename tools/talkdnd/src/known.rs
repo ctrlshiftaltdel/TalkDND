@@ -49,8 +49,13 @@ fn party_line(save_dir: &Path, s: &check::Sheet) -> String {
         })
         .filter(|c| !c.trim().is_empty())
         .unwrap_or_else(|| "?".into());
+    let role = if crate::charsheet::controller_for(save_dir, s) == crate::charsheet::DM {
+        "同伴"
+    } else {
+        "玩家角色"
+    };
     format!(
-        "{}（{}）：{} {} 级，HP {}，AC {}",
+        "{}（{}，{role}）：{} {} 级，HP {}，AC {}",
         s.name, s.id, class, level, hp, ac
     )
 }
@@ -73,12 +78,15 @@ pub fn lines(save_dir: &Path, compact: bool) -> Vec<String> {
     out.push("队伍：".into());
     let sheets = check::sheets(save_dir);
     let mut listed = 0;
-    for s in sheets.iter().filter(|s| {
-        s.block
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .is_none_or(|k| k.eq_ignore_ascii_case("pc"))
-    }) {
+    // Party members: every sheet in Characters/ (player characters and
+    // DM-run companions, whatever their combat `kind`) plus anyone on the
+    // campaign party list. Story NPCs in NPCs/ are not party members.
+    let party = crate::start::party_ids(save_dir);
+    let chars_dir = save_dir.join("Characters");
+    for s in sheets
+        .iter()
+        .filter(|s| s.file.starts_with(&chars_dir) || party.contains(&s.id))
+    {
         out.push(format!("- {}", party_line(save_dir, s)));
         listed += 1;
     }
@@ -218,7 +226,7 @@ mod tests {
         assert!(text.contains("当前场景：宴会厅"), "{text}");
         assert!(text.contains("#1 The gala is tonight"), "{text}");
         assert!(
-            text.contains("Hero（hero）：rogue 3 级，HP 24，AC 16"),
+            text.contains("Hero（hero，玩家角色）：rogue 3 级，HP 24，AC 16"),
             "{text}"
         );
         assert!(text.contains("Goblin（perception 15）"), "{text}");
