@@ -715,6 +715,11 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     for e in &memories {
         d += &format!("- {}\n", crate::memory::entry_line(e));
     }
+    // 世界时间 (P06): only when the feature is enabled; this section is
+    // read-only — start never writes world-time.yaml.
+    if let Some(sec) = crate::worldtime::digest_section(save) {
+        d += &sec;
+    }
     // dm-secrets.md with content but zero recognized markers would silently
     // protect nothing; the warning carries counts only, never file content.
     if let Some(w) = crate::secret::zero_marker_warning(save) {
