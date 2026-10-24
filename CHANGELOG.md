@@ -4,6 +4,31 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v0.11.0 — 2026-10-24
+
+### 新功能
+- **游玩中修正书页**（#108）。`pdf2md fix --book "<书名>" --page N [--from 文件] [--reason "原因"]` 把核对过的一页 Markdown 写进该书的 `index/fixes/pNNNN.md`，首行记录 PDF 的 sha256；没有转换进程时立即重组，下一次 `adventure section` 读到的就是修正版。`--no-apply` 只存修正；覆盖旧修正前自动备份到 `fixes/backups/`。页号越界、该页尚未转换、输入为空都会拒绝。
+- **书库收口：整本与分卷并存**（#109）。`talkdnd library merge <slug> [--dry-run]` 把 `<slug>-a`、`-b`、`-2`、`-part-2` 等分卷文件夹整体归档到 `.talkdnd/book-backups/merge-<slug>/`，从不删除；分卷的 `combat/` 只在整本没有时移入；存档里的旧路径重指向整本。`library tidy` / `start` 发现整本与分卷并存时会提示这条命令，不会自己搬。
+
+### 变更
+- **开发契约与检查清单对齐代码**（#105）。`AGENTS.md` 与 `README.md` 现在写明玩家运行 `combat-sim` 与 `talkdnd` 两个程序；`fetch-binary` / `install-local` 装两个制品、做两次构建；补上 `check-leaks`、`edition: github` 禁止 `orchestrator.py init`、仓库地图、存档 schema/版本和 CI 检查入口；README 开发检查补齐 `tools/talkdnd`、kit unittest、pdf2md pytest、cargo deny、yamllint 与单测过滤。
+- **pdf2md 游玩中修正流程**（#108）。`LetsPlay/docs/pdf2md.md` 新增「游玩中修正」；`LetsPlay/AGENTS.md` 在原有行内补一句，仍为 150 行。
+- **开发命令说明**（#105）。新增 `tools/talkdnd-dev/README.md`，列出六个子命令、用法与退出码。
+
+### 修复
+- 修正 `AGENTS.md` / `README.md` 把玩家程序只写成一个 `combat-sim`、以及 `install-local` 只构建一个 crate 的错误描述（#105）。
+
+### 更新说明 / 迁移
+- 覆盖式更新：下载新发布包，解压到临时位置，把包内 `TalkDND/` 的内容复制到现有游戏文件夹，覆盖同名文件；存档目录原样保留。
+- 无存档 schema 变化，`start` 不需要迁移。
+- pdf2md 的 VERSION 仍是 0.6.0：`fix` 只是新增命令，不改变提取格式，升级不会重转已转换的书。
+- 书库里有整本与分卷并存时，`bin/talkdnd start` 会提示 `bin/talkdnd library merge <slug>`；运行前先确认整本 PDF 完整。旧分卷不会被删除。
+- 游玩中修正的页保存在该书 `index/fixes/`，只在本机，不入库；PDF 换 hash 后旧修正自动失效。
+
+### 已知限制
+- 不会自动判断两份不同文件名的 PDF 是同一本书；`library merge` 只处理整本 + 分卷的命名结构，且需要显式运行。
+- `pdf2md fix` 需要该页已经转换；未转换的页先 `pdf2md run --book … --pages …`。
+
 ## v0.10.0 — 2026-10-23
 
 ### 新功能
