@@ -226,6 +226,7 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
   事件字段：id（EV-001 起）、due（自由文本标签）、title、status（pending \| done \| skipped）、dm_only（bool，默认 false）、notes（string，默认 ""）。
 
 - 到期判定（P00 冻结的简化规则）：只按标签相等——due 与当前 date 标签相同且 status = pending 即「今天到期」，由 time event list 标注、start 在启用时提示。程序不做历法算术（月长、闰年、跨标签先后一律不推断）；elapsed_days 只回答「过了多少天」。
+- 可见性（2026-10-25 项目所有者决定，澄清 dm_only 与「列出全部事件」的冲突）：time event list 默认只列非 dm_only 事件（玩家视图），--all 为 DM 视图（全部事件，dm_only 行首标 [DM]，不得进入玩家可看材料）；start 只提示玩家可见的到期事件。
 - 写入命令：time enable/disable/set/advance/event add/done/skip；读取命令：time show、time event list、start（启用时的时间与到期事件节）。
 - integrity：存在时纳入。
 - 失败/损坏行为：文件缺失 = 未启用（默认）；YAML 非法或 version > 1 = 拒绝并提示；enabled: false 时 set/advance/event add/done/skip 一律退出码 1（show/event list/enable 可用）；advance 必须带 --days 或 --hours 至少一个；重复 advance 不累计错误（纯加法）。
@@ -323,11 +324,11 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
 | time set | --date D [--phase P] | 新标签；未启用拒绝 | 0 / 1 |
 | time advance | --days N 或 --hours N（至少一个） | 新 elapsed_days；纯加法 | 0 / 1 |
 | time event add | --due 标签 --title T [--dm-only] [--note N] | 新事件 id | 0 / 1 |
-| time event list | | 全部事件；due 等于当前 date 且 pending 的标「今天到期」 | 0 |
+| time event list [--all] | | 默认玩家视图（只列非 dm_only）；--all 为 DM 视图（全部事件，dm_only 行首标 [DM]）；due 等于当前 date 且 pending 的标「今天到期」 | 0 |
 | time event done <id> / time event skip <id> | | 状态变更 + 日志行 | 0 / 1 |
 
 - 未启用时写命令一律退出码 1（show/event list/enable 可用）。
-- start 仅在启用时显示时间与到期事件；事件不自动改数值或剧情。
+- start 仅在启用时显示时间与玩家可见的到期事件（dm_only 事件不出现）；事件不自动改数值或剧情。
 - 事件 notes 可文本引用 P04 实体 id；不做外键校验。
 
 ### 5.5 P07 — adventure index（TASK-0060）
@@ -356,7 +357,7 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
 
 ### 6.1 玩家视图
 
-玩家视图 = 下列输出的并集：known；start 摘要中面向玩家的部分（关键记忆节只含 player-confirmed）；handout 导出内容；combat-sim --player；guard 检查对象（叙述草稿）；entity list/entity show/relation list/relation context/memory list/time show/time event list 的默认输出；adventure index show/search；snapshot diff 默认输出（检查点清单与数据副本本身是 DM 本地恢复数据，不进入玩家视图，见第 4.1 节）。
+玩家视图 = 下列输出的并集：known；start 摘要中面向玩家的部分（关键记忆节只含 player-confirmed）；handout 导出内容；combat-sim --player；guard 检查对象（叙述草稿）；entity list/entity show/relation list/relation context/memory list/time show/time event list 的默认输出（time event list 默认即玩家视图；--all 的 DM 视图见第 6.2 节）；adventure index show/search；snapshot diff 默认输出（检查点清单与数据副本本身是 DM 本地恢复数据，不进入玩家视图，见第 4.1 节）。
 
 过滤规则（实现时逐条生效）：
 
