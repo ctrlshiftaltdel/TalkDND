@@ -715,6 +715,11 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     for e in &memories {
         d += &format!("- {}\n", crate::memory::entry_line(e));
     }
+    // dm-secrets.md with content but zero recognized markers would silently
+    // protect nothing; the warning carries counts only, never file content.
+    if let Some(w) = crate::secret::zero_marker_warning(save) {
+        warnings.push(w);
+    }
     match crate::audit::audit(save) {
         Ok(r) => {
             d += "\n## 存档校验\n\n";
@@ -795,6 +800,25 @@ mod tests {
         assert!(d.contains("M-001：The bard owes the guard a favor"), "{d}");
         assert!(!d.contains("secretly serves the duke"), "{d}");
         assert!(!d.contains("Silent Duke"), "{d}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn digest_warns_when_dm_secrets_has_no_markers_and_stays_quiet_when_empty() {
+        let root = temp_root("zeromarkers");
+        let save = root.join("Saves/2030-03-04-01");
+        fs::write(save.join("dm-secrets.md"), "整段叙述没有任何显式标记。\n").unwrap();
+        let d = digest(&root, &save, &Options { pdf2md: false }).unwrap();
+        assert!(d.contains("## 警告"), "{d}");
+        assert!(d.contains("没有任何可识别的秘密标记"), "{d}");
+        assert!(!d.contains("整段叙述"), "{d}");
+        // Empty and comment-only files must not warn.
+        fs::write(save.join("dm-secrets.md"), "").unwrap();
+        let d = digest(&root, &save, &Options { pdf2md: false }).unwrap();
+        assert!(!d.contains("没有任何可识别的秘密标记"), "{d}");
+        fs::write(save.join("dm-secrets.md"), "# DM 秘密（只给 DM）\n\n").unwrap();
+        let d = digest(&root, &save, &Options { pdf2md: false }).unwrap();
+        assert!(!d.contains("没有任何可识别的秘密标记"), "{d}");
         let _ = fs::remove_dir_all(&root);
     }
 

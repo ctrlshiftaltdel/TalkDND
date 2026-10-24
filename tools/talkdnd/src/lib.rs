@@ -446,6 +446,26 @@ enum SecretCmd {
     List,
     /// Remove a manual secret term
     Remove { term: Vec<String> },
+    /// Read-only scan of a DM notes file: explicit marker coverage, counts
+    /// and line numbers only, never file content
+    Scan {
+        /// File to scan (default: this save's dm-secrets.md)
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// Import DM-reviewed explicit terms from a file (one per line or the
+    /// existing marker forms); the default is a dry-run preview
+    Import {
+        /// File to read terms from
+        #[arg(long)]
+        from: String,
+        /// Write the new terms into this save (default: preview only)
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Explicit dry-run preview (already the default)
+        #[arg(long, conflicts_with = "apply")]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -787,6 +807,12 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                 } => vec![secret::add(&s, &term.join(" "), chapter, &note)?],
                 SecretCmd::List => secret::list_lines(&s, &root),
                 SecretCmd::Remove { term } => vec![secret::remove(&s, &term.join(" "))?],
+                SecretCmd::Scan { from } => secret::scan_lines(&s, from.as_deref())?,
+                SecretCmd::Import {
+                    from,
+                    apply,
+                    dry_run: _,
+                } => secret::import_lines(&s, &from, apply)?,
             };
             for l in lines {
                 println!("{l}");
