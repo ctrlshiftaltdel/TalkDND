@@ -1,5 +1,6 @@
-//! `talkdnd check`: ability checks, skill checks and saving throws outside
-//! combat, with the modifier read from the character sheet's combat block.
+//! `talkdnd check`: ability checks, skill checks, tool checks and saving
+//! throws outside combat, with the modifier read from the character sheet's
+//! combat block.
 
 use crate::data::{self, ABILITIES};
 use crate::save;
@@ -94,15 +95,132 @@ fn int_at(v: &serde_norway::Value, map: &str, key: &str) -> Option<i32> {
     v.get(map)?.get(key)?.as_i64().map(|x| x as i32)
 }
 
+fn ability_mod(b: &serde_norway::Value, a: &str) -> i32 {
+    let score = int_at(b, "abilities", a).unwrap_or(10);
+    (score - 10).div_euclid(2)
+}
+
+/// Proficiency bonus from the combat block: `prof` when present, else derived
+/// from `level` (2 + (level-1)/4, level 1 → +2).
+fn prof_bonus_of(b: &serde_norway::Value) -> i32 {
+    if let Some(p) = b.get("prof").and_then(|v| v.as_i64()) {
+        return p as i32;
+    }
+    let level = b.get("level").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    2 + (level.clamp(1, 20) - 1) / 4
+}
+
+/// Tools the character is proficient in, read from the structured sheet file
+/// (`sheets/<id>.yaml`, `tools` list). A missing or unparsable file means no
+/// tool proficiencies; the Markdown prose is never consulted.
+fn structured_tools(save_dir: &Path, sheet: &Sheet) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(crate::charsheet::path(save_dir, &sheet.id)) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_norway::from_str::<serde_norway::Value>(&text) else {
+        return Vec::new();
+    };
+    v.get("tools")
+        .and_then(|t| t.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Tool-name matching key: case-, whitespace- and punctuation-insensitive
+/// (`Thieves' Tools`, `thieves tools` and `THIEVES-TOOLS` all match).
+fn norm_tool(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.trim().to_lowercase().chars() {
+        match c {
+            '\'' | '’' | '‘' | '"' | '“' | '”' => {}
+            '-' | '_' => {
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+            c if c.is_whitespace() => {
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Well-known alternate spellings of the canonical (SRD) tool names.
+fn tool_alias(n: &str) -> String {
+    match n {
+        "thiefs tools" | "thief tools" => "thieves tools",
+        "tinker tools" => "tinkers tools",
+        "alchemist supplies" => "alchemists supplies",
+        "smith tools" => "smiths tools",
+        "mason tools" => "masons tools",
+        "jeweler tools" => "jewelers tools",
+        "navigator tools" | "navigators kit" => "navigators tools",
+        "disguise kits" => "disguise kit",
+        "forgery kits" => "forgery kit",
+        "herbalism kits" => "herbalism kit",
+        "poisoners kits" => "poisoners kit",
+        "dice sets" => "dice set",
+        "gaming sets" => "gaming set",
+        "musical instruments" => "musical instrument",
+        _ => n,
+    }
+    .to_string()
+}
+
+/// Modifier and label for `tool:<name>` with the explicitly chosen ability.
+/// Proficiency comes only from the structured sheet's `tools` list: a
+/// proficient tool adds the combat block's proficiency bonus on top of the
+/// ability modifier; anything else rolls the bare ability modifier and says so.
+fn tool_modifier(
+    sheet: &Sheet,
+    save_dir: &Path,
+    tool: &str,
+    ability: Option<&str>,
+) -> Result<(i32, String)> {
+    let tool = tool.trim();
+    if tool.is_empty() {
+        bail!("empty tool name: use `tool:<name> --ability <str|dex|con|int|wis|cha>`");
+    }
+    let raw = ability
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| anyhow!("tool check `{tool}` needs --ability <str|dex|con|int|wis|cha>"))?;
+    let a = ability_id(raw)
+        .ok_or_else(|| anyhow!("unknown ability `{raw}`: use str, dex, con, int, wis or cha"))?;
+    let b = &sheet.block;
+    let ab = ability_mod(b, a);
+    let canon = tool_alias(&norm_tool(tool));
+    let proficient = structured_tools(save_dir, sheet)
+        .iter()
+        .any(|t| tool_alias(&norm_tool(t)) == canon);
+    let m = if proficient {
+        ab + prof_bonus_of(b)
+    } else {
+        ab
+    };
+    let label = if proficient {
+        format!("{tool} ({a}, proficient) check")
+    } else {
+        format!("{tool} ({a}) check, not proficient (no proficiency bonus added)")
+    };
+    Ok((m, label))
+}
+
 /// Modifier and label for `what`: a skill id, an ability (`str`, `wisdom`),
-/// `save:<ability>` / `<ability>-save`, or `init`.
+/// `save:<ability>` / `<ability>-save`, or `init`. Tool checks go through
+/// [`tool_modifier`] (see [`run`]).
 pub fn modifier(sheet: &Sheet, what: &str) -> Result<(i32, String)> {
     let b = &sheet.block;
     let w = what.to_lowercase().replace([' ', '_'], "-");
-    let ab_mod = |a: &str| -> i32 {
-        let score = int_at(b, "abilities", a).unwrap_or(10);
-        (score - 10).div_euclid(2)
-    };
+    let ab_mod = |a: &str| ability_mod(b, a);
     let save_of = w
         .strip_prefix("save:")
         .or_else(|| w.strip_suffix("-save"))
@@ -128,7 +246,7 @@ pub fn modifier(sheet: &Sheet, what: &str) -> Result<(i32, String)> {
         return Ok((m, format!("{w} ({a}) check")));
     }
     bail!(
-        "unknown check `{what}`: use a skill ({}), an ability (str..cha), save:<ability> or init",
+        "unknown check `{what}`: use a skill ({}), an ability (str..cha), save:<ability>, init or tool:<name> --ability <ability>",
         data::SKILLS
             .iter()
             .map(|s| s.0)
@@ -142,6 +260,7 @@ pub fn run(
     save_dir: &Path,
     who: &str,
     what: &str,
+    ability: Option<&str>,
     dc: Option<i32>,
     adv: bool,
     dis: bool,
@@ -151,7 +270,14 @@ pub fn run(
 ) -> Result<String> {
     let all = sheets(save_dir);
     let sheet = find(&all, who)?;
-    let (m, label) = modifier(sheet, what)?;
+    let (m, label) = if what.to_lowercase().starts_with("tool:") {
+        tool_modifier(sheet, save_dir, &what[5..], ability)?
+    } else {
+        if ability.is_some() {
+            bail!("--ability only applies to tool:<name> checks, not `{what}`");
+        }
+        modifier(sheet, what)?
+    };
     let mut expr = if m >= 0 {
         format!("1d20+{m}")
     } else {
@@ -241,5 +367,76 @@ mod tests {
         assert_eq!(find(&all, "BRUNI").unwrap().id, "bruni");
         assert_eq!(find(&all, "bru").unwrap().id, "bruni");
         assert!(find(&all, "ilsa").is_err());
+    }
+
+    #[test]
+    fn tool_names_normalize_case_space_and_punctuation() {
+        assert_eq!(norm_tool("  Thieves'  Tools "), "thieves tools");
+        assert_eq!(norm_tool("THIEVES-TOOLS"), "thieves tools");
+        assert_eq!(norm_tool("dice_set"), "dice set");
+        assert_eq!(norm_tool("\u{201c}Dice\u{201d} Set"), "dice set");
+        assert_eq!(tool_alias(&norm_tool("Thief's Tools")), "thieves tools");
+        assert_eq!(tool_alias(&norm_tool("tinker tools")), "tinkers tools");
+        assert_eq!(tool_alias(&norm_tool("Disguise Kits")), "disguise kit");
+        assert_eq!(tool_alias(&norm_tool("herbalism kit")), "herbalism kit");
+    }
+
+    #[test]
+    fn tool_modifier_reads_structured_tools_and_pb() {
+        let dir = std::env::temp_dir().join(format!("talkdnd-tool-mod-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sheets")).unwrap();
+        fs::write(
+            dir.join("sheets/bruni.yaml"),
+            "version: 1\ntools: [\"thieves' tools\", dice set]\n",
+        )
+        .unwrap();
+        let block: serde_norway::Value = serde_norway::from_str(
+            "id: bruni\nname: Bruni\nlevel: 5\nprof: 3\nabilities: {dex: 14, wis: 17}\n",
+        )
+        .unwrap();
+        let s = Sheet {
+            id: "bruni".into(),
+            name: "Bruni".into(),
+            file: PathBuf::new(),
+            block,
+        };
+        // Proficient: dex +2 plus prof +3.
+        let (m, label) = tool_modifier(&s, &dir, "thieves' tools", Some("dex")).unwrap();
+        assert_eq!(m, 5);
+        assert_eq!(label, "thieves' tools (dex, proficient) check");
+        // Case and spaces do not change the outcome; full ability names work.
+        let (m, _) = tool_modifier(&s, &dir, "  DICE  SET ", Some("Dexterity")).unwrap();
+        assert_eq!(m, 5, "normalized to a listed tool");
+        // Not in the structured list: bare ability modifier, explicit note.
+        let (m, label) = tool_modifier(&s, &dir, "smith tools", Some("wis")).unwrap();
+        assert_eq!(m, 3, "no proficiency bonus");
+        assert_eq!(
+            label,
+            "smith tools (wis) check, not proficient (no proficiency bonus added)"
+        );
+        // Errors: missing ability, unknown ability, empty tool name.
+        assert!(tool_modifier(&s, &dir, "x", None).is_err());
+        assert!(tool_modifier(&s, &dir, "x", Some("ego")).is_err());
+        assert!(tool_modifier(&s, &dir, "  ", Some("dex")).is_err());
+        // No structured file at all: nothing is proficient.
+        let empty = std::env::temp_dir().join(format!("talkdnd-tool-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&empty);
+        fs::create_dir_all(&empty).unwrap();
+        let (m, label) = tool_modifier(&s, &empty, "thieves' tools", Some("dex")).unwrap();
+        assert_eq!(m, 2);
+        assert!(label.contains("not proficient"));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn prof_bonus_comes_from_prof_or_level() {
+        let v: serde_norway::Value = serde_norway::from_str("prof: 3\n").unwrap();
+        assert_eq!(prof_bonus_of(&v), 3);
+        let v: serde_norway::Value = serde_norway::from_str("level: 5\n").unwrap();
+        assert_eq!(prof_bonus_of(&v), 3);
+        let v: serde_norway::Value = serde_norway::from_str("{}\n").unwrap();
+        assert_eq!(prof_bonus_of(&v), 2, "default level 1");
     }
 }

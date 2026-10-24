@@ -145,6 +145,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 - World time is per save, off by default, and moves only on an explicit command. No narration or scene change advances it.
 - The Oracle produces inspiration only. It writes no save file, never invents a roll, and resolves every die through the combat-sim dice engine.
 - The live encounter state `Saves/<slot>/combat/*.state.json` is authoritative save data, not merely replayable scratch: it is covered by the integrity manifest when present, every normal combat-sim write refreshes the baseline on success (a failed write never advances it), a missing state file is not an error, and hand edits are reported and accepted like any other tracked file.
+- Tool proficiency checks read proficiency only from the structured `Saves/<slot>/sheets/<id>.yaml` `tools` list, never from Markdown prose or the tool name. The checked ability is a mandatory explicit `--ability`; an unproficient or unknown but well-formed tool still rolls with only the ability modifier (plus explicit extras) and is marked not proficient, and the proficiency bonus comes from the combat block's `prof` (derived from `level` when absent).
 
 ## Open decisions
 
@@ -157,6 +158,12 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `ORCHESTRATION-PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-24 — Tool proficiency checks (TASK-0068)
+
+`talkdnd check` supports tool proficiency checks: `talkdnd check <who> tool:<name> --ability <str|dex|con|int|wis|cha> [--adv|--dis] [--extra N] [--dc N]`. Proficiency is read only from the structured sheet data — the `tools` list of `Saves/<slot>/sheets/<id>.yaml`; a missing or tool-less structured file means nothing is proficient. `--ability` is mandatory and is never inferred from the tool name. A proficient tool adds the combat block's proficiency bonus (`prof`, derived from `level` when absent) on top of the ability modifier; an unproficient tool still rolls, adds only the ability modifier and any explicit extras, and the output and session log explicitly say `not proficient (no proficiency bonus added)`. An unknown but well-formed tool name is not silently treated as proficient: it takes the same unproficient path. Tool names match case-, space-, apostrophe- and hyphen-insensitively with a small alias table, and malformed arguments are clear errors. `LetsPlay/docs/dice.md` documents the form in the same pull request.
+
+Alternative considered: infer the checked ability from the tool name (e.g. thieves' tools → dex). Rejected: the same tool is legitimately used with different abilities in different scenes, so a name-based mapping would silently produce wrong modifiers; the issue requires the ability to be user-specified.
 
 ### 2026-10-24 — Live combat state is authoritative and integrity-tracked (TASK-0066)
 

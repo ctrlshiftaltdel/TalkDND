@@ -1089,3 +1089,322 @@ fn checkpoint_text_still_appends_a_section() {
     assert!(out.contains("还没有检查点"), "{out}");
     let _ = fs::remove_dir_all(&r);
 }
+
+// ---- TASK-0068: tool proficiency checks (Issue #130) ----
+
+/// Hand-written sheet whose combat block mirrors a level-2 rogue:
+/// dex 14 (+2), wis 17 (+3), prof 2. `structured` controls whether
+/// `sheets/<id>.yaml` exists and which tools it lists.
+fn write_tool_sheet(save: &Path, id: &str, structured: bool) {
+    fs::write(
+        save.join(format!("Characters/{id}.md")),
+        format!("# {id}——角色卡\n\n## 战斗数据块（combat-sim）\n\n```combat yaml\nid: {id}\nname: {id}\nkind: pc\nside: party\nsize: medium\nlevel: 2\nac: 12\nhp: 18\nspeed: {{walk: 30}}\nprof: 2\nabilities: {{str: 10, dex: 14, con: 12, int: 10, wis: 17, cha: 10}}\nsaves: {{}}\nskills: {{stealth: 6}}\nattacks: []\nnotes: \"rogue 2\"\n```\n"),
+    )
+    .unwrap();
+    if structured {
+        fs::create_dir_all(save.join("sheets")).unwrap();
+        fs::write(
+            save.join(format!("sheets/{id}.yaml")),
+            "version: 1\ntools: [\"thieves\' tools\", dice set]\n",
+        )
+        .unwrap();
+    }
+}
+
+fn tool_save(name: &str) -> (PathBuf, PathBuf) {
+    let r = root(name);
+    ok(&r, &["new", "--date", "2030-08-01", "--ruleset", "2024"]);
+    let save = r.join("Saves/2030-08-01-01");
+    fs::create_dir_all(save.join("Characters")).unwrap();
+    write_tool_sheet(&save, "rina", true);
+    // No structured file: nothing is proficient, whatever the prose says.
+    write_tool_sheet(&save, "pla", false);
+    ok(
+        &r,
+        &["integrity", "accept", "--reason", "tool check test sheets"],
+    );
+    (r, save)
+}
+
+/// Total of the d20 test in a `talkdnd check` line (`…: 1d20(9)+4=13 vs DC 15 …`).
+fn roll_total(out: &str) -> i32 {
+    let expr = out.split_once(": ").unwrap().1;
+    let seg = expr.split(" vs ").next().unwrap();
+    seg.rsplit('=').next().unwrap().trim().parse().unwrap()
+}
+
+#[test]
+fn tool_checks_read_proficiency_from_structured_sheet() {
+    let (r, save) = tool_save("tool-prof");
+    // Proficient: dex +2 plus prof +2 -> +4; the same seed rolls the same d20,
+    // so the non-proficient character's total is exactly the PB lower.
+    let prof = ok(
+        &r,
+        &[
+            "--seed",
+            "7",
+            "check",
+            "rina",
+            "tool:thieves-tools",
+            "--ability",
+            "dex",
+            "--dc",
+            "15",
+        ],
+    );
+    assert!(
+        prof.contains("thieves-tools (dex, proficient) check"),
+        "{prof}"
+    );
+    assert!(prof.contains("vs DC 15"), "{prof}");
+    let not_prof = ok(
+        &r,
+        &[
+            "--seed",
+            "7",
+            "check",
+            "pla",
+            "tool:thieves-tools",
+            "--ability",
+            "dex",
+            "--dc",
+            "15",
+        ],
+    );
+    assert!(
+        not_prof.contains("thieves-tools (dex) check, not proficient (no proficiency bonus added)"),
+        "{not_prof}"
+    );
+    assert_eq!(
+        roll_total(&prof) - roll_total(&not_prof),
+        2,
+        "proficient adds exactly the PB: {prof} | {not_prof}"
+    );
+    // A well-formed tool the sheet never lists rolls anyway and says so.
+    let unknown = ok(
+        &r,
+        &[
+            "--seed",
+            "7",
+            "check",
+            "rina",
+            "tool:smith-tools",
+            "--ability",
+            "dex",
+        ],
+    );
+    assert!(
+        unknown.contains("not proficient (no proficiency bonus added)"),
+        "{unknown}"
+    );
+    assert_eq!(
+        roll_total(&unknown),
+        roll_total(&not_prof),
+        "unknown tool = no PB"
+    );
+    // Session log carries the check line with the proficiency verdict.
+    let log = fs::read_to_string(save.join("Sessions/2030-08-01-session-00-setup.md")).unwrap();
+    assert!(log.contains("检定"), "{log}");
+    assert!(
+        log.contains("thieves-tools (dex, proficient) check"),
+        "{log}"
+    );
+    let rolls = fs::read_to_string(save.join("rolls.log")).unwrap();
+    assert!(rolls.contains("thieves-tools"), "{rolls}");
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn tool_names_normalize_case_space_and_alias() {
+    let (r, _save) = tool_save("tool-norm");
+    // Sheet lists "thieves\' tools" and "dice set"; every spelling matches.
+    for form in [
+        "thieves\' tools",
+        "THIEVES TOOLS",
+        "Thieves-Tools",
+        "thiefs tools",
+    ] {
+        let base = ok(
+            &r,
+            &[
+                "--seed",
+                "7",
+                "check",
+                "rina",
+                "tool:thieves-tools",
+                "--ability",
+                "dex",
+            ],
+        );
+        let out = ok(
+            &r,
+            &[
+                "--seed",
+                "7",
+                "check",
+                "rina",
+                &format!("tool:{form}"),
+                "--ability",
+                "DEXTERITY",
+            ],
+        );
+        assert!(out.contains("proficient) check"), "{form}: {out}");
+        assert_eq!(roll_total(&out), roll_total(&base), "{form}");
+    }
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn tool_check_arguments_are_strict() {
+    let (r, _save) = tool_save("tool-strict");
+    // --ability is mandatory for tool checks.
+    let (good, out) = run(&r, &["check", "rina", "tool:thieves-tools"]);
+    assert!(!good && out.contains("--ability"), "{out}");
+    // …and must be a real ability.
+    let (good, out) = run(
+        &r,
+        &["check", "rina", "tool:thieves-tools", "--ability", "ego"],
+    );
+    assert!(!good && out.contains("unknown ability `ego`"), "{out}");
+    // Empty tool names are malformed.
+    let (good, out) = run(&r, &["check", "rina", "tool:", "--ability", "dex"]);
+    assert!(!good && out.contains("empty tool name"), "{out}");
+    // --ability belongs to tool checks only.
+    let (good, out) = run(&r, &["check", "rina", "stealth", "--ability", "dex"]);
+    assert!(
+        !good && out.contains("--ability only applies to tool:"),
+        "{out}"
+    );
+    let (good, out) = run(&r, &["check", "rina", "save:con", "--ability", "dex"]);
+    assert!(
+        !good && out.contains("--ability only applies to tool:"),
+        "{out}"
+    );
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn tool_check_adv_dis_extra_dc_and_log() {
+    let (r, save) = tool_save("tool-modes");
+    let adv = ok(
+        &r,
+        &[
+            "--seed",
+            "3",
+            "check",
+            "rina",
+            "tool:dice set",
+            "--ability",
+            "dex",
+            "--adv",
+            "--dc",
+            "10",
+        ],
+    );
+    assert!(adv.contains("adv→"), "{adv}");
+    assert!(adv.contains("PASS") || adv.contains("FAIL"), "{adv}");
+    let dis = ok(
+        &r,
+        &[
+            "--seed",
+            "3",
+            "check",
+            "rina",
+            "tool:dice set",
+            "--ability",
+            "dex",
+            "--dis",
+        ],
+    );
+    assert!(dis.contains("dis→"), "{dis}");
+    let extra = ok(
+        &r,
+        &[
+            "--seed",
+            "3",
+            "check",
+            "rina",
+            "tool:dice set",
+            "--ability",
+            "dex",
+            "--extra",
+            "+2",
+        ],
+    );
+    assert!(
+        extra.contains("+4+2"),
+        "proficient +4 then extra +2: {extra}"
+    );
+    let dice_extra = ok(
+        &r,
+        &[
+            "--seed",
+            "3",
+            "check",
+            "rina",
+            "tool:dice set",
+            "--ability",
+            "dex",
+            "--extra",
+            "1d4",
+        ],
+    );
+    assert!(dice_extra.contains("; extra 1d4"), "{dice_extra}");
+    let not_prof = ok(
+        &r,
+        &[
+            "--seed",
+            "3",
+            "check",
+            "pla",
+            "tool:dice set",
+            "--ability",
+            "dex",
+            "--extra",
+            "+2",
+        ],
+    );
+    assert!(
+        not_prof.contains("+2+2"),
+        "bare dex +2 then extra +2: {not_prof}"
+    );
+    assert!(not_prof.contains("not proficient"), "{not_prof}");
+    // The roll log keeps the same shape as other checks.
+    let rolls = fs::read_to_string(save.join("rolls.log")).unwrap();
+    assert!(
+        rolls.contains("dice set (dex, proficient) check"),
+        "{rolls}"
+    );
+    assert!(
+        rolls.contains("dice set (dex) check, not proficient"),
+        "{rolls}"
+    );
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn attribute_skill_save_checks_are_unchanged() {
+    let (r, _save) = tool_save("tool-regress");
+    // Untrained skill: bare wis +3.
+    let out = ok(
+        &r,
+        &["--seed", "11", "check", "rina", "perception", "--dc", "15"],
+    );
+    assert!(out.contains("perception (wis) check"), "{out}");
+    assert!(out.contains("+3="), "{out}");
+    // Trained skill from the combat block.
+    let out = ok(&r, &["--seed", "11", "check", "rina", "stealth"]);
+    assert!(
+        out.contains("stealth (dex) check") && out.contains("+6="),
+        "{out}"
+    );
+    // Saves and abilities keep their labels.
+    let out = ok(&r, &["--seed", "11", "check", "rina", "save:wis"]);
+    assert!(
+        out.contains("wis saving throw") && out.contains("+3="),
+        "{out}"
+    );
+    let out = ok(&r, &["--seed", "11", "check", "rina", "dex"]);
+    assert!(out.contains("dex check") && out.contains("+2="), "{out}");
+    let _ = fs::remove_dir_all(&r);
+}
