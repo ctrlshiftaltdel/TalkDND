@@ -147,4 +147,5 @@
 | `docs/pdf2md.md` | 书籍 PDF 转 Markdown、查书顺序、质量审核 |
 | `docs/handouts.md` | 资料图导出、玩家可见标记、裁切 |
 | `docs/layout.md` | 目录结构、存档结构、交接清单 |
+| `docs/world-time.md` | 世界时间与预定事件（`time` 命令、`world-time.yaml`、到期提示与可见性） |
 | `docs/deviation.md` | 偏离度 scope/比例、原创台账、预算、隐藏面与检查 |

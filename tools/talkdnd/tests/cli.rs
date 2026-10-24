@@ -1158,20 +1158,9 @@ fn scaffold_groups_help_lists_the_contract_surface() {
 fn scaffold_stubs_are_not_implemented_yet() {
     let r = root("scaffold-stub");
     ok(&r, &["new", "--date", "2030-01-02"]);
-    // memory / settings style are real since TASK-0061 and entity / relation
-    // land with TASK-0062; only the time and oracle groups are still stubs.
+    // memory / settings style are real since TASK-0061, entity / relation
+    // since TASK-0062 and time since TASK-0063; only oracle is still a stub.
     let cases: &[&[&str]] = &[
-        &["time", "show"],
-        &["time", "enable"],
-        &["time", "disable"],
-        &["time", "set", "--date", "1 Hammer"],
-        &["time", "advance", "--days", "2"],
-        &[
-            "time", "event", "add", "--due", "1 Hammer", "--title", "festival",
-        ],
-        &["time", "event", "list"],
-        &["time", "event", "done", "e-1"],
-        &["time", "event", "skip", "e-1"],
         &["oracle", "yes-no"],
         &["oracle", "event"],
         &["oracle", "meaning"],
