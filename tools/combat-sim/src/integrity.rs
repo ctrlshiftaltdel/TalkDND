@@ -89,6 +89,22 @@ fn list(dir: &Path, ext: &str, skip_underscore: bool) -> Vec<PathBuf> {
     v
 }
 
+/// `manifest.yaml` of every checkpoint directory under `checkpoints/`.
+/// Only the manifest is hashed; the checkpoint's data copies are not.
+fn checkpoint_manifests(save: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = fs::read_dir(save.join("checkpoints")) else {
+        return Vec::new();
+    };
+    let mut v: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .map(|d| d.join("manifest.yaml"))
+        .filter(|p| p.is_file())
+        .collect();
+    v.sort();
+    v
+}
+
 /// Current fingerprints of the tracked files.
 pub fn snapshot(save: &Path) -> BTreeMap<String, String> {
     let mut files: Vec<PathBuf> = Vec::new();
@@ -98,12 +114,18 @@ pub fn snapshot(save: &Path) -> BTreeMap<String, String> {
         "house-rules.md",
         "save-meta.yaml",
         "original.yaml",
+        // Continuity sidecars (P03/P04/P06): tracked only when present.
+        "memory.yaml",
+        "entities.yaml",
+        "relations.yaml",
+        "world-time.yaml",
     ] {
         let p = save.join(f);
         if p.is_file() {
             files.push(p);
         }
     }
+    files.extend(checkpoint_manifests(save));
     files.extend(list(&save.join("Characters"), "md", true));
     files.extend(list(&save.join("NPCs"), "md", true));
     files.extend(list(&save.join("sheets"), "yaml", false));
@@ -399,6 +421,121 @@ mod tests {
             "{files:?}"
         );
         assert!(!files.keys().any(|k| k.starts_with(".cache")), "{files:?}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn continuity_sidecars_are_tracked_when_present() {
+        let d = dir("sidecars");
+        fs::write(d.join("progress.yaml"), "xp: {a: 0}\n").unwrap();
+        // Absent: nothing enters the manifest and nothing is reported.
+        let (_, created) = ensure(&d).unwrap();
+        assert!(created);
+        assert!(changes(&d).unwrap().is_empty());
+        let snap = snapshot(&d);
+        for name in [
+            "memory.yaml",
+            "entities.yaml",
+            "relations.yaml",
+            "world-time.yaml",
+        ] {
+            assert!(!snap.contains_key(name), "{name} tracked while absent");
+        }
+        assert!(
+            !snap.keys().any(|k| k.starts_with("checkpoints/")),
+            "{snap:?}"
+        );
+        // Present: a tool-style write adopts them, then they are tracked.
+        let before = snapshot(&d);
+        for name in [
+            "memory.yaml",
+            "entities.yaml",
+            "relations.yaml",
+            "world-time.yaml",
+        ] {
+            fs::write(d.join(name), format!("version: 1\nfile: {name}\n")).unwrap();
+        }
+        fs::create_dir_all(d.join("checkpoints/20260101-120000")).unwrap();
+        fs::write(
+            d.join("checkpoints/20260101-120000/manifest.yaml"),
+            "version: 1\nid: 20260101-120000\n",
+        )
+        .unwrap();
+        // Never hashed: checkpoint data copies and session logs.
+        fs::write(
+            d.join("checkpoints/20260101-120000/progress.yaml"),
+            "xp: {a: 7}\n",
+        )
+        .unwrap();
+        fs::create_dir_all(d.join("Sessions")).unwrap();
+        fs::write(d.join("Sessions/2026-01-01.md"), "log\n").unwrap();
+        after_write(&d, &before).unwrap();
+        assert!(changes(&d).unwrap().is_empty());
+        let snap = snapshot(&d);
+        for name in [
+            "memory.yaml",
+            "entities.yaml",
+            "relations.yaml",
+            "world-time.yaml",
+            "checkpoints/20260101-120000/manifest.yaml",
+        ] {
+            assert!(snap.contains_key(name), "{name} missing from snapshot");
+        }
+        assert!(
+            !snap
+                .keys()
+                .any(|k| k.starts_with("checkpoints/") && !k.ends_with("manifest.yaml")),
+            "checkpoint data copy hashed: {snap:?}"
+        );
+        assert!(
+            !snap.keys().any(|k| k.starts_with("Sessions/")),
+            "session log hashed: {snap:?}"
+        );
+        assert!(!snap.contains_key("integrity.yaml"), "manifest self-hashed");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn hand_edits_to_continuity_sidecars_are_reported() {
+        let d = dir("sidecar-edit");
+        fs::write(d.join("memory.yaml"), "version: 1\nentries: []\n").unwrap();
+        fs::write(d.join("relations.yaml"), "version: 1\nrelations: []\n").unwrap();
+        fs::create_dir_all(d.join("checkpoints/20260101-120000")).unwrap();
+        fs::write(
+            d.join("checkpoints/20260101-120000/manifest.yaml"),
+            "version: 1\nid: 20260101-120000\n",
+        )
+        .unwrap();
+        ensure(&d).unwrap();
+        assert!(changes(&d).unwrap().is_empty());
+        // Hand edits: one top-level sidecar and one checkpoint manifest.
+        fs::write(d.join("memory.yaml"), "version: 1\nentries: [tampered]\n").unwrap();
+        fs::write(
+            d.join("checkpoints/20260101-120000/manifest.yaml"),
+            "version: 1\nid: 20260101-120000\nreason: hand-edited\n",
+        )
+        .unwrap();
+        let mut got: Vec<String> = changes(&d)
+            .unwrap()
+            .iter()
+            .map(|c| c.path().to_string())
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                "checkpoints/20260101-120000/manifest.yaml".to_string(),
+                "memory.yaml".to_string(),
+            ]
+        );
+        assert!(
+            changes(&d)
+                .unwrap()
+                .iter()
+                .all(|c| matches!(c, Change::Modified(_))),
+            "{:?}",
+            changes(&d).unwrap()
+        );
         let _ = fs::remove_dir_all(&d);
     }
 }
