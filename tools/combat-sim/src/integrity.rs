@@ -130,6 +130,17 @@ pub fn snapshot(save: &Path) -> BTreeMap<String, String> {
     files.extend(list(&save.join("NPCs"), "md", true));
     files.extend(list(&save.join("sheets"), "yaml", false));
     files.extend(list(&save.join("combat"), "yaml", false));
+    // Live encounter states (combat/*.state.json): the authoritative record
+    // of an ongoing fight, tracked when present so hand edits are reported.
+    // A save without state files simply contributes nothing here.
+    files.extend(
+        list(&save.join("combat"), "json", false)
+            .into_iter()
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().ends_with(crate::state::STATE_SUFFIX))
+            }),
+    );
     let mut out = BTreeMap::new();
     for f in files {
         if let Ok(bytes) = fs::read(&f) {
@@ -421,6 +432,39 @@ mod tests {
             "{files:?}"
         );
         assert!(!files.keys().any(|k| k.starts_with(".cache")), "{files:?}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn combat_state_files_are_tracked_when_present() {
+        let d = dir("state-files");
+        fs::write(d.join("progress.yaml"), "xp: {a: 0}\n").unwrap();
+        // Absent: nothing is tracked and nothing is reported.
+        ensure(&d).unwrap();
+        assert!(changes(&d).unwrap().is_empty());
+        assert!(
+            !snapshot(&d).keys().any(|k| k.ends_with(".state.json")),
+            "state file tracked while absent"
+        );
+        // Present: the state file is tracked; other json files in combat/ are
+        // not. A new file shows up as Added, not Modified.
+        fs::write(d.join("combat/encounter.state.json"), "{}\n").unwrap();
+        fs::write(d.join("combat/scratch.json"), "{}\n").unwrap();
+        assert_eq!(
+            changes(&d).unwrap(),
+            vec![Change::Added("combat/encounter.state.json".into())]
+        );
+        // A tool write adopts it, then it is clean.
+        let before = snapshot(&d);
+        fs::write(d.join("combat/encounter.state.json"), "{\"round\": 1}\n").unwrap();
+        after_write(&d, &before).unwrap();
+        assert!(changes(&d).unwrap().is_empty());
+        // A later hand edit is reported.
+        fs::write(d.join("combat/encounter.state.json"), "{\"round\": 2}\n").unwrap();
+        assert_eq!(
+            changes(&d).unwrap(),
+            vec![Change::Modified("combat/encounter.state.json".into())]
+        );
         let _ = fs::remove_dir_all(&d);
     }
 

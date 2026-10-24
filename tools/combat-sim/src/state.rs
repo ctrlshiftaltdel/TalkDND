@@ -1190,8 +1190,19 @@ impl EncounterState {
         }
         let json =
             serde_json::to_string_pretty(self).context("failed to serialize encounter state")?;
+        // A save-owned state file (Saves/<slot>/combat/*.state.json) is part
+        // of the integrity manifest: refresh the baseline after a successful
+        // write so the tool's own writes are never reported as hand edits.
+        // Scratch states outside a save are not tracked, and a failed write
+        // must not advance the baseline.
+        let save = crate::integrity::save_of_combat_file(path);
+        let before = save.as_deref().map(crate::integrity::snapshot);
         crate::fsutil::atomic_write(path, json.as_bytes())
-            .with_context(|| format!("failed to write state file {}", path.display()))
+            .with_context(|| format!("failed to write state file {}", path.display()))?;
+        if let (Some(save), Some(before)) = (save, before) {
+            crate::integrity::after_write(&save, &before)?;
+        }
+        Ok(())
     }
 }
 

@@ -144,6 +144,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 - Checkpoints are the DM-local recovery path, not a player-facing view. `checkpoint snapshot` rewinds mechanical state plus revealed/identified knowledge and nothing else (never append-only logs, DM working files, derived files, or binary handout exports); `checkpoint restore` backs the whole save up before replacing anything, appends a restore line to the session log without truncating history, refreshes the integrity manifest and audit baseline, migrates a snapshot whose schema is older than the current main schema and refuses a newer one, and keeps the last ten; `snapshot diff` reports structured changes only.
 - World time is per save, off by default, and moves only on an explicit command. No narration or scene change advances it.
 - The Oracle produces inspiration only. It writes no save file, never invents a roll, and resolves every die through the combat-sim dice engine.
+- The live encounter state `Saves/<slot>/combat/*.state.json` is authoritative save data, not merely replayable scratch: it is covered by the integrity manifest when present, every normal combat-sim write refreshes the baseline on success (a failed write never advances it), a missing state file is not an error, and hand edits are reported and accepted like any other tracked file.
 
 ## Open decisions
 
@@ -156,6 +157,12 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `ORCHESTRATION-PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-24 — Live combat state is authoritative and integrity-tracked (TASK-0066)
+
+The live encounter state files `Saves/<slot>/combat/*.state.json` are now treated as authoritative save data, not merely replayable scratch: once a fight is under way, the JSON on disk is the record of that fight. They join the integrity manifest when present (a save without state files reports nothing), and every normal combat-sim write of a state file — creating or updating — refreshes the integrity baseline on success, so the tool's own writes are never reported as hand edits. A failed write leaves the baseline untouched, and states written outside a save directory stay untracked scratch. Hand edits to a tracked state file are reported like any other save file and accepted with `talkdnd integrity accept --reason`. `LetsPlay/docs/table-integrity.md` and the authority matrix plus integrity rules in `LetsPlay/docs/campaign-continuity.md` are updated in the same pull request.
+
+Alternative considered: keep `*.state.json` out of integrity because an encounter can be re-simulated from `campaign.yaml`. Rejected: replaying is a DM convenience, not a substitute for the file of record; the mid-fight state the tools write is exactly what the integrity system exists to protect, and excluding it would let manual edits to a live fight go unnoticed while making every legitimate engine write a false alarm once tracking existed without baseline maintenance.
 
 ### 2026-10-24 — Campaign-continuity contract clarification (TASK-0056 review)
 
