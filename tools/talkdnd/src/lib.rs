@@ -4,18 +4,25 @@
 
 pub mod adventure;
 pub mod audit;
+pub mod bookindex;
 pub mod chargen;
 pub mod charsheet;
 pub mod check;
+pub mod checkpoint;
 pub mod classdata;
 pub mod data;
+pub mod diff;
+pub mod entity;
+pub mod graph;
 pub mod handout;
 pub mod identify;
 pub mod known;
 pub mod library;
+pub mod memory;
 pub mod migrate;
 pub mod npc;
 pub mod options;
+pub mod oracle;
 pub mod original;
 pub mod progress;
 pub mod reveal;
@@ -25,6 +32,7 @@ pub mod secret;
 pub mod settings;
 pub mod start;
 pub mod update;
+pub mod worldtime;
 
 use anyhow::{bail, Context, Result};
 use chargen::Creation;
@@ -120,12 +128,54 @@ enum Cmd {
         #[arg(long, allow_hyphen_values = true)]
         extra: Option<String>,
     },
-    /// Append a `## 存档点` section to the newest session log (text from args or stdin)
-    Checkpoint { text: Vec<String> },
+    /// Checkpoints: `checkpoint <text>` (arguments or stdin) appends a `## 存档点`
+    /// section to the newest session log as before, while
+    /// `checkpoint snapshot|list|show|restore` manages checkpoint snapshots.
+    /// Text whose first word is a subcommand name (snapshot/list/show/restore)
+    /// must be separated with `--` or passed on stdin.
+    Checkpoint {
+        #[command(subcommand)]
+        cmd: Option<checkpoint::Cmd>,
+        /// Checkpoint text (the same section as before). If the first word is
+        /// a subcommand name (snapshot/list/show/restore), separate the text
+        /// with `--` or pass it on stdin.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        text: Vec<String>,
+    },
+    /// Checkpoint snapshots: structured diff between checkpoints (or `current`)
+    Snapshot {
+        #[command(subcommand)]
+        cmd: diff::Cmd,
+    },
     /// Append one timestamped line to the newest session log
     Log {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         text: Vec<String>,
+    },
+    /// Long-term memory: facts that survive session gaps (P03)
+    Memory {
+        #[command(subcommand)]
+        cmd: memory::Cmd,
+    },
+    /// Story entities: NPCs, locations, factions, quests, items (P04)
+    Entity {
+        #[command(subcommand)]
+        cmd: entity::Cmd,
+    },
+    /// Relations between entities (P04)
+    Relation {
+        #[command(subcommand)]
+        cmd: graph::Cmd,
+    },
+    /// World time: calendar labels and due-dated events (P06)
+    Time {
+        #[command(subcommand)]
+        cmd: worldtime::Cmd,
+    },
+    /// Improvisation oracle: yes/no, event focus, meaning (P08; read-only)
+    Oracle {
+        #[command(subcommand)]
+        cmd: oracle::Cmd,
     },
     /// Book library (Adventures/, Rules/<edition>/): one folder per book
     Library {
@@ -369,6 +419,12 @@ enum AdventureCmd {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Structural index of a book (P07): build/show/search titles, pages and
+    /// anchors — never body text
+    Index {
+        #[command(subcommand)]
+        cmd: bookindex::Cmd,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -392,6 +448,11 @@ enum SecretCmd {
 enum SettingsCmd {
     /// Show or change dice display: `settings dice on|off`
     Dice { value: Option<String> },
+    /// Narration style: `settings style show`, `settings style set <字段> <值> --reason R`
+    Style {
+        #[command(subcommand)]
+        cmd: memory::StyleCmd,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -683,6 +744,10 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
         Cmd::Adventure { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             let lines = match cmd {
+                AdventureCmd::Index { cmd } => {
+                    bookindex::run(&root, &s, cmd)?;
+                    return Ok(());
+                }
                 AdventureCmd::Section {
                     query,
                     list,
@@ -789,6 +854,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                         }
                     }
                 }
+                Some(SettingsCmd::Style { cmd }) => memory::run_style(&root, &s, cmd)?,
             }
         }
         Cmd::Reveal { cmd } => {
@@ -1034,19 +1100,17 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                 println!("{l}");
             }
         }
-        Cmd::Checkpoint { text } => {
+        Cmd::Checkpoint { cmd, text } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
-            let mut body = text.join(" ");
-            if body.trim().is_empty() {
-                std::io::stdin().read_to_string(&mut body)?;
+            if let Some(cmd) = cmd {
+                checkpoint::run(&root, &s, cmd)?;
+            } else {
+                checkpoint::append(&root, &s, text)?;
             }
-            if body.trim().is_empty() {
-                bail!("checkpoint text is empty (pass it as arguments or on stdin)");
-            }
-            let log = save::log_path(&s)?;
-            let now = chrono::Local::now().format("%Y-%m-%d %H:%M");
-            save::append(&log, &format!("\n## 存档点（{now}）\n\n{}\n", body.trim()))?;
-            println!("checkpoint appended to {}", rel(&root, &log));
+        }
+        Cmd::Snapshot { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            diff::run(&root, &s, cmd)?
         }
         Cmd::Log { text } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
@@ -1077,6 +1141,26 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             let now = chrono::Local::now().format("%H:%M");
             save::append(&log, &format!("- [{now}] {}", body.trim()))?;
             println!("logged to {}", rel(&root, &log));
+        }
+        Cmd::Memory { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            memory::run(&root, &s, cmd)?
+        }
+        Cmd::Entity { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            entity::run(&root, &s, cmd)?
+        }
+        Cmd::Relation { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            graph::run(&root, &s, cmd)?
+        }
+        Cmd::Time { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            worldtime::run(&root, &s, cmd)?
+        }
+        Cmd::Oracle { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            oracle::run(&root, &s, cmd)?
         }
         Cmd::Options { ruleset } => print_options(&ruleset),
         Cmd::Data { cmd } => data_cmd(&root, cmd)?,

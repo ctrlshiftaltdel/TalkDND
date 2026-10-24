@@ -10,6 +10,31 @@ fn root(name: &str) -> PathBuf {
     p
 }
 
+fn run_in(root: &Path, args: &[&str], input: &str) -> (bool, String) {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_talkdnd"))
+        .arg("--root")
+        .arg(root)
+        .args(args)
+        .env("TALKDND_NO_PDF2MD", "1")
+        .env("TALKDND_COMBAT_SIM", root.join("no-such-combat-sim"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let s =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    (out.status.success(), s)
+}
+
 fn run(root: &Path, args: &[&str]) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_talkdnd"))
         .arg("--root")
@@ -933,5 +958,139 @@ fn adventure_section_refuses_ahead_and_logs_with_reason() {
         good && out.contains("first body") && !out.contains("second body"),
         "{out}"
     );
+    let _ = fs::remove_dir_all(&r);
+}
+
+// TASK-0057 (P00a): the nine new command groups land their CLI surface with
+// stubs only. Help text follows LetsPlay/docs/campaign-continuity.md §5.
+#[test]
+fn scaffold_groups_help_lists_the_contract_surface() {
+    let r = root("scaffold-help");
+    let cases: &[(&[&str], &str)] = &[
+        (&["checkpoint", "--help"], "snapshot list show restore TEXT"),
+        (&["checkpoint", "snapshot", "--help"], "--reason --json"),
+        (&["checkpoint", "list", "--help"], "--json"),
+        (&["checkpoint", "show", "--help"], "ID --json"),
+        (&["checkpoint", "restore", "--help"], "ID --yes --json"),
+        (&["snapshot", "--help"], "diff"),
+        (&["snapshot", "diff", "--help"], "ID_A ID_B"),
+        (&["memory", "--help"], "add list remove"),
+        (&["memory", "add", "--help"], "TEXT --source --tag"),
+        (&["memory", "list", "--help"], "--tag --all"),
+        (&["memory", "remove", "--help"], "ID"),
+        (&["settings", "style", "--help"], "show set"),
+        (&["settings", "style", "set", "--help"], "FIELD VALUE --reason"),
+        (&["entity", "--help"], "add list show rename retire"),
+        (&["entity", "add", "--help"], "--type --name --alias --first-seen --dm-only"),
+        (&["entity", "list", "--help"], "--type --all"),
+        (&["entity", "show", "--help"], "ID"),
+        (&["entity", "rename", "--help"], "ID NAME"),
+        (&["entity", "retire", "--help"], "ID"),
+        (&["relation", "--help"], "add list end show context"),
+        (&["relation", "add", "--help"], "--type --from --to --since --source --note --dm-only"),
+        (&["relation", "list", "--help"], "--entity --at --all"),
+        (&["relation", "end", "--help"], "ID --at --note"),
+        (&["relation", "show", "--help"], "ID"),
+        (&["relation", "context", "--help"], "ENTITY"),
+        (&["time", "--help"], "show enable disable set advance event"),
+        (&["time", "set", "--help"], "--date --phase"),
+        (&["time", "advance", "--help"], "--days --hours"),
+        (&["time", "event", "--help"], "add list done skip"),
+        (&["time", "event", "add", "--help"], "--due --title --dm-only --note"),
+        (&["adventure", "index", "--help"], "build show search"),
+        (&["adventure", "index", "build", "--help"], "--book"),
+        (&["adventure", "index", "show", "--help"], "BOOK"),
+        (&["adventure", "index", "search", "--help"], "BOOK QUERY"),
+        (&["oracle", "--help"], "yes-no event meaning"),
+        (&["oracle", "yes-no", "--help"], "QUESTION"),
+        (&["oracle", "event", "--help"], "--focus"),
+        (&["oracle", "meaning", "--help"], "--chaos"),
+    ];
+    for &(args, needles) in cases {
+        let out = ok(&r, args);
+        for n in needles.split(' ') {
+            assert!(out.contains(n), "{args:?} --help is missing `{n}`:\n{out}");
+        }
+    }
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn scaffold_stubs_are_not_implemented_yet() {
+    let r = root("scaffold-stub");
+    ok(&r, &["new", "--date", "2030-01-02"]);
+    let cases: &[&[&str]] = &[
+        &["checkpoint", "snapshot"],
+        &["checkpoint", "list"],
+        &["checkpoint", "show", "cp-1"],
+        &["checkpoint", "restore", "cp-1", "--yes"],
+        &["snapshot", "diff", "cp-1", "current"],
+        &["memory", "add", "the bard owes the guard a favor"],
+        &["memory", "list"],
+        &["memory", "remove", "m-1"],
+        &["settings", "style", "show"],
+        &["settings", "style", "set", "narration", "short", "--reason", "table vote"],
+        &["entity", "add", "--type", "npc", "--name", "Mira"],
+        &["entity", "list"],
+        &["entity", "show", "mira"],
+        &["entity", "rename", "mira", "Mira Bentwood"],
+        &["entity", "retire", "mira"],
+        &["relation", "add", "--type", "ally", "--from", "mira", "--to", "party"],
+        &["relation", "list"],
+        &["relation", "end", "r-1"],
+        &["relation", "show", "r-1"],
+        &["relation", "context", "mira"],
+        &["time", "show"],
+        &["time", "enable"],
+        &["time", "disable"],
+        &["time", "set", "--date", "1 Hammer"],
+        &["time", "advance", "--days", "2"],
+        &["time", "event", "add", "--due", "1 Hammer", "--title", "festival"],
+        &["time", "event", "list"],
+        &["time", "event", "done", "e-1"],
+        &["time", "event", "skip", "e-1"],
+        &["adventure", "index", "build"],
+        &["adventure", "index", "show", "some-book"],
+        &["adventure", "index", "search", "some-book", "dragon"],
+        &["oracle", "yes-no"],
+        &["oracle", "event"],
+        &["oracle", "meaning"],
+    ];
+    for &args in cases {
+        let (good, out) = run(&r, args);
+        assert!(!good, "{args:?} should fail: {out}");
+        assert!(
+            out.contains("not implemented in TASK-0057"),
+            "{args:?} did not report the scaffold stub:\n{out}"
+        );
+    }
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn checkpoint_text_still_appends_a_section() {
+    let r = root("checkpoint-text");
+    ok(&r, &["new", "--date", "2030-01-02"]);
+    let log_path = r.join("Saves/2030-01-02-01/Sessions/2030-01-02-session-00-setup.md");
+    let out = ok(&r, &["checkpoint", "第 3 天傍晚，队伍在酒馆休整"]);
+    assert!(out.contains("checkpoint appended to"), "{out}");
+    let log = fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("## 存档点"), "{log}");
+    assert!(log.contains("第 3 天傍晚，队伍在酒馆休整"), "{log}");
+    // Text whose first word is a subcommand name needs `--` (or stdin).
+    ok(&r, &["checkpoint", "--", "list", "the", "gear"]);
+    let log = fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("list the gear"), "{log}");
+    // The same text on stdin still works.
+    let (good, out) = run_in(&r, &["checkpoint"], "snapshot before the long rest\n");
+    assert!(good, "{out}");
+    let log = fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("snapshot before the long rest"), "{log}");
+    // Empty stdin is still refused.
+    let (good, out) = run_in(&r, &["checkpoint"], "");
+    assert!(!good && out.contains("checkpoint text is empty"), "{out}");
+    // A bare subcommand name is the subcommand, not checkpoint text.
+    let (good, out) = run(&r, &["checkpoint", "list"]);
+    assert!(!good && out.contains("not implemented in TASK-0057"), "{out}");
     let _ = fs::remove_dir_all(&r);
 }
