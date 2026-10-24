@@ -270,6 +270,62 @@ fn events_add_list_done_skip_with_visibility() {
 }
 
 #[test]
+fn show_counts_only_player_visible_events() {
+    let (r, _save) = new_save("show-counts");
+    ok(&r, &["time", "enable"]);
+    ok(&r, &["time", "set", "--date", "1 Hammer"]);
+    // 2 player-visible + 1 dm_only pending events.
+    ok(
+        &r,
+        &[
+            "time", "event", "add", "--due", "1 Hammer", "--title", "festival",
+        ],
+    );
+    ok(
+        &r,
+        &[
+            "time",
+            "event",
+            "add",
+            "--due",
+            "1 Hammer",
+            "--title",
+            "secret ambush",
+            "--dm-only",
+        ],
+    );
+    ok(
+        &r,
+        &[
+            "time", "event", "add", "--due", "2 Hammer", "--title", "later",
+        ],
+    );
+
+    // Enabled show reports only the 2 visible events (contract §6.1): the
+    // dm_only event must not leak through either total or pending count.
+    let out = ok(&r, &["time", "show"]);
+    assert!(out.contains("事件：2 条"), "{out}");
+    assert!(out.contains("待发生 2"), "{out}");
+    assert!(!out.contains("事件：3 条"), "{out}");
+    assert!(!out.contains("secret ambush"), "{out}");
+
+    // The disabled branch keeps the same player-visible totals.
+    ok(&r, &["time", "disable"]);
+    let out = ok(&r, &["time", "show"]);
+    assert!(out.contains("事件 2 条"), "{out}");
+    assert!(!out.contains("事件 3 条"), "{out}");
+
+    // Back on, one visible event done: still 2 visible, 1 pending.
+    ok(&r, &["time", "enable"]);
+    ok(&r, &["time", "event", "done", "EV-001"]);
+    let out = ok(&r, &["time", "show"]);
+    assert!(out.contains("事件：2 条"), "{out}");
+    assert!(out.contains("待发生 1"), "{out}");
+    assert!(!out.contains("事件：3 条"), "{out}");
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
 fn only_explicit_commands_change_world_time() {
     let (r, save) = new_save("no-auto");
     ok(&r, &["time", "enable"]);

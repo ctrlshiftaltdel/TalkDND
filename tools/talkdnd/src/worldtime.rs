@@ -9,9 +9,10 @@
 //!
 //! Visibility (contract §6.1, owner decision 2026-10-25): `time event
 //! list` defaults to the player view (dm_only events hidden); `--all` is
-//! the DM view with a `[DM]` marker, and the `start` digest shows only
-//! player-visible due events. The digest here is read-only: `start` never
-//! writes world-time.yaml.
+//! the DM view with a `[DM]` marker, the `start` digest shows only
+//! player-visible due events, and `time show` counts only player-visible
+//! events (dm_only never changes its totals). The digest here is
+//! read-only: `start` never writes world-time.yaml.
 
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
@@ -22,7 +23,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Subcommand, Clone)]
 pub enum Cmd {
-    /// Show enabled/calendar/date/phase/elapsed_days and the event count
+    /// Show enabled/calendar/date/phase/elapsed_days and the player-visible
+    /// event count (dm_only events are never counted)
     Show,
     /// Enable world time
     Enable,
@@ -264,19 +266,28 @@ pub fn run(root: &Path, save: &Path, cmd: Cmd) -> Result<()> {
                 println!("- 日期：{}", label(&wt.date));
                 println!("- 时段：{}", label(&wt.phase));
                 println!("- 已过天数：{}", fmt_days(wt.elapsed_days));
-                let pending = wt.events.iter().filter(|e| e.status == PENDING).count();
+                // Player view (contract §6.1): dm_only events stay out of
+                // both totals, so the counts cannot leak their existence.
+                let visible = wt.events.iter().filter(|e| !e.dm_only).count();
+                let pending = wt
+                    .events
+                    .iter()
+                    .filter(|e| !e.dm_only && e.status == PENDING)
+                    .count();
                 println!(
                     "- 事件：{} 条（待发生 {pending}；`talkdnd time event list` 查看）",
-                    wt.events.len()
+                    visible
                 );
             } else {
                 println!("世界时间：未启用（`talkdnd time enable` 开启；未启用时写命令被拒绝）");
                 if wt.version > 0 {
+                    // Same player-view rule: dm_only events are not counted.
+                    let visible = wt.events.iter().filter(|e| !e.dm_only).count();
                     println!(
                         "- 已保留的数据：日期 {}，已过天数 {}，事件 {} 条（启用后继续有效）",
                         label(&wt.date),
                         fmt_days(wt.elapsed_days),
-                        wt.events.len()
+                        visible
                     );
                 }
             }

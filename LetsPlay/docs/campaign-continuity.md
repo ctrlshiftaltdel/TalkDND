@@ -319,7 +319,7 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
 
 | 命令 | 参数 | 输出 | 退出码 |
 |---|---|---|---|
-| time show | | enabled/calendar/date/phase/elapsed_days/事件计数 | 0 |
+| time show | | enabled/calendar/date/phase/elapsed_days/事件计数（事件计数为玩家可见数，不含 dm_only） | 0 |
 | time enable / time disable | | 开关状态 + 日志行 | 0 |
 | time set | --date D [--phase P] | 新标签；未启用拒绝 | 0 / 1 |
 | time advance | --days N 或 --hours N（至少一个） | 新 elapsed_days；纯加法 | 0 / 1 |

@@ -15,7 +15,7 @@
 
 | 命令 | 说明 |
 |---|---|
-| `time show` | 显示启用状态、历法、日期、时段、已过天数与事件计数（未启用也可用） |
+| `time show` | 显示启用状态、历法、日期、时段、已过天数与事件计数（未启用也可用）；事件计数为玩家可见数，不含 dm_only |
 | `time enable` | 开启（幂等；重复执行不写文件、不记日志） |
 | `time disable` | 关闭；日期/时段/事件/已过天数保留（幂等） |
 | `time set --date D [--phase P]` | 设当前日期标签；`--phase` 可选，`--phase ""` 清空时段；未启用拒绝 |
@@ -24,7 +24,7 @@
 | `time event list [--all]` | 列事件；`due` 等于当前日期且 pending 的标「今天到期」 |
 | `time event done <id>` / `time event skip <id>` | 标记完成/跳过；未知 id 或已是终态时退出码 1 |
 
-可见性（2026-10-25 项目所有者决定）：`time event list` 默认只列非 `dm_only` 事件（玩家视图）；`--all` 是 DM 视图，全部事件都列出，`dm_only` 行首标 `[DM]`。`start` 摘要只提示玩家可见的今天到期事件。`--all` 的输出是 DM 视图，不要进入玩家可看材料（见 `docs/campaign-continuity.md` §6.2 与 guard）。
+可见性（2026-10-25 项目所有者决定）：`time event list` 默认只列非 `dm_only` 事件（玩家视图）；`--all` 是 DM 视图，全部事件都列出，`dm_only` 行首标 `[DM]`。`start` 摘要只提示玩家可见的今天到期事件。`time show` 的事件计数（总数与待发生）也只统计玩家可见事件（不含 dm_only），玩家不能从计数推断隐藏事件的存在；DM 看全部仍用 `time event list --all`。`--all` 的输出是 DM 视图，不要进入玩家可看材料（见 `docs/campaign-continuity.md` §6.2 与 guard）。
 
 ## start 摘要
 
