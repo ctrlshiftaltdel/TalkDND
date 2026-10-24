@@ -1155,28 +1155,6 @@ fn scaffold_groups_help_lists_the_contract_surface() {
 }
 
 #[test]
-fn scaffold_stubs_are_not_implemented_yet() {
-    let r = root("scaffold-stub");
-    ok(&r, &["new", "--date", "2030-01-02"]);
-    // memory / settings style are real since TASK-0061, entity / relation
-    // since TASK-0062 and time since TASK-0063; only oracle is still a stub.
-    let cases: &[&[&str]] = &[
-        &["oracle", "yes-no"],
-        &["oracle", "event"],
-        &["oracle", "meaning"],
-    ];
-    for &args in cases {
-        let (good, out) = run(&r, args);
-        assert!(!good, "{args:?} should fail: {out}");
-        assert!(
-            out.contains("not implemented in TASK-0057"),
-            "{args:?} did not report the scaffold stub:\n{out}"
-        );
-    }
-    let _ = fs::remove_dir_all(&r);
-}
-
-#[test]
 fn checkpoint_text_still_appends_a_section() {
     let r = root("checkpoint-text");
     ok(&r, &["new", "--date", "2030-01-02"]);

@@ -589,7 +589,13 @@ pub fn plan(save_dir: &Path) -> Result<String> {
 例如：`- term: 馆长的真名` 或 `幕后黑手是 [[红面具]]`。\n\n\
 ## 计划\n\n\
 # - term: <秘密词>（把行首的 # 去掉才生效）\n\n\
-## 伏笔与回收\n\n";
+## 伏笔与回收\n\n\
+## 当前局面\n\n\
+## 参与者目标\n\n\
+## 冲突\n\n\
+## 线索\n\n\
+## 可能行动\n\n\
+## 不介入后果\n\n";
     atomic_write(&p, text.as_bytes())?;
     Ok(format!(
         "已创建 `{}`（只给 DM，已 gitignore；用 `- term: X` 或 `[[X]]` 标记秘密词）",

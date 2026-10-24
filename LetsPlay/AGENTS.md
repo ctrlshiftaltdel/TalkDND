@@ -149,3 +149,4 @@
 | `docs/layout.md` | 目录结构、存档结构、交接清单 |
 | `docs/world-time.md` | 世界时间与预定事件（`time` 命令、`world-time.yaml`、到期提示与可见性） |
 | `docs/deviation.md` | 偏离度 scope/比例、原创台账、预算、隐藏面与检查 |
+| `docs/oracle.md` | 即兴 oracle（yes-no/event/meaning）、只读边界与 dm-plan 模板小节 |
