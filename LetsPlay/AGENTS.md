@@ -142,7 +142,7 @@
 | `docs/chargen.md` | 建卡每一步、战斗风格/背景/装备、本地规则书数据、同伴生成 |
 | `docs/character-data.md` | 角色卡数据源、`char` 命令、与 combat-sim/校验的关系 |
 | `docs/combat.md` | combat-sim 命令与坑、`--player` 名称遮蔽、规则数据分层 |
-| `docs/narration.md` | 叙事原则、同伴演绎、DM 秘密、裁定文件 |
+| `docs/narration.md` | 叙事原则、同伴演绎、DM 秘密、裁定文件、叙事风格与关键记忆（`settings style`、`memory`） |
 | `docs/table-integrity.md` | 场外指令与作弊、房规、存档校验与日志对账 |
 | `docs/pdf2md.md` | 书籍 PDF 转 Markdown、查书顺序、质量审核 |
 | `docs/handouts.md` | 资料图导出、玩家可见标记、裁切 |

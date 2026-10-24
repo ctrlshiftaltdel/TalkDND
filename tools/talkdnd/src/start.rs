@@ -705,6 +705,16 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
             d += &format!("- {}\n", truncate(&r, 200));
         }
     }
+    // 关键记忆 (P03): player-confirmed entries only (contract §6.1);
+    // import/manual entries and dm-secrets content never reach the digest.
+    let memories = crate::memory::player_entries(save);
+    d += "\n## 关键记忆（玩家确认的固定事实与偏好；`talkdnd memory list`）\n\n";
+    if memories.is_empty() {
+        d += "- 还没有；玩家明确说「记住这个」时 `talkdnd memory add \"<事实>\" --source player-confirmed`\n";
+    }
+    for e in &memories {
+        d += &format!("- {}\n", crate::memory::entry_line(e));
+    }
     match crate::audit::audit(save) {
         Ok(r) => {
             d += "\n## 存档校验\n\n";
@@ -764,6 +774,28 @@ mod tests {
         .unwrap();
         fs::write(p.join("AGENTS.md"), "x").unwrap();
         p
+    }
+
+    #[test]
+    fn digest_key_memory_shows_confirmed_entries_only() {
+        let root = temp_root("memory");
+        let save = root.join("Saves/2030-03-04-01");
+        crate::memory::add(
+            &save,
+            "The bard owes the guard a favor",
+            "player-confirmed",
+            &["npc:guard".into()],
+        )
+        .unwrap();
+        crate::memory::add(&save, "the guard secretly serves the duke", "manual", &[]).unwrap();
+        // dm-secrets content must never leak into the digest either.
+        fs::write(save.join("dm-secrets.md"), "- term: The Silent Duke\n").unwrap();
+        let d = digest(&root, &save, &Options { pdf2md: false }).unwrap();
+        assert!(d.contains("## 关键记忆"), "{d}");
+        assert!(d.contains("M-001：The bard owes the guard a favor"), "{d}");
+        assert!(!d.contains("secretly serves the duke"), "{d}");
+        assert!(!d.contains("Silent Duke"), "{d}");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

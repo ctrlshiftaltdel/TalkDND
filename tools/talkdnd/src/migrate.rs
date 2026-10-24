@@ -9,7 +9,9 @@
 //! `sheets/<id>.yaml`; `NPCs/` keeps only story NPCs, 7 = book paths in save
 //! files use the one-folder-per-book library (`Adventures/<slug>/`,
 //! `Rules/<edition>/<slug>/`, converted index in `index/`; see
-//! [`crate::library`]). `talkdnd start` and `talkdnd migrate` back the
+//! [`crate::library`]), 8 = per-save DM style settings (`settings.style`:
+//! narration, detail, pace, npc_voice, options; see [`Style`] and
+//! `LetsPlay/docs/narration.md`). `talkdnd start` and `talkdnd migrate` back the
 //! whole save up into `Saves/_backups/` before writing, then run the
 //! migrations in order. A save from a newer talkdnd is refused: this binary
 //! cannot know its format.
@@ -30,7 +32,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "save-meta.yaml";
-pub const CURRENT_SCHEMA: u32 = 7;
+pub const CURRENT_SCHEMA: u32 = 8;
 pub const BACKUP_DIR: &str = "_backups";
 
 /// How far this save may deviate from the published adventure.
@@ -120,15 +122,80 @@ pub struct Settings {
     /// the programs still roll and log every die (`rolls.log`).
     #[serde(default = "dice_on")]
     pub dice_display: bool,
+    /// How the DM narrates this table (schema 8; see [`Style`]). Older saves
+    /// migrate to the defaults with the usual backup; only explicit player
+    /// feedback ever changes it, never automatic inference.
+    #[serde(default)]
+    pub style: Style,
 }
 
 fn dice_on() -> bool {
     true
 }
 
+/// The DM's narration style, one fixed value per field
+/// (`LetsPlay/docs/campaign-continuity.md` §5.2). Defaults follow
+/// `LetsPlay/docs/narration.md`: standard beats, standard detail, standard
+/// pace, distinct companion voices and 2-4 closing options.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Style {
+    /// Length of a narration beat: short | standard | long.
+    #[serde(default = "style_standard")]
+    pub narration: String,
+    /// How much sensory and scene detail: low | standard | high.
+    #[serde(default = "style_standard")]
+    pub detail: String,
+    /// Scene pacing: slow | standard | fast.
+    #[serde(default = "style_standard")]
+    pub pace: String,
+    /// Companion and NPC voices: distinct | neutral.
+    #[serde(default = "style_distinct")]
+    pub npc_voice: String,
+    /// Suggested options at the end of a scene: 2-4 | none.
+    #[serde(default = "style_two_four")]
+    pub options: String,
+}
+
+fn style_standard() -> String {
+    "standard".into()
+}
+
+fn style_distinct() -> String {
+    "distinct".into()
+}
+
+fn style_two_four() -> String {
+    "2-4".into()
+}
+
+impl Default for Style {
+    fn default() -> Self {
+        Self {
+            narration: style_standard(),
+            detail: style_standard(),
+            pace: style_standard(),
+            npc_voice: style_distinct(),
+            options: style_two_four(),
+        }
+    }
+}
+
+impl Style {
+    /// One-line summary of the five values, e.g. for migration reports.
+    pub fn describe(&self) -> String {
+        format!(
+            "narration={}、detail={}、pace={}、npc_voice={}、options={}",
+            self.narration, self.detail, self.pace, self.npc_voice, self.options
+        )
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
-        Self { dice_display: true }
+        Self {
+            dice_display: true,
+            style: Style::default(),
+        }
     }
 }
 
@@ -226,6 +293,8 @@ pub struct Report {
     pub deviation_default: bool,
     /// 4→5: the old save had no settings; dice display becomes on.
     pub settings_default: bool,
+    /// 7→8: the old save had no style; the narration defaults are written.
+    pub style_default: bool,
     /// 5→6: companion sheets moved from NPCs/ to Characters/ ("old → new").
     pub companions: Vec<String>,
     /// 5→6: sheets/<id>.yaml files that got a `controller:` field ("id=controller").
@@ -263,6 +332,12 @@ impl Report {
                     "会写入桌面设置：骰子显示开（默认；可随时用 `talkdnd settings dice off` 关闭）"
                         .into(),
                 );
+            }
+            if self.style_default {
+                v.push(format!(
+                    "会写入桌面风格：{}（旧存档没有设置过；`talkdnd settings style show` 查看）",
+                    Style::default().describe()
+                ));
             }
             if !self.companions.is_empty() {
                 v.push(format!(
@@ -303,6 +378,12 @@ impl Report {
         }
         if self.settings_default {
             v.push("桌面设置：骰子显示默认开（可用 `talkdnd settings dice off` 关闭）".into());
+        }
+        if self.style_default {
+            v.push(format!(
+                "桌面风格：默认已写入（{}；`talkdnd settings style set <字段> <值> --reason <原因>` 修改）",
+                Style::default().describe()
+            ));
         }
         if !self.companions.is_empty() {
             v.push(format!(
@@ -350,6 +431,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         dry_run,
         deviation_default: from < 4,
         settings_default: from < 5,
+        style_default: from < 8,
         ..Default::default()
     };
     if dry_run {
@@ -468,6 +550,14 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             backup: backup.clone(),
         });
     }
+    if from < 8 {
+        meta.migrations.push(Migration {
+            from: from.max(7),
+            to: 8,
+            date: date.clone(),
+            backup: backup.clone(),
+        });
+    }
     write_meta(save, &meta)?;
 
     let deviation_note = if from < 4 {
@@ -477,6 +567,11 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     };
     let settings_note = if from < 5 {
         "；骰子显示默认开"
+    } else {
+        ""
+    };
+    let style_note = if from < 8 {
+        "；桌面风格默认 standard/distinct/2-4"
     } else {
         ""
     };
@@ -491,7 +586,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         format!("；书本路径改到一书一文件夹：{}", report.books.join("，"))
     };
     let text = format!(
-        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{companion_note}{books_note}",
+        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{style_note}{companion_note}{books_note}",
         chrono::Local::now().format("%H:%M")
     );
     if let Some(log) = save::latest_log(save) {
@@ -991,11 +1086,11 @@ mod tests {
         let root = root("v1");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (1, 7));
+        assert_eq!((report.from, report.to), (1, 8));
         assert!(report.deviation_default);
         assert_eq!(report.sheets, vec!["hero".to_string()]);
         assert!(charsheet::path(&save, "hero").is_file());
-        assert_eq!(meta(&save).schema, 7);
+        assert_eq!(meta(&save).schema, 8);
         assert_eq!(meta(&save).deviation.scope, 0);
         assert_eq!(meta(&save).deviation.ratio, None);
         assert!(meta(&save)
@@ -1021,7 +1116,7 @@ mod tests {
         assert!(!backups[0].join("_backups").exists());
 
         let log = fs::read_to_string(save.join("Sessions/2030-01-01-session-00.md")).unwrap();
-        assert!(log.contains("存档结构迁移 schema 1→7"), "{log}");
+        assert!(log.contains("存档结构迁移 schema 1→8"), "{log}");
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
 
@@ -1045,7 +1140,7 @@ mod tests {
         let root = root("dry");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, true).unwrap();
-        assert_eq!((report.from, report.to), (1, 7));
+        assert_eq!((report.from, report.to), (1, 8));
         assert!(report.dry_run && report.sheets == vec!["hero".to_string()]);
         assert!(!path(&save).is_file());
         assert!(!charsheet::path(&save, "hero").is_file());
@@ -1074,8 +1169,8 @@ mod tests {
         fs::write(save.join("progress.yaml"), edited).unwrap();
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (2, 7));
-        assert!(meta(&save).schema == 7);
+        assert_eq!((report.from, report.to), (2, 8));
+        assert!(meta(&save).schema == 8);
         let changes = combat_sim::integrity::changes(&save).unwrap();
         assert!(
             changes
@@ -1168,20 +1263,20 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (3, 7));
+        assert_eq!((report.from, report.to), (3, 8));
         assert!(report.deviation_default);
         assert!(report
             .lines()
             .iter()
             .any(|l| l.contains("scope 0") && l.contains("偏离度")));
         let m = meta(&save);
-        assert_eq!(m.schema, 7);
+        assert_eq!(m.schema, 8);
         assert_eq!(m.deviation.scope, 0);
         assert_eq!(m.deviation.ratio, None);
         assert!(m.migrations.iter().any(|x| x.from == 3 && x.to == 4));
         assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
         let log = fs::read_to_string(save.join("Sessions/2030-04-05-session-00.md")).unwrap();
-        assert!(log.contains("schema 3→7"), "{log}");
+        assert!(log.contains("schema 3→8"), "{log}");
         assert!(log.contains("scope 0"), "{log}");
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
             .unwrap()
@@ -1233,21 +1328,24 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (4, 7));
+        assert_eq!((report.from, report.to), (4, 8));
         assert!(!report.deviation_default);
         assert!(report.settings_default);
+        assert!(report.style_default);
         let m = meta(&save);
-        assert_eq!(m.schema, 7);
+        assert_eq!(m.schema, 8);
         assert_eq!(m.deviation.scope, 2);
         assert_eq!(m.deviation.ratio, Some(15));
         assert!(m.settings.dice_display);
+        assert_eq!(m.settings.style, Style::default());
         assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
         assert!(m.migrations.iter().any(|x| x.from == 5 && x.to == 6));
         assert!(m.migrations.iter().any(|x| x.from == 6 && x.to == 7));
-        assert_eq!(m.migrations.len(), 3);
+        assert!(m.migrations.iter().any(|x| x.from == 7 && x.to == 8));
+        assert_eq!(m.migrations.len(), 4);
         let log = fs::read_to_string(save.join("Sessions/2030-04-06-session-00.md")).unwrap();
         assert!(
-            log.contains("schema 4→7") && log.contains("骰子显示默认开"),
+            log.contains("schema 4→8") && log.contains("骰子显示默认开"),
             "{log}"
         );
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
@@ -1332,13 +1430,13 @@ mod tests {
         let kel_before = fs::read_to_string(save.join("NPCs/Kel-Stone.md")).unwrap();
 
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (5, 7));
+        assert_eq!((dry.from, dry.to), (5, 8));
         assert_eq!(dry.companions.len(), 3, "{:?}", dry.companions);
         assert!(save.join("NPCs/Kel-Stone.md").is_file());
         assert!(!root.join("Saves").join(BACKUP_DIR).exists());
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (5, 7));
+        assert_eq!((report.from, report.to), (5, 8));
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         for f in ["Kel-Stone.md", "mo.md", "_party.md"] {
             assert!(save.join("Characters").join(f).is_file(), "{f}");
@@ -1369,7 +1467,7 @@ mod tests {
         // The structured file still loads and resolves.
         let cf: charsheet::CharFile = serde_norway::from_str(&sheet).unwrap();
         assert_eq!(cf.controller(), charsheet::DM);
-        assert_eq!(meta(&save).schema, 7);
+        assert_eq!(meta(&save).schema, 8);
         assert!(meta(&save)
             .migrations
             .iter()
@@ -1383,7 +1481,7 @@ mod tests {
         assert!(backups[0].join("NPCs/Kel-Stone.md").is_file());
         let log = fs::read_to_string(save.join("Sessions/2030-05-01-session-00.md")).unwrap();
         assert!(
-            log.contains("schema 5→7") && log.contains("Characters/Kel-Stone.md"),
+            log.contains("schema 5→8") && log.contains("Characters/Kel-Stone.md"),
             "{log}"
         );
 
@@ -1455,11 +1553,12 @@ mod tests {
         )
         .unwrap();
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (6, 7));
+        assert_eq!((dry.from, dry.to), (6, 8));
         assert_eq!(dry.books, vec!["dm-plan.md".to_string()]);
         let report = ensure(&save, &root, false).unwrap();
         assert_eq!(report.books, vec!["dm-plan.md".to_string()]);
         assert!(report.backup.is_some());
+        assert!(report.style_default);
         let plan = fs::read_to_string(save.join("dm-plan.md")).unwrap();
         assert!(
             plan.contains("Adventures/keys-from-the-golden-vault/index/index.md"),
@@ -1469,7 +1568,7 @@ mod tests {
         assert!(fs::read_to_string(save.join("combat/campaign.yaml"))
             .unwrap()
             .contains("Adventures/keys-from-the-golden-vault/combat"));
-        assert_eq!(meta(&save).schema, 7);
+        assert_eq!(meta(&save).schema, 8);
         assert!(meta(&save)
             .migrations
             .iter()
@@ -1492,6 +1591,100 @@ mod tests {
             .unwrap()
             .contains("Adventures/golden-vault/combat"));
         assert!(repoint_books(&save, &root, false).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn v7_save(root: &Path, slot: &str) -> PathBuf {
+        let save = root.join("Saves").join(slot);
+        fs::create_dir_all(save.join("Sessions")).unwrap();
+        fs::write(save.join("Sessions/2030-06-01-session-00.md"), "# log\n").unwrap();
+        fs::write(
+            save.join("save-meta.yaml"),
+            "schema: 7\ntool: 0.11.0\ndeviation: {scope: 0, ratio: null}\nsettings: {dice_display: false}\nmigrations: []\n",
+        )
+        .unwrap();
+        save
+    }
+
+    #[test]
+    fn migrates_a_v7_save_with_default_style_backup_and_log() {
+        let root = root("v7");
+        let save = v7_save(&root, "2030-06-01-01");
+
+        let dry = ensure(&save, &root, true).unwrap();
+        assert_eq!((dry.from, dry.to), (7, 8));
+        assert!(dry.style_default);
+        assert!(!path(&save).is_file() || meta(&save).schema == 7);
+        assert!(!root.join("Saves").join(BACKUP_DIR).exists());
+
+        let report = ensure(&save, &root, false).unwrap();
+        assert_eq!((report.from, report.to), (7, 8));
+        assert!(report.style_default);
+        assert!(report
+            .backup
+            .as_deref()
+            .is_some_and(|b| b.starts_with("Saves/_backups/")));
+        let m = meta(&save);
+        assert_eq!(m.schema, 8);
+        // The rest of settings is untouched by the schema bump.
+        assert!(!m.settings.dice_display);
+        // The style fields arrive with the contract defaults.
+        assert_eq!(m.settings.style, Style::default());
+        assert!(m.migrations.iter().any(|x| x.from == 7 && x.to == 8));
+        assert!(
+            report
+                .lines()
+                .iter()
+                .any(|l| l.contains("narration=standard")),
+            "{:?}",
+            report.lines()
+        );
+
+        // Whole-save backup taken before the write: the copy still says 7,
+        // which is the documented restore path.
+        let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        let backup_meta = fs::read_to_string(backups[0].join("save-meta.yaml")).unwrap();
+        assert!(backup_meta.contains("schema: 7"), "{backup_meta}");
+
+        // The backup path and the style default are written to the log.
+        let log = fs::read_to_string(save.join("Sessions/2030-06-01-session-00.md")).unwrap();
+        assert!(log.contains("schema 7→8"), "{log}");
+        assert!(log.contains("Saves/_backups/"), "{log}");
+        assert!(log.contains("桌面风格默认"), "{log}");
+        assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
+
+        // Idempotent: a second run changes nothing.
+        let snap = combat_sim::integrity::snapshot(&save);
+        let again = ensure(&save, &root, false).unwrap();
+        assert!(again.already_current());
+        assert_eq!(snap, combat_sim::integrity::snapshot(&save));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_meta_write_leaves_the_old_save_intact() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = root("failwrite");
+        let save = v7_save(&root, "2030-06-02-01");
+        // A read-only save folder makes the atomic write of save-meta.yaml
+        // fail; nothing else in a 7→8 migration writes inside the save.
+        fs::set_permissions(&save, fs::Permissions::from_mode(0o555)).unwrap();
+        let err = ensure(&save, &root, false).unwrap_err();
+        fs::set_permissions(&save, fs::Permissions::from_mode(0o755)).unwrap();
+        let msg = err.to_string();
+        assert!(msg.contains("save-meta.yaml"), "{msg}");
+        // No half-migrated save-meta.yaml: the old schema still loads.
+        assert_eq!(meta(&save).schema, 7);
+        assert_eq!(meta(&save).settings.style, Style::default());
+        // And the old save is still usable: the retry migrates normally.
+        let report = ensure(&save, &root, false).unwrap();
+        assert_eq!((report.from, report.to), (7, 8));
+        assert_eq!(meta(&save).schema, 8);
         let _ = fs::remove_dir_all(&root);
     }
 }
