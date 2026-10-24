@@ -150,6 +150,12 @@ Validation is the kit check and the leak check in Success criteria, plus the com
 
 ## Decision Log
 
+### 2026-10-24 — Play-time page fixes and split-volume consolidation
+
+Two play-table gaps. First, when converted Markdown contradicts the PDF mid-session, the DM can fix that one page immediately: `pdf2md fix` writes `index/fixes/pNNNN.md` with the PDF sha256 and rebuilds the book when no worker is running; `--no-apply` defers the rebuild. The PDF stays authoritative, text is not patched from memory, and the fix stays local. Second, `Adventures/` may hold both a full book and its split volumes (`<slug>-a`, `-b`, `-2`, ...). `talkdnd library merge <slug>` archives the parts under `.talkdnd/book-backups/merge-<slug>/` (never deletes), moves a part's `combat/` only when the full book has none, and repoints save paths to the full book. `library tidy` only warns and prints the command; it never moves parts by itself.
+
+Alternative considered: automatic merging whenever a new PDF arrives. Rejected: deciding that two PDFs are the same book, and choosing which content survives, is a data-loss risk; the explicit command with a backup keeps the owner in control.
+
 ### 2026-10-20 — LetsPlay layout
 
 Play content lives under `LetsPlay/`. The DM agent starts there and reads `LetsPlay/AGENTS.md`. Development contracts, tools, CI, and this charter stay at the repository root.

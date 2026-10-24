@@ -53,6 +53,8 @@ Rules/
 - pdf2md 正在后台转换时不整理，等它结束后再运行。
 - 读取仍然兼容旧结构（`.md/<书名>/`），所以没整理过的书照样能查。
 
+**整本与分卷**：一本书拆成多个 PDF 时，文件夹名是 `<slug>-a`、`<slug>-b`、`<slug>-2` 等，读取时按同一本书合并。拿到整合版 PDF 后，把它放进 `<slug>/`，运行 `bin/talkdnd library merge <slug>`：旧分卷整体移到 `.talkdnd/book-backups/merge-<slug>/`（不删除），分卷的战斗数据在整本没有 `combat/` 时自动移入，存档里的旧路径重指向整本。`library tidy` 发现整本与分卷并存时会提示这条命令，不会自己搬。
+
 ## 裁定文件（`Rules/rulings*.md` 与 `Rules/defaults/`）
 
 两份同名文件不是重复，分工固定：

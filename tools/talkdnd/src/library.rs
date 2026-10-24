@@ -414,6 +414,183 @@ impl TidyReport {
     }
 }
 
+/// Result of folding split-volume folders into the full-book folder.
+#[derive(Debug, Default)]
+pub struct MergeReport {
+    pub dry_run: bool,
+    pub canonical: Option<String>,
+    pub archived: Vec<Move>,
+    pub combat: Vec<Move>,
+    pub warnings: Vec<String>,
+    pub skipped: Option<String>,
+}
+
+impl MergeReport {
+    pub fn lines(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if let Some(s) = &self.skipped {
+            v.push(format!("书库合并：跳过（{s}）"));
+            return v;
+        }
+        let Some(canonical) = &self.canonical else {
+            v.push("书库合并：没有找到整本文件夹；先把整合版 PDF 放进去再运行".into());
+            return v;
+        };
+        v.push(format!("书库合并：整本文件夹 `{canonical}`"));
+        if self.archived.is_empty() && self.combat.is_empty() && self.warnings.is_empty() {
+            v.push("书库合并：没有分卷，无需合并".into());
+            return v;
+        }
+        let verb = if self.dry_run {
+            "会归档"
+        } else {
+            "已归档"
+        };
+        for m in &self.archived {
+            v.push(format!("书库合并：{verb} `{}` → `{}`", m.from, m.to));
+        }
+        let verb = if self.dry_run {
+            "会移动"
+        } else {
+            "已移动"
+        };
+        for m in &self.combat {
+            v.push(format!("书库合并：{verb} `{}` → `{}`", m.from, m.to));
+        }
+        for w in &self.warnings {
+            v.push(format!("书库合并：注意：{w}"));
+        }
+        v
+    }
+}
+
+/// Fold `<slug>-a`, `<slug>-b`, `<slug>-2` ... into the full `<slug>`
+/// folder. Part folders are moved, never deleted, into
+/// `.talkdnd/book-backups/merge-<slug>/`; a part's `combat/` is moved into
+/// the full folder only when that folder has none.
+pub fn merge_parts(root: &Path, book: &str, dry_run: bool) -> Result<MergeReport> {
+    let mut report = MergeReport {
+        dry_run,
+        ..Default::default()
+    };
+    if pdf2md_busy(root) {
+        report.skipped =
+            Some("pdf2md 正在后台转换；等它结束后再运行 `talkdnd library merge`".into());
+        return Ok(report);
+    }
+    let want = slug(book);
+    let adventure_root = root.join("Adventures");
+    let mut full: Vec<(u8, PathBuf)> = Vec::new();
+    let mut parts: Vec<PathBuf> = Vec::new();
+    for d in book_folders(&adventure_root) {
+        match key_rank(&name_of(&d), &want) {
+            Some(rank @ (0 | 1)) => full.push((rank, d)),
+            Some(2) => parts.push(d),
+            _ => {}
+        }
+    }
+    full.sort();
+    let Some((_, canonical)) = full.into_iter().next() else {
+        anyhow::bail!(
+            "没有找到 `{want}` 的整本文件夹；先把整合版 PDF 放进 `Adventures/{want}/` 再运行"
+        )
+    };
+    report.canonical = Some(rel_dir(root, &canonical));
+    if parts.is_empty() {
+        return Ok(report);
+    }
+    if !sorted_entries(&canonical).into_iter().any(|p| is_pdf(&p)) {
+        anyhow::bail!(
+            "`{}` 里没有 PDF；先放入整合版 PDF",
+            rel_dir(root, &canonical)
+        );
+    }
+    let backup = next_merge_backup(root, &want);
+    let mut logical = Vec::new();
+    for part in &parts {
+        let part_combat = part.join("combat");
+        let canonical_combat = canonical.join("combat");
+        if part_combat.is_dir() {
+            if canonical_combat.exists() {
+                report.warnings.push(format!(
+                    "`{}` 与整本都有 `combat/`；分卷留在备份，未合并战斗数据",
+                    rel_dir(root, part)
+                ));
+            } else {
+                let m = Move {
+                    from: rel_dir(root, &part_combat),
+                    to: rel_dir(root, &canonical_combat),
+                };
+                if !dry_run {
+                    fs::rename(&part_combat, &canonical_combat)
+                        .with_context(|| format!("move {} -> {}", m.from, m.to))?;
+                }
+                report.combat.push(m);
+            }
+        }
+        let dst = backup.join(name_of(part));
+        let m = Move {
+            from: rel_dir(root, part),
+            to: rel_dir(root, &dst),
+        };
+        if !dry_run {
+            fs::create_dir_all(&backup).with_context(|| format!("create {}", backup.display()))?;
+            fs::rename(part, &dst).with_context(|| format!("move {} -> {}", m.from, m.to))?;
+        }
+        report.archived.push(m);
+        // A save that pointed at the part must now point at the surviving full
+        // book, not at the backup.
+        logical.push(Move {
+            from: rel_dir(root, part),
+            to: rel_dir(root, &canonical),
+        });
+    }
+    if !dry_run {
+        record_moves(root, &logical)?;
+    }
+    Ok(report)
+}
+
+fn next_merge_backup(root: &Path, want: &str) -> PathBuf {
+    let base = root.join(".talkdnd/book-backups");
+    let first = base.join(format!("merge-{want}"));
+    if !first.exists() {
+        return first;
+    }
+    let mut n = 2u32;
+    loop {
+        let p = base.join(format!("merge-{want}-{n}"));
+        if !p.exists() {
+            return p;
+        }
+        n += 1;
+    }
+}
+
+/// Warn when a full-book folder and its split volumes both exist. A book that
+/// only has parts is a legitimate multi-volume set, so it is not reported.
+fn merge_warnings(adventure_root: &Path) -> Vec<String> {
+    let folders = book_folders(adventure_root);
+    let mut out = Vec::new();
+    for d in &folders {
+        let name = name_of(d);
+        let mut parts: Vec<String> = folders
+            .iter()
+            .filter(|o| key_rank(&name_of(o), &name) == Some(2))
+            .map(|o| format!("`Adventures/{}`", name_of(o)))
+            .collect();
+        if parts.is_empty() {
+            continue;
+        }
+        parts.sort();
+        out.push(format!(
+            "同一本书既有整本也有分卷：`Adventures/{name}` 与 {}；确认整本完整后运行 `talkdnd library merge {name}`",
+            parts.join("、")
+        ));
+    }
+    out
+}
+
 fn rel(root: &Path, p: &Path) -> String {
     p.strip_prefix(root)
         .unwrap_or(p)
@@ -727,6 +904,9 @@ pub fn tidy(root: &Path, dry_run: bool) -> Result<TidyReport> {
         return Ok(t.report);
     }
     t.category(&root.join("Adventures"))?;
+    for w in merge_warnings(&root.join("Adventures")) {
+        t.warn(w);
+    }
     for ed in EDITIONS {
         t.category(&root.join("Rules").join(ed))?;
     }
@@ -1100,6 +1280,113 @@ mod tests {
             again.lines()
         );
         let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn merge_archives_parts_and_keeps_combat() {
+        let r = tmp("merge");
+        let adv = r.join("Adventures");
+        write(&adv.join("foo/Foo.pdf"), "pdf");
+        write(&adv.join("foo/index/manifest.json"), "{}");
+        write(&adv.join("foo-a/Foo A.pdf"), "pdf");
+        write(&adv.join("foo-a/combat/a.yaml"), "a: 1\n");
+        write(&adv.join("foo-b/Foo B.pdf"), "pdf");
+
+        let rep = merge_parts(&r, "foo", false).unwrap();
+        assert!(
+            rep.lines().iter().any(|l| l.contains("已归档")),
+            "{:?}",
+            rep.lines()
+        );
+        assert!(!adv.join("foo-a").exists());
+        assert!(!adv.join("foo-b").exists());
+        let backup = r.join(".talkdnd/book-backups/merge-foo");
+        assert!(backup.join("foo-a/Foo A.pdf").is_file());
+        assert!(backup.join("foo-b/Foo B.pdf").is_file());
+        assert!(adv.join("foo/combat/a.yaml").is_file());
+        assert!(!backup.join("foo-a/combat").exists());
+        let moves = load_moves(&r);
+        assert!(moves
+            .iter()
+            .any(|m| m.from == "Adventures/foo-a/" && m.to == "Adventures/foo/"));
+        assert!(moves
+            .iter()
+            .any(|m| m.from == "Adventures/foo-b/" && m.to == "Adventures/foo/"));
+
+        let again = merge_parts(&r, "foo", false).unwrap();
+        assert!(again.lines().iter().any(|l| l.contains("无需合并")));
+    }
+
+    #[test]
+    fn merge_dry_run_changes_nothing() {
+        let r = tmp("merge-dry");
+        let adv = r.join("Adventures");
+        write(&adv.join("foo/Foo.pdf"), "pdf");
+        write(&adv.join("foo-a/Foo A.pdf"), "pdf");
+
+        let rep = merge_parts(&r, "foo", true).unwrap();
+        assert_eq!(rep.archived.len(), 1);
+        assert!(adv.join("foo-a/Foo A.pdf").is_file());
+        assert!(!r.join(".talkdnd/book-backups").exists());
+        assert!(load_moves(&r).is_empty());
+    }
+
+    #[test]
+    fn merge_refuses_without_a_full_book() {
+        let r = tmp("merge-refuse");
+        let adv = r.join("Adventures");
+        write(&adv.join("foo-a/Foo A.pdf"), "pdf");
+        write(&adv.join("foo-b/Foo B.pdf"), "pdf");
+        assert!(merge_parts(&r, "foo", false).is_err());
+        assert!(adv.join("foo-a/Foo A.pdf").is_file());
+    }
+
+    #[test]
+    fn merge_keeps_a_parts_combat_when_both_sides_have_one() {
+        let r = tmp("merge-collide");
+        let adv = r.join("Adventures");
+        write(&adv.join("foo/Foo.pdf"), "pdf");
+        write(&adv.join("foo/combat/keep.yaml"), "keep: 1\n");
+        write(&adv.join("foo-a/Foo A.pdf"), "pdf");
+        write(&adv.join("foo-a/combat/a.yaml"), "a: 1\n");
+
+        let rep = merge_parts(&r, "foo", false).unwrap();
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("未合并战斗数据")),
+            "{:?}",
+            rep.warnings
+        );
+        assert!(!adv.join("foo/combat/a.yaml").exists());
+        assert!(r
+            .join(".talkdnd/book-backups/merge-foo/foo-a/combat/a.yaml")
+            .is_file());
+    }
+
+    #[test]
+    fn tidy_warns_about_a_full_book_with_parts() {
+        let r = tmp("merge-warn");
+        let adv = r.join("Adventures");
+        write(&adv.join("foo/Foo.pdf"), "pdf");
+        write(&adv.join("foo-a/Foo A.pdf"), "pdf");
+        let rep = tidy(&r, true).unwrap();
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("library merge foo")),
+            "{:?}",
+            rep.warnings
+        );
+
+        let r2 = tmp("merge-parts-only");
+        write(&r2.join("Adventures/foo-a/Foo A.pdf"), "pdf");
+        write(&r2.join("Adventures/foo-b/Foo B.pdf"), "pdf");
+        let rep2 = tidy(&r2, true).unwrap();
+        assert!(
+            !rep2
+                .warnings
+                .iter()
+                .any(|w| w.contains("同一本书既有整本也有分卷")),
+            "{:?}",
+            rep2.warnings
+        );
     }
 
     #[test]
