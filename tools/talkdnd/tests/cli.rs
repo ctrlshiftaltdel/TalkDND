@@ -1032,11 +1032,6 @@ fn scaffold_stubs_are_not_implemented_yet() {
     let r = root("scaffold-stub");
     ok(&r, &["new", "--date", "2030-01-02"]);
     let cases: &[&[&str]] = &[
-        &["checkpoint", "snapshot"],
-        &["checkpoint", "list"],
-        &["checkpoint", "show", "cp-1"],
-        &["checkpoint", "restore", "cp-1", "--yes"],
-        &["snapshot", "diff", "cp-1", "current"],
         &["memory", "add", "the bard owes the guard a favor"],
         &["memory", "list"],
         &["memory", "remove", "m-1"],
@@ -1110,11 +1105,10 @@ fn checkpoint_text_still_appends_a_section() {
     // Empty stdin is still refused.
     let (good, out) = run_in(&r, &["checkpoint"], "");
     assert!(!good && out.contains("checkpoint text is empty"), "{out}");
-    // A bare subcommand name is the subcommand, not checkpoint text.
+    // A bare subcommand name is the subcommand, not checkpoint text:
+    // `checkpoint list` works (TASK-0059) and this save has no checkpoints.
     let (good, out) = run(&r, &["checkpoint", "list"]);
-    assert!(
-        !good && out.contains("not implemented in TASK-0057"),
-        "{out}"
-    );
+    assert!(good, "{out}");
+    assert!(out.contains("还没有检查点"), "{out}");
     let _ = fs::remove_dir_all(&r);
 }
