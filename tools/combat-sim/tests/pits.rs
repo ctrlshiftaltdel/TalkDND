@@ -312,8 +312,64 @@ fn climbing_down_costs_extra_and_carrying_halves_speed() {
 }
 
 #[test]
-fn acting_out_of_turn_warns() {
+fn acting_out_of_turn_attack_fails() {
     let t = setup("turn", "pit-fight");
+    // setup() pins Hero's initiative at 30, so Hero acts first and Mook 1 is
+    // out of turn. The attack must fail before any roll, log line, action
+    // spend, or HP or resource change.
+    let before = std::fs::read(t.p()).unwrap();
+    let out = run(&[
+        "--state",
+        t.p(),
+        "attack",
+        "Mook 1",
+        "Hero",
+        "poke",
+        "--seed",
+        "1",
+    ]);
+    assert!(!out.status.success(), "out-of-turn attack must fail");
+    let message = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(message.contains("cannot attack now"), "{message}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(
+        before,
+        std::fs::read(t.p()).unwrap(),
+        "state file must be byte-identical after a failed out-of-turn attack"
+    );
+
+    // --force is the explicit DM override and leaves an audit line.
+    let out = ok(&[
+        "--state",
+        t.p(),
+        "attack",
+        "Mook 1",
+        "Hero",
+        "poke",
+        "--force",
+        "--seed",
+        "1",
+    ]);
+    assert!(
+        out.contains("WARNING: Mook 1 acts out of turn to attack"),
+        "{out}"
+    );
+    assert!(out.contains("with --force"), "{out}");
+    assert!(out.contains("attacks Hero with Poke"), "{out}");
+
+    // On the attacker's own turn the attack is normal: no warning.
+    let active = || -> String {
+        let status: Value =
+            serde_json::from_str(&ok(&["--state", t.p(), "status", "--json"])).unwrap();
+        status["active"].as_str().unwrap().to_string()
+    };
+    while active() != "Mook 1" {
+        ok(&["--state", t.p(), "next", "--seed", "1"]);
+    }
     let out = ok(&[
         "--state",
         t.p(),
@@ -324,21 +380,8 @@ fn acting_out_of_turn_warns() {
         "--seed",
         "1",
     ]);
-    assert!(
-        out.contains("WARNING: Mook 1 is acting out of turn"),
-        "{out}"
-    );
-    let out = ok(&[
-        "--state",
-        t.p(),
-        "attack",
-        "Hero",
-        "Mook 1",
-        "sure-sword",
-        "--seed",
-        "1",
-    ]);
     assert!(!out.contains("WARNING"), "{out}");
+    assert!(out.contains("attacks Hero with Poke"), "{out}");
 }
 
 #[test]
