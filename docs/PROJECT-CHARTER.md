@@ -31,6 +31,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 - Publish prebuilt `combat-sim` binaries for the release targets in this charter, and keep a from-source build for everyone else.
 - Record product decisions in this charter so later tasks do not drift from them.
 - Let the DM leave a published adventure only within a per-save, creation-locked deviation scope and ratio, with every original element registered in a DM-only ledger.
+- Resume a campaign across sessions with a recoverable state history (checkpoints and structured diffs), stable entity and relation memory, optional in-world time, and fast local navigation of the player's own books, all inside the existing save and under the same privacy and spoiler discipline.
 
 ## Non-goals
 
@@ -125,6 +126,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - `uv run --no-project python scripts/validate_kit.py`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
 - Release automation builds the three prebuilt targets named in this charter.
 - A pull request that changes scope, goals, tech stack, rules support, or a user decision also updates this charter in that same pull request.
+- Once v0.12 ships, a session interrupted mid-play can be resumed from the last good checkpoint, and the structured diff since the previous session is available without rereading the whole log.
 
 ## Architecture decisions
 
@@ -137,6 +139,11 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 - Prebuilt releases cover Linux x86_64, Windows x86_64, and macOS arm64.
 - This file is a living charter, updated in the same pull request as the decision it records.
 - Adventure deviation is per save, chosen with `talkdnd new --scope/--ratio`, stored in `save-meta.yaml`, and cannot be changed after creation. Original content is registered in the DM-only `original.yaml` before it is used, and its type, rarity and chapter budget are checked by the tool.
+- The campaign-continuity data contract is `LetsPlay/docs/campaign-continuity.md`. It is the single authority matrix for the P00–P08 program; implementation tasks do not drift from it.
+- The main save schema rises to 8 only in P03. All other new save state is versioned sidecars (`memory.yaml`, `entities.yaml`, `relations.yaml`, `world-time.yaml`, `checkpoints/*/manifest.yaml`, `index/structured.json`): a missing file means the feature is off, a newer version is refused.
+- Checkpoints are the DM-local recovery path, not a player-facing view. `checkpoint snapshot` rewinds mechanical state plus revealed/identified knowledge and nothing else (never append-only logs, DM working files, derived files, or binary handout exports); `checkpoint restore` backs the whole save up before replacing anything, appends a restore line to the session log without truncating history, refreshes the integrity manifest and audit baseline, migrates a snapshot whose schema is older than the current main schema and refuses a newer one, and keeps the last ten; `snapshot diff` reports structured changes only.
+- World time is per save, off by default, and moves only on an explicit command. No narration or scene change advances it.
+- The Oracle produces inspiration only. It writes no save file, never invents a roll, and resolves every die through the combat-sim dice engine.
 
 ## Open decisions
 
@@ -144,11 +151,27 @@ None. A new product decision is written into the Decision Log, and into the sect
 
 ## Initial milestone
 
-The smallest end-to-end slice is already the play kit: a player supplies an SRD, starts in `LetsPlay/`, and uses `combat-sim` to roll dice and resolve one combat under a single `ruleset`. This charter is the signed description of that slice. Further work stays inside it until the Decision Log says otherwise.
+The smallest end-to-end slice is already the play kit: a player supplies an SRD, starts in `LetsPlay/`, and uses `combat-sim` to roll dice and resolve one combat under a single `ruleset`. This charter is the signed description of that slice. Further work stays inside it until the Decision Log says otherwise. The 2026-10-24 Decision Log authorizes the P00–P08 campaign-continuity program as the next scope, shipping in v0.12–v0.14.
 
 Validation is the kit check and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `ORCHESTRATION-PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-24 — Campaign-continuity contract clarification (TASK-0056 review)
+
+Master review of the frozen P00 contract (`LetsPlay/docs/campaign-continuity.md`) found one contradiction and two undefined restore edges, plus an unclear visibility statement; the contract is amended in place, in the same file and the same pull request. `identified.yaml` joins the checkpoint copy set (it is small and must stay consistent with `reveals.yaml`), so a checkpoint rewinds mechanical state plus revealed/identified knowledge — never append-only logs (`Sessions/`, `rolls.log`), DM working files, derived files, or binary handout exports — and checkpoints themselves are DM-local recovery data, not a player-facing view. On restore: a snapshot whose `schema` is older than the current main schema is restored and then migrated normally (whole-save backup plus session-log line), a newer one is refused; after a restore the current session log gains a restore line and is never truncated, and the integrity manifest and audit baseline are refreshed so `talkdnd check` stays clean.
+
+Alternative considered: keep `identified.yaml` out of checkpoints and rebuild identification from `reveals.yaml` after a restore. Rejected: `identified.yaml` is its own versioned sidecar with DM-only appearance overrides; rebuilding would silently drop state and break the one-writer matrix.
+
+### 2026-10-24 — Campaign continuity program P00–P08
+
+The owner approved the adjusted P00–P08 program. P00 freezes the data contract in `LetsPlay/docs/campaign-continuity.md`: an authority matrix that gives every existing save store exactly one writer, the exact formats (fields, versions, defaults, corruption behavior) for the new sidecars (`checkpoints/`, `memory.yaml`, `entities.yaml`, `relations.yaml`, `world-time.yaml`, `index/structured.json`), the session and in-world time model, the P01–P08 command surface, visibility rules, non-goals, and success metrics. The former P02 (snapshot diff) is folded into P01 (checkpoints and restore): both need the same snapshot machinery and both touch `start.rs`. The former P05 (relation graph) is folded into P04 (entities): relations reference entity ids. P09 (second-screen display and player input devices) is removed from the roadmap; it would introduce a network service and needs its own charter change and security assessment before any implementation.
+
+Schema strategy: the main save schema (`save-meta.yaml` `schema`, currently 7) rises to 8 only in P03 (per-save DM style settings), with the usual whole-save backup migration. Every other new file is a versioned sidecar: a missing file means the feature is off, a newer version is refused. Save integrity covers the new sidecars when they exist but never `Sessions/` or checkpoint data copies. World time is off by default and advances only on an explicit command; the Oracle produces inspiration only, writes no authoritative state, and rolls only through the combat-sim dice engine.
+
+Release slices: v0.12 = P00 + P00a + P00b + P01 + P07 (reliability and navigation); v0.13 = P03 + P04 (memory and entities); v0.14 = P06 + P08 (world time and DM aids).
+
+Alternative considered: keep the former P01–P09 split and add P00 as a standalone design phase. Rejected: the fold-ins remove two migration windows and two `lib.rs` conflicts, and a network-service feature must not ride along on an approved reliability program.
 
 ### 2026-10-24 — Play-time page fixes and split-volume consolidation (v0.11.0)
 
