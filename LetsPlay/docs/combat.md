@@ -15,6 +15,7 @@ CS=bin/combat-sim
 $CS content check                                   # 改了数据后必跑，必须 0 error
 $CS --state v13 new --encounter v13-gemstone-guards  # 省略 --party 时用清单里的 party
 $CS --state v13 init --surprised "Museum Guard 1"   # 2024：先攻劣势；2014：失去第一回合（引擎按 ruleset 自动处理）
+$CS --state v13 add --creature "museum-guard:2@far" --side enemy   # 战斗进行中增援（--initiative N 指定先攻）
 $CS --state v13 status                              # 当前回合、HP、状态、资源
 $CS --state v13 scene                               # 区域、距离、高度、可交互物
 $CS --state v13 attack Will "Museum Guard 2" longsword [--adv|--dis] [--nonlethal]
@@ -40,6 +41,7 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 - 休息：`rest short <名字|all> [--hd N]` 花 N 个生命骰（每个掷骰 + 体质调整值）恢复 HP；`rest long <名字|all>` 回满 HP 和资源、恢复一半生命骰（至少 1）并结束专注。`all` 只包括 party 一方活着的角色，敌人和死者不休息。
 - 同伴（`Characters/` 里 `controller: dm` 的队友；战斗块 `side: party`，`kind` 可以是 `pc` 或 `npc`）和 PC 一样在 0 HP 时倒地并做死亡豁免（`deathsave`）。
 - 睡眠术（2024 第二次豁免；2014 的 HP 池整个是手动）、冒险书的特殊机关、增援到场时机等是**手动**的：用 `save`、`condition add`、`activate`。
+- 增援入战：`combat-sim add --creature "id:数量@区域"`（可重复；区域默认 party zone）。side 默认取生物数据自己的 side，用 `--side` 指定时必须是一个单词（自动转小写）。先攻未指定时每个新战斗者各自掷 `1d20+先攻修正`（日志记 `(rolled)`），`--initiative N` 则用固定值（日志记 `(set)`）。插入规则：先攻总值插队，同值排在已在场者之后；**插在当前行动位置之前的新战斗者本轮不行动**（日志会写明），从下一轮起按序行动；插在当前位置之后的本轮照常行动。当前行动者与回合进度不受影响，既有战斗者的数据与日志也不会被改动。还没 `init` 时只添加不掷先攻（此时 `--initiative` 报错，`init` 会为所有人掷）；战斗已分出胜负的 state 不能再添加，需新建遭遇。新战斗者总是清醒加入；加到 party 一侧照常写回 party-state。
 - 状态文件是自包含的快照；改了角色卡/怪物数据后，**正在进行的**战斗不会自动更新，需要新建 state。
 - 引擎结果 = 规则结算的建议，DM 仍要检查是否符合叙事与规则（例如潜行、视线、幻象遮挡是否允许借机攻击）。
 - 战斗中每个掷骰同样要抄进会话日志（引擎输出已经是完整算式，可直接贴）。

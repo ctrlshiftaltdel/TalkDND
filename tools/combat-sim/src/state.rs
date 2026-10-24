@@ -21,6 +21,7 @@ use crate::content::schema::{
     EndsOn, ResourceDef, Rules, SaveEndsAt, Scene, SceneMode, SceneTrigger, Side, Speed,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
+use crate::dice::{D20Roll, DiceRng, RollMode};
 use crate::space::{GridMap, GridSpace, Position, SpaceCache, SpaceView, ZoneGraph};
 
 /// State file used when no `--state` is supplied.
@@ -946,33 +947,229 @@ impl EncounterState {
 
     /// Applies each creature's initial condition ids (after content is known).
     fn refresh_initial_conditions(&mut self) -> Result<()> {
-        for combatant in &mut self.combatants {
-            let ids = combatant.creature.conditions.clone().unwrap_or_default();
-            for id in ids {
-                if combatant.is_immune_to_condition(&id) {
-                    continue;
-                }
-                let duration = self
-                    .content
-                    .conditions
-                    .get(&id)
-                    .and_then(|condition| condition.duration_default.clone());
-                combatant.conditions.push(ActiveCondition {
-                    condition: id,
-                    source: None,
-                    linked: None,
-                    duration: duration
-                        .map(|duration| active_duration(&duration, &combatant.name, 0)),
-                    save_ends: None,
-                    ends_on: Vec::new(),
-                    created_by: None,
-                    concentration: false,
-                    applied_round: 0,
-                    notes: None,
-                });
-            }
+        for index in 0..self.combatants.len() {
+            self.apply_initial_conditions(index)?;
         }
         Ok(())
+    }
+
+    /// Applies one combatant's creature-defined initial conditions. Used when
+    /// building an encounter and when adding a combatant to a live fight.
+    fn apply_initial_conditions(&mut self, index: usize) -> Result<()> {
+        let ids = self.combatants[index]
+            .creature
+            .conditions
+            .clone()
+            .unwrap_or_default();
+        for id in ids {
+            if self.combatants[index].is_immune_to_condition(&id) {
+                continue;
+            }
+            let duration = self
+                .content
+                .conditions
+                .get(&id)
+                .and_then(|condition| condition.duration_default.clone());
+            let name = self.combatants[index].name.clone();
+            let round = self.round;
+            self.combatants[index].conditions.push(ActiveCondition {
+                condition: id,
+                source: None,
+                linked: None,
+                duration: duration.map(|duration| active_duration(&duration, &name, round)),
+                save_ends: None,
+                ends_on: Vec::new(),
+                created_by: None,
+                concentration: false,
+                applied_round: round,
+                notes: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// Adds new combatants to an encounter that already exists (`add`).
+    ///
+    /// Existing combatants are never touched: their HP, resources, conditions,
+    /// action counters, positions, initiative and the log lines so far stay
+    /// exactly as they are. New combatants join awake and, once initiative has
+    /// been rolled, enter the order by total (rolled per combatant, or the
+    /// explicit `initiative` value). A combatant inserted at or before the
+    /// current turn position does not act in the running round; it first acts
+    /// when the order wraps around. With no initiative order yet the
+    /// combatants are only added; `init` rolls for everyone later. Adding to
+    /// an ended encounter (`outcome` set) is refused.
+    ///
+    /// Returns the indices of the new combatants.
+    pub fn add_combatants(
+        &mut self,
+        adds: &[AddSpec],
+        side: Option<&str>,
+        initiative: Option<i32>,
+        rng: &mut dyn DiceRng,
+        log: &mut Vec<String>,
+    ) -> Result<Vec<usize>> {
+        if initiative.is_some() && self.initiative.is_empty() {
+            bail!(
+                "--initiative needs an initiative order; run `init` first (it rolls for every combatant, added ones included)"
+            );
+        }
+        if let Some(outcome) = &self.outcome {
+            bail!("the encounter has ended ({outcome}); adding combatants needs a new encounter");
+        }
+        let scene = self
+            .scene
+            .as_ref()
+            .ok_or_else(|| anyhow!("state has no scene; cannot place new combatants"))?
+            .clone();
+        let mut placement = Placement {
+            mode: scene.mode,
+            grid: if scene.mode == SceneMode::Grid {
+                Some(
+                    GridMap::parse(&scene)
+                        .ok_or_else(|| anyhow!("scene `{}` has no usable grid", scene.id))?,
+                )
+            } else {
+                None
+            },
+            occupied: self
+                .combatants
+                .iter()
+                .filter_map(|combatant| combatant.cell().map(|[x, y]| (x, y)))
+                .collect(),
+        };
+        let side = match side {
+            Some(text) => {
+                let text = text.trim().to_ascii_lowercase();
+                if text.is_empty()
+                    || !text.chars().all(|c| {
+                        c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
+                    })
+                {
+                    bail!("invalid side `{text}`: use one word like `party` or `enemy`");
+                }
+                Some(Side::new(text))
+            }
+            None => None,
+        };
+
+        let running = !self.initiative.is_empty();
+        let mut new_indices = Vec::new();
+        for add in adds {
+            let creature = self
+                .content
+                .resolve_creature(&add.creature)
+                .with_context(|| format!("add `{}`", add.creature))?;
+            let creature_id = creature.id.clone();
+            let zone = add
+                .zone
+                .clone()
+                .unwrap_or_else(|| self.party_zone.clone().unwrap_or_default());
+            let request = PlaceRequest::Zone(zone);
+            if !placement.request_known(&scene, &request) {
+                bail!(
+                    "add `{}` uses unknown zone `{}` (known zones: {})",
+                    add.creature,
+                    request.describe(),
+                    zone_list(&scene, placement.grid.as_ref())
+                );
+            }
+            let base_name = creature.display_name().to_string();
+            let side = side.clone().unwrap_or_else(|| creature.side());
+            let ai = creature.ai.clone();
+            let before = self.combatants.len();
+            append_instances(
+                &mut self.combatants,
+                &mut placement,
+                &scene,
+                creature,
+                &base_name,
+                add.count,
+                &request,
+                side,
+                false,
+                ai,
+                log,
+                "add",
+            )?;
+            for index in before..self.combatants.len() {
+                self.apply_initial_conditions(index)?;
+                log.push(format!(
+                    "Added {} ({} {}) at {}",
+                    self.combatants[index].name,
+                    self.combatants[index].side.as_str(),
+                    creature_id,
+                    self.combatants[index].zone
+                ));
+                new_indices.push(index);
+            }
+        }
+
+        if running {
+            for &index in &new_indices {
+                let (total, line) = match initiative {
+                    Some(total) => (
+                        total,
+                        format!("Initiative {}: {total} (set)", self.combatants[index].name),
+                    ),
+                    None => {
+                        let roll = D20Roll::roll(
+                            self.combatants[index].creature.init_bonus(),
+                            RollMode::Normal,
+                            rng,
+                        );
+                        (
+                            roll.total,
+                            format!(
+                                "Initiative {}: {} (rolled)",
+                                self.combatants[index].name,
+                                roll.text()
+                            ),
+                        )
+                    }
+                };
+                self.combatants[index].initiative_total = Some(total);
+                log.push(line);
+                if self.insert_into_initiative(index) {
+                    log.push(format!(
+                        "{} joins before the current turn: no action in round {}",
+                        self.combatants[index].name, self.round
+                    ));
+                }
+            }
+        }
+        self.rebuild_caches();
+        Ok(new_indices)
+    }
+
+    /// Inserts a combatant into the live initiative order, mirroring the
+    /// engine's `activate` semantics: higher totals first, ties after the
+    /// combatants already in the order. Returns whether the combatant was
+    /// inserted at or before the current turn position and therefore waits
+    /// until the order wraps around before its first turn.
+    fn insert_into_initiative(&mut self, index: usize) -> bool {
+        if self.initiative.is_empty() {
+            self.initiative.push(index);
+            return false;
+        }
+        let total = self.combatants[index].initiative_total.unwrap_or(0);
+        let position = self
+            .initiative
+            .iter()
+            .position(|candidate| {
+                let other = self.combatants[*candidate].initiative_total.unwrap_or(0);
+                total > other
+            })
+            .unwrap_or(self.initiative.len());
+        self.initiative.insert(position, index);
+        let waits = position <= self.turn;
+        if waits {
+            self.turn = self.turn.saturating_add(1);
+        }
+        if self.turn >= self.initiative.len() {
+            self.turn = self.initiative.len().saturating_sub(1);
+        }
+        waits
     }
 
     pub fn space(&self) -> Option<SpaceView<'_>> {
