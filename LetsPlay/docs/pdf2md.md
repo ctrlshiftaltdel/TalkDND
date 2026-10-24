@@ -53,6 +53,22 @@ Rules/2024/players-handbook-2024/index/img/p0123-a1.webp                # 从扫
 2. 以下情况一律打开 PDF 对应页核对：`index.md` 列为低质量的页、正文里带 `> ⚠ Stat block check` 的**数据块**（`index.md` 的 Stat blocks 一节标 ✓ 的数据块数值自洽，可直接用 Markdown）、表格看起来错位、文字明显缺漏，以及所有**地图**（用 PDF 或 `img/` 下的图片）。
 3. 书还没转到那一页：直接查 PDF。**PDF 永远是权威来源**；Markdown 只是便于检索的副本。
 
+## 结构化索引：talkdnd adventure index
+
+`talkdnd` 还能把一本书的 pdf2md 输出整理成只含结构的索引，写进同一本书的 `index/structured.json`（派生数据，和 `index/` 里其他文件一样不入库，删掉即重建）：
+
+```
+Adventures/curse-of-strahd/index/structured.json  # version、book、source、headings、chapters、maps、figures、statblocks、low_quality_pages
+```
+
+- **只存结构**：标题、PDF 页码、锚点（`pN`）和标签（地图图注、数据卡名），不存正文、页面图或抽出的句子。
+- **来源**：该书的 `index/index.json` 与 `index/<书名>.pages.md`；缺任何一个都会点名报错。`source` 记 PDF 的相对路径与 sha256（取不到时退化为 mtime 秒）。
+- **命令**：
+  - `bin/talkdnd adventure index build [--book <书名>]`（缺省本存档的冒险）：生成或刷新索引；源未变时输出跳过，只有 PDF 或索引内容变化才重建；幂等、顺序稳定（文档序）。
+  - `bin/talkdnd adventure index show <书名>`：打印章节、节、地图、图、数据卡的标题、页码、锚点，不打印正文。
+  - `bin/talkdnd adventure index search <书名> <查询>`：只匹配标题/章节/图示/数据卡标签，输出标题、页码、锚点；正文检索用 `adventure search`。
+- 重建只写 `structured.json` 一个文件，不改动 pdf2md 的任何输出；索引版本高于程序支持时拒绝并提示升级 talkdnd。
+
 ## 0.6.0（pdf2md）/ TalkDND 0.10.0：一书一文件夹、只生成页码版
 
 - **输出位置**：PDF 在书文件夹里（文件夹名 = 书名的 slug）时，输出写进同文件夹的 `index/`；否则仍写旧位置 `.md/<书名>/`。slug 规则与 `talkdnd` 相同（见 `docs/layout.md`）。
