@@ -321,6 +321,27 @@ pub enum Command {
     /// Wake dormant creatures matching a name, creature id or tag.
     Activate { name: String },
 
+    /// Add new combatants to an encounter that already exists. Mid-fight
+    /// additions enter the initiative order by total (rolled per combatant,
+    /// or `--initiative`); one inserted at or before the current turn
+    /// position does not act in the running round. Added combatants join
+    /// awake, and the party side writes back to party-state as usual.
+    Add {
+        /// Creatures to add: `id[:count][@zone]` (repeatable). The zone
+        /// defaults to the encounter's party zone.
+        #[arg(long = "creature", value_name = "ID[:N][@ZONE]", required = true)]
+        creatures: Vec<String>,
+        /// Side for the new combatants, for example `party` or `enemy`
+        /// (default: each creature's own side).
+        #[arg(long, value_name = "SIDE")]
+        side: Option<String>,
+        /// Fixed initiative total for every added combatant (omit to roll
+        /// d20 + initiative bonus per combatant). Needs an initiative order;
+        /// before `init` the added combatants are simply added to the fight.
+        #[arg(long, value_name = "N")]
+        initiative: Option<i32>,
+    },
+
     /// Inspect and validate campaign content without loading an encounter.
     Content {
         #[command(subcommand)]
@@ -939,6 +960,21 @@ pub fn run() -> Result<()> {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 engine::activate(state, &name, rng, lines)
+            })
+        }
+        Command::Add {
+            creatures,
+            side,
+            initiative,
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
+                let adds = creatures
+                    .iter()
+                    .map(|spec| AddSpec::parse(spec))
+                    .collect::<Result<Vec<_>>>()?;
+                state.add_combatants(&adds, side.as_deref(), initiative, rng, lines)?;
+                Ok(())
             })
         }
         Command::Content { command } => run_content(&sources, command),

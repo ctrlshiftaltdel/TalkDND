@@ -1050,3 +1050,445 @@ fn damage_works_on_any_turn_and_spends_no_action() {
     );
     assert_success(&output, "attack after a DM damage");
 }
+
+#[test]
+fn add_combatants_to_a_running_encounter_preserves_everything() {
+    let temp = TempState::new("add-running");
+    create(&temp, &["--party", "striker-a,warden-b"]);
+    assert_success(
+        &run(
+            temp.path(),
+            &[
+                "init",
+                "--set",
+                "Striker A=20",
+                "--set",
+                "Warden B=15",
+                "--set",
+                "Brute A=10",
+            ],
+        ),
+        "init",
+    );
+    assert_success(&run(temp.path(), &["damage", "Brute", "5"]), "damage");
+
+    let before: Value = serde_json::from_slice(&fs::read(temp.path()).unwrap()).unwrap();
+    let before_combatants = before["combatants"].as_array().unwrap().clone();
+    let before_log = before["log"].as_array().unwrap().clone();
+
+    let output = run(
+        temp.path(),
+        &["add", "--creature", "brute-a:2@beta", "--seed", "42"],
+    );
+    assert_success(&output, "add two foes");
+    let out = stdout(&output);
+    assert!(
+        out.contains("Added Brute A 1 (enemy brute-a) at beta"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Added Brute A 2 (enemy brute-a) at beta"),
+        "{out}"
+    );
+    assert!(out.contains("(rolled)"), "{out}");
+    assert!(!out.contains("(set)"), "{out}");
+
+    let after: Value = serde_json::from_slice(&fs::read(temp.path()).unwrap()).unwrap();
+    let combatants = after["combatants"].as_array().unwrap().clone();
+    assert_eq!(combatants.len(), before_combatants.len() + 2);
+
+    // Existing combatants keep every field, including the damage taken.
+    for (old, new) in before_combatants.iter().zip(combatants.iter()) {
+        assert_eq!(old, new, "existing combatant changed: {old}");
+    }
+    // The log only grows: every pre-existing line is byte-identical.
+    let log = after["log"].as_array().unwrap().clone();
+    assert!(log.len() > before_log.len());
+    for (index, line) in before_log.iter().enumerate() {
+        assert_eq!(line, &log[index], "log line {index} changed");
+    }
+
+    // The new combatants have rolled initiative and enter the order without
+    // moving the current actor or the round.
+    assert_eq!(after["round"], 1);
+    assert_eq!(after["turn"], 0);
+    assert_eq!(status_json(temp.path())["active"], "Striker A");
+    assert_eq!(
+        after["initiative"].as_array().unwrap()[0],
+        before["initiative"].as_array().unwrap()[0]
+    );
+    for name in ["Brute A 1", "Brute A 2"] {
+        let combatant = combatants
+            .iter()
+            .find(|combatant| combatant["name"] == name)
+            .unwrap_or_else(|| panic!("{name} should be present"));
+        assert_eq!(combatant["zone"], "beta");
+        assert_eq!(combatant["hp"], combatant["max_hp"]);
+        assert!(combatant["initiative_total"].is_i64(), "{combatant}");
+    }
+
+    // The audit lines are part of the persistent log.
+    let output = run(temp.path(), &["log", "--tail", "10"]);
+    assert_success(&output, "log");
+    let log = stdout(&output);
+    assert!(
+        log.contains("Added Brute A 1 (enemy brute-a) at beta"),
+        "{log}"
+    );
+    assert!(log.contains("Initiative Brute A 1: 1d20("), "{log}");
+    assert!(log.contains("(rolled)"), "{log}");
+}
+
+#[test]
+fn added_combatant_before_the_current_turn_waits_until_next_round() {
+    let temp = TempState::new("add-retroactive");
+    create(&temp, &["--party", "striker-a,warden-b"]);
+    assert_success(
+        &run(
+            temp.path(),
+            &[
+                "init",
+                "--set",
+                "Striker A=20",
+                "--set",
+                "Warden B=15",
+                "--set",
+                "Brute A=10",
+            ],
+        ),
+        "init",
+    );
+    assert_eq!(status_json(temp.path())["active"], "Striker A");
+
+    // Higher than everyone: inserted at the top, before the current turn
+    // position, so it must not act in round 1.
+    let output = run(
+        temp.path(),
+        &[
+            "add",
+            "--creature",
+            "rampage-e",
+            "--side",
+            "enemy",
+            "--initiative",
+            "25",
+        ],
+    );
+    assert_success(&output, "add with explicit initiative");
+    let out = stdout(&output);
+    assert!(out.contains("Initiative Rampage E: 25 (set)"), "{out}");
+    assert!(
+        out.contains("Rampage E joins before the current turn: no action in round 1"),
+        "{out}"
+    );
+
+    let status = status_json(temp.path());
+    assert_eq!(
+        status["active"], "Striker A",
+        "current actor must be preserved"
+    );
+    assert_eq!(status["round"], 1);
+    let rampage = status["combatants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|combatant| combatant["name"] == "Rampage E")
+        .expect("Rampage E should be present")
+        .clone();
+    assert_eq!(rampage["initiative"], 25);
+    assert_eq!(rampage["side"], "enemy");
+
+    // The remaining round-1 turns are Warden B and Brute A, then the order
+    // wraps around to Rampage E in round 2 - it never acted in round 1.
+    let mut turns = Vec::new();
+    for _ in 0..3 {
+        let output = run(temp.path(), &["next"]);
+        assert_success(&output, "next");
+        let line = stdout(&output)
+            .lines()
+            .find(|line| line.contains("'s turn"))
+            .expect("next prints a turn line")
+            .to_string();
+        turns.push(line);
+    }
+    assert_eq!(turns[0], "Round 1 - Warden B's turn", "{turns:?}");
+    assert_eq!(turns[1], "Round 1 - Brute A's turn", "{turns:?}");
+    assert_eq!(turns[2], "Round 2 - Rampage E's turn", "{turns:?}");
+
+    // And on that legitimate turn it can act normally.
+    let output = run(
+        temp.path(),
+        &["attack", "Rampage E", "Warden", "bite", "--seed", "1"],
+    );
+    assert_success(&output, "attack on the added combatant's turn");
+    assert!(
+        stdout(&output).contains("Rampage E attacks Warden B with Bite"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn added_combatant_after_the_current_turn_acts_this_round() {
+    let temp = TempState::new("add-lower");
+    create(&temp, &["--party", "striker-a,warden-b"]);
+    assert_success(
+        &run(
+            temp.path(),
+            &[
+                "init",
+                "--set",
+                "Striker A=20",
+                "--set",
+                "Warden B=15",
+                "--set",
+                "Brute A=10",
+            ],
+        ),
+        "init",
+    );
+    // Lower than the current actor: joins behind it and acts later in the
+    // same round.
+    let output = run(
+        temp.path(),
+        &["add", "--creature", "recharger-r", "--initiative", "5"],
+    );
+    assert_success(&output, "add with a low explicit initiative");
+    assert!(
+        !stdout(&output).contains("no action in round"),
+        "{}",
+        stdout(&output)
+    );
+    let mut turns = Vec::new();
+    for _ in 0..3 {
+        let output = run(temp.path(), &["next"]);
+        assert_success(&output, "next");
+        let line = stdout(&output)
+            .lines()
+            .find(|line| line.contains("'s turn"))
+            .expect("next prints a turn line")
+            .to_string();
+        turns.push(line);
+    }
+    assert_eq!(turns[0], "Round 1 - Warden B's turn", "{turns:?}");
+    assert_eq!(turns[1], "Round 1 - Brute A's turn", "{turns:?}");
+    assert_eq!(turns[2], "Round 1 - Recharger R's turn", "{turns:?}");
+}
+
+#[test]
+fn add_before_initiative_adds_without_rolling() {
+    let temp = TempState::new("add-before-init");
+    create(&temp, &["--party", "striker-a"]);
+
+    // Before init runs there is no order yet: --initiative is refused.
+    let output = run(
+        temp.path(),
+        &["add", "--creature", "brute-a", "--initiative", "15"],
+    );
+    assert!(
+        !output.status.success(),
+        "--initiative before init must fail"
+    );
+    assert!(
+        stderr(&output).contains("--initiative needs an initiative order"),
+        "{}",
+        stderr(&output)
+    );
+
+    let output = run(temp.path(), &["add", "--creature", "brute-a@beta"]);
+    assert_success(&output, "add before init");
+    assert!(
+        stdout(&output).contains("Added Brute A 2"),
+        "{}",
+        stdout(&output)
+    );
+    let status = status_json(temp.path());
+    assert_eq!(status["round"], 0);
+    assert_eq!(status["combatants"].as_array().unwrap().len(), 3);
+    let raw: Value = serde_json::from_slice(&fs::read(temp.path()).unwrap()).unwrap();
+    assert_eq!(raw["initiative"].as_array().unwrap().len(), 0);
+
+    // init rolls for everyone, the added combatant included.
+    assert_success(&run(temp.path(), &["init", "--seed", "7"]), "init");
+    let status = status_json(temp.path());
+    let combatants = status["combatants"].as_array().unwrap();
+    assert_eq!(combatants.len(), 3);
+    assert!(combatants
+        .iter()
+        .all(|combatant| combatant["initiative"].is_i64()));
+    let raw: Value = serde_json::from_slice(&fs::read(temp.path()).unwrap()).unwrap();
+    assert_eq!(raw["initiative"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn add_rejects_invalid_input_without_touching_the_state() {
+    let temp = TempState::new("add-invalid");
+    create(&temp, &["--party", "striker-a"]);
+    assert_success(&run(temp.path(), &["init", "--seed", "42"]), "init");
+    let before = fs::read(temp.path()).unwrap();
+
+    let failures: &[(&[&str], &str)] = &[
+        (&["add", "--creature", "no-such-foe"], "no-such-foe"),
+        (&["add", "--creature", "brute-a@nowhere"], "unknown zone"),
+        (
+            &["add", "--creature", "brute-a:0"],
+            "count must be at least 1",
+        ),
+        (
+            &["add", "--creature", "brute-a", "--side", "Bad Side!"],
+            "invalid side",
+        ),
+        (
+            &["add", "--creature", "brute-a", "--initiative", "abc"],
+            "invalid value",
+        ),
+    ];
+    for (args, expected) in failures {
+        let output = run(temp.path(), args);
+        assert!(!output.status.success(), "{args:?} should fail");
+        if !expected.is_empty() {
+            let message = format!("{}{}", stderr(&output), stdout(&output));
+            assert!(message.contains(expected), "{args:?}: {message}");
+        }
+        assert_eq!(
+            before,
+            fs::read(temp.path()).unwrap(),
+            "state file must be byte-identical after a failed {args:?}"
+        );
+    }
+}
+
+#[test]
+fn add_to_the_party_side_syncs_party_state_and_the_integrity_baseline() {
+    let root = unique_temp_dir("add-party-integrity");
+    fs::create_dir_all(root.join("combat")).unwrap();
+    let manifest = root.join("combat/campaign.yaml");
+    let library = yaml_path(&fixture("library"));
+    fs::write(
+        &manifest,
+        format!(
+            "name: Add Party Test\nlibrary: [\"{library}\"]\nstate_dir: .\nparty: [striker-a]\n"
+        ),
+    )
+    .unwrap();
+    // The integrity manifest exists before the first tool write (talkdnd
+    // creates it on first use); a combat/ state file is part of it.
+    combat_sim::integrity::ensure(&root).unwrap();
+    let cs = |args: &[&str]| {
+        let mut all = vec!["--campaign", manifest.to_str().unwrap()];
+        all.extend_from_slice(args);
+        run_raw(&all)
+    };
+    assert_success(
+        &cs(&["--state", "v13", "new", "--encounter", "test-fight"]),
+        "new",
+    );
+    assert!(
+        combat_sim::integrity::changes(&root).unwrap().is_empty(),
+        "new must adopt the state file into the baseline"
+    );
+    assert_success(
+        &cs(&["--state", "v13", "init", "--set", "Striker A=20"]),
+        "init",
+    );
+
+    // Add a party-side member mid-fight: the party-state file gains the
+    // member and the integrity baseline moves with the tool's own write.
+    let output = cs(&[
+        "--state",
+        "v13",
+        "add",
+        "--creature",
+        "warden-b",
+        "--side",
+        "party",
+        "--initiative",
+        "8",
+    ]);
+    assert_success(&output, "add party-side member");
+    let out = stdout(&output);
+    assert!(out.contains("Added Warden B (party warden-b)"), "{out}");
+    assert!(out.contains("Initiative Warden B: 8 (set)"), "{out}");
+
+    let party = fs::read_to_string(root.join("combat/party-state.yaml")).unwrap();
+    assert!(party.contains("warden-b"), "{party}");
+    assert!(
+        combat_sim::integrity::changes(&root).unwrap().is_empty(),
+        "add must refresh the integrity baseline"
+    );
+    let show = cs(&["--state", "v13", "party", "show"]);
+    assert_success(&show, "party show");
+    assert!(stdout(&show).contains("Warden B"), "{}", stdout(&show));
+
+    // A later hand edit is still detected on top of the refreshed baseline.
+    let state_file = root.join("combat/v13.state.json");
+    let text = fs::read_to_string(&state_file).unwrap();
+    fs::write(&state_file, text.replace("Striker A", "Striker X")).unwrap();
+    assert_eq!(
+        combat_sim::integrity::changes(&root).unwrap(),
+        vec![combat_sim::integrity::Change::Modified(
+            "combat/v13.state.json".into()
+        )]
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn add_to_a_grid_scene_places_on_a_free_cell() {
+    let temp = TempState::new("add-grid");
+    let manifest = fixture("manifest.yaml");
+    let output = run_raw(&[
+        "--state",
+        temp.path().to_str().unwrap(),
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "new",
+        "--encounter",
+        "grid-fight",
+        "--party",
+        "adept-a",
+    ]);
+    assert_success(&output, "new grid fight");
+    assert_success(&run(temp.path(), &["init", "--set", "Adept A=20"]), "init");
+
+    let output = run(
+        temp.path(),
+        &[
+            "add",
+            "--creature",
+            "resistant-r@statue",
+            "--initiative",
+            "12",
+        ],
+    );
+    assert_success(&output, "add to a grid scene");
+    let status = status_json(temp.path());
+    let cells: Vec<[i64; 2]> = status["combatants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|combatant| {
+            combatant["pos"]
+                .as_array()
+                .map(|pos| [pos[0].as_i64().unwrap(), pos[1].as_i64().unwrap()])
+        })
+        .collect();
+    assert_eq!(cells.len(), 4, "{cells:?}");
+    let mut sorted = cells.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(
+        cells.len(),
+        sorted.len(),
+        "positions must not overlap: {cells:?}"
+    );
+    let added = status["combatants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|combatant| combatant["name"] == "Resistant R")
+        .expect("Resistant R should be present")
+        .clone();
+    assert_eq!(added["zone"], "statue");
+    assert_eq!(added["pos"], serde_json::json!([1, 4]));
+}
