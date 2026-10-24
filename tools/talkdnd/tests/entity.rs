@@ -104,12 +104,12 @@ fn name_and_alias_conflicts_are_refused_and_never_merged() {
     let mira_ci = vec!["mira ".to_string()];
     assert!(entity::add(&save, "npc", "Tess", &mira_ci, None, false).is_err());
 
-    // Re-adding the same name and type is idempotent, not a duplicate.
-    let again = entity::add(&save, "npc", "MIRA", &[], None, false).unwrap();
-    assert!(
-        again.contains("已存在") && again.contains("E-001"),
-        "{again}"
-    );
+    // Re-adding the same kind+name is refused too: no silent idempotency,
+    // and the ledger is unchanged.
+    let again = entity::add(&save, "npc", "MIRA", &[], None, false)
+        .unwrap_err()
+        .to_string();
+    assert!(again.contains("冲突") && again.contains("E-001"), "{again}");
     assert_eq!(ledger(&save).entities.len(), 2);
     // Nothing was auto-merged: the alias set is unchanged.
     assert_eq!(ledger(&save).entities[0].aliases, ["Bentwood"]);

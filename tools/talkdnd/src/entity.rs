@@ -7,7 +7,7 @@
 //! Default outputs are the player view: `dm_only` entities never appear and
 //! retired entities stay out of the default list. Candidate suggestions from
 //! logs or handouts are never written automatically — `entity add` is the
-//! only write path, and re-applying the same suggestion is idempotent.
+//! only write path, and every name/alias clash is refused.
 
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
@@ -318,9 +318,9 @@ pub fn display(ledger: &Ledger, id: &str) -> String {
 
 // ----------------------------------------------------------------- commands
 
-/// `entity add`: register one entity. Re-adding the same primary name and
-/// type returns the existing id (idempotent candidate application); any other
-/// name/alias clash is refused with the conflicting entities.
+/// `entity add`: register one entity. Any name/alias clash — including
+/// re-adding the same kind and name — is refused with the conflicting
+/// entities; nothing is auto-merged or silently deduplicated.
 pub fn add(
     save: &Path,
     kind: &str,
@@ -351,16 +351,6 @@ pub fn add(
         }
     }
     let ledger = load(save)?;
-    if let Some(e) = ledger
-        .entities
-        .iter()
-        .find(|e| e.kind == kind && e.name.to_lowercase() == name.to_lowercase())
-    {
-        return Ok(format!(
-            "已存在：{}（{} {}）；未改动，返回既有 id",
-            e.id, e.kind, e.name
-        ));
-    }
     let mut clashes = clash_lines(&ledger, name, None);
     for a in &aliases {
         clashes.extend(clash_lines(&ledger, a, None));
