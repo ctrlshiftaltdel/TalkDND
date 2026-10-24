@@ -255,6 +255,15 @@ enum LibraryCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Fold split-volume folders (`<slug>-a`, `-b`, `-2`, ...) into the
+    /// full-book folder once an integrated PDF is in place
+    Merge {
+        /// Book slug or title; must match the full-book folder
+        book: String,
+        /// Only report what would move; change nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -1075,6 +1084,13 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             cmd: LibraryCmd::Tidy { dry_run },
         } => {
             for l in library::tidy(&root, dry_run)?.lines() {
+                println!("{l}");
+            }
+        }
+        Cmd::Library {
+            cmd: LibraryCmd::Merge { book, dry_run },
+        } => {
+            for l in library::merge_parts(&root, &book, dry_run)?.lines() {
                 println!("{l}");
             }
         }

@@ -7,6 +7,7 @@ agent can start a scene after reading one short digest. Players run it as
 | Command | What it does |
 |---|---|
 | `start [--save S] [--no-pdf2md]` | Newest (or named) save: tidies the book library (as `library tidy`), migrates the save, ruleset, `combat-sim content check`, starts `pdf2md run` in the background when `uv` exists, writes `Saves/<slot>/digest.md` (last checkpoint, party, warnings) and prints it |
+| `library merge <book> [--dry-run]` | Full book plus split volumes (`<slug>-a`, `-b`, `-2`, ...): archive the parts under `.talkdnd/book-backups/merge-<slug>/` (never deletes), move a part's `combat/` only when the full book has none, and repoint saves to the full book; `library tidy` warns when this is possible |
 | `library tidy [--dry-run]` | Book library: one folder per book. Moves loose or mis-named PDFs (and their converted index) to `Adventures/<slug>/` or `Rules/<edition>/<slug>/` (`<slug>/index/` for pdf2md output), reports every move, logs it in `.talkdnd/library-moves.yaml`, deletes page-less reader copies next to a paged edition (bytes reported); never deletes book files, keeps both on a collision, only warns about rulebooks of unknown edition; idempotent. Slug rule: `../../LetsPlay/docs/layout.md` |
 | `new [--ruleset 2014\|2024] [--adventure NAME]` | New save skeleton (`Characters/` (PCs + companions) `NPCs/` (story NPCs) `Sessions/ combat/campaign.yaml canon.md dm-secrets.md`) and `chargen.json` |
 | `chargen status` | Steps done and the next step |
