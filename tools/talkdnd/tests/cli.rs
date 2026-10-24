@@ -312,7 +312,7 @@ fn deviation_is_validated_locked_and_tamper_checked() {
     let save = r.join("Saves/2030-01-03-01");
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     assert!(
-        meta.contains("schema: 7") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
+        meta.contains("schema: 8") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
         "{meta}"
     );
     let out = ok(&r, &["original", "status"]);
@@ -397,13 +397,13 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     let out = ok(&r, &["start"]);
     assert!(out.contains("存档结构"), "{out}");
     assert!(
-        out.contains("schema 1 → 7") || out.contains("schema 1→7"),
+        out.contains("schema 1 → 8") || out.contains("schema 1→8"),
         "{out}"
     );
     assert!(save.join("sheets/hero.yaml").is_file());
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     assert!(
-        meta.contains("schema: 7") && meta.contains("scope: 0"),
+        meta.contains("schema: 8") && meta.contains("scope: 0"),
         "{meta}"
     );
     let backups: Vec<PathBuf> = fs::read_dir(r.join("Saves/_backups"))
@@ -413,7 +413,7 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     assert_eq!(backups.len(), 1);
     assert!(backups[0].join("Characters/hero.md").is_file());
     let log = fs::read_to_string(save.join("Sessions/2030-06-07-session-00-setup.md")).unwrap();
-    assert!(log.contains("存档结构迁移 schema 1→7"), "{log}");
+    assert!(log.contains("存档结构迁移 schema 1→8"), "{log}");
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
     assert!(ok(&r, &["start"]).contains("无需迁移"));
     assert_eq!(fs::read_dir(r.join("Saves/_backups")).unwrap().count(), 1);
@@ -468,7 +468,7 @@ fn migration_does_not_launder_a_hand_edit() {
     fs::write(&p, text).unwrap();
     let out = ok(&r, &["start"]);
     assert!(
-        out.contains("schema 2 → 7") || out.contains("schema 2→7"),
+        out.contains("schema 2 → 8") || out.contains("schema 2→8"),
         "{out}"
     );
     let out = ok(&r, &["check"]);
@@ -1031,32 +1031,9 @@ fn scaffold_groups_help_lists_the_contract_surface() {
 fn scaffold_stubs_are_not_implemented_yet() {
     let r = root("scaffold-stub");
     ok(&r, &["new", "--date", "2030-01-02"]);
+    // memory / settings style are real since TASK-0061 and entity / relation
+    // land with TASK-0062; only the time and oracle groups are still stubs.
     let cases: &[&[&str]] = &[
-        &["memory", "add", "the bard owes the guard a favor"],
-        &["memory", "list"],
-        &["memory", "remove", "m-1"],
-        &["settings", "style", "show"],
-        &[
-            "settings",
-            "style",
-            "set",
-            "narration",
-            "short",
-            "--reason",
-            "table vote",
-        ],
-        &["entity", "add", "--type", "npc", "--name", "Mira"],
-        &["entity", "list"],
-        &["entity", "show", "mira"],
-        &["entity", "rename", "mira", "Mira Bentwood"],
-        &["entity", "retire", "mira"],
-        &[
-            "relation", "add", "--type", "ally", "--from", "mira", "--to", "party",
-        ],
-        &["relation", "list"],
-        &["relation", "end", "r-1"],
-        &["relation", "show", "r-1"],
-        &["relation", "context", "mira"],
         &["time", "show"],
         &["time", "enable"],
         &["time", "disable"],

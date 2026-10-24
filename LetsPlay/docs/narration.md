@@ -28,6 +28,27 @@
 - 同伴可以提建议、吐槽、反对，但不抢玩家的决定权；玩家没给指令时，同伴按性格做合理的事，并在叙述里说明。
 - 新 NPC 第一次出场时，把名字、外貌、态度、与队伍的关系记进 `NPCs/`（剧情 NPC）或会话日志。
 
+## 叙事风格与关键记忆（`settings style`、`memory`）
+
+每档存档有一套 DM 风格设置（`save-meta.yaml` 的 `settings.style`，schema 8），用 `$T settings style show` 查看。各字段含义与可选值（加粗是默认值）：
+
+| 字段 | 含义 | 可选值 |
+|------|------|--------|
+| narration | 一次叙述的长度 | short（短）/ **standard**（标准）/ long（长） |
+| detail | 感官与场景细节密度 | low / **standard** / high |
+| pace | 场景推进节奏 | slow（关键场景放慢）/ **standard** / fast（赶路、过场加快） |
+| npc_voice | 同伴与 NPC 声音 | **distinct**（各具声口）/ neutral（平实带过） |
+| options | 每幕结尾建议选项 | **2-4** / none（玩家明确表示自己来时才关） |
+
+- **只有玩家明确反馈才改**：玩家说「太啰嗦了」「再详细点」「选项少给点」时才改，一次一项：`$T settings style set <字段> <值> --reason "<玩家的话>"`。`--reason` 必填，写玩家为什么要求改，并记入会话日志。**不要从气氛或剧情自动推断**，也不要替玩家预设。
+- 旧存档第一次使用时自动迁移到 schema 8，风格字段按默认值补齐（迁移前整档备份，见 `Saves/_backups/`）。
+- `npc_voice: distinct` 时按上面「同伴与演绎」执行：每个同伴声音可分辨；`neutral` 时同伴台词平实、少口音化修饰，但仍按角色卡性格说话。
+
+**关键记忆（memory）**是跨会话长期有效的固定事实与偏好。玩家明确说「记住这个」时录入：`$T memory add "<事实>" --source player-confirmed`（可加 `--tag npc:<id>`）；`$T memory list` 只列玩家确认条目，`--all` 是 DM 视图；`$T memory remove <id>` 删除。玩家确认的条目会出现在 `$T start` 摘要的「关键记忆」节里。
+
+- **边界**：记忆只放长期有效的固定事实与偏好（世仇、约定、玩家偏好）。事件过程写会话日志，玩家已知的揭示用 `reveal add`，公开的世界设定写 `canon.md`；不要用记忆替代它们。
+- **可见性**：玩家视图（`memory list`、`start` 的「关键记忆」节）只显示 `player-confirmed` 条目；`import` / `manual` 条目只在 DM 视图出现，不要把它们复述给玩家。秘密照旧只进 `dm-secrets.md`。
+
 ## DM 秘密
 
 - 秘密只放在 `Saves/<存档>/dm-secrets.md`（已被仓库 `.gitignore` 排除，模式 `**/dm-secrets.md`）。
