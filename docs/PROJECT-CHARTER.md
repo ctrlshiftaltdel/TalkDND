@@ -150,7 +150,7 @@ Validation is the kit check and the leak check in Success criteria, plus the com
 
 ## Decision Log
 
-### 2026-10-24 — Play-time page fixes and split-volume consolidation
+### 2026-10-24 — Play-time page fixes and split-volume consolidation (v0.11.0)
 
 Two play-table gaps. First, when converted Markdown contradicts the PDF mid-session, the DM can fix that one page immediately: `pdf2md fix` writes `index/fixes/pNNNN.md` with the PDF sha256 and rebuilds the book when no worker is running; `--no-apply` defers the rebuild. The PDF stays authoritative, text is not patched from memory, and the fix stays local. Second, `Adventures/` may hold both a full book and its split volumes (`<slug>-a`, `-b`, `-2`, ...). `talkdnd library merge <slug>` archives the parts under `.talkdnd/book-backups/merge-<slug>/` (never deletes), moves a part's `combat/` only when the full book has none, and repoints save paths to the full book. `library tidy` only warns and prints the command; it never moves parts by itself.
 
