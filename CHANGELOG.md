@@ -4,6 +4,45 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v1.0.0 — 2026-10-25
+
+### 新功能
+- **检查点与快照恢复**（P01，#126）。`checkpoint snapshot|list|show|restore` 把整个存档（含 integrity 清单覆盖的文件与 `identified.yaml`）打成快照存进 `checkpoints/<id>/`，manifest 里每个文件记 sha256；`snapshot diff <idA> <idB|current>` 输出两个时点之间的结构化差异。`restore` 必须加 `--yes`：恢复前先把当前存档整体备份；快照的 schema 比当前旧时按正常流程迁移（整档备份 + 会话日志一行），比当前新则拒绝；恢复后补一条会话日志并刷新完整性基线，`check` 保持干净。检查点保留最新 10 份，超出自动淘汰最旧的。检查点是 DM 本地恢复数据，不回退会话日志、`rolls.log`、dm-secrets/dm-plan 等 DM 工作文件。`start` 摘要显示最后检查点与较上次的变化。
+- **冒险结构索引**（P07，#125）。`adventure index build|show|search` 为每本书生成 `index/structured.json`：只存标题、页码、锚点，从不输出正文；重建幂等，源文件未变时跳过并报告「已是最新」。
+- **长期记忆与叙事风格**（P03，#132）。`memory add|list|remove` 记录长期事实与偏好（带 `source` 与标签）；玩家视图只含 player-confirmed，`--all` 是 DM 视图。`settings style show|set` 调整 narration/detail/pace/npc_voice/options，`set` 必须给 `--reason`，每次改动写会话日志。
+- **实体与关系台账**（P04，#133）。`entity add|list|show|rename|retire` 登记 npc/location/faction/quest/item，支持别名；`relation add|list|end|show|context` 记录实体间关系，可按时间点过滤（关系只在起止日期之间有效）、按 dm_only 过滤；`entity add` 幂等，同名或同别名冲突一律拒绝并列出冲突项。
+- **世界时间与预定事件**（P06，#139）。`time show|enable|disable|set|advance` 与 `time event add|list|done|skip`。默认关闭，关闭时一切写入命令被拒绝；只有 `time set` / `time advance` 推进时钟；到期判定按标签精确相等；`dm_only` 事件默认隐藏。`start` 在启用时显示世界时间与今天到期的事件（只列玩家可见的）。
+- **即兴 Oracle 与 dm-plan 模板**（P08，#140）。`oracle yes-no|event|meaning` 给 DM 即兴灵感：yes-no 只打印 `yes`/`no`，event 输出事件焦点短语，meaning 输出「短语（混乱 N）」。短语全部是本任务手写的原创内容，不来自任何书籍或随机表；三个子命令共用骰子引擎，隐藏的 `--seed` 可完整复现输出。Oracle 严格只读：不写任何存档文件。`original plan` 模板在「计划」「伏笔与回收」之外新增六个可选小节（当前局面、参与者目标、冲突、线索、可能行动、不介入后果）；已有 `dm-plan.md` 永不覆盖。
+- **战斗质量加固**（#134、#135、#136、#137、#138）。非当前行动者的攻击默认拒绝（`--force` 显式 DM 覆盖）；战斗状态 JSON 纳入完整性清单；`combat-sim add` 在已存在遭遇中加入新战斗者；`talkdnd check` 支持工具熟练项检定（`check <who> tool:<name> --ability <属性>`）；`secret scan` / `secret import` 提供 DM 秘密词清单的只读覆盖率报告与显式批量导入，`start` 在 dm-secrets.md 有内容但零标记时预警。
+
+### 变更
+- 存档 schema 7 → **8**（只有 P03 的 `settings.style`，存进 save-meta）。首次 `start` 或相关写入遇到 schema 7 的存档，先整份备份到 `Saves/_backups/` 再迁移，重复运行不重复迁移。其余新数据都是带版本的 sidecar：version 1，文件缺失 = 功能未启用，高版本拒绝。
+- integrity 清单覆盖 memory/entities/relations/world-time/checkpoints 与战斗状态文件（存在时才计入）。工具自己的写入成功后自动刷新基线；手改由 `check` 报告，可用 `integrity accept --reason` 记录。
+- `start` 摘要新增：最后检查点、较上次的变化、关键记忆（玩家确认的固定事实）、启用时的世界时间；`check` 支持工具熟练项；命令面新增 P00/P00a/P00b 的各组命令（#122、#123、#124）。
+- 三个程序版本统一为 **1.0.0**（combat-sim、talkdnd、talkdnd-dev）；pdf2md 仍为 0.6.0，不重转已转换的书。
+
+### 修复
+- 非当前行动者的攻击不再默认放行（#135）。
+- 战斗状态写入失败不再推进完整性基线；之后的手改会被正常报告（#134）。
+- 同名/同别名实体重复登记不再静默复用旧 id，改为拒绝并列出冲突（#133）。
+- `time show` 与 `time event list` 的 dm_only 事件不再进入玩家视图，包括计数——`time show` 的总数与待办数都不把隐藏事件算进去（#139）。
+- `combat-sim add` 不再重建遭遇，已有战斗者的 HP、资源、状态、先攻与遭遇日志全部保留（#137）。
+
+### 更新说明 / 迁移
+- **覆盖式更新**：下载 1.0.0 发布包，把包内 `TalkDND/LetsPlay/` 的内容覆盖到现有游戏文件夹，覆盖同名文件；存档目录原样保留。不要用旧包整个替换（会丢存档、规则书和冒险书）。
+- 更新后第一次 `bin/talkdnd start` 会把 schema 7 的存档备份到 `Saves/_backups/` 再迁移到 8；重复运行不重复迁移。确认无误后可删除旧备份。
+- 旧存档不需要任何新 sidecar：memory/entities/relations/world-time/checkpoints 都按需启用，文件不存在 = 功能未启用。检查点、实体、世界时间默认不改变现有战役的行为。
+- pdf2md 不重转：已转换的书保持原样；两个程序（combat-sim、talkdnd）随发布包更新。
+- **1.0.0 是第一个稳定版**，把原计划的 v0.12/v0.13/v0.14 三个切片收为一个里程碑（项目所有者 2026-10-25 决定，见 docs/PROJECT-CHARTER.md Decision Log）。
+
+### 已知限制
+- 检查点 id 精确到秒，同一秒内打多份快照靠 `-2`/`-3` 后缀区分；按 id 排序不代表真实创建先后。restore 不回退会话日志、`rolls.log`、dm-secrets.md/dm-plan.md 等 DM 工作文件。
+- 实体/关系不会自动出现在 `known` 或 `start` 摘要；`check` 不做跨引用全表扫描，引用校验发生在写入时。
+- 世界时间不做历法算术（月长、闰年、标签先后都不处理）；极端大的已过天数下 f64 精度可能吞掉纯小时增量，此时 `time advance` 报告「已过天数未变化」且不改动存档；`start` 遇到损坏的 world-time.yaml 会静默省略世界时间一节，`check` 会报告损坏。
+- 冒险索引只存标题/页码/锚点，不自动抽取实体或线索。
+- Oracle 短语表是手写原创，程序无法自动证明「不含书籍文本」；`--seed` 仅供测试复现。
+- `start` 的零标记预警只看 dm-secrets.md；dm-plan.md 不在 #131 的扫描范围内。
+
 ## v0.11.0 — 2026-10-24
 
 ### 新功能
