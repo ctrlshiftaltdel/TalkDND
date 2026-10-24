@@ -600,6 +600,45 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
             d += "（日志里还没有 `## 存档点`，从日志末尾接着读）";
         }
     }
+    d += "\n\n## 最后检查点\n\n";
+    match crate::checkpoint::latest(save) {
+        Some(e) => {
+            let reason = e.reason.as_deref().unwrap_or("-");
+            let status = match &e.problem {
+                Some(p) => format!("不可用（{p}）"),
+                None => "可用".to_string(),
+            };
+            d += &format!(
+                "- {}（{}；原因：{}；日志 {}@{}；{}）\n",
+                e.id, e.created, reason, e.log_file, e.log_lines, status
+            );
+        }
+        None => {
+            d += "- 还没有检查点；`talkdnd checkpoint snapshot [--reason ...]` 建一个（DM 本地恢复数据，不是玩家视图）\n";
+        }
+    }
+    d += "\n## 较上次的变化\n\n";
+    match crate::checkpoint::latest_usable(save) {
+        Some(e) => match crate::diff::diff_lines(save, &e.id, "current") {
+            Ok(lines) if lines.is_empty() => d += "- 与最新检查点相比无变化\n",
+            Ok(lines) => {
+                for line in lines.iter().take(30) {
+                    d += &format!("- {line}\n");
+                }
+                if lines.len() > 30 {
+                    d += &format!(
+                        "- …（其余 {} 行用 `talkdnd snapshot diff` 看）\n",
+                        lines.len() - 30
+                    );
+                }
+            }
+            Err(err) => {
+                d += "- 读不了（见警告）\n";
+                warnings.push(format!("较上次的变化读不了：{err}"));
+            }
+        },
+        None => d += "- 没有可用的检查点可比\n",
+    }
     d += "\n\n## 队伍（角色卡数据块，maxHP / AC）\n\n";
     let party = party_ids(save);
     let mut ms = members(save);

@@ -14,8 +14,8 @@
 | `Rules/combat/` | combat-sim 规则数据，分层：`common/` + `2014/` + `2024/`（只收 SRD 内容） | ✅（SRD，CC-BY-4.0） |
 | `Adventures/<slug>/` | 玩家自备的冒险书，一本一个文件夹：PDF + `index/`（pdf2md 生成） | ❌ 仅 README 入库 |
 | `Adventures/<slug>/combat/` | 该冒险的战斗数据：`scenes/`、`encounters.yaml`、`creatures.yaml` | ❌（由书改编，本地自建） |
-| `Saves/YYYY-MM-DD-NN/` | 一份存档：`Characters/`（全部队伍成员：玩家角色和 DM 操控的同伴，`sheets/<id>.yaml` 的 `controller: player|dm` 区分；`_party.md` 是同伴总览）、`NPCs/`（只放剧情 NPC，可为空）、`Sessions/`（会话日志）、`combat/`（`campaign.yaml` 清单 + `*.state.json` 战斗状态）、`canon.md`（即兴定论）、`progress.yaml`（经验/金币/物品/当前场景）、`reveals.yaml`、`handouts.yaml` 与 `handouts/`（已给玩家看的资料图）（已揭示知识，`talkdnd reveal`）、`integrity.yaml`（存档校验，程序维护，不要手改）、`save-meta.yaml`（存档结构版本、锁定的偏离度与桌面设置，程序维护）、`original.yaml`（DM 原创内容台账，含隐藏面）、`dm-plan.md`（DM 长期计划，可无）、`secret-terms.yaml`（手动秘密词）、`identified.yaml`（已识别怪物/物品）、`rolls.log`（全部掷骰记录）、`house-rules.md`（可选）、`dm-secrets.md`（🔒）、`digest.md`、`chargen.json`、`sheets/`、`npc-drafts/` | ❌（个人进度） |
-| `Saves/_backups/` | 存档结构迁移前的整份备份（自动生成，可删） | ❌ |
+| `Saves/YYYY-MM-DD-NN/` | 一份存档：`Characters/`（全部队伍成员：玩家角色和 DM 操控的同伴，`sheets/<id>.yaml` 的 `controller: player|dm` 区分；`_party.md` 是同伴总览）、`NPCs/`（只放剧情 NPC，可为空）、`Sessions/`（会话日志）、`combat/`（`campaign.yaml` 清单 + `*.state.json` 战斗状态）、`canon.md`（即兴定论）、`progress.yaml`（经验/金币/物品/当前场景）、`reveals.yaml`、`handouts.yaml` 与 `handouts/`（已给玩家看的资料图）（已揭示知识，`talkdnd reveal`）、`integrity.yaml`（存档校验，程序维护，不要手改）、`save-meta.yaml`（存档结构版本、锁定的偏离度与桌面设置，程序维护）、`original.yaml`（DM 原创内容台账，含隐藏面）、`dm-plan.md`（DM 长期计划，可无）、`secret-terms.yaml`（手动秘密词）、`identified.yaml`（已识别怪物/物品）、`rolls.log`（全部掷骰记录）、`house-rules.md`（可选）、`dm-secrets.md`（🔒）、`digest.md`、`chargen.json`、`sheets/`、`npc-drafts/`、`checkpoints/<id>/`（结构化检查点：`manifest.yaml` 记每个副本的 sha256，数据副本覆盖 `progress/reveals/save-meta/original/identified/canon/house-rules` 与 `Characters/NPCs/sheets/combat`；DM 本地恢复数据，不是玩家视图；每次快照后只保留最新 10 份） | ❌（个人进度） |
+| `Saves/_backups/` | 存档结构迁移前、以及 `checkpoint restore` 恢复前的整份备份（自动生成，可删） | ❌ |
 | `docs/` | DM 参考章节（本文件、掷骰、叙事、战斗、pdf2md、建卡细节、剧本偏离度），按需读 | ✅ |
 | `tools/pdf2md/` | PDF → Markdown 后台转换工具（Python，经 uv 运行）。输出在书文件夹的 `index/`，见 `docs/pdf2md.md` | ✅ 源码；❌ 输出与 `.venv` |
 | `bin/combat-sim`、`bin/talkdnd` | 战斗程序与游玩助手。Windows 加 `.exe`。不入库。放法见 `README.md` 和 `bin/README.md` | ❌ 本地文件 |
@@ -68,6 +68,7 @@ Rules/
 ## 交接清单（换 DM 之前 / 每次结束会话时）
 
 - [ ] 会话日志末尾写好 `## 存档点（现实日期 时间）`：游戏内时间、地点、每个角色 HP/资源/金币/重要物品、未决事项、下一步可能的选项。
+- [ ] 需要能回滚时打了结构化检查点：`talkdnd checkpoint snapshot [--reason 原因]`（`checkpoint list` / `show <id>` 看状态，`snapshot diff <id> current` 看变化，`checkpoint restore <id> --yes` 恢复——恢复前会自动整份备份）。
 - [ ] 本场的 HP、资源、物品、金币变化都用 `talkdnd char` 记过（`talkdnd char <名字>` 看一行状态）；`content check` 0 error；`talkdnd check`（不带参数）无警告。
 - [ ] 本次得知的新事实已 `talkdnd reveal add`。
 - [ ] 新裁定已写进本机副本 `Rules/rulings.md` 或 `Rules/rulings-<版本>.md`（`Rules/defaults/` 是出厂默认，不要改；升级后本机副本不会被覆盖）。
