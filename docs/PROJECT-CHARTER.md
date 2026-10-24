@@ -141,7 +141,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 - Adventure deviation is per save, chosen with `talkdnd new --scope/--ratio`, stored in `save-meta.yaml`, and cannot be changed after creation. Original content is registered in the DM-only `original.yaml` before it is used, and its type, rarity and chapter budget are checked by the tool.
 - The campaign-continuity data contract is `LetsPlay/docs/campaign-continuity.md`. It is the single authority matrix for the P00–P08 program; implementation tasks do not drift from it.
 - The main save schema rises to 8 only in P03. All other new save state is versioned sidecars (`memory.yaml`, `entities.yaml`, `relations.yaml`, `world-time.yaml`, `checkpoints/*/manifest.yaml`, `index/structured.json`): a missing file means the feature is off, a newer version is refused.
-- Checkpoints are the recovery path. `checkpoint snapshot`/`checkpoint restore` back the whole save up before replacing anything and keep the last ten; `snapshot diff` reports structured changes only.
+- Checkpoints are the DM-local recovery path, not a player-facing view. `checkpoint snapshot` rewinds mechanical state plus revealed/identified knowledge and nothing else (never append-only logs, DM working files, derived files, or binary handout exports); `checkpoint restore` backs the whole save up before replacing anything, appends a restore line to the session log without truncating history, refreshes the integrity manifest and audit baseline, migrates a snapshot whose schema is older than the current main schema and refuses a newer one, and keeps the last ten; `snapshot diff` reports structured changes only.
 - World time is per save, off by default, and moves only on an explicit command. No narration or scene change advances it.
 - The Oracle produces inspiration only. It writes no save file, never invents a roll, and resolves every die through the combat-sim dice engine.
 
@@ -156,6 +156,12 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `ORCHESTRATION-PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-24 — Campaign-continuity contract clarification (TASK-0056 review)
+
+Master review of the frozen P00 contract (`LetsPlay/docs/campaign-continuity.md`) found one contradiction and two undefined restore edges, plus an unclear visibility statement; the contract is amended in place, in the same file and the same pull request. `identified.yaml` joins the checkpoint copy set (it is small and must stay consistent with `reveals.yaml`), so a checkpoint rewinds mechanical state plus revealed/identified knowledge — never append-only logs (`Sessions/`, `rolls.log`), DM working files, derived files, or binary handout exports — and checkpoints themselves are DM-local recovery data, not a player-facing view. On restore: a snapshot whose `schema` is older than the current main schema is restored and then migrated normally (whole-save backup plus session-log line), a newer one is refused; after a restore the current session log gains a restore line and is never truncated, and the integrity manifest and audit baseline are refreshed so `talkdnd check` stays clean.
+
+Alternative considered: keep `identified.yaml` out of checkpoints and rebuild identification from `reveals.yaml` after a restore. Rejected: `identified.yaml` is its own versioned sidecar with DM-only appearance overrides; rebuilding would silently drop state and break the one-writer matrix.
 
 ### 2026-10-24 — Campaign continuity program P00–P08
 

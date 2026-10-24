@@ -1,7 +1,7 @@
 # 战役连续性数据契约（P00）
 
 > 本文件是「战役连续性」程序 P00–P08 的唯一数据契约：权威矩阵、文件格式、会话与时间模型、schema 与 integrity 策略、命令面、可见性规则、非目标与成功指标。
-> 状态：2026-10-24 经项目所有者批准，由 TASK-0056（Issue #113）冻结。后续任务（P00a–P08）按本契约实现；偏离本契约必须先改本文件并登记为项目所有者决策。
+> 状态：2026-10-24 经项目所有者批准，由 TASK-0056（Issue #113）冻结；2026-10-24 按复审意见修订（检查点覆盖范围纳入 identified.yaml、restore 的 schema 不匹配与恢复后日志/基线规则、检查点 DM 本地定位），对应 docs/PROJECT-CHARTER.md Decision Log 同日条目。后续任务（P00a–P08）按本契约实现；偏离本契约必须先改本文件并登记为项目所有者决策。
 > 读者：P00–P08 各任务的实现者与审查者；DM 按需查阅（LetsPlay/docs/ 下的其他章节照旧）。
 > 路径约定：除特别说明外，所有存档路径相对于游戏文件夹；Saves/<slot>/ 表示一份存档。英文标识符（字段名、命令名、文件名、枚举值）按本文逐字使用，不翻译、不改写、不改大小写。
 
@@ -44,7 +44,7 @@
 
 | 数据 | 文件 | 唯一写入者 | 读取者 | 可见级别 | integrity |
 |---|---|---|---|---|---|
-| 检查点清单与数据副本 | Saves/<slot>/checkpoints/<id>/ | talkdnd checkpoint snapshot（恢复由 checkpoint restore 替换存档） | checkpoint list/show、snapshot diff | 清单 DM/玩家可见；数据副本同原文件 | 仅 checkpoints/*/manifest.yaml 存在时纳入 |
+| 检查点清单与数据副本 | Saves/<slot>/checkpoints/<id>/ | talkdnd checkpoint snapshot（恢复由 checkpoint restore 替换存档） | checkpoint list/show、snapshot diff | DM-only（DM 本地恢复数据，非玩家视图）；数据副本同原文件 | 仅 checkpoints/*/manifest.yaml 存在时纳入 |
 | 固定记忆 | Saves/<slot>/memory.yaml | talkdnd memory add/remove | memory list、start（关键记忆节） | 玩家视图只显示 player-confirmed | 存在时纳入（P00b） |
 | 实体登记 | Saves/<slot>/entities.yaml | talkdnd entity 命令族 | entity/relation context/known（按过滤规则） | dm_only 条目仅 DM | 存在时纳入（P00b） |
 | 关系登记 | Saves/<slot>/relations.yaml | talkdnd relation 命令族 | relation/relation context | dm_only 关系仅 DM | 存在时纳入（P00b） |
@@ -136,13 +136,15 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
   | log_lines | int | 该日志在快照时的行数 |
   | files | map | 相对路径 → sha256:<hex>；覆盖下列数据副本的每个文件 |
 
-- 数据副本覆盖范围（冻结，来自任务包）：progress.yaml、reveals.yaml、save-meta.yaml、original.yaml、canon.md、house-rules.md（存在时）、Characters/、NPCs/、sheets/、combat/。不含 Sessions/、checkpoints/、dm-secrets.md、dm-plan.md、secret-terms.yaml、identified.yaml、rolls.log、digest.md、chargen.json、handouts/、npc-drafts/、integrity.yaml。
+- 数据副本覆盖范围（冻结，来自任务包）：progress.yaml、reveals.yaml、save-meta.yaml、original.yaml、identified.yaml、canon.md、house-rules.md（存在时）、Characters/、NPCs/、sheets/、combat/。不含 Sessions/、checkpoints/、dm-secrets.md、dm-plan.md、secret-terms.yaml、rolls.log、digest.md、chargen.json、handouts/、npc-drafts/、integrity.yaml。
+- 回退语义（冻结）：检查点回退机械状态与已揭示/已识别知识——覆盖范围内的文件恢复到快照时状态；identified.yaml 文件小且必须与 reveals.yaml 保持一致，故纳入覆盖范围（其 integrity 按第 1.1 节维持不纳入，P00b 不改变）。检查点不回退 append-only 日志（Sessions/、rolls.log）、DM 工作文件（dm-secrets.md、dm-plan.md、secret-terms.yaml、digest.md、chargen.json、npc-drafts/）、派生文件（digest.md、checkpoints/ 自身）或二进制资料图导出（handouts/）。
 - 写入命令：talkdnd checkpoint snapshot [--reason R] [--json]；读取命令：checkpoint list、checkpoint show <id>、snapshot diff。
+- 可见性：检查点是 DM 本地恢复数据，不是玩家视图——清单与数据副本只供 DM 与恢复流程使用；对玩家只暴露第 6 节过滤后的 snapshot diff 输出。
 - integrity：仅 checkpoints/*/manifest.yaml 存在时纳入。
 - 失败/损坏行为：manifest 缺失、YAML 解析失败、version > 1、files 指纹与实际副本不符 → 该检查点标记为不可用（list/show 明确标注，restore 拒绝）；不影响其他检查点。
 - 保留策略：每次成功 snapshot 后只保留最新 10 份，更早的在输出里报告后删除。
 - 并发：同一 slot 同时只允许一个 snapshot/restore，用 Saves/<slot>/.talkdnd.lock 文件锁；第二个并发调用以退出码 1 失败并说明锁被占用。
-- 迁移/回退：旧存档没有 checkpoints/ 时 snapshot 直接可用（无迁移）；restore 前先把整份当前存档备份到 Saves/_backups/<slot>-<stamp>-restore-<id>，再原子替换检查点覆盖范围内的文件，并删除快照之后新增的、属于覆盖范围的文件；范围外文件原样保留。恢复是受控工具操作：完成后按工具写入语义更新 integrity 清单与对账基线，使恢复后 talkdnd check 无未解释变化。没有 --yes 拒绝执行（退出码 1）。
+- 迁移/回退：旧存档没有 checkpoints/ 时 snapshot 直接可用（无迁移）；restore 前先把整份当前存档备份到 Saves/_backups/<slot>-<stamp>-restore-<id>，再原子替换检查点覆盖范围内的文件，并删除快照之后新增的、属于覆盖范围的文件；范围外文件原样保留。schema 不匹配（冻结）：manifest.schema 小于当前主 schema 时，先完成恢复，再按第 3.1 节正常迁移（整档备份 + 会话日志行，与既有迁移同一套规则）；manifest.schema 大于当前主 schema 时拒绝恢复，报错点名检查点与 schema 并提示更新 talkdnd。恢复是受控工具操作：完成后按工具写入语义更新 integrity 清单与对账基线，使恢复后 talkdnd check 无未解释变化，并在当前会话日志追加一行恢复记录（检查点 id、备份路径、时间）；日志只追加、不截断，既有历史一律不改写。没有 --yes 拒绝执行（退出码 1）。
 
 ### 4.2 memory.yaml（P03）
 
@@ -354,7 +356,7 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
 
 ### 6.1 玩家视图
 
-玩家视图 = 下列输出的并集：known；start 摘要中面向玩家的部分（关键记忆节只含 player-confirmed）；handout 导出内容；combat-sim --player；guard 检查对象（叙述草稿）；entity list/entity show/relation list/relation context/memory list/time show/time event list 的默认输出；adventure index show/search；snapshot diff 默认输出。
+玩家视图 = 下列输出的并集：known；start 摘要中面向玩家的部分（关键记忆节只含 player-confirmed）；handout 导出内容；combat-sim --player；guard 检查对象（叙述草稿）；entity list/entity show/relation list/relation context/memory list/time show/time event list 的默认输出；adventure index show/search；snapshot diff 默认输出（检查点清单与数据副本本身是 DM 本地恢复数据，不进入玩家视图，见第 4.1 节）。
 
 过滤规则（实现时逐条生效）：
 
