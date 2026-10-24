@@ -126,7 +126,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - `uv run --no-project python scripts/validate_kit.py`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
 - Release automation builds the three prebuilt targets named in this charter.
 - A pull request that changes scope, goals, tech stack, rules support, or a user decision also updates this charter in that same pull request.
-- Once v0.12 ships, a session interrupted mid-play can be resumed from the last good checkpoint, and the structured diff since the previous session is available without rereading the whole log.
+- As of v1.0.0, a session interrupted mid-play can be resumed from the last good checkpoint, and the structured diff since the previous session is available without rereading the whole log.
 
 ## Architecture decisions
 
@@ -156,11 +156,17 @@ None. A new product decision is written into the Decision Log, and into the sect
 
 ## Initial milestone
 
-The smallest end-to-end slice is already the play kit: a player supplies an SRD, starts in `LetsPlay/`, and uses `combat-sim` to roll dice and resolve one combat under a single `ruleset`. This charter is the signed description of that slice. Further work stays inside it until the Decision Log says otherwise. The 2026-10-24 Decision Log authorizes the P00–P08 campaign-continuity program as the next scope, shipping in v0.12–v0.14.
+The smallest end-to-end slice is already the play kit: a player supplies an SRD, starts in `LetsPlay/`, and uses `combat-sim` to roll dice and resolve one combat under a single `ruleset`. This charter is the signed description of that slice. Further work stays inside it until the Decision Log says otherwise. The 2026-10-24 Decision Log authorizes the P00–P08 campaign-continuity program as the next scope, shipping as v1.0.0 on 2026-10-25 (see the 2026-10-25 Decision Log entry).
 
 Validation is the kit check and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `ORCHESTRATION-PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-25 — TalkDND 1.0.0 (first stable release)
+
+The owner decided on 2026-10-25 to ship the approved P00–P08 campaign-continuity program together with the 2026-10-24/25 combat quality hardening (#127–#131) as one milestone: TalkDND 1.0.0, the first stable release. This replaces the release slicing in the 2026-10-24 P00–P08 decision (v0.12 = P00 + P00a + P00b + P01 + P07; v0.13 = P03 + P04; v0.14 = P06 + P08); every feature of those three slices is already merged on main. The save schema rises to 8 exactly as that decision authorized (only P03's `settings.style`, whole-save backup migration). TASK-0070 itself changes release metadata only — the three crate versions to 1.0.0, the CHANGELOG v1.0.0 section, this charter, and the release-slice line in `LetsPlay/docs/campaign-continuity.md` §9 — with no source, test, CI or behavior change.
+
+Alternative considered: continue shipping the three slices as v0.12–v0.14. Rejected: the owner decided on 2026-10-25 to close the milestone as 1.0.0; all slice content is already on main, so three separate releases would add tag and migration overhead without any additional change.
 
 ### 2026-10-25 — Improvisation oracle and the dm-plan template (TASK-0064)
 
