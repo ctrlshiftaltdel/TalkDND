@@ -266,6 +266,7 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
 - 人读输出为中文行（与现有一致）；标注 [--json] 的命令额外支持单行 JSON 到 stdout，字段名英文。
 - 存量命令行为、输出、退出码不变（P00a 验收第 4 条）。唯一的结构变化：checkpoint 从「纯文本参数」变为「命令组」，talkdnd checkpoint <文本>（或 stdin）原样可用；文本以子命令名（snapshot/list/show/restore）开头时用 -- 分隔或走 stdin。
 - P00a 脚手架（TASK-0057）落地九个命令组：checkpoint、snapshot、memory、settings style、entity、relation、time、adventure index、oracle；模块 checkpoint.rs、diff.rs、memory.rs、entity.rs、graph.rs、worldtime.rs、bookindex.rs、oracle.rs 各带 Cmd 枚举与 pub fn run(root, save, cmd) -> Result<()>，未实现子命令统一 bail!("not implemented in TASK-0057")；lib.rs 只转交。帮助文本按本节写死。
+- 2026-10-25 澄清（TASK-0064）：oracle 是唯一不读写任何存档文件的命令组；它的三个子命令同样从 lib 分发接收共享 RNG，因此 --seed 下输出可复现。
 
 ### 5.1 P01 — checkpoint / snapshot（TASK-0059，合并原 P01+P02）
 

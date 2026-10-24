@@ -1192,7 +1192,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
         }
         Cmd::Oracle { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
-            oracle::run(&root, &s, cmd)?
+            oracle::run(&root, &s, cmd, rng)?
         }
         Cmd::Options { ruleset } => print_options(&ruleset),
         Cmd::Data { cmd } => data_cmd(&root, cmd)?,
