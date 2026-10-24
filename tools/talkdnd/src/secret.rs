@@ -504,6 +504,252 @@ pub fn guard_terms(save_dir: &Path, root: &Path, text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Read-only marker coverage of one DM notes file: how many explicit
+/// markers (`- term:`, `- 秘密词:`, `[[词]]`) it has and which content lines
+/// carry none. Only counts and 1-based line numbers are recorded — never
+/// line text — so a report can be shown or logged without leaking secrets.
+#[derive(Debug, Default, PartialEq)]
+pub struct ScanReport {
+    pub markers: usize,
+    pub content_lines: usize,
+    pub marked_lines: usize,
+    pub unmarked_lines: Vec<usize>,
+}
+
+pub fn scan_text(text: &str) -> ScanReport {
+    let mut rep = ScanReport::default();
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        rep.content_lines += 1;
+        let terms = parse_marked_terms(line);
+        if terms.is_empty() {
+            rep.unmarked_lines.push(i + 1);
+        } else {
+            rep.markers += terms.len();
+            rep.marked_lines += 1;
+        }
+    }
+    rep
+}
+
+/// `talkdnd secret scan [--from <file>]`: read-only coverage report for a DM
+/// notes file (default: this save's `dm-secrets.md`). The source file is
+/// never modified, the report holds counts and line numbers only — no file
+/// content — and nothing here is written to the session log.
+pub fn scan_lines(save_dir: &Path, from: Option<&str>) -> Result<Vec<String>> {
+    let path = match from {
+        Some(f) => PathBuf::from(f),
+        None => save_dir.join("dm-secrets.md"),
+    };
+    if !path.is_file() {
+        bail!("文件不存在：{}", path.display());
+    }
+    let rep = scan_text(&fs::read_to_string(&path)?);
+    let mut out = vec![format!(
+        "扫描 {}（只读；只报告数量与行号，不显示正文）",
+        path.display()
+    )];
+    if rep.content_lines == 0 {
+        out.push("- 文件为空或只有注释：没有需要保护的内容".into());
+        return Ok(out);
+    }
+    out.push(format!(
+        "- 显式标记：{} 个（`- term:` / `- 秘密词:` / `[[词]]`）",
+        rep.markers
+    ));
+    out.push(format!(
+        "- 内容行：{} 行，有标记 {} 行，未标记 {} 行",
+        rep.content_lines,
+        rep.marked_lines,
+        rep.unmarked_lines.len()
+    ));
+    if rep.unmarked_lines.is_empty() {
+        out.push("- 覆盖率：所有内容行都有显式标记".into());
+    } else {
+        let shown: Vec<String> = rep
+            .unmarked_lines
+            .iter()
+            .take(30)
+            .map(|l| l.to_string())
+            .collect();
+        out.push(format!(
+            "- 未标记行：{}{}",
+            shown.join(", "),
+            if rep.unmarked_lines.len() > 30 {
+                format!(" …（其余 {} 行）", rep.unmarked_lines.len() - 30)
+            } else {
+                String::new()
+            }
+        ));
+        out.push(format!(
+            "- 覆盖率：{}/{} 内容行有显式标记；未标记的叙述不会被当作秘密词",
+            rep.marked_lines, rep.content_lines
+        ));
+    }
+    if rep.markers == 0 {
+        out.push(
+            "- 警告：整份文件没有任何可识别标记；要保护的词用 `- term:` 或 `[[词]]` 标记，或用 `talkdnd secret import --from <文件>` 导入".into(),
+        );
+    }
+    Ok(out)
+}
+
+/// Terms on one import line: the existing marker forms (`- term: X`,
+/// `- 秘密词: X`, `[[X]]`) or one plain term per line. Comment and blank
+/// lines yield nothing. `Err(())` marks a content line with no usable term:
+/// an empty marker value, or a term shorter than two characters (the
+/// collector never keeps shorter terms).
+fn parse_import_line(line: &str) -> Result<Vec<String>, ()> {
+    let t = line.trim();
+    if t.is_empty() || t.starts_with('#') {
+        return Ok(Vec::new());
+    }
+    let mut marker = false;
+    let mut out = Vec::new();
+    for prefix in ["- term:", "- term：", "- 秘密词:", "- 秘密词："] {
+        if let Some(rest) = t.strip_prefix(prefix) {
+            marker = true;
+            let term = rest
+                .split(" #")
+                .next()
+                .unwrap_or(rest)
+                .trim()
+                .trim_matches(['"', '\'', '“', '”'])
+                .trim();
+            if !term.is_empty() {
+                out.push(term.to_string());
+            }
+        }
+    }
+    let found = brackets(t);
+    if !found.is_empty() {
+        out.extend(found);
+    } else if marker {
+        // `- term:` with an empty value: a format error, not a whole-line term.
+    } else {
+        let term = t.trim_matches(['"', '\'', '“', '”']).trim();
+        if term.is_empty() {
+            return Err(());
+        }
+        out.push(term.to_string());
+    }
+    if out.is_empty() || out.iter().any(|term| term.chars().count() < 2) {
+        return Err(());
+    }
+    Ok(out)
+}
+
+/// `talkdnd secret import --from <file> [--dry-run | --apply]`: import
+/// DM-reviewed explicit terms, one per line or in the existing marker forms.
+/// The default is a dry-run preview that writes nothing; only an explicit
+/// apply writes `secret-terms.yaml`. Terms are deduplicated
+/// case-insensitively against each other and the existing manual list. The
+/// report counts added, skipped and malformed lines and never quotes file
+/// content; nothing it prints reaches the session log.
+pub fn import_lines(save_dir: &Path, from: &str, apply: bool) -> Result<Vec<String>> {
+    let path = PathBuf::from(from);
+    if !path.is_file() {
+        bail!("文件不存在：{}", path.display());
+    }
+    let text = fs::read_to_string(&path)?;
+    let mut candidates: Vec<String> = Vec::new();
+    let mut error_lines: Vec<usize> = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        match parse_import_line(line) {
+            Ok(terms) => candidates.extend(terms),
+            Err(()) => error_lines.push(i + 1),
+        }
+    }
+    let existing = load_manual(save_dir)?;
+    let mut seen: Vec<String> = existing
+        .terms
+        .iter()
+        .map(|t| t.term.to_lowercase())
+        .collect();
+    let mut fresh: Vec<String> = Vec::new();
+    let mut skipped = 0usize;
+    for term in candidates {
+        let key = term.to_lowercase();
+        if seen.contains(&key) {
+            skipped += 1;
+        } else {
+            seen.push(key);
+            fresh.push(term);
+        }
+    }
+    let mut out = vec![if apply {
+        format!("导入：{from}（显式词条，须为 DM 审核过的内容）")
+    } else {
+        format!("导入预览（dry-run，未写入存档）：{from}")
+    }];
+    if fresh.is_empty() {
+        out.push("- 将新增 0 条".into());
+    } else {
+        out.push(format!("- 将新增 {} 条", fresh.len()));
+        for term in fresh.iter().take(20) {
+            out.push(format!("  - {term}"));
+        }
+        if fresh.len() > 20 {
+            out.push(format!("  - …（其余 {} 条略）", fresh.len() - 20));
+        }
+    }
+    out.push(format!("- 跳过 {skipped} 条（重复）"));
+    if error_lines.is_empty() {
+        out.push("- 格式错误 0 条".into());
+    } else {
+        let shown: Vec<String> = error_lines.iter().take(30).map(|l| l.to_string()).collect();
+        out.push(format!(
+            "- 格式错误 {} 条：第 {} 行（词条为空或不足 2 字；不导入）",
+            error_lines.len(),
+            shown.join(", ")
+        ));
+    }
+    if !apply {
+        out.push("确认无误后加 --apply 写入存档".into());
+        return Ok(out);
+    }
+    if fresh.is_empty() {
+        out.push("没有要新增的词条；存档未改动".into());
+        return Ok(out);
+    }
+    let added = fresh.len();
+    let mut m = existing;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    for term in fresh {
+        m.terms.push(ManualTerm {
+            term,
+            chapter: None,
+            note: String::new(),
+            added: now.clone(),
+        });
+    }
+    store_manual(save_dir, &m)?;
+    invalidate(save_dir);
+    out.push(format!(
+        "已写入 {added} 条到 {FILE}（只存在本存档，已 gitignore）；秘密词缓存已失效"
+    ));
+    Ok(out)
+}
+
+/// `talkdnd start` digest warning: `dm-secrets.md` has content but no
+/// recognized explicit marker, so nothing in it is protected. The warning
+/// carries counts only, never file content. Missing, empty and comment-only
+/// files stay quiet.
+pub fn zero_marker_warning(save_dir: &Path) -> Option<String> {
+    let text = fs::read_to_string(save_dir.join("dm-secrets.md")).ok()?;
+    let rep = scan_text(&text);
+    if rep.markers > 0 || rep.content_lines == 0 {
+        return None;
+    }
+    Some(format!(
+        "dm-secrets.md 有内容但没有任何可识别的秘密标记（`- term:` / `- 秘密词:` / `[[词]]`）；普通段落不会被当作秘密词，{} 行内容未受保护。要保护的词需要显式标记，或用 `talkdnd secret import --from <文件>` 导入",
+        rep.content_lines
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,6 +929,142 @@ mod tests {
         assert!(original::known_entries(&save)
             .iter()
             .any(|e| e.id == "O-001"));
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn scan_counts_markers_and_unmarked_lines_without_content() {
+        let text = "# secrets\n- term: Red Mask\n- 秘密词: 红面具\n\nA clue about [[Silver Key]].\nplain unmarked narrative\n\n# comment [[Not This]]\n";
+        let rep = scan_text(text);
+        assert_eq!(rep.markers, 3, "{rep:?}");
+        assert_eq!(rep.content_lines, 4, "{rep:?}");
+        assert_eq!(rep.marked_lines, 3, "{rep:?}");
+        assert_eq!(rep.unmarked_lines, vec![6], "{rep:?}");
+        assert_eq!(scan_text(""), ScanReport::default());
+        assert_eq!(scan_text("# only a comment\n").content_lines, 0);
+    }
+
+    #[test]
+    fn import_parses_marker_and_plain_lines() {
+        assert_eq!(
+            parse_import_line("- term: Red Mask").unwrap(),
+            vec!["Red Mask"]
+        );
+        assert_eq!(
+            parse_import_line("- 秘密词：红面具").unwrap(),
+            vec!["红面具"]
+        );
+        assert_eq!(
+            parse_import_line("A [[Silver Key]] clue").unwrap(),
+            vec!["Silver Key"]
+        );
+        assert_eq!(parse_import_line("红面具").unwrap(), vec!["红面具"]);
+        assert_eq!(
+            parse_import_line("\"Quoted Name\"").unwrap(),
+            vec!["Quoted Name"]
+        );
+        assert_eq!(
+            parse_import_line("# comment").unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(parse_import_line("").unwrap(), Vec::<String>::new());
+        // Malformed: empty marker value, or a term shorter than two chars.
+        assert!(parse_import_line("- term:").is_err());
+        assert!(parse_import_line("- 秘密词:  ").is_err());
+        assert!(parse_import_line("x").is_err());
+        assert!(parse_import_line("\"\"").is_err());
+    }
+
+    #[test]
+    fn import_dry_run_writes_nothing_apply_dedupes_and_invalidates() {
+        let r = root("import");
+        let save = r.join("Saves/2030-01-01-01");
+        let from = r.join("terms.txt");
+        fs::write(
+            &from,
+            "# DM reviewed\n- term: Red Mask\n红面具\nSilver Key\nRed Mask\n- term:\nx\n",
+        )
+        .unwrap();
+        // Dry-run: preview only, nothing is written to the save.
+        let out = import_lines(&save, from.to_str().unwrap(), false)
+            .unwrap()
+            .join("\n");
+        assert!(out.contains("dry-run"), "{out}");
+        assert!(out.contains("将新增 3 条"), "{out}");
+        assert!(out.contains("跳过 1 条"), "{out}");
+        assert!(out.contains("格式错误 2 条：第 6, 7 行"), "{out}");
+        assert!(!save.join(FILE).exists(), "{out}");
+        // Populate the cache with the pre-import state.
+        assert!(guard_terms(&save, &r, "the Red Mask waits").is_empty());
+        // Apply writes, and the new term is guarded right away (cache gone).
+        let out = import_lines(&save, from.to_str().unwrap(), true)
+            .unwrap()
+            .join("\n");
+        assert!(out.contains("已写入 3 条"), "{out}");
+        assert!(list(&save, &r).iter().any(|t| t.term == "红面具"));
+        assert!(
+            !guard_terms(&save, &r, "the Red Mask waits").is_empty(),
+            "imported terms must be guarded after the cache is invalidated"
+        );
+        // A second apply adds nothing: everything is a duplicate now.
+        let out = import_lines(&save, from.to_str().unwrap(), true)
+            .unwrap()
+            .join("\n");
+        assert!(
+            out.contains("将新增 0 条") && out.contains("存档未改动"),
+            "{out}"
+        );
+        // Revealed terms stay filtered.
+        crate::reveal::add(&save, "Red Mask 已揭示", "test", &[]).unwrap();
+        assert!(guard_terms(&save, &r, "the Red Mask waits").is_empty());
+        assert!(scan_lines(&save, Some("no/such/file.md")).is_err());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn scan_lines_reports_counts_only_and_never_content() {
+        let r = root("scanlines");
+        let save = r.join("Saves/2030-01-01-01");
+        fs::write(
+            save.join("dm-secrets.md"),
+            "- term: Red Mask\nplain narrative line\n",
+        )
+        .unwrap();
+        let out = scan_lines(&save, None).unwrap().join("\n");
+        assert!(out.contains("显式标记：1 个"), "{out}");
+        assert!(
+            out.contains("内容行：2 行，有标记 1 行，未标记 1 行"),
+            "{out}"
+        );
+        assert!(out.contains("未标记行：2"), "{out}");
+        assert!(!out.contains("plain narrative line"), "{out}");
+        // Comment-only file: quiet, no coverage warning.
+        fs::write(save.join("other.md"), "# DM 秘密（只给 DM）\n\n").unwrap();
+        let out = scan_lines(&save, Some(save.join("other.md").to_str().unwrap()))
+            .unwrap()
+            .join("\n");
+        assert!(out.contains("没有需要保护的内容"), "{out}");
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn zero_marker_warning_only_for_nonempty_unmarked_files() {
+        let r = root("zerowarn");
+        let save = r.join("Saves/2030-01-01-01");
+        assert!(zero_marker_warning(&save).is_none(), "missing file");
+        fs::write(save.join("dm-secrets.md"), "").unwrap();
+        assert!(zero_marker_warning(&save).is_none(), "empty file");
+        fs::write(save.join("dm-secrets.md"), "   \n# 只给 DM\n\n").unwrap();
+        assert!(zero_marker_warning(&save).is_none(), "comment-only file");
+        fs::write(save.join("dm-secrets.md"), "整段叙述没有任何显式标记。\n").unwrap();
+        let w = zero_marker_warning(&save).unwrap();
+        assert!(
+            w.contains("没有任何可识别的秘密标记") && w.contains("1 行内容未受保护"),
+            "{w}"
+        );
+        assert!(!w.contains("整段叙述"), "{w}");
+        fs::write(save.join("dm-secrets.md"), "- term: 红面具\n").unwrap();
+        assert!(zero_marker_warning(&save).is_none(), "marked file");
         let _ = fs::remove_dir_all(&r);
     }
 }

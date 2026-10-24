@@ -871,6 +871,133 @@ fn guard_secret_known_and_dice_settings() {
 }
 
 #[test]
+fn secret_scan_is_read_only_and_reports_coverage_without_content() {
+    let r = root("secret-scan");
+    ok(&r, &["new", "--date", "2030-09-01", "--scope", "0"]);
+    let save = r.join("Saves/2030-09-01-01");
+    let notes = save.join("notes.md");
+    fs::write(
+        &notes,
+        "# secrets\n- term: Red Mask\n- 秘密词: 红面具\nA clue about [[Silver Key]].\nplain unmarked narrative\n",
+    )
+    .unwrap();
+    let out = ok(&r, &["secret", "scan", "--from", notes.to_str().unwrap()]);
+    assert!(out.contains("显式标记：3 个"), "{out}");
+    assert!(
+        out.contains("内容行：4 行，有标记 3 行，未标记 1 行"),
+        "{out}"
+    );
+    assert!(out.contains("未标记行：5"), "{out}");
+    // No file content in the report: neither marked terms nor unmarked text.
+    assert!(!out.contains("plain unmarked narrative"), "{out}");
+    assert!(!out.contains("A clue about"), "{out}");
+    assert!(!out.contains("Red Mask"), "{out}");
+    // Read-only: the source file is byte-identical after scanning.
+    let before = fs::read_to_string(&notes).unwrap();
+    ok(&r, &["secret", "scan", "--from", notes.to_str().unwrap()]);
+    assert_eq!(fs::read_to_string(&notes).unwrap(), before);
+    // A comment-only file reports nothing to protect.
+    fs::write(save.join("dm-secrets.md"), "# DM 秘密（只给 DM）\n\n").unwrap();
+    let out = ok(&r, &["secret", "scan"]);
+    assert!(out.contains("没有需要保护的内容"), "{out}");
+    // Missing file is a clear error.
+    let (good, _) = run(
+        &r,
+        &[
+            "secret",
+            "scan",
+            "--from",
+            save.join("nope.md").to_str().unwrap(),
+        ],
+    );
+    assert!(!good);
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn secret_import_defaults_to_dry_run_and_applies_only_on_flag() {
+    let r = root("secret-import");
+    ok(&r, &["new", "--date", "2030-09-02", "--scope", "0"]);
+    let save = r.join("Saves/2030-09-02-01");
+    let terms = r.join("terms.txt");
+    fs::write(
+        &terms,
+        "# DM reviewed\n- term: Red Mask\n红面具\nSilver Key\nRed Mask\n- term:\nx\n",
+    )
+    .unwrap();
+    // Default (no flag) and explicit --dry-run write nothing.
+    let cases: &[&[&str]] = &[&[], &["--dry-run"]];
+    for flag in cases {
+        let mut args = vec!["secret", "import", "--from", terms.to_str().unwrap()];
+        args.extend(*flag);
+        let out = ok(&r, &args);
+        assert!(out.contains("dry-run"), "{out}");
+        assert!(out.contains("将新增 3 条"), "{out}");
+        assert!(out.contains("跳过 1 条"), "{out}");
+        assert!(out.contains("格式错误 2 条"), "{out}");
+        assert!(!save.join("secret-terms.yaml").exists(), "{out}");
+    }
+    // Guard is clean before the import; this also populates the term cache.
+    assert!(run(&r, &["guard", "The Red Mask waits"]).0);
+    // --apply persists, deduplicates and invalidates the cache.
+    let out = ok(
+        &r,
+        &[
+            "secret",
+            "import",
+            "--from",
+            terms.to_str().unwrap(),
+            "--apply",
+        ],
+    );
+    assert!(out.contains("已写入 3 条"), "{out}");
+    assert!(ok(&r, &["secret", "list"]).contains("红面具"));
+    let (good, out) = run(&r, &["guard", "The Red Mask waits"]);
+    assert!(
+        !good,
+        "imported term must be guarded after cache invalidation: {out}"
+    );
+    // A second apply adds nothing new.
+    let out = ok(
+        &r,
+        &[
+            "secret",
+            "import",
+            "--from",
+            terms.to_str().unwrap(),
+            "--apply",
+        ],
+    );
+    assert!(
+        out.contains("将新增 0 条") && out.contains("存档未改动"),
+        "{out}"
+    );
+    // Revealed terms stay filtered.
+    ok(
+        &r,
+        &["reveal", "add", "Red Mask 已揭示", "--source", "test"],
+    );
+    assert!(run(&r, &["guard", "The Red Mask waits"]).0);
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn start_warns_on_zero_marker_dm_secrets_and_stays_quiet_on_empty() {
+    let r = root("start-zeromarker");
+    ok(&r, &["new", "--date", "2030-09-03", "--scope", "0"]);
+    let save = r.join("Saves/2030-09-03-01");
+    fs::write(save.join("dm-secrets.md"), "整段叙述没有任何显式标记。\n").unwrap();
+    let out = ok(&r, &["start"]);
+    assert!(out.contains("没有任何可识别的秘密标记"), "{out}");
+    assert!(!out.contains("整段叙述"), "{out}");
+    // Empty file: no warning.
+    fs::write(save.join("dm-secrets.md"), "").unwrap();
+    let out = ok(&r, &["start"]);
+    assert!(!out.contains("没有任何可识别的秘密标记"), "{out}");
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
 fn adventure_search_returns_pdf_pages_fuzzily() {
     let r = root("advsearch");
     ok(

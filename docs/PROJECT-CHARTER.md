@@ -146,6 +146,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 - The Oracle produces inspiration only. It writes no save file, never invents a roll, and resolves every die through the combat-sim dice engine.
 - The live encounter state `Saves/<slot>/combat/*.state.json` is authoritative save data, not merely replayable scratch: it is covered by the integrity manifest when present, every normal combat-sim write refreshes the baseline on success (a failed write never advances it), a missing state file is not an error, and hand edits are reported and accepted like any other tracked file.
 - Tool proficiency checks read proficiency only from the structured `Saves/<slot>/sheets/<id>.yaml` `tools` list, never from Markdown prose or the tool name. The checked ability is a mandatory explicit `--ability`; an unproficient or unknown but well-formed tool still rolls with only the ability modifier (plus explicit extras) and is marked not proficient, and the proficiency bonus comes from the combat block's `prof` (derived from `level` when absent).
+- Secret protection stays literal. `secret scan` is read-only and reports marker coverage as counts and line numbers, never file content; `secret import` reads only DM-reviewed explicit terms, defaults to a dry-run preview, and writes only on an explicit `--apply` after deduplication and format validation; `talkdnd start` warns when `dm-secrets.md` has content but zero recognized markers. There is no semantic spoiler detection: unmarked narrative is never auto-imported, and the guard's matching strategy (case-insensitive English word boundaries, Chinese substrings) is unchanged.
 
 ## Open decisions
 
@@ -158,6 +159,14 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `ORCHESTRATION-PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-24 — Secret marker scan, explicit import and start warning (TASK-0069)
+
+`talkdnd secret scan [--from <file>]` is a read-only coverage report for a DM notes file (default: the save's `dm-secrets.md`): it counts the recognized explicit markers (`- term:`, `- 秘密词:`, `[[词]]`), lists the content lines that carry none by 1-based line number (capped listing), and reports a coverage summary. The source file is never modified, the report holds counts and line numbers only — no file content — and nothing it prints is written to the session log, so no secret body text can reach player-visible output or the public log through it. `talkdnd secret import --from <file> [--dry-run | --apply]` imports DM-reviewed explicit terms, one per line or in the existing marker forms. The default (with or without an explicit `--dry-run`) is a preview that writes nothing; only an explicit `--apply` writes `secret-terms.yaml`, after deduplicating case-insensitively against the import file itself and the existing manual list, and validating format by line number (an empty marker value or a term shorter than two characters is reported as an error and not imported). Applying invalidates the secret-term cache, and the existing revealed-term filtering is unchanged. `talkdnd start` warns in the digest when `dm-secrets.md` has content but zero recognized markers, including the unmarked-line count; a missing, empty or comment-only file stays quiet.
+
+Boundary: everything stays literal. Scan and import recognize only explicit markers; they do not perform semantic spoiler detection, never turn narrative sentences or paragraphs into terms automatically, and the guard's matching strategy is unchanged. Synonym, paraphrase and semantic coverage remains the DM's job.
+
+Alternative considered: automatic semantic spoiler detection that turns unmarked narrative into secret terms. Rejected: it would flood the guard with false positives, over-block normal narration, and promise a guarantee that literal matching cannot deliver; the issue explicitly rules it out.
 
 ### 2026-10-24 — Tool proficiency checks (TASK-0068)
 

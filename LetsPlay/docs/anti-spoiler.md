@@ -91,12 +91,18 @@ $T start                 # 摘要里带 known 的压缩版
 $T secret add "红面具" --chapter 2 --note "幕后黑手"
 $T secret list
 $T secret remove "红面具"
+$T secret scan [--from <文件>]
+$T secret import --from <文件> [--dry-run | --apply]
 $T guard "选项：从红面具的密道离开"
 echo "<整段草稿>" | $T guard -
 ```
 
 - 匹配不区分大小写；英文按整词匹配（秘密词 `Inn` 不会命中 `inner`），中文按子串匹配；已出现在 `reveals.yaml` 里的词自动排除。
 - 单个英文单词的章节标题太泛（如 `Wharf`），不会自动成为秘密词；DM-only 小节正文里的 `[[专名]]` 仍会收集。需要检查这类泛称时用 `secret add` 显式加入。
+- `secret scan [--from <文件>]`（默认扫本存档 `dm-secrets.md`）是**只读**的覆盖率报告：数出可识别的显式标记（`- term:` / `- 秘密词:` / `[[词]]`）有多少个、哪些内容行一个标记都没有（只给行号，最多列 30 个）和覆盖率。它不改源文件，报告里没有任何正文，也不写会话日志。
+- `secret import --from <文件>` 导入 DM **审核过**的显式词条：每行一个词条，或用现有标记写法。默认 dry-run 只预览不写存档；确认后加 `--apply` 才写入 `secret-terms.yaml`。导入会按不区分大小写去重（文件内部和现有手动清单），并按行号报告格式错误（空词条、不足 2 字）和新增/跳过数量；写入后缓存自动失效，已揭示词照常过滤。
+- `talkdnd start` 在 `dm-secrets.md` 有内容但没有任何可识别标记时给出配置警告（附未标记行数）；文件缺失、为空或只有注释时保持安静。
+- **语义边界**：扫描与导入只认显式标记，不做语义级剧透识别，也不会把未标记的叙述段落自动变成词条。同义词、改写和语义转述仍要 DM 人工补词条；`scan` 报告的未标记行只是提醒，不是判定。
 - 有命中时每个词打印「剧透词：X（建议改写为玩家已知的说法）」并返回退出码 1；干净时退出码 0。
 - 清单有缓存，源文件变化（包括手工 `secret add/remove`）后自动失效，检查很快。
 - 这是**提醒**，不是硬拦截：确实需要让玩家知道时，先把事实 `reveal add`，词自然从清单里消失；不要为了通过检查删秘密或改词掩盖。
@@ -135,7 +141,7 @@ echo "<整段草稿>" | $T guard -
 
 ## 程序支持与局限
 
-- 程序能**记账、按场景读书、扫描草稿、遮蔽名字**：`reveal add/list/check`、`known`、`scene`、`adventure section`、`secret add/list/remove`、`guard`、`identify`、`original add --hidden`、`reveal add --original`、`settings dice`。
+- 程序能**记账、按场景读书、扫描草稿、遮蔽名字**：`reveal add/list/check`、`known`、`scene`、`adventure section`、`secret add/list/remove/scan/import`、`guard`、`identify`、`original add --hidden`、`reveal add --original`、`settings dice`。
 - `$T check` 只做针对性检查：原创隐藏面是否出现在会话日志、原创台账/偏离度是否被手改、数值变化有没有日志解释；它不扫描冒险书，也不判断一句叙述算不算剧透。
 - `guard` 对英文做不区分大小写的整词匹配、对中文做子串匹配；查不到不能证明角色一定不知道（DM 可能忘了记），查到也不一定是剧透（可能只是用词重合）。判断仍靠第 1、3 层。
 - 名称遮蔽只覆盖 combat-sim 的玩家视图和 `known` 的识别状态；DM 自己的视图永远显示真名，不要把 DM 视图直接投给玩家。
