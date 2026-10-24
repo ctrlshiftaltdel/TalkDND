@@ -979,15 +979,24 @@ fn scaffold_groups_help_lists_the_contract_surface() {
         (&["memory", "list", "--help"], "--tag --all"),
         (&["memory", "remove", "--help"], "ID"),
         (&["settings", "style", "--help"], "show set"),
-        (&["settings", "style", "set", "--help"], "FIELD VALUE --reason"),
+        (
+            &["settings", "style", "set", "--help"],
+            "FIELD VALUE --reason",
+        ),
         (&["entity", "--help"], "add list show rename retire"),
-        (&["entity", "add", "--help"], "--type --name --alias --first-seen --dm-only"),
+        (
+            &["entity", "add", "--help"],
+            "--type --name --alias --first-seen --dm-only",
+        ),
         (&["entity", "list", "--help"], "--type --all"),
         (&["entity", "show", "--help"], "ID"),
         (&["entity", "rename", "--help"], "ID NAME"),
         (&["entity", "retire", "--help"], "ID"),
         (&["relation", "--help"], "add list end show context"),
-        (&["relation", "add", "--help"], "--type --from --to --since --source --note --dm-only"),
+        (
+            &["relation", "add", "--help"],
+            "--type --from --to --since --source --note --dm-only",
+        ),
         (&["relation", "list", "--help"], "--entity --at --all"),
         (&["relation", "end", "--help"], "ID --at --note"),
         (&["relation", "show", "--help"], "ID"),
@@ -996,7 +1005,10 @@ fn scaffold_groups_help_lists_the_contract_surface() {
         (&["time", "set", "--help"], "--date --phase"),
         (&["time", "advance", "--help"], "--days --hours"),
         (&["time", "event", "--help"], "add list done skip"),
-        (&["time", "event", "add", "--help"], "--due --title --dm-only --note"),
+        (
+            &["time", "event", "add", "--help"],
+            "--due --title --dm-only --note",
+        ),
         (&["adventure", "index", "--help"], "build show search"),
         (&["adventure", "index", "build", "--help"], "--book"),
         (&["adventure", "index", "show", "--help"], "BOOK"),
@@ -1009,7 +1021,7 @@ fn scaffold_groups_help_lists_the_contract_surface() {
     for &(args, needles) in cases {
         let out = ok(&r, args);
         for n in needles.split(' ') {
-            assert!(out.contains(n), "{args:?} --help is missing `{n}`:\n{out}");
+            assert!(out.contains(n), "{args:?} is missing {n}:\n{out}");
         }
     }
     let _ = fs::remove_dir_all(&r);
@@ -1029,13 +1041,23 @@ fn scaffold_stubs_are_not_implemented_yet() {
         &["memory", "list"],
         &["memory", "remove", "m-1"],
         &["settings", "style", "show"],
-        &["settings", "style", "set", "narration", "short", "--reason", "table vote"],
+        &[
+            "settings",
+            "style",
+            "set",
+            "narration",
+            "short",
+            "--reason",
+            "table vote",
+        ],
         &["entity", "add", "--type", "npc", "--name", "Mira"],
         &["entity", "list"],
         &["entity", "show", "mira"],
         &["entity", "rename", "mira", "Mira Bentwood"],
         &["entity", "retire", "mira"],
-        &["relation", "add", "--type", "ally", "--from", "mira", "--to", "party"],
+        &[
+            "relation", "add", "--type", "ally", "--from", "mira", "--to", "party",
+        ],
         &["relation", "list"],
         &["relation", "end", "r-1"],
         &["relation", "show", "r-1"],
@@ -1045,7 +1067,9 @@ fn scaffold_stubs_are_not_implemented_yet() {
         &["time", "disable"],
         &["time", "set", "--date", "1 Hammer"],
         &["time", "advance", "--days", "2"],
-        &["time", "event", "add", "--due", "1 Hammer", "--title", "festival"],
+        &[
+            "time", "event", "add", "--due", "1 Hammer", "--title", "festival",
+        ],
         &["time", "event", "list"],
         &["time", "event", "done", "e-1"],
         &["time", "event", "skip", "e-1"],
@@ -1091,6 +1115,9 @@ fn checkpoint_text_still_appends_a_section() {
     assert!(!good && out.contains("checkpoint text is empty"), "{out}");
     // A bare subcommand name is the subcommand, not checkpoint text.
     let (good, out) = run(&r, &["checkpoint", "list"]);
-    assert!(!good && out.contains("not implemented in TASK-0057"), "{out}");
+    assert!(
+        !good && out.contains("not implemented in TASK-0057"),
+        "{out}"
+    );
     let _ = fs::remove_dir_all(&r);
 }
