@@ -74,8 +74,11 @@ $T log rolls --last 5       # 查看最近的掷骰记录
 
 ## 战斗外的检定：`talkdnd check`
 
-不用自己算调整值：`talkdnd check <角色> <技能|属性|save:属性|init> [--dc N] [--adv|--dis] [--extra 1d4|+2]`。
+不用自己算调整值：`talkdnd check <角色> <技能|属性|save:属性|init|tool:工具> [--ability 属性] [--dc N] [--adv|--dis] [--extra 1d4|+2]`。
 
 - 调整值从角色卡的战斗数据块读取。队友和玩家角色都在 `Characters/`，剧情 NPC 在 `NPCs/`（熟练技能用 `skills`，豁免用 `saves`，其余用属性调整值）。
-- 例：`talkdnd check Bruni perception --dc 15`、`talkdnd check bruni save:con --dis`、`talkdnd check Ilsa stealth --adv --extra 1d4`（神导术）。
+- 工具检定：`talkdnd check <角色> tool:<工具名> --ability <str|dex|con|int|wis|cha>`。同一工具在不同场景可用不同属性，所以检定属性必须显式给出，程序不会从工具名猜测；缺属性或属性写错会直接报错。
+- 工具熟练只看结构化角色数据（`Saves/<存档>/sheets/<id>.yaml` 的 `tools` 列表），不看角色卡正文。已熟练：属性调整值 + 当前熟练加值；未熟练：只加属性调整值与 `--extra`，输出会明确标注 `not proficient (no proficiency bonus added)`。写法正确但角色没练过的工具同样按未熟练检定，不会静默当成已熟练。
+- 工具名忽略大小写、多余空格、撇号/引号，连字符当空格（`thieves' tools`、`Thieves Tools`、`thieves-tools` 一样），另有少量常见别名（如 `thief's tools`、`dice sets`）；参数写错报错，不会猜。
+- 例：`talkdnd check Bruni perception --dc 15`、`talkdnd check bruni save:con --dis`、`talkdnd check Ilsa stealth --adv --extra 1d4`（神导术）、`talkdnd check Rina tool:thieves-tools --ability dex --dc 15`。
 - 结果自动写进最新的会话日志。战斗中仍用 `combat-sim check/save`。

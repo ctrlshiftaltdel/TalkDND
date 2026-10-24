@@ -116,8 +116,12 @@ enum Cmd {
         /// Character id or name (Characters/: PCs and companions; NPCs/: story NPCs)
         #[arg(requires = "what")]
         who: Option<String>,
-        /// Skill id (perception), ability (wis), save:<ability> or init
+        /// Skill id (perception), ability (wis), save:<ability>, init or tool:<name>
         what: Option<String>,
+        /// Ability for tool checks (str|dex|con|int|wis|cha); required by
+        /// tool:<name>, rejected for every other check
+        #[arg(long)]
+        ability: Option<String>,
         #[arg(long)]
         dc: Option<i32>,
         #[arg(long)]
@@ -964,6 +968,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
         Cmd::Check {
             who,
             what,
+            ability,
             dc,
             adv,
             dis,
@@ -981,6 +986,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                 &s,
                 &who,
                 &what,
+                ability.as_deref(),
                 dc,
                 adv,
                 dis,
