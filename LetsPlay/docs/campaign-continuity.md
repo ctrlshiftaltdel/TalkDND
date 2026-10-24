@@ -1,7 +1,7 @@
 # 战役连续性数据契约（P00）
 
 > 本文件是「战役连续性」程序 P00–P08 的唯一数据契约：权威矩阵、文件格式、会话与时间模型、schema 与 integrity 策略、命令面、可见性规则、非目标与成功指标。
-> 状态：2026-10-24 经项目所有者批准，由 TASK-0056（Issue #113）冻结；2026-10-24 按复审意见修订（检查点覆盖范围纳入 identified.yaml、restore 的 schema 不匹配与恢复后日志/基线规则、检查点 DM 本地定位），对应 docs/PROJECT-CHARTER.md Decision Log 同日条目。后续任务（P00a–P08）按本契约实现；偏离本契约必须先改本文件并登记为项目所有者决策。
+> 状态：2026-10-24 经项目所有者批准，由 TASK-0056（Issue #113）冻结；2026-10-24 按复审意见修订（检查点覆盖范围纳入 identified.yaml、restore 的 schema 不匹配与恢复后日志/基线规则、检查点 DM 本地定位），对应 docs/PROJECT-CHARTER.md Decision Log 同日条目；2026-10-24 按 TASK-0066（Issue #128）修订：`combat/*.state.json` 界定为权威数据并在存在时纳入 integrity，见第 1.1 节与第 3.3 节，对应 docs/PROJECT-CHARTER.md Decision Log 同日条目。后续任务（P00a–P08）按本契约实现；偏离本契约必须先改本文件并登记为项目所有者决策。
 > 读者：P00–P08 各任务的实现者与审查者；DM 按需查阅（LetsPlay/docs/ 下的其他章节照旧）。
 > 路径约定：除特别说明外，所有存档路径相对于游戏文件夹；Saves/<slot>/ 表示一份存档。英文标识符（字段名、命令名、文件名、枚举值）按本文逐字使用，不翻译、不改写、不改大小写。
 
@@ -16,7 +16,7 @@
 | 角色数据块 | Saves/<slot>/sheets/<id>.yaml | talkdnd char（另 chargen sheet、level-up、companion sheet、迁移时由 migrate 改写） | check/char/start/known、combat-sim | 玩家可见 | 纳入（sheets/*.yaml） | 旧卡首次使用时自动迁移；回退 = P01 检查点或 Saves/_backups/ 备份 |
 | 渲染角色卡 / 剧情 NPC 卡 | Saves/<slot>/Characters/*.md、Saves/<slot>/NPCs/*.md | talkdnd char（渲染）、companion sheet、npc；不要手改 | start/known、DM | 玩家可见（NPCs/ 只放剧情 NPC） | 纳入（跳过 _ 开头文件，如 _party.md） | 随主 schema 迁移（5→6 移动过队友卡）；回退同上 |
 | 队伍战斗状态 | Saves/<slot>/combat/party-state.yaml | combat-sim 战斗命令；talkdnd char 回写 HP/资源/状态 | start（当前状态节）、check | 玩家可见 | 纳入（combat/*.yaml） | 自带 version，高版本拒绝并提示更新；回退 = 检查点 |
-| 战役清单与战斗状态 | Saves/<slot>/combat/campaign.yaml、combat/*.state.json | talkdnd new（清单）；combat-sim（*.state.json） | combat-sim、start | 玩家可见 | campaign.yaml 纳入；*.state.json 不纳入 | 随主 schema；*.state.json 可随时重打 |
+| 战役清单与战斗状态 | Saves/<slot>/combat/campaign.yaml、combat/*.state.json | talkdnd new（清单）；combat-sim（*.state.json） | combat-sim、start | 玩家可见 | 均纳入（*.state.json 存在时纳入；combat-sim 每次成功写入后自动刷新基线，2026-10-24 TASK-0066 起） | 随主 schema；*.state.json 可用 combat-sim 从清单重建，但战斗进行中它是权威记录 |
 | 经验 / 金币 / 物品 / 场景 | Saves/<slot>/progress.yaml | xp add、level-up、loot、scene | known/start/check | 玩家可见 | 纳入 | 自带 version（0/1 兼容），高版本拒绝；回退 = 检查点 |
 | 已揭示知识 | Saves/<slot>/reveals.yaml | talkdnd reveal add（identify/handout 等自动登记也写入这里） | known、guard | 玩家可见（玩家已知事实的唯一台账） | 纳入 | 自带 version，高版本拒绝；回退 = 检查点 |
 | 原创内容台账 | Saves/<slot>/original.yaml | talkdnd original add | check、start（DM 节）、known（已遇见的原创） | DM-only（hidden 面在揭示前不得外泄） | 纳入 | 自带 version，高版本拒绝；回退 = 检查点 |
@@ -102,7 +102,7 @@
 ### 3.3 integrity 纳入规则（P00b 执行）
 
 - 存在才纳入：memory.yaml、entities.yaml、relations.yaml、world-time.yaml、checkpoints/*/manifest.yaml。文件不存在时清单里没有该项，check 不报缺失。
-- 永不纳入：Sessions/（任何日志）、checkpoints/ 下的数据副本（只哈希 manifest.yaml，避免整份重复哈希）、integrity.yaml 自身。第 1.1/1.2 节里标注「不纳入」的存储维持现状，P00b 不扩大、也不收窄。
+- 永不纳入：Sessions/（任何日志）、checkpoints/ 下的数据副本（只哈希 manifest.yaml，避免整份重复哈希）、integrity.yaml 自身。第 1.1/1.2 节里标注「不纳入」的存储维持现状，P00b 不扩大、也不收窄。2026-10-24 更新（TASK-0066）：唯一例外是 `combat/*.state.json`，从「不纳入」改为存在时纳入（见第 1.1 节）；本节其余「不纳入」项不变。
 - 纳入后行为不变：工具写入自动更新指纹；手改被 changes_against 报告为 Modified，DM 用 talkdnd integrity accept --reason 接受。
 
 ### 3.4 check 扩展点
