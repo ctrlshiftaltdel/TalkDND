@@ -44,6 +44,12 @@ def main(argv=None):
     q.add_argument("--limit", type=int, default=20)
     ap_ = sub.add_parser("apply", help="rebuild <book>.md with fixes/ applied (waits for no worker)")
     ap_.add_argument("--book")
+    fx = sub.add_parser("fix", help="store a hand-written correction for one page and rebuild")
+    fx.add_argument("--book", required=True)
+    fx.add_argument("--page", type=int, required=True, help="PDF page number (1-based)")
+    fx.add_argument("--from", dest="src", default="-", help="corrected Markdown file ('-' = stdin)")
+    fx.add_argument("--reason", default="", help="why; kept in fixes/manual.log.jsonl")
+    fx.add_argument("--no-apply", action="store_true", help="store only; rebuild on the next apply")
     rv = sub.add_parser("review", help="agent review of pages; keeps a fix only if scores do not regress")
     rv.add_argument("--book", required=True)
     rv.add_argument("--page", help="PDF pages, e.g. 12,30-32 (default: worst pages from fix-queue)")
@@ -110,6 +116,8 @@ def main(argv=None):
         return 0
     if args.cmd == "contact-sheet":
         return contact_sheets(root, args.book)
+    if args.cmd == "fix":
+        return fixcmd(root, args)
     if args.cmd in ("audit", "fix-queue", "apply", "review"):
         return reviewcmd(root, args)
     return 2
@@ -220,6 +228,73 @@ def reviewcmd(root, args):
                     rc |= rec["status"] == "error"
             audit.audit_book(bv)
     return rc
+
+
+def fixcmd(root, args):
+    """Store a hand-written correction for one page and rebuild the book."""
+    import json
+    import re
+    import shutil
+    import time
+
+    from . import audit, fixes
+    from .convert import Book
+
+    pdf = _find(root, args.book)
+    b = Book(pdf)
+    try:
+        pages = b.m.get("page_count", 0)
+        if not (1 <= args.page <= pages):
+            print(f"page {args.page} out of range 1..{pages}", file=sys.stderr)
+            return 2
+        if str(args.page) not in b.m.get("pages", {}):
+            print(f"page {args.page} has not been converted yet; "
+                  f"run `pdf2md run --book ... --pages {args.page}` first", file=sys.stderr)
+            return 2
+        if args.src == "-":
+            md = sys.stdin.read()
+        else:
+            with open(args.src, encoding="utf-8") as f:
+                md = f.read()
+        md = re.sub(r'^\s*(?:<a id="p\d+"></a>|<!-- PDF p\.\d+ -->)\s*$', "", md, flags=re.M)
+        if not md.strip():
+            print("empty correction; nothing written", file=sys.stderr)
+            return 2
+        path = audit.fix_path(b, args.page)
+        if os.path.exists(path):
+            bdir = os.path.join(b.dir, "fixes", "backups")
+            os.makedirs(bdir, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            dst = os.path.join(bdir, f"p{args.page:04d}-{stamp}.md")
+            n = 1
+            while os.path.exists(dst):
+                n += 1
+                dst = os.path.join(bdir, f"p{args.page:04d}-{stamp}-{n}.md")
+            shutil.copy2(path, dst)
+        fixes.write_fix(path, b.m["sha256"], VERSION, "manual", md)
+        print(f"stored fix for p.{args.page}")
+        if args.reason:
+            log = os.path.join(b.dir, "fixes", "manual.log.jsonl")
+            os.makedirs(os.path.dirname(log), exist_ok=True)
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"page": args.page, "reason": args.reason,
+                                    "at": time.strftime("%Y-%m-%dT%H:%M:%S")},
+                                   ensure_ascii=False) + "\n")
+        if args.no_apply:
+            print("not rebuilt; run `pdf2md apply --book ...` when ready")
+            return 0
+        lock = worker.Lock(root)
+        if not lock.acquire():
+            print("worker running: the fix will be applied when it next assembles the book")
+            return 0
+        try:
+            b.assemble()
+        finally:
+            lock.release()
+        print("rebuilt", os.path.basename(pdf))
+        return 0
+    finally:
+        b.close()
 
 
 def _find(root, name):

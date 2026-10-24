@@ -40,6 +40,13 @@ Rules/2024/players-handbook-2024/index/img/p0123-a1.webp                # 从扫
 - 只有召回率不降、未知词不升时才采用，保存为 `fixes/pNNNN.md`，重新转换后依然生效；否则放进 `fixes/rejected/` 并记入 `fixes/review.log.jsonl`。`pdf2md apply` 在没有转换进程时立即重建该书（否则下次组装时自动应用）。
 - 修正文件同样只在本地，不入库、不贴出去。查书时遇到 `inferred` 标记，关键数值仍以 PDF 为准。
 
+**游玩中修正（正文与 PDF 不符时）**：以 PDF 为准，当场改好再继续。
+
+1. `uv run --project tools/pdf2md python -m pdf2md render "<书名>" <页>` 生成该页图片（或直接打开 PDF），核对文字、数字和表格。
+2. 把该页正确的 Markdown 写到临时文件；不要写页锚点，程序会补。
+3. `uv run --project tools/pdf2md python -m pdf2md fix --book "<书名>" --page <页> --from <临时文件> --reason "<一句话原因>"`。没有转换进程时它立即重组；提示 `worker running` 时，修正会在下次组装生效。
+4. 用 `bin/talkdnd adventure section ...` 再读一次确认。修正留在 `index/fixes/`，不入库、不贴出去。
+
 **查书顺序**：
 
 1. 先查该书的 `index/index.md`（链接都指向 `.pages.md#pN`）。正文只有一份 `index/<书名>.pages.md`（页码版）：连续阅读时跳过 `<a id="pN"></a>` 和 `<!-- PDF p.N -->` 两种行即可，要页码时按 `<a id="pN">` 得到 PDF 页码。冒险书用 `bin/talkdnd adventure section` / `search` 查，输出已去掉锚点行。

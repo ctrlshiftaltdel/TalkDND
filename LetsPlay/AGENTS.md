@@ -46,7 +46,7 @@
 10. **书是骨架，演绎靠即兴**：剧情节点、秘密、地图、数据块、DC 照书；描述和对话用自己的话即兴，不照念原文。公开细节写 `canon.md`，秘密写 `dm-secrets.md`。见 `docs/narration.md`。
 11. **守住秘密**：只透露角色能得知的信息；会话日志不写秘密（写“见 dm-secrets”）。见「信息纪律」。
 12. **战斗**用 combat-sim：`export COMBAT_SIM_CAMPAIGN=$PWD/Saves/<存档>/combat/campaign.yaml`，命令与坑见 `docs/combat.md`。
-13. **完整规则书优先**：`$T start` 的「规则来源」列出本地完整规则书时，查规则、法术、怪物、背景、专长先读这些书，SRD 兜底。先查 `<书文件夹>/index/index.md`；正文只有一份 `<书文件夹>/index/<书名>.pages.md`（`<a id="pN"></a>` = PDF 第 N 页）。标 ⚠ 的数据块、低质量页、地图看 PDF。见 `docs/pdf2md.md`。
+13. **完整规则书优先**：`$T start` 的「规则来源」列出本地完整规则书时，查规则、法术、怪物、背景、专长先读这些书，SRD 兜底。先查 `<书文件夹>/index/index.md`；正文只有一份 `<书文件夹>/index/<书名>.pages.md`（`<a id="pN"></a>` = PDF 第 N 页）。标 ⚠ 的数据块、低质量页、地图看 PDF。读出内容与 PDF 不符时，按 `docs/pdf2md.md`「游玩中修正」当场改好再继续。见 `docs/pdf2md.md`。
 14. **隐私**：不要把规则书、冒险书文本、存档或 `dm-secrets.md` 提交到 git 或贴到任何 issue、PR。
 ## 剧本偏离度（必须遵守）
 每个存档开档时锁定「能离剧本多远」：`deviation.scope` 与 `ratio` 存在 `save-meta.yaml`，**开档后不能改**。完整说明见 `docs/deviation.md`。
