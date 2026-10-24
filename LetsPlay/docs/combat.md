@@ -36,7 +36,7 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 
 - `simulate` 只有一方时会报错；清单里没写 `party:` 时必须传 `--party`。
 - 非致命：只有**近战**可以击昏；要击昏就加 `--nonlethal`（或生物数据带 `tags: [nonlethal]`）。不加就是致死。
-- 越回合的 `cast` / `use`：反应能力照常执行；其他能力**直接报错**，先 `next`。准备动作或 DM 裁定时加 `--force`（会打印 WARNING）。`attack`、`move`、`interact` 越回合仍只警告（借机攻击等）。
+- 越回合的行动：`attack`、`cast`、`use` **直接报错**，先 `next`；`cast`/`use` 的反应能力照常执行。准备动作或 DM 裁定时给 `attack`/`cast`/`use` 加 `--force`（会打印 WARNING 审计行并写入战斗日志）。`move`、`interact` 不消耗行动，越回合仍只警告。`damage` 是 DM 命令，没有行动者，不受轮次限制也不消耗行动。
 - 休息：`rest short <名字|all> [--hd N]` 花 N 个生命骰（每个掷骰 + 体质调整值）恢复 HP；`rest long <名字|all>` 回满 HP 和资源、恢复一半生命骰（至少 1）并结束专注。`all` 只包括 party 一方活着的角色，敌人和死者不休息。
 - 同伴（`Characters/` 里 `controller: dm` 的队友；战斗块 `side: party`，`kind` 可以是 `pc` 或 `npc`）和 PC 一样在 0 HP 时倒地并做死亡豁免（`deathsave`）。
 - 睡眠术（2024 第二次豁免；2014 的 HP 池整个是手动）、冒险书的特殊机关、增援到场时机等是**手动**的：用 `save`、`condition add`、`activate`。

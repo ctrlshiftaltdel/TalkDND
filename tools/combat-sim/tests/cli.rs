@@ -127,6 +127,15 @@ fn full_cli_flow() {
     assert!(stdout(&output).contains("| conditions:"));
     assert!(stdout(&output).contains("| resources:"));
 
+    // Attacks are turn-gated: advance to Striker's turn before attacking.
+    while !status_json(temp.path())["active"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Striker")
+    {
+        assert_success(&run(temp.path(), &["next", "--seed", "1"]), "next");
+    }
+
     let output = run(
         temp.path(),
         &["attack", "Striker", "Brute", "test-sword", "--seed", "1"],
@@ -826,4 +835,218 @@ fn state_command_rolls_are_appended_without_narration() {
     let log = fs::read_to_string(save.join("rolls.log")).unwrap();
     assert_eq!(log.lines().count(), before, "{log}");
     let _ = fs::remove_dir_all(&save);
+}
+
+#[test]
+fn attack_out_of_turn_fails_without_changing_any_state() {
+    let temp = TempState::new("attack-outofturn");
+    create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
+    assert_success(&run(temp.path(), &["init", "--seed", "42"]), "init");
+    while status_json(temp.path())["active"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Striker")
+    {
+        assert_success(&run(temp.path(), &["next", "--seed", "1"]), "next");
+    }
+    let before = fs::read(temp.path()).unwrap();
+
+    let output = run(
+        temp.path(),
+        &["attack", "Striker", "Brute", "test-sword", "--seed", "1"],
+    );
+    assert!(!output.status.success(), "out-of-turn attack must fail");
+    let message = stderr(&output);
+    assert!(message.contains("cannot attack now"), "{message}");
+    assert!(
+        message.contains("Run `next` first, or add --force"),
+        "{message}"
+    );
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+
+    // The refusal must precede any roll, log line, action spend, or HP or
+    // resource change: the self-contained state file stays byte-identical
+    // (rolls.log is only appended on success).
+    let after = fs::read(temp.path()).unwrap();
+    assert_eq!(
+        before, after,
+        "state file must be byte-identical after a failed out-of-turn attack"
+    );
+}
+
+#[test]
+fn attack_on_the_attacker_s_turn_still_succeeds() {
+    let temp = TempState::new("attack-onturn");
+    create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
+    assert_success(&run(temp.path(), &["init", "--seed", "42"]), "init");
+    while !status_json(temp.path())["active"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Striker")
+    {
+        assert_success(&run(temp.path(), &["next", "--seed", "1"]), "next");
+    }
+    let output = run(
+        temp.path(),
+        &["attack", "Striker", "Brute", "test-sword", "--seed", "1"],
+    );
+    assert_success(&output, "on-turn attack");
+    assert!(stdout(&output).contains("attacks Brute A with Test Sword"));
+    assert!(!stdout(&output).contains("WARNING"), "{}", stdout(&output));
+}
+
+#[test]
+fn attack_force_overrides_the_turn_rule_with_an_audit_line() {
+    let temp = TempState::new("attack-force");
+    create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
+    assert_success(&run(temp.path(), &["init", "--seed", "42"]), "init");
+    while status_json(temp.path())["active"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Striker")
+    {
+        assert_success(&run(temp.path(), &["next", "--seed", "1"]), "next");
+    }
+    let output = run(
+        temp.path(),
+        &[
+            "attack",
+            "Striker",
+            "Brute",
+            "test-sword",
+            "--force",
+            "--seed",
+            "1",
+        ],
+    );
+    assert_success(&output, "forced out-of-turn attack");
+    let out = stdout(&output);
+    assert!(out.contains("WARNING"), "{out}");
+    assert!(out.contains("with --force"), "{out}");
+    assert!(out.contains("attacks Brute A with Test Sword"), "{out}");
+    // The audit line is part of the persistent encounter log.
+    let output = run(temp.path(), &["log", "--tail", "100"]);
+    assert_success(&output, "log");
+    assert!(
+        stdout(&output).contains("WARNING: Striker A acts out of turn to attack"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn cast_and_use_reactions_still_work_out_of_turn() {
+    let temp = TempState::new("reaction-outofturn");
+    create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
+    assert_success(&run(temp.path(), &["init", "--seed", "42"]), "init");
+    while status_json(temp.path())["active"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Warden")
+    {
+        assert_success(&run(temp.path(), &["next", "--seed", "1"]), "next");
+    }
+    // `warding` is a reaction: allowed out of turn without --force and
+    // without a warning.
+    let output = run(
+        temp.path(),
+        &["use", "Warden", "warding", "Warden", "--seed", "1"],
+    );
+    assert_success(&output, "reaction out of turn");
+    assert!(!stdout(&output).contains("WARNING"), "{}", stdout(&output));
+}
+
+#[test]
+fn move_and_interact_out_of_turn_warn_but_proceed() {
+    let temp = TempState::new("move-interact-outofturn");
+    let manifest = fixture("manifest.yaml");
+    let output = run_raw(&[
+        "--state",
+        temp.path().to_str().unwrap(),
+        "--campaign",
+        manifest.to_str().unwrap(),
+        "new",
+        "--encounter",
+        "zone-empty",
+        "--party",
+        "adept-a",
+        "--add",
+        "sentinel-t",
+    ]);
+    assert_success(&output, "new zone scene with a foe");
+    assert_success(
+        &run(temp.path(), &["init", "--set", "Sentinel T=30"]),
+        "init",
+    );
+    assert_eq!(status_json(temp.path())["active"], "Sentinel T");
+
+    // Movement and object interaction do not consume an action, so they stay
+    // warn-only out of turn (see LetsPlay/docs/combat.md).
+    let output = run(temp.path(), &["move", "Adept", "beta", "--no-oa"]);
+    assert_success(&output, "out-of-turn move");
+    assert!(
+        stdout(&output).contains("WARNING: Adept A is acting out of turn"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(stdout(&output).contains("moves alpha -> beta"));
+
+    let output = run(
+        temp.path(),
+        &[
+            "interact", "Adept", "console", "--option", "1", "--seed", "42",
+        ],
+    );
+    assert_success(&output, "out-of-turn interact");
+    assert!(
+        stdout(&output).contains("WARNING: Adept A is acting out of turn"),
+        "{}",
+        stdout(&output)
+    );
+
+    // On the mover's own turn no warning appears.
+    while !status_json(temp.path())["active"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Adept")
+    {
+        assert_success(&run(temp.path(), &["next", "--seed", "1"]), "next");
+    }
+    let output = run(temp.path(), &["move", "Adept", "alpha", "--no-oa"]);
+    assert_success(&output, "on-turn move");
+    assert!(!stdout(&output).contains("WARNING"), "{}", stdout(&output));
+}
+
+#[test]
+fn damage_works_on_any_turn_and_spends_no_action() {
+    let temp = TempState::new("damage-dm");
+    create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
+    assert_success(&run(temp.path(), &["init", "--seed", "42"]), "init");
+    // `damage` has no actor: it must work regardless of whose turn it is.
+    let output = run(temp.path(), &["damage", "Brute", "5"]);
+    assert_success(&output, "damage as a DM command");
+    assert!(stdout(&output).contains("takes"), "{}", stdout(&output));
+    let brute = status_json(temp.path())["combatants"]
+        .as_array()
+        .expect("combatants")
+        .iter()
+        .find(|combatant| combatant["name"] == "Brute A")
+        .expect("Brute A should be present")
+        .clone();
+    assert_eq!(brute["hp"], brute["max_hp"].as_i64().unwrap() - 5);
+
+    // It must not consume an action either: the attacker can still act on
+    // its own turn afterwards.
+    while !status_json(temp.path())["active"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Striker")
+    {
+        assert_success(&run(temp.path(), &["next", "--seed", "1"]), "next");
+    }
+    let output = run(
+        temp.path(),
+        &["attack", "Striker", "Brute", "test-sword", "--seed", "1"],
+    );
+    assert_success(&output, "attack after a DM damage");
 }

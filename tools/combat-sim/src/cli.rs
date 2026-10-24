@@ -142,6 +142,9 @@ pub enum Command {
         /// Knock out instead of kill if a melee attack drops the target to 0 HP (2024 PHB).
         #[arg(long)]
         nonlethal: bool,
+        /// Attack outside your turn (readied attack, DM ruling).
+        #[arg(long)]
+        force: bool,
     },
 
     /// Apply damage from an expression or flat number.
@@ -584,11 +587,12 @@ pub fn run() -> Result<()> {
             multi,
             no_reactions,
             nonlethal,
+            force,
         } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
                 let attacker = canonical_name(state, &attacker)?;
-                warn_out_of_turn(state, &attacker, lines);
+                check_action_turn(state, &attacker, force, lines)?;
                 let target = canonical_name(state, &target)?;
                 let options = AttackOptions {
                     advantage: adv,
@@ -1130,22 +1134,73 @@ fn make_rng(seed: Option<u64>) -> Box<dyn DiceRng> {
     }
 }
 
-/// Warns (does not block) when someone other than the active combatant acts:
-/// legitimate for reactions and readied actions, a bookkeeping slip otherwise.
-fn warn_out_of_turn(state: &EncounterState, actor: &str, lines: &mut Vec<String>) {
+/// Name of the active combatant, or `None` when turn tracking does not apply
+/// (no initiative rolled yet, or the fight has already ended).
+fn active_combatant(state: &EncounterState) -> Option<&str> {
     if state.initiative.is_empty() || state.outcome.is_some() {
-        return;
+        return None;
     }
-    let Some(&active) = state.initiative.get(state.turn) else {
+    let &active = state.initiative.get(state.turn)?;
+    Some(state.combatants[active].name.as_str())
+}
+
+/// Warns (does not block) when someone other than the active combatant moves
+/// or interacts: neither consumes an action in this engine, so out-of-turn
+/// use stays a bookkeeping warning for the DM.
+fn warn_out_of_turn(state: &EncounterState, actor: &str, lines: &mut Vec<String>) {
+    let Some(active_name) = active_combatant(state) else {
         return;
     };
-    let active_name = &state.combatants[active].name;
     if !active_name.eq_ignore_ascii_case(actor) {
         lines.push(format!(
             "WARNING: {actor} is acting out of turn (round {}, active: {active_name}). OK for reactions/readied actions; otherwise run `next` first.",
             state.round
         ));
     }
+}
+
+/// Shared tail of the turn gates: `--force` logs an audit WARNING and lets
+/// the action proceed; without it the command fails here, before any roll,
+/// log line, action spend or other state change. Callers must have checked
+/// that `actor` is not the active combatant.
+fn force_or_deny(
+    state: &EncounterState,
+    actor: &str,
+    action: &str,
+    exception: &str,
+    force: bool,
+    lines: &mut Vec<String>,
+) -> Result<()> {
+    let active_name = active_combatant(state).expect("caller checked the active combatant");
+    if force {
+        lines.push(format!(
+            "WARNING: {actor} acts out of turn to {action} (round {}, active: {active_name}) with --force",
+            state.round
+        ));
+        return Ok(());
+    }
+    bail!(
+        "{actor} cannot {action} now: it is {active_name}'s turn (round {}). {exception}Run `next` first, or add --force for a readied action or DM ruling",
+        state.round
+    )
+}
+
+/// Blocks an attack outside the attacker's turn unless `--force` (readied
+/// attack or DM ruling). Unlike [`check_turn`] there is no reaction
+/// exception: an attack always spends the attacker's action.
+fn check_action_turn(
+    state: &EncounterState,
+    attacker: &str,
+    force: bool,
+    lines: &mut Vec<String>,
+) -> Result<()> {
+    let Some(active_name) = active_combatant(state) else {
+        return Ok(());
+    };
+    if active_name.eq_ignore_ascii_case(attacker) {
+        return Ok(());
+    }
+    force_or_deny(state, attacker, "attack", "", force, lines)
 }
 
 /// Blocks a non-reaction ability outside the actor's turn unless `--force`
@@ -1157,13 +1212,9 @@ fn check_turn(
     force: bool,
     lines: &mut Vec<String>,
 ) -> Result<()> {
-    if state.initiative.is_empty() || state.outcome.is_some() {
-        return Ok(());
-    }
-    let Some(&active) = state.initiative.get(state.turn) else {
+    let Some(active_name) = active_combatant(state) else {
         return Ok(());
     };
-    let active_name = &state.combatants[active].name;
     if active_name.eq_ignore_ascii_case(actor) {
         return Ok(());
     }
@@ -1179,17 +1230,14 @@ fn check_turn(
     if reaction {
         return Ok(());
     }
-    if force {
-        lines.push(format!(
-            "WARNING: {actor} uses {ability} out of turn (round {}, active: {active_name}) with --force",
-            state.round
-        ));
-        return Ok(());
-    }
-    Err(anyhow!(
-        "{actor} cannot use {ability} now: it is {active_name}'s turn (round {}). Only reactions work out of turn; run `next` first, or add --force for a readied action or DM ruling",
-        state.round
-    ))
+    force_or_deny(
+        state,
+        actor,
+        &format!("use {ability}"),
+        "Only reactions work out of turn. ",
+        force,
+        lines,
+    )
 }
 
 /// Party ids from `--party`, else the manifest's `party:` list, else an error.
