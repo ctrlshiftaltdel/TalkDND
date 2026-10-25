@@ -309,9 +309,13 @@ pub fn restore_injecting(root: &Path, save: &Path, id: &str, fault: RestoreFault
     restore_inner(root, save, id, true, false, Some(fault), None)
 }
 
-/// Test-only entry: `restore` with a closure injected just before the final
-/// integrity manifest re-baseline (`--yes`, plain output). The hook plays a
-/// concurrent manifest writer committing at that point; production always
+/// Test-only entry: `restore` with a closure injected inside the final
+/// integrity manifest re-baseline (`--yes`, plain output): the hook runs in
+/// `restore_rebaseline` right after the integrity manifest lock is taken and
+/// just before the manifest is read, so it plays a concurrent manifest
+/// writer committing at exactly the point the lock has made impossible to
+/// interleave with. The hook must not re-acquire that lock (it would wait on
+/// itself); it should assert the lock is held instead. Production always
 /// passes `None`. See the regression test
 /// `restore_rebaseline_keeps_a_concurrent_writers_fingerprints` in
 /// `tests/checkpoint.rs`.
@@ -509,14 +513,7 @@ fn restore_inner(
             ),
         )?;
     }
-    if let Some(hook) = manifest_hook {
-        // Test-only (restore_injecting_manifest_hook): fires at the start of
-        // the manifest re-baseline — the interleaving point that the
-        // integrity lock inside restore_rebaseline closes; production
-        // always passes None.
-        hook();
-    }
-    restore_rebaseline(save)?;
+    restore_rebaseline(save, manifest_hook)?;
 
     if json {
         let v = serde_json::json!({
@@ -562,8 +559,18 @@ fn restore_inner(
 /// (`.talkdnd.lock`); the integrity lock is always taken after it, never
 /// the reverse, and nothing inside (load, snapshot, `audit::current`,
 /// store) acquires a lock, so the two never nest.
-fn restore_rebaseline(save: &Path) -> Result<()> {
+///
+/// `fault` is a test-only hook (production always passes `None`): it runs
+/// once the lock is held and just before the manifest is read, so a test can
+/// commit a competing writer's update at the point the lock has made
+/// impossible to interleave with the read (mirrors
+/// `carry_dirty_flags_guarded`). The hook must not re-acquire the lock the
+/// caller now holds — it would wait on itself.
+fn restore_rebaseline(save: &Path, fault: Option<&dyn Fn()>) -> Result<()> {
     let _lock = integrity::lock(save)?;
+    if let Some(f) = fault {
+        f();
+    }
     let mut im = integrity::load(save)?.unwrap_or_else(|| integrity::baseline(save));
     im.files = integrity::snapshot(save);
     im.baseline = Some(serde_norway::to_value(audit::current(save))?);

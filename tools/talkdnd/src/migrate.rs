@@ -1717,13 +1717,18 @@ mod tests {
     /// read-modify-write runs under the integrity manifest lock and reads
     /// the manifest inside it, so a concurrent tool process that commits
     /// between `after_write`'s release and this lock keeps its fingerprint.
-    /// Writer B is injected (test-only fault hook) at exactly that point;
-    /// it stands in for a real writer that committed there — a real one
-    /// reaches the same state through the lock, but the hook must not
-    /// re-acquire the lock the test already holds, so its committed update
-    /// is written with a raw manifest read-modify-write. Before the lock
-    /// existed, carry's store dropped B's fingerprint (the first assertion
-    /// below caught `progress.yaml` regressing to its pre-B value).
+    /// Writer B is injected (test-only fault hook) at exactly that point —
+    /// after the lock is taken, before the manifest is read. The hook first
+    /// proves the lock is held by opening a second handle on
+    /// `.talkdnd.integrity.lock` and asserting `try_lock()` returns
+    /// `WouldBlock`: without the lock this assertion fails instead of the
+    /// whole test silently passing on pre-lock code. B stands in for a real
+    /// writer that committed there — a real one reaches the same state
+    /// through the lock, but the hook must not re-acquire the lock the test
+    /// already holds, so its committed update is written with a raw manifest
+    /// read-modify-write. Before the lock existed, carry's store dropped B's
+    /// fingerprint (the first assertion below caught `progress.yaml`
+    /// regressing to its pre-B value).
     #[test]
     fn carry_dirty_flags_keeps_a_concurrent_writers_fingerprints() {
         let save = std::env::temp_dir().join(format!("talkdnd-carry-race-{}", std::process::id()));
@@ -1751,6 +1756,21 @@ mod tests {
         const B_PROGRESS: &str = "xp: {hero: 50}\n";
         let b_save = save.clone();
         let writer_b = move || {
+            // The hook runs with the integrity manifest lock held: a second
+            // opener must be locked out. This is the assertion that fails on
+            // pre-lock code (issue #154).
+            let probe = fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(b_save.join(combat_sim::integrity::LOCK))
+                .unwrap();
+            match probe.try_lock() {
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                other => panic!(
+                    "the integrity manifest lock must be held at the hook point; try_lock returned {other:?}"
+                ),
+            }
             fs::write(b_save.join("progress.yaml"), B_PROGRESS).unwrap();
             let mut m = combat_sim::integrity::load(&b_save).unwrap().unwrap();
             m.files.insert(
