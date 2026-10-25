@@ -492,8 +492,16 @@ fn integrity_tracks_world_time_writes() {
             "time", "event", "add", "--due", "1 Hammer", "--title", "festival",
         ],
     );
+    // TASK-0071 (contract §3.4): the tool write itself is still clean —
+    // no file-diff warning — and the due-today event is now reported as the
+    // contract-mandated cross-ref warning (existing expectation updated,
+    // not weakened: the tamper half below still proves write tracking).
     let out = ok(&r, &["check"]);
-    assert!(out.contains("integrity: OK"), "{out}");
+    assert!(
+        out.contains("cross-ref: 世界时间事件 EV-001 今日到期"),
+        "{out}"
+    );
+    assert!(!out.contains("changed outside the tools"), "{out}");
     // A hand edit is reported: the file shows as "changed outside the tools".
     fs::write(
         wt_path(&save),
