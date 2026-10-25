@@ -286,7 +286,7 @@ fn show(save: &Path, id: &str, json: bool) -> Result<()> {
 // ---------------------------------------------------------------- restore
 
 fn restore(root: &Path, save: &Path, id: &str, yes: bool, json: bool) -> Result<()> {
-    restore_inner(root, save, id, yes, json, None, None)
+    restore_inner(root, save, id, yes, json, None, None, None)
 }
 
 /// Test-only fault injection for `restore` (production always passes
@@ -306,7 +306,7 @@ pub struct RestoreFault {
 /// Test-only entry: `restore` with injected faults (`--yes`, plain output).
 #[doc(hidden)]
 pub fn restore_injecting(root: &Path, save: &Path, id: &str, fault: RestoreFault) -> Result<()> {
-    restore_inner(root, save, id, true, false, Some(fault), None)
+    restore_inner(root, save, id, true, false, Some(fault), None, None)
 }
 
 /// Test-only entry: `restore` with a closure injected inside the final
@@ -326,9 +326,37 @@ pub fn restore_injecting_manifest_hook(
     id: &str,
     manifest_hook: &dyn Fn(),
 ) -> Result<()> {
-    restore_inner(root, save, id, true, false, None, Some(manifest_hook))
+    restore_inner(root, save, id, true, false, None, Some(manifest_hook), None)
 }
 
+/// Test-only entry: `restore` with a hook that runs right after the
+/// pre-restore whole-save backup and before anything is staged, plus an
+/// injected commit fault. It lets a test play a concurrent tool process that
+/// creates and locks `.talkdnd.integrity.lock` during a restore — the window
+/// in which a rollback mirrors the backup over the save. Production always
+/// passes `None`. See `rollback_keeps_the_integrity_lock_a_concurrent_writer_holds`
+/// in `tests/checkpoint.rs`.
+#[doc(hidden)]
+pub fn restore_injecting_after_backup(
+    root: &Path,
+    save: &Path,
+    id: &str,
+    fault: RestoreFault,
+    after_backup: &dyn Fn(),
+) -> Result<()> {
+    restore_inner(
+        root,
+        save,
+        id,
+        true,
+        false,
+        Some(fault),
+        None,
+        Some(after_backup),
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // two test-only hooks push it past the limit
 fn restore_inner(
     root: &Path,
     save: &Path,
@@ -337,6 +365,7 @@ fn restore_inner(
     json: bool,
     fault: Option<RestoreFault>,
     manifest_hook: Option<&dyn Fn()>,
+    after_backup: Option<&dyn Fn()>,
 ) -> Result<()> {
     let fault = fault.unwrap_or_default();
     if !yes {
@@ -364,7 +393,15 @@ fn restore_inner(
     let backup_name = format!("{slot}-{}-restore-{id}", stamp_compact());
     let backup = root.join("Saves").join(BACKUP_DIR).join(&backup_name);
     fs::create_dir_all(root.join("Saves").join(BACKUP_DIR))?;
-    copy_tree(save, &backup)?;
+    copy_tree(save, &backup).with_context(|| {
+        format!(
+            "恢复已中止：当前存档未改动；无法完整备份到 {}",
+            rel(root, &backup)
+        )
+    })?;
+    if let Some(hook) = after_backup {
+        hook();
+    }
 
     // 2. Stage every replacement next to its target; nothing is touched yet.
     let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
@@ -868,7 +905,10 @@ fn temp_sibling(dst: &Path) -> PathBuf {
     dst.with_file_name(name)
 }
 
-/// Recursive copy (backups and rollback); skips the lock and the cache.
+/// Recursive copy (backups and rollback); skips the checkpoint lock and the
+/// cache. Refuses any other entry it cannot reproduce (symlink, socket, …)
+/// instead of silently producing an incomplete backup that a mirror rollback
+/// would later treat as the whole pre-restore tree.
 fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("create {}", dest.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
@@ -888,6 +928,11 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
         } else if ft.is_file() {
             fs::copy(&from, &to)
                 .with_context(|| format!("copy {} to {}", from.display(), to.display()))?;
+        } else {
+            bail!(
+                "无法复制 {}：不是普通文件或目录（符号链接和特殊文件无法纳入整份备份）",
+                from.display()
+            );
         }
     }
     Ok(())
@@ -895,9 +940,10 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
 
 /// The removing half of a mirror rollback: delete every entry under `dest`
 /// that has no counterpart under `src`, so the tree matches `src` exactly
-/// after `copy_tree(src, dest)`. The lock file and `.cache` directories are
-/// runtime data deliberately outside the backup scope (contract §4.1) and
-/// are never touched. Returns human-readable leftovers
+/// after `copy_tree(src, dest)`. The checkpoint lock `.talkdnd.lock`, the
+/// integrity manifest lock `.talkdnd.integrity.lock` and `.cache`
+/// directories are runtime data deliberately outside the backup scope
+/// (contract §4.1) and are never touched. Returns human-readable leftovers
 /// (`path（error）`) for entries that could not be removed — the caller
 /// must report them instead of claiming a verified rollback.
 fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
@@ -906,11 +952,20 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
             out.push(format!("{}（读不了）", rel(root, dest)));
             return;
         };
-        let mut entries: Vec<std::fs::DirEntry> = rd.filter_map(|e| e.ok()).collect();
+        // A per-entry iteration error means this walk cannot prove the tree
+        // matches the backup: report it instead of dropping the entry and
+        // letting the caller claim a verified rollback.
+        let mut entries: Vec<std::fs::DirEntry> = Vec::new();
+        for entry in rd {
+            match entry {
+                Ok(entry) => entries.push(entry),
+                Err(err) => out.push(format!("{}（目录项读取失败：{err}）", rel(root, dest))),
+            }
+        }
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let name = entry.file_name();
-            if name == LOCK || name == ".cache" {
+            if name == LOCK || name == integrity::LOCK || name == ".cache" {
                 continue;
             }
             let path = entry.path();

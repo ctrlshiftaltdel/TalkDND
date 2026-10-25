@@ -941,3 +941,117 @@ fn restore_rebaseline_keeps_a_concurrent_writers_fingerprints() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+/// A concurrent tool command can create and lock `.talkdnd.integrity.lock`
+/// after restore has taken its pre-restore whole-save backup. The rollback
+/// mirrors that backup over the save and removes everything the backup
+/// lacks; the integrity lock is runtime data, never save content, and must
+/// survive — deleting it while a writer holds it lets the next writer open a
+/// fresh file and take the lock too, silently breaking the per-save manifest
+/// mutex. The after-backup hook plays the concurrent writer; the injected
+/// commit failure forces the rollback path.
+#[test]
+fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
+    let (root, save) = fixture("rollback-integrity-lock");
+    let id = snapshot(&save, None);
+    // `migrate::init` and snapshot do not create the integrity lock: it
+    // first appears when a writer takes it, after the backup.
+    let lock = save.join(combat_sim::integrity::LOCK);
+    assert!(!lock.exists());
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+
+    let held: std::sync::Mutex<Option<fs::File>> = std::sync::Mutex::new(None);
+    let hook_save = save.clone();
+    let concurrent_writer = || {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(hook_save.join(combat_sim::integrity::LOCK))
+            .unwrap();
+        file.lock().unwrap();
+        *held.lock().unwrap() = Some(file);
+    };
+    let err = checkpoint::restore_injecting_after_backup(
+        &root,
+        &save,
+        &id,
+        checkpoint::RestoreFault {
+            fail_rename_at: Some(1),
+            fail_rollback: false,
+        },
+        &concurrent_writer,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("回滚到恢复前状态"), "{err}");
+
+    // A second writer must hit the *same* locked file and get `WouldBlock`,
+    // not a freshly created replacement it can lock while the concurrent
+    // writer still holds the old one.
+    let probe = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    match probe.try_lock() {
+        Err(std::fs::TryLockError::WouldBlock) => {}
+        other => panic!("rollback broke the integrity lock: try_lock returned {other:?}"),
+    }
+    drop(held.lock().unwrap().take());
+    drop(probe);
+    // Mutual exclusion, not just file existence: after the holder releases,
+    // a new writer can take the lock again.
+    let after = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    after
+        .try_lock()
+        .expect("a released integrity lock must be acquirable again");
+    drop(after);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// `copy_tree` only copies regular files and directories. Before this fix a
+/// symlink anywhere in the save was silently left out of the pre-restore
+/// backup; a rollback then deleted the symlink (the backup lacks it) and
+/// still reported 「回滚到恢复前状态」. Restore now refuses before staging
+/// when the whole-save backup cannot reproduce every entry. Windows creates
+/// symlinks only with a privilege, so the deterministic fixture is Unix-only;
+/// the check itself is portable (`DirEntry::file_type`).
+#[cfg(unix)]
+#[test]
+fn restore_refuses_entries_the_whole_save_backup_cannot_copy() {
+    let (root, save) = fixture("symlink-refuse");
+    let id = snapshot(&save, None);
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+    let link = save.join("handout-link.md");
+    std::os::unix::fs::symlink("canon.md", &link).unwrap();
+    let before = fs::read_to_string(save.join("progress.yaml")).unwrap();
+
+    let err = restore(&save, &id, true).unwrap_err();
+    // `main` prints `{err:#}`: assert on the full chain, which names the
+    // entry type, not just the outer "无法完整备份" context.
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("符号链接") || msg.contains("特殊文件"),
+        "the refusal must name the entry type: {msg}"
+    );
+    assert!(
+        msg.contains("未改动"),
+        "the refusal must say nothing changed: {msg}"
+    );
+    assert!(
+        fs::symlink_metadata(&link).unwrap().is_symlink(),
+        "the symlink must not be removed"
+    );
+    assert_eq!(
+        fs::read_to_string(save.join("progress.yaml")).unwrap(),
+        before,
+        "a refused restore must not touch the save"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
