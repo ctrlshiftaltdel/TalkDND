@@ -664,3 +664,122 @@ fn cli_snapshot_list_show_restore_flow() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn staging_failure_leaves_the_save_tree_unchanged() {
+    let (root, save) = fixture("stage-fail");
+    let id = snapshot(&save, None);
+    // Portable staging failure: a file sits where the covered Characters/
+    // directory must be created, so staging aborts before anything is
+    // replaced (no permission tricks, works on every platform).
+    fs::remove_dir_all(save.join("Characters")).unwrap();
+    fs::write(save.join("Characters"), "not a directory\n").unwrap();
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+    let before = fingerprint(&save);
+    let err = restore(&save, &id, true).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("恢复已中止"), "{msg}");
+    assert!(msg.contains("未改动"), "{msg}");
+    assert!(msg.contains("Saves/_backups/"), "{msg}");
+    assert_eq!(
+        fingerprint(&save),
+        before,
+        "a staging failure must not touch the tree"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn partial_commit_failure_rolls_back_the_whole_tree() {
+    let (root, save) = fixture("commit-fail");
+    let id = snapshot(&save, None);
+    // Diverge the save from the snapshot and add a covered file that only
+    // exists after it: a successful restore would delete it, so the full-tree
+    // comparison (this file included) proves the rollback was complete —
+    // not just a few spot checks.
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+    fs::write(save.join("canon.md"), "# 新定论\n").unwrap();
+    fs::write(save.join("Characters/nick.md"), "# Nick\n").unwrap();
+    let before = fingerprint(&save);
+    // Injected commit failure at the 4th rename (0-based): three files are
+    // already replaced when the commit breaks. The rollback itself must run
+    // for real and restore every file.
+    let err = checkpoint::restore_injecting(
+        &root,
+        &save,
+        &id,
+        checkpoint::RestoreFault {
+            fail_rename_at: Some(3),
+            fail_rollback: false,
+        },
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("恢复失败"), "{msg}");
+    assert!(msg.contains("已从"), "{msg}");
+    assert!(msg.contains("回滚到恢复前状态"), "{msg}");
+    assert!(!msg.contains("回滚失败"), "{msg}");
+    assert!(msg.contains("Saves/_backups/"), "{msg}");
+    assert_eq!(
+        fingerprint(&save),
+        before,
+        "rollback must restore the whole tree, post-snapshot files included"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn failed_rollback_is_reported_not_claimed() {
+    let (root, save) = fixture("rollback-fail");
+    let id = snapshot(&save, None);
+    // The commit fails partway and the rollback itself fails too (both
+    // injected; a real rollback obstruction such as ENOSPC is not portable
+    // to reproduce). The error must say the rollback failed, name the
+    // backup and both errors, and never claim "已回滚".
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+    let err = checkpoint::restore_injecting(
+        &root,
+        &save,
+        &id,
+        checkpoint::RestoreFault {
+            fail_rename_at: Some(3),
+            fail_rollback: true,
+        },
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("恢复失败"), "{msg}");
+    assert!(msg.contains("回滚失败"), "{msg}");
+    assert!(msg.contains("可能不完整"), "{msg}");
+    assert!(msg.contains("injected commit failure"), "{msg}");
+    assert!(msg.contains("injected rollback failure"), "{msg}");
+    assert!(msg.contains("Saves/_backups/"), "{msg}");
+    assert!(!msg.contains("已从"), "{msg}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn real_commit_obstruction_still_rolls_back_cleanly() {
+    let (root, save) = fixture("real-eisdir");
+    let id = snapshot(&save, None);
+    // Real-world partial-commit trigger (no injection): sheets/tess.yaml is
+    // the last covered file in commit order, so every earlier rename has
+    // already committed when the rename onto the directory fails. The
+    // rollback must still bring the whole tree back.
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+    fs::write(save.join("Characters/nick.md"), "# Nick\n").unwrap();
+    fs::remove_file(save.join("sheets/tess.yaml")).unwrap();
+    fs::create_dir_all(save.join("sheets/tess.yaml")).unwrap();
+    let before = fingerprint(&save);
+    let err = restore(&save, &id, true).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("恢复失败"), "{msg}");
+    assert!(msg.contains("已从"), "{msg}");
+    assert!(!msg.contains("回滚失败"), "{msg}");
+    assert_eq!(
+        fingerprint(&save),
+        before,
+        "a real commit failure must still roll back the whole tree"
+    );
+    let _ = fs::remove_dir_all(&root);
+}

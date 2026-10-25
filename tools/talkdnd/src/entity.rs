@@ -316,6 +316,44 @@ pub fn display(ledger: &Ledger, id: &str) -> String {
     }
 }
 
+/// Read-only name/alias audit for `talkdnd check` (contract §3.4): names or
+/// aliases (case-insensitive) shared by two or more entities, plus a record
+/// whose own alias equals its name — the fallback for hand-edited ledgers,
+/// since `add`/`rename` already refuse clashes at write time. One line per
+/// finding; a pair sharing several keys is reported once per key, not per
+/// direction. Never writes anything.
+pub fn audit_names(ledger: &Ledger) -> Vec<String> {
+    use std::collections::BTreeMap;
+    let mut by_key: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    let mut out = Vec::new();
+    for e in &ledger.entities {
+        let key = e.name.to_lowercase();
+        by_key
+            .entry(key.clone())
+            .or_default()
+            .push((e.id.clone(), format!("{}（{}）主名", e.id, e.name)));
+        for a in &e.aliases {
+            by_key
+                .entry(a.to_lowercase())
+                .or_default()
+                .push((e.id.clone(), format!("{}（{}）别名 `{a}`", e.id, e.name)));
+        }
+        if e.aliases.iter().any(|a| a.to_lowercase() == key) {
+            out.push(format!("实体 {}（{}）的主名与别名相同", e.id, e.name));
+        }
+    }
+    for (key, holders) in &by_key {
+        let mut ids: Vec<&str> = holders.iter().map(|(id, _)| id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.len() > 1 {
+            let rendered: Vec<&str> = holders.iter().map(|(_, r)| r.as_str()).collect();
+            out.push(format!("名称/别名冲突「{key}」：{}", rendered.join("、")));
+        }
+    }
+    out
+}
+
 // ----------------------------------------------------------------- commands
 
 /// `entity add`: register one entity. Any name/alias clash — including

@@ -279,6 +279,38 @@ fn show(save: &Path, id: &str, json: bool) -> Result<()> {
 // ---------------------------------------------------------------- restore
 
 fn restore(root: &Path, save: &Path, id: &str, yes: bool, json: bool) -> Result<()> {
+    restore_inner(root, save, id, yes, json, None)
+}
+
+/// Test-only fault injection for `restore` (production always passes
+/// `None`): `fail_rename_at` makes the n-th commit rename (0-based,
+/// commit order) fail with a synthetic error after real staging, and
+/// `fail_rollback` makes the whole-save rollback fail the same way. This
+/// keeps the partial-commit and rollback-failure paths deterministically
+/// testable on every platform — no permission tricks, and deliberately no
+/// production switch.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RestoreFault {
+    pub fail_rename_at: Option<usize>,
+    pub fail_rollback: bool,
+}
+
+/// Test-only entry: `restore` with injected faults (`--yes`, plain output).
+#[doc(hidden)]
+pub fn restore_injecting(root: &Path, save: &Path, id: &str, fault: RestoreFault) -> Result<()> {
+    restore_inner(root, save, id, true, false, Some(fault))
+}
+
+fn restore_inner(
+    root: &Path,
+    save: &Path,
+    id: &str,
+    yes: bool,
+    json: bool,
+    fault: Option<RestoreFault>,
+) -> Result<()> {
+    let fault = fault.unwrap_or_default();
     if !yes {
         bail!("恢复会替换存档里覆盖范围的文件；确认请加 --yes（会先把整份存档备份到 Saves/{BACKUP_DIR}/）");
     }
@@ -328,11 +360,17 @@ fn restore(root: &Path, save: &Path, id: &str, yes: bool, json: bool) -> Result<
         }
     }
     if let Some(err) = stage_err {
-        for (tmp, _) in &staged {
-            let _ = fs::remove_file(tmp);
+        let leftovers = remove_staged(root, &staged, 0);
+        if leftovers.is_empty() {
+            return Err(err.context(format!(
+                "恢复已中止：当前存档未改动（恢复前整份备份在 {}）",
+                rel(root, &backup)
+            )));
         }
         return Err(err.context(format!(
-            "恢复已中止：当前存档未改动（恢复前整份备份在 {}）",
+            "恢复已中止：覆盖文件未改动，但 {} 个临时文件残留：{}（恢复前整份备份在 {}）",
+            leftovers.len(),
+            leftovers.join("、"),
             rel(root, &backup)
         )));
     }
@@ -343,7 +381,11 @@ fn restore(root: &Path, save: &Path, id: &str, yes: bool, json: bool) -> Result<
     let mut i = 0;
     while i < staged.len() {
         let (tmp, dst) = &staged[i];
-        match fs::rename(tmp, dst) {
+        let attempt = match fault.fail_rename_at {
+            Some(n) if n == i => Err(std::io::Error::other("injected commit failure")),
+            _ => fs::rename(tmp, dst),
+        };
+        match attempt {
             Ok(()) => replaced += 1,
             Err(err) => {
                 commit_err = Some(anyhow::Error::new(err));
@@ -353,14 +395,44 @@ fn restore(root: &Path, save: &Path, id: &str, yes: bool, json: bool) -> Result<
         i += 1;
     }
     if let Some(err) = commit_err {
-        for (tmp, _) in staged.iter().skip(i) {
-            let _ = fs::remove_file(tmp);
+        // Remove the not-yet-committed temp files; failures are reported so
+        // the message never claims a state it did not verify.
+        let leftovers = remove_staged(root, &staged, i);
+        let rollback = if fault.fail_rollback {
+            Err(anyhow::anyhow!("injected rollback failure"))
+        } else {
+            copy_tree(&backup, save)
+        };
+        match rollback {
+            Ok(()) => {
+                let mut msg = format!(
+                    "恢复失败：{err}；已从 {} 回滚到恢复前状态",
+                    rel(root, &backup)
+                );
+                if !leftovers.is_empty() {
+                    msg += &format!(
+                        "；{} 个临时文件残留：{}",
+                        leftovers.len(),
+                        leftovers.join("、")
+                    );
+                }
+                return Err(anyhow::anyhow!(msg));
+            }
+            Err(rb) => {
+                let mut msg = format!(
+                    "恢复失败：{err}；回滚失败（{rb:#}），当前存档可能不完整。恢复前整份备份在 {}，请手动检查或用备份恢复",
+                    rel(root, &backup)
+                );
+                if !leftovers.is_empty() {
+                    msg += &format!(
+                        "；另有 {} 个临时文件残留：{}",
+                        leftovers.len(),
+                        leftovers.join("、")
+                    );
+                }
+                return Err(anyhow::anyhow!(msg));
+            }
         }
-        let _ = copy_tree(&backup, save);
-        return Err(err.context(format!(
-            "恢复失败：已从 {} 回滚到恢复前状态",
-            rel(root, &backup)
-        )));
     }
 
     // 4. Covered files that appeared after the snapshot are removed.
@@ -482,6 +554,20 @@ pub fn entries(save: &Path) -> Vec<Entry> {
     checkpoint_ids(save)
         .into_iter()
         .map(|id| entry(save, &id))
+        .collect()
+}
+
+/// Read-only checkpoint audit for `talkdnd check` (contract §3.4): one line
+/// per checkpoint whose manifest is missing or damaged or whose copies fail
+/// verification — the same `problem` that `list`/`show` display and
+/// `restore` refuses on. Never fatal, never writes.
+pub fn audit_checkpoints(save: &Path) -> Vec<String> {
+    checkpoint_ids(save)
+        .into_iter()
+        .filter_map(|id| {
+            let problem = entry(save, &id).problem?;
+            Some(format!("检查点 {id} 不可用：{problem}"))
+        })
         .collect()
 }
 
@@ -679,6 +765,21 @@ fn rel(root: &Path, p: &Path) -> String {
         .unwrap_or(p)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+/// Remove staged temp files from index `from`; returns human-readable
+/// leftovers (`path（error）`) so callers can report what could not be
+/// cleaned instead of claiming the save is untouched.
+fn remove_staged(root: &Path, staged: &[(PathBuf, PathBuf)], from: usize) -> Vec<String> {
+    staged
+        .iter()
+        .skip(from)
+        .filter_map(|(tmp, _)| {
+            fs::remove_file(tmp)
+                .err()
+                .map(|e| format!("{}（{e}）", rel(root, tmp)))
+        })
+        .collect()
 }
 
 fn temp_sibling(dst: &Path) -> PathBuf {

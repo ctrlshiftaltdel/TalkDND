@@ -646,9 +646,15 @@ fn parse_import_line(line: &str) -> Result<Vec<String>, ()> {
 /// DM-reviewed explicit terms, one per line or in the existing marker forms.
 /// The default is a dry-run preview that writes nothing; only an explicit
 /// apply writes `secret-terms.yaml`. Terms are deduplicated
-/// case-insensitively against each other and the existing manual list. The
-/// report counts added, skipped and malformed lines and never quotes file
-/// content; nothing it prints reaches the session log.
+/// case-insensitively against each other and the existing manual list.
+///
+/// Output boundaries (LetsPlay/docs/anti-spoiler.md, layer 4b): the dry-run
+/// preview is a **DM-only local review** — it lists up to 20 pending terms
+/// on stdout so the DM can review them before applying, but it writes
+/// nothing, not `secret-terms.yaml` and not the session log, and it must
+/// never be pasted into player-visible material. `scan` is the report that
+/// never quotes file content (counts and line numbers only); apply counts
+/// and errors are likewise content-free beyond the pending terms above.
 pub fn import_lines(save_dir: &Path, from: &str, apply: bool) -> Result<Vec<String>> {
     let path = PathBuf::from(from);
     if !path.is_file() {
@@ -985,15 +991,27 @@ mod tests {
             "# DM reviewed\n- term: Red Mask\n红面具\nSilver Key\nRed Mask\n- term:\nx\n",
         )
         .unwrap();
-        // Dry-run: preview only, nothing is written to the save.
+        // Dry-run: preview only, nothing is written to the save. The
+        // preview is the DM-only local review: it lists the pending terms
+        // on stdout, but neither the save nor the session log changes.
+        let log_before = fs::read_to_string(save.join("Sessions/s.md")).unwrap();
         let out = import_lines(&save, from.to_str().unwrap(), false)
             .unwrap()
             .join("\n");
         assert!(out.contains("dry-run"), "{out}");
+        assert!(
+            out.contains("Red Mask") && out.contains("Silver Key") && out.contains("红面具"),
+            "{out}"
+        );
         assert!(out.contains("将新增 3 条"), "{out}");
         assert!(out.contains("跳过 1 条"), "{out}");
         assert!(out.contains("格式错误 2 条：第 6, 7 行"), "{out}");
         assert!(!save.join(FILE).exists(), "{out}");
+        assert_eq!(
+            fs::read_to_string(save.join("Sessions/s.md")).unwrap(),
+            log_before,
+            "dry-run must not touch the session log"
+        );
         // Populate the cache with the pre-import state.
         assert!(guard_terms(&save, &r, "the Red Mask waits").is_empty());
         // Apply writes, and the new term is guarded right away (cache gone).
@@ -1002,6 +1020,12 @@ mod tests {
             .join("\n");
         assert!(out.contains("已写入 3 条"), "{out}");
         assert!(list(&save, &r).iter().any(|t| t.term == "红面具"));
+        assert!(save.join(FILE).exists(), "only apply writes {FILE}");
+        assert_eq!(
+            fs::read_to_string(save.join("Sessions/s.md")).unwrap(),
+            log_before,
+            "apply writes secret-terms.yaml, never the session log"
+        );
         assert!(
             !guard_terms(&save, &r, "the Red Mask waits").is_empty(),
             "imported terms must be guarded after the cache is invalidated"

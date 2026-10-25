@@ -7,6 +7,12 @@
 //! explained by new session-log lines or new `xp_log` entries; otherwise they
 //! are reported as warnings. Matching is plain keyword search, so results are
 //! deterministic.
+//!
+//! `Report` also carries the contract §3.4 cross-reference warnings
+//! (`cross_ref`): read-only consistency checks over the entity ledger,
+//! relations, world time and checkpoints, contributed by those modules. They
+//! are warnings like everything else in a report — `talkdnd check` still
+//! exits 0 — and never quote file content.
 
 use crate::check;
 use crate::progress::Progress;
@@ -221,19 +227,30 @@ pub struct Report {
     pub unexplained: Vec<String>,
     /// Deviation/ledger warnings from `original::audit`.
     pub original: Vec<String>,
+    /// Cross-reference warnings (contract §3.4): relations pointing at
+    /// missing entity ids, clashing entity names/aliases, world-time events
+    /// due today and unusable checkpoints. Warnings, never errors; a file
+    /// that fails to load becomes one warning naming file and error instead
+    /// of aborting the remaining checks.
+    pub cross_ref: Vec<String>,
 }
 
 impl Report {
     pub fn clean(&self) -> bool {
-        self.changes.is_empty() && self.unexplained.is_empty() && self.original.is_empty()
+        self.changes.is_empty()
+            && self.unexplained.is_empty()
+            && self.original.is_empty()
+            && self.cross_ref.is_empty()
     }
 
     /// Number of issue lines (for the short warning before a check roll).
     pub fn issue_count(&self) -> usize {
-        self.changes.len() + self.unexplained.len() + self.original.len()
+        self.changes.len() + self.unexplained.len() + self.original.len() + self.cross_ref.len()
     }
 
-    /// Warning lines plus DM guidance (empty when clean).
+    /// Warning lines plus DM guidance (empty when clean). Cross-reference
+    /// warnings are DM-view output (they also run in `start`) and never
+    /// carry file content or dm_only details.
     pub fn lines(&self) -> Vec<String> {
         let mut v = Vec::new();
         for c in &self.changes {
@@ -245,7 +262,10 @@ impl Report {
         for o in &self.original {
             v.push(format!("deviation: {o}"));
         }
-        if !v.is_empty() {
+        for x in &self.cross_ref {
+            v.push(format!("cross-ref: {x}"));
+        }
+        if !(self.changes.is_empty() && self.unexplained.is_empty() && self.original.is_empty()) {
             v.push("DM：若是你自己按桌规手改并已记日志 → `talkdnd integrity accept --reason \"…\"`；否则跳出角色问玩家，`talkdnd log` 记下处理结果，不合理的改动按日志改回后再 accept（见 docs/table-integrity.md）".into());
         }
         v
@@ -279,7 +299,43 @@ pub fn audit(save: &Path) -> Result<Report> {
         Some(b) => r.unexplained = reconcile(save, &b),
         None => set_baseline(save, &mut m)?,
     }
+    r.cross_ref = cross_ref_warnings(save);
     Ok(r)
+}
+
+/// Cross-reference audit (contract §3.4): relations pointing at missing
+/// entity ids, clashing entity names/aliases, world-time events due today
+/// and unusable checkpoints. Read-only. A sidecar that fails to load
+/// (invalid YAML, newer schema) becomes one warning naming file and error,
+/// and every check that does not depend on it still runs.
+fn cross_ref_warnings(save: &Path) -> Vec<String> {
+    let mut v = Vec::new();
+    let ledger = match crate::entity::load(save) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            v.push(format!("entities.yaml 无法读取：{e}"));
+            None
+        }
+    };
+    let relations = match crate::graph::load(save) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            v.push(format!("relations.yaml 无法读取：{e}"));
+            None
+        }
+    };
+    if let (Some(l), Some(r)) = (&ledger, &relations) {
+        v.extend(crate::graph::audit_references(r, l));
+    }
+    if let Some(l) = &ledger {
+        v.extend(crate::entity::audit_names(l));
+    }
+    match crate::worldtime::load(save) {
+        Ok(wt) => v.extend(crate::worldtime::audit_due(&wt)),
+        Err(e) => v.push(format!("world-time.yaml 无法读取：{e}")),
+    }
+    v.extend(crate::checkpoint::audit_checkpoints(save));
+    v
 }
 
 /// Call after a tool command: record the files it wrote; refresh the
