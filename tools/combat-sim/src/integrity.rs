@@ -470,25 +470,44 @@ mod tests {
     /// Two real writers through the public API, serialized only by the
     /// manifest lock: whichever commits second re-reads the manifest inside
     /// the lock and keeps the first writer's fingerprint.
+    ///
+    /// Both writers share one pre-write baseline and publish their file with
+    /// [`crate::fsutil::atomic_write`], exactly like the production writers,
+    /// and neither records until both files are in place. The outcome
+    /// therefore does not depend on thread scheduling: whenever an
+    /// `after_write` can run, the save already holds both final files, so the
+    /// first committer records both fingerprints and the second finds nothing
+    /// left to update. The previous version took a per-thread `snapshot` and
+    /// wrote with a bare `fs::write`; one writer could then observe the
+    /// other's truncated file and commit that partial fingerprint, after
+    /// which the real writer looked dirty (macOS CI reported
+    /// `Modified("Characters/A.md")`).
     #[test]
     fn concurrent_public_api_writers_keep_both_fingerprints() {
+        use std::sync::{Arc, Barrier};
+
         let d = dir("threads");
         fs::write(d.join("progress.yaml"), "xp: {a: 0}\n").unwrap();
         fs::write(d.join("Characters/A.md"), "hp: 10\n").unwrap();
         ensure(&d).unwrap();
+
+        // One baseline for both writers, taken before either file changes.
+        let before = snapshot(&d);
+        // Both files land first; only then may either writer record.
+        let written = Arc::new(Barrier::new(2));
         let a = {
-            let d = d.clone();
+            let (d, before, written) = (d.clone(), before.clone(), Arc::clone(&written));
             std::thread::spawn(move || {
-                let before = snapshot(&d);
-                fs::write(d.join("progress.yaml"), "xp: {a: 100}\n").unwrap();
+                crate::fsutil::atomic_write(d.join("progress.yaml"), "xp: {a: 100}\n").unwrap();
+                written.wait();
                 after_write(&d, &before).unwrap();
             })
         };
         let b = {
-            let d = d.clone();
+            let (d, before, written) = (d.clone(), before, Arc::clone(&written));
             std::thread::spawn(move || {
-                let before = snapshot(&d);
-                fs::write(d.join("Characters/A.md"), "hp: 20\n").unwrap();
+                crate::fsutil::atomic_write(d.join("Characters/A.md"), "hp: 20\n").unwrap();
+                written.wait();
                 after_write(&d, &before).unwrap();
             })
         };
