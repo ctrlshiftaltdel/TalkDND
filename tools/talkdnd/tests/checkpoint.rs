@@ -87,6 +87,60 @@ fn restore(save: &Path, id: &str, yes: bool) -> anyhow::Result<()> {
     )
 }
 
+/// A checkpoint taken at schema 6 while the save is already back at 8, so
+/// restore commits the old save-meta and then owes a normal migration.
+fn older_schema_checkpoint(save: &Path) -> String {
+    let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
+    fs::write(
+        save.join("save-meta.yaml"),
+        meta.replace("schema: 8", "schema: 6"),
+    )
+    .unwrap();
+    let id = snapshot(save, None);
+    let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
+    fs::write(
+        save.join("save-meta.yaml"),
+        meta.replace("schema: 6", "schema: 8"),
+    )
+    .unwrap();
+    id
+}
+
+/// Pre-restore whole-save backups (the recovery path under Saves/_backups/).
+fn restore_backups(root: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = fs::read_dir(root.join("Saves/_backups")) else {
+        return Vec::new();
+    };
+    let mut v: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.contains("-restore-"))
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+/// A post-commit failure must name the stage, the checkpoint id, the
+/// pre-restore whole-save backup and the fact that the save may already have
+/// changed — and must never claim the save is unchanged.
+fn assert_post_commit_failure(err: &anyhow::Error, id: &str, stage: &str, root: &Path) {
+    let msg = err.to_string();
+    assert!(msg.contains(id), "checkpoint id missing: {msg}");
+    assert!(msg.contains(stage), "stage missing: {msg}");
+    assert!(msg.contains("可能已被替换或改变"), "state missing: {msg}");
+    assert!(!msg.contains("未改动"), "must not claim unchanged: {msg}");
+    let backups = restore_backups(root);
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    let name = backups[0].file_name().unwrap().to_string_lossy();
+    assert!(
+        msg.contains(name.as_ref()),
+        "backup {name} missing from: {msg}"
+    );
+}
+
 fn show(save: &Path, id: &str) -> anyhow::Result<()> {
     checkpoint::run(
         &root_of(save),
@@ -537,6 +591,80 @@ fn restore_rebaselines_integrity_and_logs_the_restore() {
 }
 
 #[test]
+fn migration_failure_after_commit_names_the_stage_checkpoint_and_backup() {
+    let (root, save) = fixture("post-migrate");
+    let id = older_schema_checkpoint(&save);
+    let err = checkpoint::restore_injecting(
+        &root,
+        &save,
+        &id,
+        checkpoint::RestoreFault {
+            fail_migration: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert_post_commit_failure(&err, &id, "schema 迁移", &root);
+    // The covered files were already committed before the migration ran.
+    let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
+    assert!(
+        meta.contains("schema: 6"),
+        "the save must already hold the checkpoint copy: {meta}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn log_append_failure_after_commit_names_the_stage_checkpoint_and_backup() {
+    let (root, save) = fixture("post-log");
+    let id = snapshot(&save, None);
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+    let err = checkpoint::restore_injecting(
+        &root,
+        &save,
+        &id,
+        checkpoint::RestoreFault {
+            fail_log_append: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert_post_commit_failure(&err, &id, "恢复日志追加", &root);
+    // The commit happened; only the log line is missing.
+    assert_eq!(
+        fs::read_to_string(save.join("progress.yaml")).unwrap(),
+        "xp: {tess: 300}\npurses:\n  tess: {cp: 500}\n  party: {cp: 0, items: [rope]}\n"
+    );
+    let log = fs::read_to_string(save.join("Sessions/2030-01-02-session-00-setup.md")).unwrap();
+    assert!(!log.contains("恢复检查点"), "{log}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn rebaseline_failure_after_commit_names_the_stage_checkpoint_and_backup() {
+    let (root, save) = fixture("post-rebase");
+    let id = snapshot(&save, None);
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+    let err = checkpoint::restore_injecting(
+        &root,
+        &save,
+        &id,
+        checkpoint::RestoreFault {
+            fail_rebaseline: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert_post_commit_failure(&err, &id, "完整性清单重定基", &root);
+    // The commit happened before the re-baseline failed.
+    assert_eq!(
+        fs::read_to_string(save.join("progress.yaml")).unwrap(),
+        "xp: {tess: 300}\npurses:\n  tess: {cp: 500}\n  party: {cp: 0, items: [rope]}\n"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn a_held_lock_fails_the_second_call_and_a_retry_after_release_works() {
     let (root, save) = fixture("lock");
     let id = snapshot(&save, None);
@@ -715,6 +843,7 @@ fn partial_commit_failure_rolls_back_the_whole_tree() {
         checkpoint::RestoreFault {
             fail_rename_at: Some(3),
             fail_rollback: false,
+            ..Default::default()
         },
     )
     .unwrap_err();
@@ -748,6 +877,7 @@ fn failed_rollback_is_reported_not_claimed() {
         checkpoint::RestoreFault {
             fail_rename_at: Some(3),
             fail_rollback: true,
+            ..Default::default()
         },
     )
     .unwrap_err();
@@ -793,6 +923,7 @@ fn rollback_after_partial_commit_removes_entries_the_backup_lacks() {
         checkpoint::RestoreFault {
             fail_rename_at: Some(1),
             fail_rollback: false,
+            ..Default::default()
         },
     )
     .unwrap_err();
@@ -979,6 +1110,7 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
         checkpoint::RestoreFault {
             fail_rename_at: Some(1),
             fail_rollback: false,
+            ..Default::default()
         },
         &concurrent_writer,
     )
