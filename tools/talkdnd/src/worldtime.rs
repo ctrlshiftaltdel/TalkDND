@@ -172,6 +172,31 @@ fn require_enabled(wt: &WorldTime) -> Result<()> {
     Ok(())
 }
 
+/// Read-only due audit for `talkdnd check` (contract §3.4): pending events
+/// whose `due` label equals the current `date` label. When the feature is
+/// disabled but such events exist, they are still reported with a note — a
+/// hint only; nothing is changed, rescheduled or created.
+pub fn audit_due(wt: &WorldTime) -> Vec<String> {
+    if wt.date.is_empty() {
+        return Vec::new();
+    }
+    let note = if wt.enabled {
+        String::new()
+    } else {
+        "；世界时间未启用".to_string()
+    };
+    wt.events
+        .iter()
+        .filter(|e| e.status == PENDING && e.due == wt.date)
+        .map(|e| {
+            format!(
+                "世界时间事件 {} 今日到期（due {}，pending）{note}",
+                e.id, e.due
+            )
+        })
+        .collect()
+}
+
 /// `EV-1`, `ev001` → `EV-001`; other shapes are not event ids.
 fn canonical_id(input: &str) -> Option<String> {
     let s = input.trim();

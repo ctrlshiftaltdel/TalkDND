@@ -10,6 +10,7 @@
 - **只按显式命令推进**：只有 `time set` / `time advance` 改时间。叙述、场景切换、战斗、休息结算、`start` 都不推进，也绝不写 `world-time.yaml`。
 - **不做历法算术**：日期和时段是自由文本标签（如 `1 Hammer`、`黄昏`），程序不推断月长、闰年或标签先后。唯一的天数计数是 `elapsed_days`（`time advance` 累加，`--hours` 按 h/24 折算）。
 - **到期只按标签相等**：事件的 `due` 与当前 `date` 相同且状态是 `pending`，就算「今天到期」；`done` / `skipped` 后不再提示。事件不自动改数值或剧情。
+- `talkdnd check`（不带参数）会以 `cross-ref:` 警告提示 `status: pending` 且 `due` 等于当前 `date` 的事件；世界时间未启用但存在这类事件时也如实提示（注明「世界时间未启用」）。只提示，不改任何数据；详见 `table-integrity.md` 第 4 节。
 
 ## 命令
 

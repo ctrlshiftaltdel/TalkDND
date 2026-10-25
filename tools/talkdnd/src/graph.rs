@@ -203,6 +203,25 @@ fn canonical_id(input: &str) -> Option<String> {
     entity::canonical_prefixed_id('r', input)
 }
 
+/// Read-only cross-reference audit for `talkdnd check` (contract §3.4): one
+/// line per relation endpoint whose id does not exist in the entity ledger.
+/// Relations always store canonical ids, so the comparison is exact; the
+/// relation id is included so the DM can find the row. Never writes.
+pub fn audit_references(relations: &Relations, ledger: &Ledger) -> Vec<String> {
+    let mut out = Vec::new();
+    for r in &relations.relations {
+        for (role, id) in [("from", &r.from), ("to", &r.to)] {
+            if !ledger.entities.iter().any(|e| &e.id == id) {
+                out.push(format!(
+                    "关系 {}（{}）：{role} 指向不存在的实体 {id}",
+                    r.id, r.kind
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// In force at `session` iff `since <= session` and (`until` empty or
 /// `session < until`) — file-name lexicographic order (contract §4.4).
 pub fn active_at(r: &Relation, session: &str) -> bool {

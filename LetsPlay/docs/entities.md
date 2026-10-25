@@ -90,4 +90,5 @@ talkdnd relation context Mira                  # 实体摘要 + 当前生效关�
 
 - YAML 非法或 `version` 高于 1：拒绝并提示更新程序。
 - 手改 `entities.yaml` / `relations.yaml`：`talkdnd check` 按 integrity 报告 Modified，确认是自己的改动后 `talkdnd integrity accept --reason`。
+- `talkdnd check`（不带参数）还做跨引用审计（契约 §3.4）：`from`/`to` 指向不存在的实体 id、主名/别名重复或互相冲突（大小写不敏感全表扫描）会以 `cross-ref:` 警告列出。这是提示不是错误，check 仍退出 0；详见 `table-integrity.md` 第 4 节。
 - 回退：删文件 = 清空台账（先备份）；检查点是更好的回退方式（见 `campaign-continuity.md`）。

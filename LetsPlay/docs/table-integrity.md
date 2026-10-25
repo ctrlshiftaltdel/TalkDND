@@ -80,3 +80,18 @@ $T integrity accept --reason "DM 更新 Yier HP 17→9（受伤，已记日志�
 - 程序自己做的变化（`xp add`、`loot`、`level-up`）都会自动写日志，所以本来就对得上。
 - 对账基准存在 `integrity.yaml` 里。整个存档干净时，每次程序写入都会刷新基准；`integrity accept` 也会刷新。这样一个警告会一直显示，直到被处理。
 - 匹配用的是简单关键词，同一输入永远得到同一结果。它只能说明“没有找到记录”，不能证明谁作弊了。警告是给 DM 的提示，最后由 DM 判断。
+
+## 4. 跨引用一致性审计（`talkdnd check`，契约 §3.4）
+
+`talkdnd check`（不带参数）在存档校验与日志对账之外，还做只读的跨引用审计。全部是**警告不是错误**：前缀 `cross-ref:`，check 仍退出 0，integrity 的语义不受影响。警告是 DM 视图：可能列出实体名/别名（含 dm_only 实体名）与关系 id/类型，但绝不含文件正文；不要贴给玩家或写进玩家可见材料。
+
+| 警告 | 什么时候出现 |
+|------|--------------|
+| 悬空关系 | `relations.yaml` 的 `from`/`to` 指向 `entities.yaml` 里不存在的实体 id（按 id 精确比较，逐条列出关系 id） |
+| 实体重名 | 主名/别名重复或互相冲突（大小写不敏感全表扫描；同一组冲突只报一行） |
+| 今日到期 | `world-time.yaml` 存在 `status: pending` 且 `due` 等于当前 `date` 的事件；世界时间未启用时也如实提示 |
+| 不可用检查点 | `checkpoints/` 里清单缺失、损坏或副本校验失败的检查点 id（与 `checkpoint list` 的「不可用」一致） |
+
+- 侧车文件读不了（YAML 非法或版本更高）不会让 check 中止：转成一条点名文件与错误的 `cross-ref:` 警告，其余检查照常。
+- 这些警告只提示，不自动改数据。常见处理：悬空关系用 `relation end --note` 更正后重登记，重名用 `entity rename`，到期事件用 `time event done/skip`，坏检查点用 `checkpoint list` 确认后删除或重建。
+- 警告会出现在 `talkdnd start` 的警告节里——那是 DM 视图，整体不要带给玩家。
