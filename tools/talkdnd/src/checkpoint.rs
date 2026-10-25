@@ -9,8 +9,11 @@
 //! and reports deletions; restore backs the whole save up first, replaces the
 //! covered files atomically (temp file + rename), deletes covered files that
 //! appeared after the snapshot, migrates when the checkpoint schema is older,
-//! logs the restore and re-baselines the integrity manifest. Snapshot and
-//! restore are serialized per slot with `Saves/<slot>/.talkdnd.lock`.
+//! logs the restore and re-baselines the integrity manifest. A failed
+//! commit rolls back by mirroring the pre-restore backup over the save —
+//! copying the backup back *and* removing save entries the backup does not
+//! have — and only reports "回滚到恢复前状态" once the whole tree matches.
+//! Snapshot and restore are serialized per slot with `Saves/<slot>/.talkdnd.lock`.
 
 use crate::{audit, migrate, save};
 use anyhow::{bail, Context, Result};
@@ -360,7 +363,11 @@ fn restore_inner(
         }
     }
     if let Some(err) = stage_err {
-        let leftovers = remove_staged(root, &staged, 0);
+        // Remove the staged temp files and whatever staging created
+        // (typically directories for covered paths that did not exist
+        // pre-restore); failures are reported, never swallowed.
+        let mut leftovers = remove_staged(root, &staged, 0);
+        leftovers.extend(remove_extras(&backup, save, root));
         if leftovers.is_empty() {
             return Err(err.context(format!(
                 "恢复已中止：当前存档未改动（恢复前整份备份在 {}）",
@@ -368,7 +375,7 @@ fn restore_inner(
             )));
         }
         return Err(err.context(format!(
-            "恢复已中止：覆盖文件未改动，但 {} 个临时文件残留：{}（恢复前整份备份在 {}）",
+            "恢复已中止：覆盖文件未改动，但 {} 个临时文件或目录残留：{}（恢复前整份备份在 {}）",
             leftovers.len(),
             leftovers.join("、"),
             rel(root, &backup)
@@ -398,10 +405,24 @@ fn restore_inner(
         // Remove the not-yet-committed temp files; failures are reported so
         // the message never claims a state it did not verify.
         let leftovers = remove_staged(root, &staged, i);
+        // Rollback = mirror the backup over the save: copy it back, then
+        // remove the entries the commit re-created (or staging made) that
+        // the pre-restore backup does not contain. Only when the whole
+        // tree matches again may the message claim a full rollback.
         let rollback = if fault.fail_rollback {
             Err(anyhow::anyhow!("injected rollback failure"))
         } else {
-            copy_tree(&backup, save)
+            copy_tree(&backup, save).and_then(|()| {
+                let extras = remove_extras(&backup, save, root);
+                if extras.is_empty() {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!(
+                        "无法删除备份之外的残留：{}",
+                        extras.join("、")
+                    ))
+                }
+            })
         };
         match rollback {
             Ok(()) => {
@@ -819,6 +840,53 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The removing half of a mirror rollback: delete every entry under `dest`
+/// that has no counterpart under `src`, so the tree matches `src` exactly
+/// after `copy_tree(src, dest)`. The lock file and `.cache` directories are
+/// runtime data deliberately outside the backup scope (contract §4.1) and
+/// are never touched. Returns human-readable leftovers
+/// (`path（error）`) for entries that could not be removed — the caller
+/// must report them instead of claiming a verified rollback.
+fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
+    fn walk(src: &Path, dest: &Path, root: &Path, out: &mut Vec<String>) {
+        let Ok(rd) = fs::read_dir(dest) else {
+            out.push(format!("{}（读不了）", rel(root, dest)));
+            return;
+        };
+        let mut entries: Vec<std::fs::DirEntry> = rd.filter_map(|e| e.ok()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let name = entry.file_name();
+            if name == LOCK || name == ".cache" {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(ft) = entry.file_type() else {
+                out.push(format!("{}（类型读不了）", rel(root, &path)));
+                continue;
+            };
+            let src_path = src.join(&name);
+            if !src_path.exists() {
+                let res = if ft.is_dir() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    fs::remove_file(&path)
+                };
+                if let Err(err) = res {
+                    out.push(format!("{}（{err}）", rel(root, &path)));
+                }
+                continue;
+            }
+            if ft.is_dir() {
+                walk(&src_path, &path, root, out);
+            }
+        }
+    }
+    let mut leftovers = Vec::new();
+    walk(src, dest, root, &mut leftovers);
+    leftovers
 }
 
 // --------------------------------------------------------------------- lock

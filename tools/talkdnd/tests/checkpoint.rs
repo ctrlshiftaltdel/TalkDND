@@ -99,6 +99,9 @@ fn show(save: &Path, id: &str) -> anyhow::Result<()> {
 }
 
 /// Everything under the save except checkpoints/, the lock and the cache.
+/// Files are `(path, content)`; directories are `(path/, empty)` — so a
+/// full-tree comparison also catches directories that were created or
+/// removed, not just file contents.
 fn fingerprint(save: &Path) -> Vec<(String, Vec<u8>)> {
     fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, Vec<u8>)>) {
         let mut entries: Vec<PathBuf> = fs::read_dir(dir)
@@ -116,6 +119,7 @@ fn fingerprint(save: &Path) -> Vec<(String, Vec<u8>)> {
                 continue;
             }
             if p.is_dir() {
+                out.push((format!("{rel}/"), Vec::new()));
                 walk(&p, base, out);
             } else {
                 out.push((rel, fs::read(&p).unwrap()));
@@ -755,6 +759,83 @@ fn failed_rollback_is_reported_not_claimed() {
     assert!(msg.contains("injected rollback failure"), "{msg}");
     assert!(msg.contains("Saves/_backups/"), "{msg}");
     assert!(!msg.contains("已从"), "{msg}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The issue #148 sequence: a covered file (and its whole directory) existed
+/// at snapshot time but is gone before the restore, so the pre-restore
+/// backup does not contain it — while the commit re-creates it before
+/// failing. A rollback that only copies the backup back would leave the
+/// re-created file behind and still claim success; the mirror rollback must
+/// remove it (and the directory staging re-created), leaving the tree
+/// exactly as it was before the restore.
+#[test]
+fn rollback_after_partial_commit_removes_entries_the_backup_lacks() {
+    let (root, save) = fixture("rollback-extras");
+    let id = snapshot(&save, None);
+    // Delete the whole covered directory: its file must be re-created by
+    // the commit (and the directory by staging), yet neither is in the
+    // pre-restore backup.
+    fs::remove_dir_all(save.join("Characters")).unwrap();
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+    let before = fingerprint(&save);
+    assert!(
+        before.iter().all(|(p, _)| !p.starts_with("Characters/")),
+        "the fixture change must remove every Characters entry: {before:?}"
+    );
+    // Commit order is the manifest's sorted key order and `Characters/tess.md`
+    // sorts first (uppercase C), so its rename re-creates the file before the
+    // injected failure hits the second rename.
+    let err = checkpoint::restore_injecting(
+        &root,
+        &save,
+        &id,
+        checkpoint::RestoreFault {
+            fail_rename_at: Some(1),
+            fail_rollback: false,
+        },
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("恢复失败"), "{msg}");
+    assert!(msg.contains("已从"), "{msg}");
+    assert!(msg.contains("回滚到恢复前状态"), "{msg}");
+    assert!(!msg.contains("回滚失败"), "{msg}");
+    assert_eq!(
+        fingerprint(&save),
+        before,
+        "rollback must also remove entries the backup does not have"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Staging creates directories for covered paths that do not exist in the
+/// pre-restore save; when staging then aborts, those directories must be
+/// removed again — the "当前存档未改动" claim must be true for the whole
+/// tree, directory structure included.
+#[test]
+fn staging_abort_removes_the_directories_staging_created() {
+    let (root, save) = fixture("stage-dirs");
+    let id = snapshot(&save, None);
+    // Staging order is the manifest's sorted key order: staging
+    // `Characters/tess.md` re-creates the deleted `Characters/` directory,
+    // then `combat/campaign.yaml` finds a file where its directory must be
+    // and staging aborts with the `Characters/` directory already created.
+    fs::remove_dir_all(save.join("Characters")).unwrap();
+    fs::remove_dir_all(save.join("combat")).unwrap();
+    fs::write(save.join("combat"), "not a directory\n").unwrap();
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+    let before = fingerprint(&save);
+    let err = restore(&save, &id, true).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("恢复已中止"), "{msg}");
+    assert!(msg.contains("未改动"), "{msg}");
+    assert!(msg.contains("Saves/_backups/"), "{msg}");
+    assert_eq!(
+        fingerprint(&save),
+        before,
+        "a staging abort must not leave the directories staging created"
+    );
     let _ = fs::remove_dir_all(&root);
 }
 
