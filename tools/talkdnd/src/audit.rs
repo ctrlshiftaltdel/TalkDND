@@ -280,14 +280,20 @@ fn baseline_of(m: &integrity::Manifest) -> Option<Baseline> {
         .and_then(|v| serde_norway::from_value(v.clone()).ok())
 }
 
+/// Set (and store) the reconciliation baseline. The caller holds the save's
+/// integrity manifest lock.
 fn set_baseline(save: &Path, m: &mut integrity::Manifest) -> Result<()> {
     m.baseline = Some(serde_norway::to_value(current(save))?);
     integrity::store(save, m)
 }
 
 /// Full audit; creates manifest and baseline for saves that predate them.
+/// The whole audit — manifest creation, fingerprint comparison and the
+/// first baseline write — runs under the save's integrity manifest lock,
+/// so a concurrent tool process cannot interleave a manifest update.
 pub fn audit(save: &Path) -> Result<Report> {
-    let (mut m, created) = integrity::ensure(save)?;
+    let _lock = integrity::lock(save)?;
+    let (mut m, created) = integrity::ensure_locked(save)?;
     let mut r = Report {
         created,
         original: crate::original::audit(
@@ -342,10 +348,14 @@ fn cross_ref_warnings(save: &Path) -> Vec<String> {
 
 /// Call after a tool command: record the files it wrote; refresh the
 /// baseline when everything is clean. Takes one save snapshot and reuses it
-/// for both the manifest update and the reconciliation check.
+/// for both the manifest update and the reconciliation check. The whole
+/// sequence — fingerprint record, manifest reload and the baseline
+/// write-back — runs under the save's integrity manifest lock, so the
+/// baseline store can never clobber a concurrent writer's fingerprints.
 pub fn after_command(save: &Path, before: &BTreeMap<String, String>) -> Result<()> {
+    let _lock = integrity::lock(save)?;
     let now = integrity::snapshot(save);
-    integrity::after_write_with(save, before, &now)?;
+    integrity::after_write_with_locked(save, before, &now)?;
     let Some(mut m) = integrity::load(save)? else {
         return Ok(());
     };
@@ -358,9 +368,10 @@ pub fn after_command(save: &Path, before: &BTreeMap<String, String>) -> Result<(
 }
 
 /// `talkdnd integrity accept`: take the current files and values as the new
-/// baseline, and log why.
+/// baseline, and log why. Runs under the save's integrity manifest lock.
 pub fn accept(save: &Path, reason: &str) -> Result<Vec<String>> {
-    let (mut m, _) = integrity::ensure(save)?;
+    let _lock = integrity::lock(save)?;
+    let (mut m, _) = integrity::ensure_locked(save)?;
     let changes = integrity::changes_against(&m, &integrity::snapshot(save));
     let unexplained = baseline_of(&m)
         .map(|b| reconcile(save, &b))

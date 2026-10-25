@@ -7,6 +7,14 @@
 //! flagged even if a tool writes it later, until the DM accepts it with
 //! `talkdnd integrity accept --reason`.
 //!
+//! Every manifest read-modify-write runs under a per-save advisory lock
+//! (`.talkdnd.integrity.lock`, [`lock`]), so concurrent tool processes cannot
+//! overwrite each other's fingerprints with a manifest that was read before
+//! the other process committed. The lock file is never fingerprinted and
+//! never removed: the OS releases the lock when the process exits, so a
+//! crash leaves no stale lock. While holding the lock, use the `*_locked`
+//! variants — nesting the locking wrappers on the same save deadlocks.
+//!
 //! The fingerprint is FNV-1a 64 over the bytes. It catches casual hand edits;
 //! it is not a security boundary (anyone with file access can also edit the
 //! manifest).
@@ -14,10 +22,42 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "integrity.yaml";
+
+/// Dedicated advisory lock file for the integrity manifest
+/// (`Saves/<slot>/.talkdnd.integrity.lock`). It serializes every manifest
+/// read-modify-write within one save. It is distinct from checkpoint's
+/// `.talkdnd.lock` and never fingerprinted: [`snapshot`] tracks save content
+/// files only.
+pub const LOCK: &str = ".talkdnd.integrity.lock";
+
+/// A held integrity manifest lock for one save ([`lock`]). Released when
+/// dropped — including through an error return or a panic — or when the
+/// process exits, so a crashed process never leaves a stale lock.
+pub struct ManifestLock {
+    _file: File,
+}
+
+/// Acquire the integrity manifest lock for `save`, blocking until any other
+/// holder releases it. Never nest acquisitions for the same save: a second
+/// `lock()` in the same process would wait on itself. While holding the
+/// lock, call the `*_locked` variants instead of the locking wrappers.
+pub fn lock(save: &Path) -> Result<ManifestLock> {
+    fs::create_dir_all(save).with_context(|| format!("create {}", save.display()))?;
+    let p = save.join(LOCK);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&p)
+        .with_context(|| format!("open integrity lock {}", p.display()))?;
+    file.lock()
+        .with_context(|| format!("lock integrity manifest of {}", save.display()))?;
+    Ok(ManifestLock { _file: file })
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Accepted {
@@ -197,8 +237,14 @@ pub fn baseline(save: &Path) -> Manifest {
 }
 
 /// Load the manifest, creating a baseline for saves that predate it.
-/// Returns (manifest, created).
+/// Returns (manifest, created). Acquires the manifest lock.
 pub fn ensure(save: &Path) -> Result<(Manifest, bool)> {
+    let _l = lock(save)?;
+    ensure_locked(save)
+}
+
+/// [`ensure`] while already holding [`lock`].
+pub fn ensure_locked(save: &Path) -> Result<(Manifest, bool)> {
     if let Some(m) = load(save)? {
         return Ok((m, false));
     }
@@ -225,24 +271,55 @@ pub fn changes_against(m: &Manifest, now: &BTreeMap<String, String>) -> Vec<Chan
 }
 
 pub fn changes(save: &Path) -> Result<Vec<Change>> {
-    let (m, _) = ensure(save)?;
+    let _l = lock(save)?;
+    let (m, _) = ensure_locked(save)?;
     Ok(changes_against(&m, &snapshot(save)))
 }
 
 /// Record the files a tool changed between `before` and now. Files that
 /// were already out of step with the manifest before the write stay flagged.
+/// Acquires the manifest lock; the manifest is read inside the lock.
 pub fn after_write(save: &Path, before: &BTreeMap<String, String>) -> Result<()> {
+    let _l = lock(save)?;
     let now = snapshot(save);
-    after_write_with(save, before, &now)
+    after_write_with_locked(save, before, &now)
 }
 
 /// [`after_write`] with the current snapshot already taken, so callers that
 /// need it anyway (audit reconciliation) parse the save only once.
+/// Acquires the manifest lock; the manifest is read inside the lock.
 pub fn after_write_with(
     save: &Path,
     before: &BTreeMap<String, String>,
     now: &BTreeMap<String, String>,
 ) -> Result<()> {
+    let _l = lock(save)?;
+    after_write_with_locked(save, before, now)
+}
+
+/// [`after_write_with`] while already holding [`lock`].
+pub fn after_write_with_locked(
+    save: &Path,
+    before: &BTreeMap<String, String>,
+    now: &BTreeMap<String, String>,
+) -> Result<()> {
+    after_write_guarded(save, before, now, None)
+}
+
+/// The manifest read-modify-write itself; the caller holds [`lock`].
+/// `fault` is a test-only hook (see the `interleaved_manifest_writers`
+/// regression test), always `None` in production. It runs just before the
+/// manifest is read, so a competing writer's committed update is picked up
+/// by the in-lock load instead of being overwritten by a stale copy.
+fn after_write_guarded(
+    save: &Path,
+    before: &BTreeMap<String, String>,
+    now: &BTreeMap<String, String>,
+    fault: Option<&dyn Fn()>,
+) -> Result<()> {
+    if let Some(f) = fault {
+        f();
+    }
     let Some(mut m) = load(save)? else {
         // First tool write on an old save: the current state is the baseline.
         let m = Manifest {
@@ -334,6 +411,124 @@ mod tests {
             changes(&d).unwrap(),
             vec![Change::Modified("Characters/A.md".into())]
         );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Regression test for the lost-fingerprint race (issue #149): two
+    /// writers whose manifest read-modify-writes interleave must both end up
+    /// in the manifest. Writer A runs with writer B's complete
+    /// read-modify-write injected at the test-only hook, i.e. before A reads
+    /// the manifest inside its lock. The fixed code re-reads the manifest
+    /// inside the lock after the injection, so B's committed fingerprint
+    /// survives A's store. Before the manifest lock existed, A merged into
+    /// the manifest it had loaded before B stored and dropped B's update —
+    /// this test failed with `Modified("Characters/A.md")` on that code.
+    #[test]
+    fn interleaved_manifest_writers_do_not_lose_fingerprints() {
+        let d = dir("race");
+        fs::write(d.join("progress.yaml"), "xp: {a: 0}\n").unwrap();
+        fs::write(d.join("Characters/A.md"), "hp: 10\n").unwrap();
+        ensure(&d).unwrap();
+        assert!(changes(&d).unwrap().is_empty());
+
+        // Both writers started from the same pre-write snapshot; A rewrote
+        // progress.yaml, B rewrote Characters/A.md.
+        let shared_before = snapshot(&d);
+        fs::write(d.join("progress.yaml"), "xp: {a: 100}\n").unwrap();
+        let now_a = snapshot(&d);
+        fs::write(d.join("Characters/A.md"), "hp: 20\n").unwrap();
+        let now_b = snapshot(&d);
+
+        let save = d.clone();
+        let before_b = shared_before.clone();
+        let writer_b = move || {
+            after_write_guarded(&save, &before_b, &now_b, None).unwrap();
+        };
+        after_write_guarded(&d, &shared_before, &now_a, Some(&writer_b)).unwrap();
+
+        assert!(
+            !snapshot(&d).contains_key(LOCK),
+            "the lock file is fingerprinted"
+        );
+        assert!(
+            changes(&d).unwrap().is_empty(),
+            "{:?}",
+            changes(&d).unwrap()
+        );
+        let m = load(&d).unwrap().unwrap();
+        assert_eq!(
+            m.files.get("progress.yaml").map(String::as_str),
+            Some(fingerprint(b"xp: {a: 100}\n").as_str())
+        );
+        assert_eq!(
+            m.files.get("Characters/A.md").map(String::as_str),
+            Some(fingerprint(b"hp: 20\n").as_str())
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Two real writers through the public API, serialized only by the
+    /// manifest lock: whichever commits second re-reads the manifest inside
+    /// the lock and keeps the first writer's fingerprint.
+    #[test]
+    fn concurrent_public_api_writers_keep_both_fingerprints() {
+        let d = dir("threads");
+        fs::write(d.join("progress.yaml"), "xp: {a: 0}\n").unwrap();
+        fs::write(d.join("Characters/A.md"), "hp: 10\n").unwrap();
+        ensure(&d).unwrap();
+        let a = {
+            let d = d.clone();
+            std::thread::spawn(move || {
+                let before = snapshot(&d);
+                fs::write(d.join("progress.yaml"), "xp: {a: 100}\n").unwrap();
+                after_write(&d, &before).unwrap();
+            })
+        };
+        let b = {
+            let d = d.clone();
+            std::thread::spawn(move || {
+                let before = snapshot(&d);
+                fs::write(d.join("Characters/A.md"), "hp: 20\n").unwrap();
+                after_write(&d, &before).unwrap();
+            })
+        };
+        a.join().unwrap();
+        b.join().unwrap();
+        assert!(
+            changes(&d).unwrap().is_empty(),
+            "{:?}",
+            changes(&d).unwrap()
+        );
+        let m = load(&d).unwrap().unwrap();
+        assert_eq!(
+            m.files.get("progress.yaml").map(String::as_str),
+            Some(fingerprint(b"xp: {a: 100}\n").as_str())
+        );
+        assert_eq!(
+            m.files.get("Characters/A.md").map(String::as_str),
+            Some(fingerprint(b"hp: 20\n").as_str())
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A failing manifest store must report the error and release the lock:
+    /// the retry below would hang forever if the error path leaked it.
+    #[test]
+    fn a_failed_manifest_write_reports_the_error_and_releases_the_lock() {
+        let d = dir("store-fail");
+        fs::write(d.join("progress.yaml"), "xp: {a: 0}\n").unwrap();
+        // A directory where the manifest belongs: every store fails on the
+        // final rename, on every platform.
+        fs::create_dir(path(&d)).unwrap();
+        let before = snapshot(&d);
+        fs::write(d.join("progress.yaml"), "xp: {a: 100}\n").unwrap();
+        let err = after_write(&d, &before).unwrap_err();
+        assert!(err.to_string().contains("integrity.yaml"), "{err}");
+        // Nothing was persisted, and the lock is free again.
+        assert!(load(&d).unwrap().is_none());
+        fs::remove_dir(path(&d)).unwrap();
+        after_write(&d, &before).unwrap();
+        assert!(changes(&d).unwrap().is_empty());
         let _ = fs::remove_dir_all(&d);
     }
 
