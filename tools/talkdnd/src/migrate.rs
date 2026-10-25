@@ -941,6 +941,31 @@ fn move_companions(save: &Path) -> Result<CompanionResult> {
 /// A companion sheet the DM had hand-edited before the move stays flagged
 /// under its new path: the manifest keeps the old fingerprint.
 fn carry_dirty_flags(save: &Path, moved: &[Move], dirty: &BTreeSet<String>) -> Result<()> {
+    carry_dirty_flags_guarded(save, moved, dirty, None)
+}
+
+/// [`carry_dirty_flags`] with a test-only fault hook (production always
+/// passes `None`): it runs once the manifest lock is held and just before
+/// the manifest is read, so a test can commit a competing writer's update
+/// at the point the lock has made impossible to interleave with the read
+/// (mirrors `after_write_guarded` in `combat_sim::integrity`).
+fn carry_dirty_flags_guarded(
+    save: &Path,
+    moved: &[Move],
+    dirty: &BTreeSet<String>,
+    fault: Option<&dyn Fn()>,
+) -> Result<()> {
+    // The manifest read-modify-write runs under the integrity manifest lock:
+    // after_write (above) has released it by the time this runs, so a
+    // concurrent writer may have committed in between and this in-lock load
+    // must pick its update up instead of overwriting it with a copy read
+    // earlier (issue #154). `dirty` is an input — the paths that were
+    // already flagged before the migration wrote anything — not a manifest
+    // copy.
+    let _lock = combat_sim::integrity::lock(save)?;
+    if let Some(f) = fault {
+        f();
+    }
     let Some(mut m) = combat_sim::integrity::load(save)? else {
         return Ok(());
     };
@@ -1686,5 +1711,74 @@ mod tests {
         assert_eq!((report.from, report.to), (7, 8));
         assert_eq!(meta(&save).schema, 8);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Regression test for issue #154: `carry_dirty_flags`' manifest
+    /// read-modify-write runs under the integrity manifest lock and reads
+    /// the manifest inside it, so a concurrent tool process that commits
+    /// between `after_write`'s release and this lock keeps its fingerprint.
+    /// Writer B is injected (test-only fault hook) at exactly that point;
+    /// it stands in for a real writer that committed there — a real one
+    /// reaches the same state through the lock, but the hook must not
+    /// re-acquire the lock the test already holds, so its committed update
+    /// is written with a raw manifest read-modify-write. Before the lock
+    /// existed, carry's store dropped B's fingerprint (the first assertion
+    /// below caught `progress.yaml` regressing to its pre-B value).
+    #[test]
+    fn carry_dirty_flags_keeps_a_concurrent_writers_fingerprints() {
+        let save = std::env::temp_dir().join(format!("talkdnd-carry-race-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&save);
+        for d in ["Characters", "NPCs"] {
+            fs::create_dir_all(save.join(d)).unwrap();
+        }
+        fs::write(save.join("progress.yaml"), "xp: {hero: 0}\n").unwrap();
+        fs::write(save.join("NPCs/Gil.md"), "# Gil\n").unwrap();
+        // Baseline manifest: both files at their current fingerprints.
+        combat_sim::integrity::ensure(&save).unwrap();
+        // The DM hand-edited Gil before the migration: the manifest keeps
+        // the stale pre-edit fingerprint and Gil is flagged dirty.
+        fs::write(save.join("NPCs/Gil.md"), "# Gil (hand-edited)\n").unwrap();
+        let dirty: BTreeSet<String> = ["NPCs/Gil.md".to_string()].into_iter().collect();
+        // The migration moves the file; carry_dirty_flags then moves the
+        // stale fingerprint to the new path so the flag follows the file.
+        fs::rename(save.join("NPCs/Gil.md"), save.join("Characters/Gil.md")).unwrap();
+        let moved = vec![Move {
+            from: "Gil.md".to_string(),
+            to: "Gil.md".to_string(),
+            sheet: None,
+        }];
+
+        const B_PROGRESS: &str = "xp: {hero: 50}\n";
+        let b_save = save.clone();
+        let writer_b = move || {
+            fs::write(b_save.join("progress.yaml"), B_PROGRESS).unwrap();
+            let mut m = combat_sim::integrity::load(&b_save).unwrap().unwrap();
+            m.files.insert(
+                "progress.yaml".to_string(),
+                combat_sim::integrity::fingerprint(B_PROGRESS.as_bytes()),
+            );
+            combat_sim::integrity::store(&b_save, &m).unwrap();
+        };
+        carry_dirty_flags_guarded(&save, &moved, &dirty, Some(&writer_b)).unwrap();
+
+        // B's committed fingerprint survived the carry's store.
+        let m = combat_sim::integrity::load(&save).unwrap().unwrap();
+        assert_eq!(
+            m.files.get("progress.yaml").map(String::as_str),
+            Some(combat_sim::integrity::fingerprint(B_PROGRESS.as_bytes()).as_str()),
+            "a concurrent writer's fingerprint was lost to carry_dirty_flags"
+        );
+        // The dirty flag followed the moved file under its new path, with
+        // the stale pre-edit fingerprint (never laundered), and the old
+        // entry is gone.
+        assert!(!m.files.contains_key("NPCs/Gil.md"));
+        assert!(m.files.contains_key("Characters/Gil.md"));
+        assert_eq!(
+            combat_sim::integrity::changes(&save).unwrap(),
+            vec![combat_sim::integrity::Change::Modified(
+                "Characters/Gil.md".into()
+            )]
+        );
+        let _ = fs::remove_dir_all(&save);
     }
 }

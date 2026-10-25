@@ -864,3 +864,54 @@ fn real_commit_obstruction_still_rolls_back_cleanly() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+/// Regression test for issue #154: restore's final integrity manifest
+/// read-modify-write runs under the save's integrity manifest lock, so a
+/// concurrent tool command that commits right before the re-baseline keeps
+/// its fingerprints: the in-lock load picks the committed update up instead
+/// of being overwritten by a manifest that was read before it committed.
+/// The concurrent writer (a real `audit::after_command`, which takes the
+/// integrity manifest lock itself) is fired through the test-only
+/// `restore_injecting_manifest_hook` at the start of the re-baseline. On
+/// pre-lock code the hook landed inside restore's unlocked
+/// read-modify-write window and restore's store dropped the writer's
+/// fingerprint — the manifest kept the checkpoint's stale fingerprint for
+/// the file the writer had rewritten, reported forever as a hand edit.
+#[test]
+fn restore_rebaseline_keeps_a_concurrent_writers_fingerprints() {
+    let (root, save) = fixture("rebaseline-race");
+    let id = snapshot(&save, None);
+    // Diverge the save from the checkpoint, so the restore really replaces
+    // covered files before it re-baselines the manifest.
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+
+    const TESS_REWRITTEN: &str =
+        "# Tess\n\n```combat yaml\nid: tess\nname: Tess\nlevel: 3\nhp: 15\nmax_hp: 20\n```\n";
+    let b_save = save.clone();
+    let writer_b = move || {
+        // The concurrent tool command rewrites a protected file and records
+        // it through the real production path (after_command takes the
+        // integrity manifest lock itself).
+        let before = combat_sim::integrity::snapshot(&b_save);
+        fs::write(b_save.join("Characters/tess.md"), TESS_REWRITTEN).unwrap();
+        talkdnd::audit::after_command(&b_save, &before).unwrap();
+    };
+    checkpoint::restore_injecting_manifest_hook(&root, &save, &id, &writer_b).unwrap();
+
+    // The manifest matches the disk exactly — every fingerprint, the
+    // concurrent writer's included — so `check` reports no changes.
+    let m = combat_sim::integrity::load(&save).unwrap().unwrap();
+    let now = combat_sim::integrity::snapshot(&save);
+    assert_eq!(m.files, now, "manifest and disk diverged after restore");
+    assert!(
+        combat_sim::integrity::changes_against(&m, &now).is_empty(),
+        "{:?}",
+        combat_sim::integrity::changes_against(&m, &now)
+    );
+    assert_eq!(
+        m.files.get("Characters/tess.md").map(String::as_str),
+        Some(combat_sim::integrity::fingerprint(TESS_REWRITTEN.as_bytes()).as_str()),
+        "the concurrent writer's fingerprint was lost to the restore"
+    );
+    let _ = fs::remove_dir_all(&root);
+}

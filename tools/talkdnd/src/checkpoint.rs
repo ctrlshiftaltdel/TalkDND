@@ -13,7 +13,11 @@
 //! commit rolls back by mirroring the pre-restore backup over the save —
 //! copying the backup back *and* removing save entries the backup does not
 //! have — and only reports "回滚到恢复前状态" once the whole tree matches.
-//! Snapshot and restore are serialized per slot with `Saves/<slot>/.talkdnd.lock`.
+//! Snapshot and restore are serialized per slot with `Saves/<slot>/.talkdnd.lock`;
+//! restore's final integrity re-baseline (and the migration it may run) then
+//! takes the per-save integrity manifest lock `.talkdnd.integrity.lock`
+//! inside it — always checkpoint lock first, integrity lock second, never
+//! the reverse.
 
 use crate::{audit, migrate, save};
 use anyhow::{bail, Context, Result};
@@ -282,7 +286,7 @@ fn show(save: &Path, id: &str, json: bool) -> Result<()> {
 // ---------------------------------------------------------------- restore
 
 fn restore(root: &Path, save: &Path, id: &str, yes: bool, json: bool) -> Result<()> {
-    restore_inner(root, save, id, yes, json, None)
+    restore_inner(root, save, id, yes, json, None, None)
 }
 
 /// Test-only fault injection for `restore` (production always passes
@@ -302,7 +306,23 @@ pub struct RestoreFault {
 /// Test-only entry: `restore` with injected faults (`--yes`, plain output).
 #[doc(hidden)]
 pub fn restore_injecting(root: &Path, save: &Path, id: &str, fault: RestoreFault) -> Result<()> {
-    restore_inner(root, save, id, true, false, Some(fault))
+    restore_inner(root, save, id, true, false, Some(fault), None)
+}
+
+/// Test-only entry: `restore` with a closure injected just before the final
+/// integrity manifest re-baseline (`--yes`, plain output). The hook plays a
+/// concurrent manifest writer committing at that point; production always
+/// passes `None`. See the regression test
+/// `restore_rebaseline_keeps_a_concurrent_writers_fingerprints` in
+/// `tests/checkpoint.rs`.
+#[doc(hidden)]
+pub fn restore_injecting_manifest_hook(
+    root: &Path,
+    save: &Path,
+    id: &str,
+    manifest_hook: &dyn Fn(),
+) -> Result<()> {
+    restore_inner(root, save, id, true, false, None, Some(manifest_hook))
 }
 
 fn restore_inner(
@@ -312,6 +332,7 @@ fn restore_inner(
     yes: bool,
     json: bool,
     fault: Option<RestoreFault>,
+    manifest_hook: Option<&dyn Fn()>,
 ) -> Result<()> {
     let fault = fault.unwrap_or_default();
     if !yes {
@@ -488,10 +509,14 @@ fn restore_inner(
             ),
         )?;
     }
-    let mut im = integrity::load(save)?.unwrap_or_else(|| integrity::baseline(save));
-    im.files = integrity::snapshot(save);
-    im.baseline = Some(serde_norway::to_value(audit::current(save))?);
-    integrity::store(save, &im)?;
+    if let Some(hook) = manifest_hook {
+        // Test-only (restore_injecting_manifest_hook): fires at the start of
+        // the manifest re-baseline — the interleaving point that the
+        // integrity lock inside restore_rebaseline closes; production
+        // always passes None.
+        hook();
+    }
+    restore_rebaseline(save)?;
 
     if json {
         let v = serde_json::json!({
@@ -524,6 +549,25 @@ fn restore_inner(
         );
     }
     Ok(())
+}
+
+/// Re-baseline the integrity manifest after a restore: fingerprints are set
+/// to the current save state and the reconciliation baseline to the current
+/// values, so `talkdnd check` is clean right after a restore. The whole
+/// read-modify-write runs under the save's integrity manifest lock, and the
+/// manifest is read inside the lock, so a concurrent tool process's
+/// committed update is picked up by the in-lock load instead of being
+/// overwritten by a manifest that was read before it committed
+/// (issue #154). Lock order: the caller already holds the checkpoint lock
+/// (`.talkdnd.lock`); the integrity lock is always taken after it, never
+/// the reverse, and nothing inside (load, snapshot, `audit::current`,
+/// store) acquires a lock, so the two never nest.
+fn restore_rebaseline(save: &Path) -> Result<()> {
+    let _lock = integrity::lock(save)?;
+    let mut im = integrity::load(save)?.unwrap_or_else(|| integrity::baseline(save));
+    im.files = integrity::snapshot(save);
+    im.baseline = Some(serde_norway::to_value(audit::current(save))?);
+    integrity::store(save, &im)
 }
 
 // ------------------------------------------------------------------ access
