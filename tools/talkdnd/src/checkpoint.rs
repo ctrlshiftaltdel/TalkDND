@@ -367,7 +367,7 @@ fn restore_inner(
         // (typically directories for covered paths that did not exist
         // pre-restore); failures are reported, never swallowed.
         let mut leftovers = remove_staged(root, &staged, 0);
-        leftovers.extend(remove_extras(&backup, &save, root));
+        leftovers.extend(remove_extras(&backup, save, root));
         if leftovers.is_empty() {
             return Err(err.context(format!(
                 "恢复已中止：当前存档未改动（恢复前整份备份在 {}）",
@@ -413,7 +413,7 @@ fn restore_inner(
             Err(anyhow::anyhow!("injected rollback failure"))
         } else {
             copy_tree(&backup, save).and_then(|()| {
-                let extras = remove_extras(&backup, &save, root);
+                let extras = remove_extras(&backup, save, root);
                 if extras.is_empty() {
                     Ok(())
                 } else {
