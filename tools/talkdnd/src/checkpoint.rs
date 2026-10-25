@@ -13,6 +13,10 @@
 //! commit rolls back by mirroring the pre-restore backup over the save —
 //! copying the backup back *and* removing save entries the backup does not
 //! have — and only reports "回滚到恢复前状态" once the whole tree matches.
+//! A failure *after* the commit (schema migration, restore log append,
+//! integrity re-baseline) is not rolled back automatically: the error names
+//! the stage, the checkpoint, the pre-restore whole-save backup and the fact
+//! that the save may already have changed.
 //! Snapshot and restore are serialized per slot with `Saves/<slot>/.talkdnd.lock`;
 //! restore's final integrity re-baseline (and the migration it may run) then
 //! takes the per-save integrity manifest lock `.talkdnd.integrity.lock`
@@ -291,16 +295,24 @@ fn restore(root: &Path, save: &Path, id: &str, yes: bool, json: bool) -> Result<
 
 /// Test-only fault injection for `restore` (production always passes
 /// `None`): `fail_rename_at` makes the n-th commit rename (0-based,
-/// commit order) fail with a synthetic error after real staging, and
-/// `fail_rollback` makes the whole-save rollback fail the same way. This
-/// keeps the partial-commit and rollback-failure paths deterministically
-/// testable on every platform — no permission tricks, and deliberately no
-/// production switch.
+/// commit order) fail with a synthetic error after real staging,
+/// `fail_rollback` makes the whole-save rollback fail the same way, and
+/// `fail_migration`, `fail_log_append` / `fail_rebaseline` make the
+/// respective post-commit stage fail after the covered files are committed.
+/// This keeps the partial-commit, rollback-failure and post-commit failure
+/// paths deterministically testable on every platform — no permission tricks,
+/// and deliberately no production switch.
 #[doc(hidden)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RestoreFault {
     pub fail_rename_at: Option<usize>,
     pub fail_rollback: bool,
+    /// Fail the post-commit schema migration instead of running it.
+    pub fail_migration: bool,
+    /// Fail the post-commit restore log append instead of running it.
+    pub fail_log_append: bool,
+    /// Fail the post-commit integrity re-baseline instead of running it.
+    pub fail_rebaseline: bool,
 }
 
 /// Test-only entry: `restore` with injected faults (`--yes`, plain output).
@@ -535,12 +547,31 @@ fn restore_inner(
     // 5. Older checkpoint schema: restore first, then the normal migration.
     let mut migration: Option<String> = None;
     if cm.schema < current {
-        let report = migrate::ensure(save, root, false)?;
+        if fault.fail_migration {
+            return Err(post_commit_failure(
+                root,
+                id,
+                &backup,
+                "提交后的 schema 迁移",
+                anyhow::anyhow!("injected migration failure"),
+            ));
+        }
+        let report = migrate::ensure(save, root, false)
+            .map_err(|err| post_commit_failure(root, id, &backup, "提交后的 schema 迁移", err))?;
         migration = Some(report.lines().join("；"));
     }
 
     // 6. Log the restore (append-only) and re-baseline integrity + audit.
     if let Some(log) = save::latest_log(save) {
+        if fault.fail_log_append {
+            return Err(post_commit_failure(
+                root,
+                id,
+                &backup,
+                "提交后的恢复日志追加",
+                anyhow::anyhow!("injected log append failure"),
+            ));
+        }
         save::append(
             &log,
             &format!(
@@ -548,9 +579,16 @@ fn restore_inner(
                 chrono::Local::now().format("%H:%M"),
                 rel(root, &backup)
             ),
-        )?;
+        )
+        .map_err(|err| post_commit_failure(root, id, &backup, "提交后的恢复日志追加", err))?;
     }
-    restore_rebaseline(save, manifest_hook)?;
+    let rebaseline = if fault.fail_rebaseline {
+        Err(anyhow::anyhow!("injected rebaseline failure"))
+    } else {
+        restore_rebaseline(save, manifest_hook)
+    };
+    rebaseline
+        .map_err(|err| post_commit_failure(root, id, &backup, "提交后的完整性清单重定基", err))?;
 
     if json {
         let v = serde_json::json!({
@@ -583,6 +621,25 @@ fn restore_inner(
         );
     }
     Ok(())
+}
+
+/// Error for a failure after the covered files were committed. At this
+/// point the save already holds the checkpoint copies (and the migration or
+/// log write may have gone partway), so the message names the checkpoint, the
+/// stage, the pre-restore whole-save backup and the fact that no automatic
+/// rollback happened. The backup is the reliable recovery point: rolling a
+/// partial migration or log append back is not provably safe.
+fn post_commit_failure(
+    root: &Path,
+    id: &str,
+    backup: &Path,
+    stage: &str,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "恢复失败：检查点 {id} 的覆盖文件已替换，但{stage}失败（{err:#}）；当前存档可能已被替换或改变，未自动回滚。恢复前整份备份在 {}，可用它手动恢复",
+        rel(root, backup)
+    )
 }
 
 /// Re-baseline the integrity manifest after a restore: fingerprints are set
