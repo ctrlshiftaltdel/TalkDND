@@ -405,18 +405,19 @@ fn restore_inner(
         };
         match rollback {
             Ok(()) => {
-                let mut msg = format!(
-                    "恢复失败：{err}；已从 {} 回滚到恢复前状态",
-                    rel(root, &backup)
-                );
-                if !leftovers.is_empty() {
-                    msg += &format!(
-                        "；{} 个临时文件残留：{}",
+                let detail = if leftovers.is_empty() {
+                    format!("已从 {} 回滚到恢复前状态", rel(root, &backup))
+                } else {
+                    // Temp files could not be removed, so we cannot claim
+                    // the whole tree is back to its pre-restore state.
+                    format!(
+                        "覆盖文件已从 {} 回滚，但 {} 个临时文件残留：{}",
+                        rel(root, &backup),
                         leftovers.len(),
                         leftovers.join("、")
-                    );
-                }
-                return Err(anyhow::anyhow!(msg));
+                    )
+                };
+                return Err(anyhow::anyhow!(format!("恢复失败：{err}；{detail}")));
             }
             Err(rb) => {
                 let mut msg = format!(

@@ -249,8 +249,10 @@ impl Report {
     }
 
     /// Warning lines plus DM guidance (empty when clean). Cross-reference
-    /// warnings are DM-view output (they also run in `start`) and never
-    /// carry file content or dm_only details.
+    /// warnings are DM-view output (they also run in `start`): they may
+    /// carry entity names/aliases (including dm_only entities) and relation
+    /// ids/types, but never file content; do not paste them to players or
+    /// into player-visible material.
     pub fn lines(&self) -> Vec<String> {
         let mut v = Vec::new();
         for c in &self.changes {
