@@ -13,6 +13,11 @@
 //! commit rolls back by mirroring the pre-restore backup over the save —
 //! copying the backup back *and* removing save entries the backup does not
 //! have — and only reports "回滚到恢复前状态" once the whole tree matches.
+//! The pre-restore backup is always a new directory: the name is
+//! `{slot}-{stamp}-restore-{id}` (one-second stamp), and when that directory
+//! already exists the next suffix (`-2`, `-3`, …) is used. The copy goes
+//! only into a directory this call just created, so an earlier or partial
+//! backup is never treated as this restore's tree.
 //! A failure *after* the commit (schema migration, restore log append,
 //! integrity re-baseline) is not rolled back automatically: the error names
 //! the stage, the checkpoint, the pre-restore whole-save backup and the fact
@@ -290,7 +295,7 @@ fn show(save: &Path, id: &str, json: bool) -> Result<()> {
 // ---------------------------------------------------------------- restore
 
 fn restore(root: &Path, save: &Path, id: &str, yes: bool, json: bool) -> Result<()> {
-    restore_inner(root, save, id, yes, json, None, None, None)
+    restore_inner(root, save, id, yes, json, None, None, None, None)
 }
 
 /// Test-only fault injection for `restore` (production always passes
@@ -318,7 +323,7 @@ pub struct RestoreFault {
 /// Test-only entry: `restore` with injected faults (`--yes`, plain output).
 #[doc(hidden)]
 pub fn restore_injecting(root: &Path, save: &Path, id: &str, fault: RestoreFault) -> Result<()> {
-    restore_inner(root, save, id, true, false, Some(fault), None, None)
+    restore_inner(root, save, id, true, false, Some(fault), None, None, None)
 }
 
 /// Test-only entry: `restore` with a closure injected inside the final
@@ -338,7 +343,17 @@ pub fn restore_injecting_manifest_hook(
     id: &str,
     manifest_hook: &dyn Fn(),
 ) -> Result<()> {
-    restore_inner(root, save, id, true, false, None, Some(manifest_hook), None)
+    restore_inner(
+        root,
+        save,
+        id,
+        true,
+        false,
+        None,
+        Some(manifest_hook),
+        None,
+        None,
+    )
 }
 
 /// Test-only entry: `restore` with a hook that runs right after the
@@ -365,10 +380,37 @@ pub fn restore_injecting_after_backup(
         Some(fault),
         None,
         Some(after_backup),
+        None,
     )
 }
 
-#[allow(clippy::too_many_arguments)] // two test-only hooks push it past the limit
+/// Test-only entry: `restore` with the compact backup timestamp forced
+/// (`--yes`, plain output). Production `restore` passes `None` and uses
+/// `stamp_compact()`. Forcing one stamp makes a same-second backup-name
+/// collision deterministic instead of a race against the clock. `fault` is
+/// `None` for an otherwise real restore. No player-facing switch.
+#[doc(hidden)]
+pub fn restore_injecting_backup_stamp(
+    root: &Path,
+    save: &Path,
+    id: &str,
+    fault: Option<RestoreFault>,
+    backup_stamp: &str,
+) -> Result<()> {
+    restore_inner(
+        root,
+        save,
+        id,
+        true,
+        false,
+        fault,
+        None,
+        None,
+        Some(backup_stamp),
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // test-only hooks push it past the limit
 fn restore_inner(
     root: &Path,
     save: &Path,
@@ -378,6 +420,7 @@ fn restore_inner(
     fault: Option<RestoreFault>,
     manifest_hook: Option<&dyn Fn()>,
     after_backup: Option<&dyn Fn()>,
+    backup_stamp: Option<&str>,
 ) -> Result<()> {
     let fault = fault.unwrap_or_default();
     if !yes {
@@ -402,9 +445,18 @@ fn restore_inner(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "save".to_string());
-    let backup_name = format!("{slot}-{}-restore-{id}", stamp_compact());
-    let backup = root.join("Saves").join(BACKUP_DIR).join(&backup_name);
-    fs::create_dir_all(root.join("Saves").join(BACKUP_DIR))?;
+    let stamp = match backup_stamp {
+        Some(stamp) => stamp.to_string(),
+        None => stamp_compact(),
+    };
+    let parent = root.join("Saves").join(BACKUP_DIR);
+    fs::create_dir_all(&parent)
+        .with_context(|| "恢复已中止：当前存档未改动；无法创建备份目录 Saves/_backups")?;
+    // A new empty directory, never an existing one: `copy_tree` does not
+    // remove entries already at the destination, so filling a directory left
+    // by an earlier restore would keep files this save no longer has.
+    let backup = allocate_restore_backup(&parent, &slot, &stamp, id)
+        .with_context(|| "恢复已中止：当前存档未改动；无法分配独立的整份备份")?;
     copy_tree(save, &backup).with_context(|| {
         format!(
             "恢复已中止：当前存档未改动；无法完整备份到 {}",
@@ -962,10 +1014,47 @@ fn temp_sibling(dst: &Path) -> PathBuf {
     dst.with_file_name(name)
 }
 
+/// Directory for this restore's whole-save backup. The unsuffixed name is
+/// `{slot}-{stamp}-restore-{id}`. The stamp is one second, so a second
+/// restore of the same checkpoint in the same second collides. `copy_tree`
+/// only adds and overwrites; it does not delete entries already at `dest`.
+/// Reusing a directory would therefore keep files from the earlier backup,
+/// and a mirror rollback would put them back into the save. An existing or
+/// partly written directory is skipped (`-2`, `-3`, …), the same
+/// disambiguation checkpoint ids and migration backups use, and this
+/// function returns only a directory it has just created empty.
+fn allocate_restore_backup(parent: &Path, slot: &str, stamp: &str, id: &str) -> Result<PathBuf> {
+    let base = format!("{slot}-{stamp}-restore-{id}");
+    let mut n = 1u32;
+    loop {
+        let name = if n == 1 {
+            base.clone()
+        } else {
+            format!("{base}-{n}")
+        };
+        let dest = parent.join(&name);
+        match fs::create_dir(&dest) {
+            Ok(()) => return Ok(dest),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                n += 1;
+                if n > 10_000 {
+                    bail!("备份目录 {base} 的数字后缀已用尽");
+                }
+            }
+            Err(err) => {
+                return Err(anyhow::Error::new(err))
+                    .with_context(|| format!("create {}", dest.display()));
+            }
+        }
+    }
+}
+
 /// Recursive copy (backups and rollback); skips the checkpoint lock and the
 /// cache. Refuses any other entry it cannot reproduce (symlink, socket, …)
 /// instead of silently producing an incomplete backup that a mirror rollback
-/// would later treat as the whole pre-restore tree.
+/// would later treat as the whole pre-restore tree. Callers that need a
+/// faithful backup must pass a destination this process just created empty:
+/// entries already under `dest` are left in place.
 fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("create {}", dest.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
