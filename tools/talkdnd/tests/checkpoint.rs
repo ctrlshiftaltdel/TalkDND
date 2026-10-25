@@ -1187,3 +1187,152 @@ fn restore_refuses_entries_the_whole_save_backup_cannot_copy() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+/// Every file and directory under `dir`, as `(relative path, bytes)`.
+/// Directory entries use a trailing `/` and empty bytes, so the comparison
+/// covers structure as well as contents. Nothing is skipped.
+fn whole_tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        let mut entries: Vec<PathBuf> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        entries.sort();
+        for p in entries {
+            let rel = p
+                .strip_prefix(base)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if p.is_dir() {
+                out.push((format!("{rel}/"), Vec::new()));
+                walk(&p, base, out);
+            } else {
+                out.push((rel, fs::read(&p).unwrap()));
+            }
+        }
+    }
+    let mut v = Vec::new();
+    walk(dir, dir, &mut v);
+    v.sort();
+    v
+}
+
+/// Issue #162: the pre-restore backup name is `{slot}-{second}-restore-{id}`,
+/// and `copy_tree` fills an existing destination without removing entries
+/// that are already there. A second restore of the same checkpoint in the
+/// same second therefore merges into the first backup. File A is in the save
+/// only for the first backup; the successful restore deletes it. The second
+/// restore is forced onto that same directory name (injected stamp, not a
+/// clock race) and fails after a partial commit. The rollback must bring
+/// back the tree from the start of *this* restore, not A from the earlier
+/// backup.
+#[test]
+fn same_second_restore_rolls_back_to_this_operation_not_the_earlier_backup() {
+    let (root, save) = fixture("backup-reuse");
+    let id = snapshot(&save, None);
+    const STAMP: &str = "20000101-000000";
+    const FILE_A: &str = "Characters/extra-a.md";
+    const FILE_A_BYTES: &[u8] = b"file-a-only-in-the-first-backup\n";
+    fs::write(save.join(FILE_A), FILE_A_BYTES).unwrap();
+
+    checkpoint::restore_injecting_backup_stamp(&root, &save, &id, None, STAMP).unwrap();
+    assert!(
+        !save.join(FILE_A).exists(),
+        "the first restore must remove covered file A"
+    );
+
+    let backups = restore_backups(&root);
+    assert_eq!(
+        backups.len(),
+        1,
+        "the first restore writes one backup: {backups:?}"
+    );
+    let first_backup = backups[0].clone();
+    let natural = root.join(format!("Saves/_backups/2030-01-02-01-{STAMP}-restore-{id}"));
+    assert_eq!(
+        first_backup, natural,
+        "the injected stamp must be the backup directory that was actually written"
+    );
+    assert_eq!(
+        fs::read(first_backup.join(FILE_A)).unwrap(),
+        FILE_A_BYTES,
+        "the first backup must contain A, because A was in the save"
+    );
+
+    let before = whole_tree(&save);
+    assert!(
+        before.iter().all(|(p, _)| p != FILE_A),
+        "A must already be gone before the second restore: {before:?}"
+    );
+
+    let err = checkpoint::restore_injecting_backup_stamp(
+        &root,
+        &save,
+        &id,
+        Some(checkpoint::RestoreFault {
+            fail_rename_at: Some(1),
+            fail_rollback: false,
+            ..Default::default()
+        }),
+        STAMP,
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    let after = whole_tree(&save);
+    let backups_after = restore_backups(&root);
+    assert_eq!(
+        after,
+        before,
+        "rollback restored a different tree than the one at the start of this restore\n\
+         error: {msg}\n\
+         backup dirs: {backups_after:?}\n\
+         A in save after rollback: {}\n\
+         A still in the first backup: {}",
+        save.join(FILE_A).exists(),
+        first_backup.join(FILE_A).is_file(),
+    );
+
+    assert_eq!(
+        backups_after.len(),
+        2,
+        "the second restore must not reuse {first_backup:?}: {backups_after:?}"
+    );
+    let second = backups_after
+        .into_iter()
+        .find(|p| p != &first_backup)
+        .unwrap();
+    assert_eq!(
+        second.file_name().unwrap().to_string_lossy(),
+        format!("2030-01-02-01-{STAMP}-restore-{id}-2"),
+        "a collision keeps the existing name and takes the next suffix"
+    );
+    assert!(
+        !second.join(FILE_A).exists(),
+        "the second backup must be this operation's tree and must not contain A"
+    );
+    assert_eq!(
+        fs::read(first_backup.join(FILE_A)).unwrap(),
+        FILE_A_BYTES,
+        "the first backup must stay intact"
+    );
+    assert_eq!(
+        whole_tree(&second),
+        before,
+        "the second backup must be a complete copy of the tree this restore started from"
+    );
+    assert!(
+        msg.contains("回滚到恢复前状态"),
+        "the real rollback must report success only for this tree: {msg}"
+    );
+    assert!(
+        !msg.contains("回滚失败"),
+        "the rollback itself must succeed: {msg}"
+    );
+    let second_name = second.file_name().unwrap().to_string_lossy();
+    assert!(
+        msg.contains(second_name.as_ref()),
+        "the error must name this restore's backup ({second_name}), not the earlier one: {msg}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
