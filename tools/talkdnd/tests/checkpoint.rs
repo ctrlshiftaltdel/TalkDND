@@ -864,3 +864,80 @@ fn real_commit_obstruction_still_rolls_back_cleanly() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+/// Regression test for issue #154: restore's final integrity manifest
+/// read-modify-write runs under the save's integrity manifest lock, so a
+/// concurrent tool command that commits right before the re-baseline keeps
+/// its fingerprints: the in-lock load picks the committed update up instead
+/// of being overwritten by a manifest that was read before it committed.
+/// The concurrent writer is fired through the test-only
+/// `restore_injecting_manifest_hook` at exactly that point — inside
+/// `restore_rebaseline`, after the integrity manifest lock is taken and
+/// before the manifest is read. The hook first proves the lock is held by
+/// opening a second handle on `.talkdnd.integrity.lock` and asserting
+/// `try_lock()` returns `WouldBlock`: without the lock this assertion
+/// fails instead of the whole test silently passing on pre-lock code. It
+/// then commits the writer's update with a raw manifest read-modify-write —
+/// a real writer reaches the same state through the lock, but the hook must
+/// not re-acquire the lock the code under test already holds. On pre-lock
+/// code restore's store dropped the writer's fingerprint — the manifest kept
+/// the checkpoint's stale fingerprint for the file the writer had
+/// rewritten, reported forever as a hand edit.
+#[test]
+fn restore_rebaseline_keeps_a_concurrent_writers_fingerprints() {
+    let (root, save) = fixture("rebaseline-race");
+    let id = snapshot(&save, None);
+    // Diverge the save from the checkpoint, so the restore really replaces
+    // covered files before it re-baselines the manifest.
+    fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
+
+    const TESS_REWRITTEN: &str =
+        "# Tess\n\n```combat yaml\nid: tess\nname: Tess\nlevel: 3\nhp: 15\nmax_hp: 20\n```\n";
+    let b_save = save.clone();
+    let writer_b = move || {
+        // The hook runs with the integrity manifest lock held: a second
+        // opener must be locked out. This is the assertion that fails on
+        // pre-lock code (issue #154).
+        let probe = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(b_save.join(combat_sim::integrity::LOCK))
+            .unwrap();
+        match probe.try_lock() {
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            other => panic!(
+                "the integrity manifest lock must be held at the hook point; try_lock returned {other:?}"
+            ),
+        }
+        // The concurrent tool command rewrites a protected file and records
+        // it with a raw manifest read-modify-write: a real writer reaches
+        // the same state through the lock, but the hook must not re-acquire
+        // the lock the code under test already holds.
+        fs::write(b_save.join("Characters/tess.md"), TESS_REWRITTEN).unwrap();
+        let mut m = combat_sim::integrity::load(&b_save).unwrap().unwrap();
+        m.files.insert(
+            "Characters/tess.md".to_string(),
+            combat_sim::integrity::fingerprint(TESS_REWRITTEN.as_bytes()),
+        );
+        combat_sim::integrity::store(&b_save, &m).unwrap();
+    };
+    checkpoint::restore_injecting_manifest_hook(&root, &save, &id, &writer_b).unwrap();
+
+    // The manifest matches the disk exactly — every fingerprint, the
+    // concurrent writer's included — so `check` reports no changes.
+    let m = combat_sim::integrity::load(&save).unwrap().unwrap();
+    let now = combat_sim::integrity::snapshot(&save);
+    assert_eq!(m.files, now, "manifest and disk diverged after restore");
+    assert!(
+        combat_sim::integrity::changes_against(&m, &now).is_empty(),
+        "{:?}",
+        combat_sim::integrity::changes_against(&m, &now)
+    );
+    assert_eq!(
+        m.files.get("Characters/tess.md").map(String::as_str),
+        Some(combat_sim::integrity::fingerprint(TESS_REWRITTEN.as_bytes()).as_str()),
+        "the concurrent writer's fingerprint was lost to the restore"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
