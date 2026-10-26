@@ -1,5 +1,6 @@
-import contextlib, io, json, sqlite3, tempfile, unittest
+import contextlib, io, json, os, sqlite3, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 import importlib.util
 
@@ -9,8 +10,17 @@ orch=importlib.util.module_from_spec(spec); spec.loader.exec_module(orch)
 
 class LocalOrchestratorTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory(); self.root=Path(self.tmp.name); orch.init(self.root)
+        self.tmp=tempfile.TemporaryDirectory(); self.root=Path(self.tmp.name)
+        # The edition is read from docs/PROJECT.md only, and is required:
+        # every local-CLI test root therefore declares it explicitly.
+        self.write_edition('local')
+        orch.init(self.root)
     def tearDown(self): self.tmp.cleanup()
+    def write_edition(self, value, key='edition'):
+        (self.root/'docs').mkdir(parents=True, exist_ok=True)
+        (self.root / 'docs').mkdir(parents=True, exist_ok=True)
+        (self.root/'docs/PROJECT.md').write_text(
+            f'# Project\n\n## 运行配置\n\n- `{key}`：`{value}`\n',encoding='utf-8')
     def add(self,tid,paths,depends=None):
         class A: pass
         a=A(); a.id=tid; a.title=tid; a.description=''; a.paths=paths; a.depends=depends or []; a.acceptance=['works']
@@ -307,53 +317,948 @@ class LocalOrchestratorTests(unittest.TestCase):
         cfg=self.root/'.orchestration'/'config.json'
         cfg.unlink()
         conf=orch.read_config(self.root)
-        self.assertEqual((conf['retry_cap'],conf['edition'],conf['local_dir']),(3,'local','.local'))
-        for key in ('retry_cap','edition','local_dir'):
+        self.assertEqual((conf['retry_cap'],conf['local_dir']),(3,'.local'))
+        for key in ('retry_cap','local_dir'):
             self.assertEqual(conf['sources'][key],'default',key)
-        # A root that was never initialized has no config file either.
+        # The edition never comes from config.json: it is the project declaration.
+        self.assertEqual(conf['edition'],'local')
+        self.assertEqual(conf['sources']['edition'],'docs/PROJECT.md')
+        # A root with no project file has no edition at all; it must not default to local.
         with tempfile.TemporaryDirectory() as other:
-            conf=orch.read_config(Path(other))
-            self.assertEqual(conf['retry_cap'],3)
-            self.assertEqual(conf['edition'],'local')
-            self.assertEqual(conf['local_dir'],'.local')
-            self.assertEqual(conf['sources']['retry_cap'],'default')
-        # init writes the same defaults into config.json; overrides remain opt-in.
+            with self.assertRaises(orch.EditionError) as cm: orch.read_config(Path(other))
+            self.assertIn('docs/PROJECT.md',str(cm.exception))
+        # init writes the runtime defaults only; the edition stays out of this file.
         orch.init(self.root)
         self.assertTrue(cfg.exists())
+        self.assertEqual(json.loads(cfg.read_text(encoding='utf-8')),{'retry_cap':3,'local_dir':'.local'})
         conf=orch.read_config(self.root)
         self.assertEqual((conf['retry_cap'],conf['edition'],conf['local_dir']),(3,'local','.local'))
 
-    def test_config_reads_overrides_from_config_json(self):
+    def test_runtime_keys_come_from_config_json_but_edition_does_not(self):
         (self.root/'.orchestration'/'config.json').write_text(
             json.dumps({'retry_cap':1,'edition':'github','local_dir':'priv'}),encoding='utf-8')
         conf=orch.read_config(self.root)
         self.assertEqual(conf['retry_cap'],1)
-        self.assertEqual(conf['edition'],'github')
         self.assertEqual(conf['local_dir'],'priv')
-        for key in ('retry_cap','edition','local_dir'):
+        for key in ('retry_cap','local_dir'):
             self.assertEqual(conf['sources'][key],'config.json',key)
-        self.assertEqual(orch.read_retry_cap(self.root),1)
-        # Illegal values fall back to their own default, not to the whole file.
-        (self.root/'.orchestration'/'config.json').write_text(
-            json.dumps({'edition':'cloud','local_dir':''}),encoding='utf-8')
-        conf=orch.read_config(self.root)
+        # A leftover `edition` key in config.json is a record, not a routing input:
+        # the project declaration wins and no second definition is honoured.
         self.assertEqual(conf['edition'],'local')
-        self.assertEqual(conf['local_dir'],'.local')
-        self.assertEqual(conf['sources']['edition'],'default')
+        self.assertEqual(conf['sources']['edition'],'docs/PROJECT.md')
+        self.assertEqual(orch.read_retry_cap(self.root),1)
+        # Illegal runtime values fall back to their own default, not to the whole file.
+        (self.root/'.orchestration'/'config.json').write_text(
+            json.dumps({'retry_cap':0,'local_dir':''}),encoding='utf-8')
+        conf=orch.read_config(self.root)
+        self.assertEqual((conf['retry_cap'],conf['local_dir']),(3,'.local'))
+        self.assertEqual(conf['sources']['retry_cap'],'default')
 
     def test_config_show_runs(self):
         out=io.StringIO()
-        with contextlib.redirect_stdout(out): orch.config_show(self.root)
+        with contextlib.redirect_stdout(out): rc=orch.config_show(self.root)
         text=out.getvalue()
-        for key in ('retry_cap','edition','local_dir','config.json'):
+        self.assertEqual(rc,0)
+        for key in ('retry_cap','local_dir','edition','config.json','docs/PROJECT.md'):
             self.assertIn(key,text)
         (self.root/'.orchestration'/'config.json').write_text(
             json.dumps({'retry_cap':2,'edition':'github','local_dir':'priv'}),encoding='utf-8')
         out=io.StringIO()
-        with contextlib.redirect_stdout(out): orch.config_show(self.root)
+        with contextlib.redirect_stdout(out): rc=orch.config_show(self.root)
         text=out.getvalue()
+        self.assertEqual(rc,0)
         self.assertIn('retry_cap  = 2',text)
-        self.assertIn('github',text)
+        self.assertIn('local_dir  = priv',text)
         self.assertIn('source: config.json',text)
+        # The printed edition is the project declaration, not the legacy config.json key.
+        self.assertIn('edition    = local',text)
+        self.assertIn('source: docs/PROJECT.md',text)
+        self.assertIn('legacy key is ignored',text)
+
+class ProjectEditionTests(unittest.TestCase):
+    """The project declaration is the single edition authority and fails closed."""
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(); self.root=Path(self.tmp.name)
+    def tearDown(self): self.tmp.cleanup()
+    def project(self, body):
+        (self.root/'docs').mkdir(parents=True, exist_ok=True)
+        (self.root / 'docs').mkdir(parents=True, exist_ok=True)
+        (self.root/'docs/PROJECT.md').write_text(f'# Project\n\n## 运行配置\n\n{body}\n',encoding='utf-8')
+    def config(self, payload):
+        target=self.root/'.orchestration'; target.mkdir(exist_ok=True)
+        (target/'config.json').write_text(payload,encoding='utf-8')
+
+    def test_project_file_is_the_only_edition_authority(self):
+        self.project('- `edition`：`local`')
+        self.config(json.dumps({'edition':'github','retry_cap':2}))
+        conf=orch.read_config(self.root)
+        self.assertEqual(conf['edition'],'local')
+        self.assertEqual(conf['sources']['edition'],'docs/PROJECT.md')
+        self.assertEqual(conf['retry_cap'],2)
+        self.project('- `edition`：`github`')
+        self.assertEqual(orch.read_config(self.root)['edition'],'github')
+
+    def test_missing_project_file_blocks(self):
+        with self.assertRaises(orch.EditionError) as cm: orch.read_project_edition(self.root)
+        msg=str(cm.exception)
+        self.assertIn('docs/PROJECT.md',msg)
+        self.assertIn('file not found',msg)
+        self.assertIn(str(self.root),msg)
+
+    def test_missing_edition_key_blocks(self):
+        self.project('- `local_dir`：`.local`')
+        with self.assertRaises(orch.EditionError) as cm: orch.read_project_edition(self.root)
+        msg=str(cm.exception)
+        self.assertIn('missing required key `edition`',msg)
+        self.assertIn(str(self.root/'docs/PROJECT.md'),msg)
+
+    def test_illegal_edition_strings_block(self):
+        for bad in ('GITHUB','cloud','local edition','local|github'):
+            with self.subTest(value=bad):
+                self.project(f'- `edition`：`{bad}`')
+                with self.assertRaises(orch.EditionError) as cm: orch.read_project_edition(self.root)
+                msg=str(cm.exception)
+                self.assertIn(bad,msg)
+                self.assertIn('allowed values are local, github',msg)
+                self.assertIn(str(self.root/'docs/PROJECT.md'),msg)
+
+    def test_wrong_type_edition_blocks(self):
+        for bad in ('1','true','"local"','[local]'):
+            with self.subTest(value=bad):
+                self.project(f'- `edition`：{bad}')
+                with self.assertRaises(orch.EditionError) as cm: orch.read_project_edition(self.root)
+                msg=str(cm.exception)
+                self.assertIn(bad,msg)
+                self.assertIn('unsupported value',msg)
+
+    def test_empty_edition_value_blocks(self):
+        self.project('- `edition`：   ')
+        with self.assertRaises(orch.EditionError) as cm: orch.read_project_edition(self.root)
+        self.assertIn('is empty',str(cm.exception))
+
+    def test_duplicate_edition_declarations_block(self):
+        self.project('- `edition`：`local`\n- `edition`：`github`')
+        with self.assertRaises(orch.EditionError) as cm: orch.read_project_edition(self.root)
+        self.assertIn('declared 2 times',str(cm.exception))
+
+    def test_unreadable_project_file_blocks(self):
+        (self.root/'docs').mkdir(parents=True, exist_ok=True)
+        (self.root/'docs/PROJECT.md').write_bytes(b'- `edition`: \xff\xfe local\n')
+        with self.assertRaises(orch.EditionError) as cm: orch.read_project_edition(self.root)
+        self.assertIn('cannot read',str(cm.exception))
+
+    def test_github_declaration_refuses_task_add_with_guidance(self):
+        self.project('- `edition`：`github`')
+        orch.init(self.root)
+        a=SimpleNamespace(id='TASK-0501',title='t',description='',paths=['a.py'],depends=[],acceptance=['works'])
+        with self.assertRaises(orch.EditionError) as cm: orch.task_add(self.root,a)
+        msg=str(cm.exception)
+        self.assertIn("'github'",msg)
+        self.assertIn('read-only archive',msg)
+        self.assertIn('issue-template.md',msg)
+        self.assertIn('execution.md',msg)
+        con=orch.connect(self.root)
+        try: self.assertEqual(con.execute('SELECT COUNT(*) FROM tasks').fetchone()[0],0)
+        finally: con.close()
+
+    def test_every_scheduling_command_is_refused_under_github(self):
+        self.project('- `edition`：`local`'); orch.init(self.root)
+        a=SimpleNamespace(id='TASK-0502',title='t',description='',paths=['a.py'],depends=[],acceptance=['works'])
+        orch.task_add(self.root,a); orch.task_ready(self.root,'TASK-0502'); orch.task_dispatch(self.root,'TASK-0502')
+        self.project('- `edition`：`github`')
+        cases=[
+            ('task ready',lambda: orch.task_ready(self.root,'TASK-0502')),
+            ('task dispatch',lambda: orch.task_dispatch(self.root,'TASK-0502')),
+            ('task status',lambda: orch.task_status(self.root,SimpleNamespace(id='TASK-0502',status='IN_PROGRESS',head_sha=None,merge_sha=None,note=''))),
+            ('task workspace',lambda: orch.set_workspace(self.root,SimpleNamespace(id='TASK-0502',head_sha='',branch='',worktree='',note=''))),
+            ('task amend',lambda: orch.task_amend(self.root,SimpleNamespace(id='TASK-0502',merge_sha='a'*40,note='x'))),
+            ('task unlock',lambda: orch.unlock(self.root,SimpleNamespace(id='TASK-0502',reason='x',force=False))),
+        ]
+        for label,call in cases:
+            with self.subTest(command=label):
+                with self.assertRaises(orch.EditionError) as cm: call()
+                self.assertIn(f'`{label}`',str(cm.exception))
+        # Refusals happen before any write: the archived registry is unchanged.
+        con=orch.connect(self.root)
+        try:
+            self.assertEqual(con.execute('SELECT status FROM tasks WHERE id=?',('TASK-0502',)).fetchone()['status'],'DISPATCHED')
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM locks WHERE task_id=?',('TASK-0502',)).fetchone()[0],1)
+        finally: con.close()
+
+    def test_readonly_and_maintenance_commands_stay_available_under_github(self):
+        self.project('- `edition`：`local`'); orch.init(self.root)
+        a=SimpleNamespace(id='TASK-0503',title='archived',description='',paths=['a.py'],depends=[],acceptance=['works'])
+        orch.task_add(self.root,a)
+        self.project('- `edition`：`github`')
+        out=io.StringIO()
+        with contextlib.redirect_stdout(out): rc=orch.config_show(self.root)
+        self.assertEqual(rc,0)
+        text=out.getvalue()
+        self.assertIn('edition    = github',text)
+        self.assertIn('source: docs/PROJECT.md',text)
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_list(self.root,SimpleNamespace(active_only=False))
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_show(self.root,'TASK-0503')
+        with contextlib.redirect_stdout(io.StringIO()): orch.backup(self.root)
+        self.assertTrue(list((self.root/'.orchestration'/'backups').glob('*.sqlite3')))
+
+    def test_config_show_reports_invalid_edition_and_returns_nonzero(self):
+        self.project('- `edition`：`cloud`')
+        out,err=io.StringIO(),io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err): rc=orch.config_show(self.root)
+        self.assertEqual(rc,1)
+        self.assertIn('(invalid)',out.getvalue())
+        self.assertIn('retry_cap',out.getvalue())
+        self.assertIn('cloud',err.getvalue())
+        self.assertIn('docs/PROJECT.md',err.getvalue())
+
+    def test_retry_cap_is_never_blocked_by_an_edition_problem(self):
+        self.project('- `edition`：`cloud`')
+        self.config('{ not json')
+        self.assertEqual(orch.read_retry_cap(self.root),3)
+        self.config(json.dumps({'retry_cap':5,'edition':'local'}))
+        self.assertEqual(orch.read_retry_cap(self.root),5)
+
+class PlanDocumentInitTests(unittest.TestCase):
+    """`init` seeds docs/PLAN.md once; docs/PLAN.md stays the plan of record.
+
+    A legacy root PLAN.md (<=1.3) is never touched and blocks seeding, so the
+    design goals always keep a single authority.
+    """
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(); self.root=Path(self.tmp.name)
+        (self.root/'docs').mkdir(parents=True, exist_ok=True)
+        (self.root / 'docs').mkdir(parents=True, exist_ok=True)
+        (self.root/'docs/PROJECT.md').write_text('# Project\n\n- `edition`：`local`\n',encoding='utf-8')
+    def tearDown(self): self.tmp.cleanup()
+    def write_template(self, data):
+        target=self.root/'templates'; target.mkdir(exist_ok=True)
+        (target/'plan.md').write_bytes(data)
+    def run_init(self):
+        out,err=io.StringIO(),io.StringIO()
+        with mock.patch.object(sys,'argv',['orchestrator.py','--root',str(self.root),'init']), \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc=orch.main()
+        return rc,out.getvalue(),err.getvalue()
+
+    def test_init_creates_plan_byte_for_byte_from_template(self):
+        # CRLF + non-ASCII bytes prove the copy is a byte copy, not a re-render.
+        data='# 计划\r\n\r\n- **Plan name:** 演示\r\n'.encode('utf-8')
+        self.write_template(data)
+        rc,out,err=self.run_init()
+        self.assertEqual(rc,0,err)
+        self.assertEqual((self.root/'docs'/'PLAN.md').read_bytes(),data)
+        self.assertEqual((self.root/'templates'/'plan.md').read_bytes(),data)
+        self.assertIn('Created docs/PLAN.md',out)
+        self.assertIn('下一步：填写 docs/PLAN.md 的设计目标（为什么做、做到什么程度、原则与边界）',out)
+
+    def test_existing_docs_plan_is_kept_and_repeated_init_is_idempotent(self):
+        self.write_template(b'# Implementation Plan\n\ntemplate\n')
+        sentinel=b'# my plan\n\nSENTINEL: owner content, never overwrite\n'
+        (self.root/'docs').mkdir(parents=True, exist_ok=True); (self.root/'docs'/'PLAN.md').write_bytes(sentinel)
+        config=self.root/'.orchestration'/'config.json'
+        rc,out,err=self.run_init(); self.assertEqual(rc,0,err)
+        self.assertIn('kept unchanged',out)
+        self.assertIn('judge task direction from the design goals',out)
+        self.assertNotIn('Created docs/PLAN.md',out)
+        first=(self.root/'docs'/'PLAN.md').read_bytes(), config.read_bytes()
+        rc,out,err=self.run_init(); self.assertEqual(rc,0,err)
+        self.assertEqual((self.root/'docs'/'PLAN.md').read_bytes(),sentinel)
+        self.assertEqual((self.root/'docs'/'PLAN.md').read_bytes(),first[0])
+        self.assertEqual(config.read_bytes(),first[1])          # runtime config untouched
+        self.assertTrue(orch.db_path(self.root).is_file())      # task store still initialised
+
+    def test_legacy_root_plan_blocks_seeding_and_is_never_touched(self):
+        # A root PLAN.md is the <=1.3 location. init must not move it, must not
+        # seed docs/PLAN.md next to it, and must point at the migration step.
+        self.write_template(b'# Implementation Plan\n\ntemplate\n')
+        sentinel=b'# legacy design goals\n\nSENTINEL: never auto-migrated\n'
+        (self.root/'PLAN.md').write_bytes(sentinel)
+        rc,out,err=self.run_init(); self.assertEqual(rc,0,err)
+        self.assertFalse((self.root/'docs'/'PLAN.md').exists())
+        self.assertEqual((self.root/'PLAN.md').read_bytes(),sentinel)
+        self.assertIn('Legacy root PLAN.md found',out)
+        self.assertIn('git mv PLAN.md docs/PLAN.md',out)
+        self.assertNotIn('Created docs/PLAN.md',out)
+        # Rerunning stays deterministic: no second authority appears.
+        rc,out,err=self.run_init(); self.assertEqual(rc,0,err)
+        self.assertFalse((self.root/'docs'/'PLAN.md').exists())
+
+    def test_missing_template_is_reported_and_init_still_succeeds(self):
+        rc,out,err=self.run_init()
+        self.assertEqual(rc,0,err)
+        self.assertFalse((self.root/'docs'/'PLAN.md').exists())
+        self.assertFalse((self.root/'docs'/'PLAN.md').exists())   # no PLAN is fabricated
+        self.assertIn('PLAN.md not created: template missing',out)
+        self.assertTrue(orch.db_path(self.root).is_file())
+
+    def test_unwritable_plan_is_an_error_not_a_silent_success(self):
+        self.write_template(b'# Implementation Plan\n\ntemplate\n')
+        with mock.patch.object(Path,'write_bytes',side_effect=OSError('read-only file system')):
+            with self.assertRaises(OSError):
+                orch.init(self.root)
+            rc,out,err=self.run_init()
+        self.assertEqual(rc,1)
+        self.assertIn('ERROR:',err)
+        self.assertIn('read-only file system',err)
+        self.assertFalse((self.root/'docs'/'PLAN.md').exists())
+
+# Real multi-process competitor: it waits for a shared start time, then opens its
+# own SQLite connection and races the same resource set. It never retries an
+# *acquisition*, so an outcome is either a grant or a recorded denial. It does
+# reopen the connection when Windows refuses the first write attempt on a WAL
+# database ("attempt to write a readonly database"), which is a per-connection
+# artefact of two processes creating the -shm file at the same instant, not a
+# lock decision.
+CONCURRENCY_WORKER = r'''
+import importlib.util, json, sys, time
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('orch_worker', sys.argv[1])
+orch = importlib.util.module_from_spec(spec); spec.loader.exec_module(orch)
+root, task, holder, declaration, start = Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5], float(sys.argv[6])
+while time.time() < start:
+    time.sleep(0.005)
+out = {'task': task, 'holder': holder, 'attempts': 0}
+con = None
+try:
+    for attempt in range(1, 41):
+        if con is not None:
+            con.close()
+        con = orch.connect(root)
+        out['attempts'] = attempt
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            break
+        except Exception as exc:
+            if 'readonly' not in str(exc) and 'locked' not in str(exc):
+                raise
+            time.sleep(0.05)
+    else:
+        raise RuntimeError('no writable connection after 40 attempts')
+    entries = orch.resolve_resource_entries(root, [declaration])
+    result = orch.acquire_resource_set(con, task, entries, holder)
+    con.execute('COMMIT')
+    out['status'] = result['status']; out['lock_ids'] = result['lock_ids']
+except orch.ResourceDenied as exc:
+    con.execute('COMMIT'); out['status'] = 'DENIED'; out['code'] = exc.code
+except Exception as exc:
+    out['status'] = 'ERROR'; out['error'] = f'{type(exc).__name__}: {exc}'
+finally:
+    if con is not None:
+        con.close()
+print(json.dumps(out))
+'''
+
+
+class ResourceIdTests(unittest.TestCase):
+    """§2.1: canonical form, hard rejections, exact matching only."""
+
+    def test_accepts_canonical_ids(self):
+        for raw in ('db:test/mysql-main', 'env:build/windows-01', 'svc:api', 'vol:data.1/0'):
+            with self.subTest(raw=raw):
+                self.assertEqual(orch.normalize_resource_id(raw), raw)
+
+    def test_rejects_uppercase_space_and_wildcards_without_rewriting(self):
+        for bad in ('DB:test/main', 'db:Test/main', ' db:test/main', 'db:test/main ',
+                    'db:test main', 'db:test\tmain', 'db:test/*', 'db:test?x', 'db:test#1',
+                    'db:test\\main'):
+            with self.subTest(raw=bad):
+                with self.assertRaises(orch.ResourceError) as cm: orch.normalize_resource_id(bad)
+                self.assertEqual(cm.exception.code, 'RESOURCE_ID_INVALID')
+
+    def test_rejects_empty_segments_and_parent_segments(self):
+        for bad in ('db:test/../main', 'db:test//main', 'db:/main', 'db:test/', 'db:..', 'db:.',
+                    'db:', ':name', 'db', '', 'db:test/main/./x'):
+            with self.subTest(raw=bad):
+                with self.assertRaises(orch.ResourceError) as cm: orch.normalize_resource_id(bad)
+                self.assertEqual(cm.exception.code, 'RESOURCE_ID_INVALID')
+
+    def test_unicode_is_nfc_normalized_before_validation(self):
+        # NFC normalisation runs before the ASCII-only pattern is applied, so both
+        # spellings of the same visual ID are rejected identically instead of one
+        # of them slipping through as a "different" resource.
+        composed, decomposed = 'db:caf\u00e9', 'db:cafe\u0301'
+        for raw in (composed, decomposed):
+            with self.subTest(raw=raw):
+                with self.assertRaises(orch.ResourceError) as cm: orch.normalize_resource_id(raw)
+                self.assertEqual(cm.exception.code, 'RESOURCE_ID_INVALID')
+        self.assertEqual(orch.normalize_resource_id('db:cafe'), 'db:cafe')
+
+    def test_sibling_names_in_one_namespace_do_not_conflict(self):
+        self.assertNotEqual(orch.normalize_resource_id('db:test/a'), orch.normalize_resource_id('db:test/b'))
+        # No prefix derivation: a parent name is a different resource, not a group.
+        self.assertNotEqual(orch.normalize_resource_id('db:test'), orch.normalize_resource_id('db:test/a'))
+
+    def test_spec_parsing_keeps_the_id_colons_and_rejects_bad_modes(self):
+        entry = orch.parse_resource_spec('db:test/main:shared:120')
+        self.assertEqual((entry['resource_id'], entry['mode'], entry['ttl']), ('db:test/main', 'shared', 120))
+        entry = orch.parse_resource_spec('db:test/main:exclusive')
+        self.assertEqual((entry['mode'], entry['ttl']), ('exclusive', None))
+        for bad in ('db:test/main', 'db:test/main:write', 'db:test/main:shared:0', ''):
+            with self.subTest(spec=bad):
+                with self.assertRaises(orch.ResourceError): orch.parse_resource_spec(bad)
+
+    def test_duplicate_resource_in_one_request_is_rejected_or_merged(self):
+        merged = orch.parse_resource_specs(['db:a:shared', 'db:a:shared'])
+        self.assertEqual(len(merged), 1)
+        with self.assertRaises(orch.ResourceError) as cm: orch.parse_resource_specs(['db:a:shared', 'db:a:exclusive'])
+        self.assertEqual(cm.exception.code, 'RESOURCE_SPEC_INVALID')
+
+
+class ResourceLockTests(unittest.TestCase):
+    """Named resource locks, implemented against docs/design/resource-locks.md."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
+        (self.root / 'docs').mkdir(parents=True, exist_ok=True)
+        (self.root / 'docs' / 'PROJECT.md').write_text('# Project\n\n- `edition`：`local`\n', encoding='utf-8')
+        with contextlib.redirect_stdout(io.StringIO()): orch.init(self.root)
+        config = self.root / '.orchestration' / 'config.json'
+        data = json.loads(config.read_text(encoding='utf-8'))
+        data.update({'resource_lease_ttl': 600, 'resource_reclaim_grace': 30})
+        config.write_text(json.dumps(data), encoding='utf-8')
+
+    def tearDown(self):
+        try:
+            self.tmp.cleanup()
+        except PermissionError:                     # Windows may still hold the WAL file
+            pass
+
+    # --- helpers ------------------------------------------------------------
+    def config(self, **values):
+        path = self.root / '.orchestration' / 'config.json'
+        data = json.loads(path.read_text(encoding='utf-8'))
+        data.update(values)
+        path.write_text(json.dumps(data), encoding='utf-8')
+
+    def add(self, tid, paths=('src/',), resources=None, depends=None):
+        args = SimpleNamespace(id=tid, title=tid, description='', paths=list(paths), depends=depends or [],
+                               acceptance=['works'], resources=resources or [])
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_add(self.root, args)
+
+    def dispatch(self, tid, holder='hostA:100', extra=None, evidence='unit-test'):
+        options = SimpleNamespace(id=tid, holder=holder, resource=list(extra or []), evidence=evidence, actor='orchestrator')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out): orch.task_dispatch(self.root, tid, options)
+        return out.getvalue()
+
+    def ready_then_dispatch(self, tid, holder='hostA:100', extra=None):
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_ready(self.root, tid)
+        return self.dispatch(tid, holder, extra)
+
+    def advance(self, tid, dest, note='', head_sha=None, merge_sha=None):
+        args = SimpleNamespace(id=tid, status=dest, head_sha=head_sha, merge_sha=merge_sha,
+                               note=note or ('evidence recorded' if dest in {'APPROVED', 'MERGED', 'VERIFIED',
+                                                                             'BLOCKED', 'NEEDS_HUMAN_DECISION',
+                                                                             'FAILED', 'CANCELED'} else ''))
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_status(self.root, args)
+
+    def count(self, sql, params=()):
+        con = orch.connect(self.root)
+        try: return con.execute(sql, params).fetchone()[0]
+        finally: con.close()
+
+    def rows(self, sql, params=()):
+        con = orch.connect(self.root)
+        try: return [dict(r) for r in con.execute(sql, params)]
+        finally: con.close()
+
+    def unlock(self, tid, resource='', reason='cleanup', force=False, evidence='', authorized_by=''):
+        args = SimpleNamespace(id=tid, resource=resource, reason=reason, force=force,
+                               evidence=evidence, authorized_by=authorized_by)
+        with contextlib.redirect_stdout(io.StringIO()): orch.unlock(self.root, args)
+
+    def events(self, task_id=None, kinds=None):
+        sql = 'SELECT * FROM resource_lock_events'
+        params = ()
+        if task_id:
+            sql += ' WHERE task_id=?'; params = (task_id,)
+        sql += ' ORDER BY event_id'
+        rows = self.rows(sql, params)
+        return [r for r in rows if not kinds or r['event_type'] in kinds]
+
+    # --- AC-1: schema -------------------------------------------------------
+    def test_schema_has_every_contract_field_and_is_created_incrementally(self):
+        columns = {r['name'] for r in self.rows('PRAGMA table_info(resource_locks)')}
+        self.assertEqual(columns, {
+            'lock_id', 'resource_id', 'mode', 'holder', 'task_id', 'acquired_at', 'lease_until', 'renewed_at',
+            'state', 'release_reason', 'released_at', 'reason', 'evidence_ref', 'backend', 'generation'})
+        event_columns = {r['name'] for r in self.rows('PRAGMA table_info(resource_lock_events)')}
+        self.assertEqual(event_columns, {
+            'event_id', 'event_type', 'at', 'actor', 'task_id', 'resource_id', 'mode', 'prev_state', 'new_state',
+            'request_fingerprint', 'reason', 'evidence_ref'})
+
+    def test_old_database_gains_the_tables_without_rebuild(self):
+        # Simulate a database written before issue #6: no resource tables at all.
+        self.add('TASK-OLD1', ['old.py'])
+        con = sqlite3.connect(orch.db_path(self.root))
+        con.executescript('DROP TABLE resource_lock_events; DROP TABLE resource_locks;')
+        con.commit(); con.close()
+        con = orch.connect(self.root)                     # opening must migrate, not fail
+        try:
+            tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn('resource_locks', tables)
+            self.assertIn('resource_lock_events', tables)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM resource_locks").fetchone()[0], 0)
+            # The pre-existing task is intact and still dispatchable through the path gate.
+            self.assertEqual(con.execute('SELECT status FROM tasks WHERE id=?', ('TASK-OLD1',)).fetchone()[0], 'PLANNED')
+        finally: con.close()
+        self.ready_then_dispatch('TASK-OLD1')
+
+    # --- AC-2/AC-3: conflict matrix ----------------------------------------
+    def test_shared_shared_is_allowed(self):
+        self.add('TASK-S1', ['a.py'], ['db:test/main:shared'])
+        self.add('TASK-S2', ['b.py'], ['db:test/main:shared'])
+        self.ready_then_dispatch('TASK-S1', 'hostA:1')
+        self.ready_then_dispatch('TASK-S2', 'hostB:2')
+        self.assertEqual(self.count("SELECT COUNT(*) FROM resource_locks WHERE resource_id='db:test/main' "
+                                    "AND state='ACTIVE'"), 2)
+        self.assertEqual({r['task_id'] for r in self.rows('SELECT task_id FROM resource_locks')},
+                         {'TASK-S1', 'TASK-S2'})
+
+    def test_shared_then_exclusive_is_denied_with_holder_details(self):
+        self.add('TASK-X1', ['a.py'], ['db:test/main:shared'])
+        self.add('TASK-X2', ['b.py'], ['db:test/main:exclusive'])
+        self.ready_then_dispatch('TASK-X1', 'hostA:1')
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_ready(self.root, 'TASK-X2')
+        with self.assertRaises(orch.ResourceError) as cm: self.dispatch('TASK-X2', 'hostB:2')
+        message = str(cm.exception)
+        self.assertIn('MODE_CONFLICT', message)
+        self.assertIn('TASK-X1', message)          # owning task
+        self.assertIn('hostA:1', message)          # owning holder
+        self.assertIn('lease_until', message)      # lease of the blocker
+        self.assertIn('next:', message)            # actionable advice, not just "conflict"
+        self.assertEqual(self.count("SELECT COUNT(*) FROM resource_locks WHERE task_id='TASK-X2'"), 0)
+
+    def test_exclusive_then_shared_and_exclusive_are_both_denied(self):
+        self.add('TASK-E1', ['a.py'], ['svc:build/line1:exclusive'])
+        self.add('TASK-E2', ['b.py'], ['svc:build/line1:shared'])
+        self.add('TASK-E3', ['c.py'], ['svc:build/line1:exclusive'])
+        self.ready_then_dispatch('TASK-E1', 'hostA:1')
+        for tid in ('TASK-E2', 'TASK-E3'):
+            with self.subTest(task=tid):
+                with contextlib.redirect_stdout(io.StringIO()): orch.task_ready(self.root, tid)
+                with self.assertRaises(orch.ResourceError) as cm: self.dispatch(tid, 'hostB:2')
+                self.assertIn('MODE_CONFLICT', str(cm.exception))
+                self.assertEqual(self.count('SELECT COUNT(*) FROM resource_locks WHERE task_id=?', (tid,)), 0)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM locks WHERE task_id=?', ('TASK-E1',)), 1)
+
+    def test_upgrade_shared_to_exclusive_is_forbidden_in_place(self):
+        self.add('TASK-U1', ['a.py'], ['db:test/main:shared'])
+        self.ready_then_dispatch('TASK-U1', 'hostA:1')
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            with self.assertRaises(orch.ResourceDenied) as cm:
+                orch.acquire_resource_set(con, 'TASK-U1', orch.resolve_resource_entries(self.root, ['db:test/main:exclusive']), 'hostA:1')
+            self.assertEqual(cm.exception.code, 'UPGRADE_FORBIDDEN')
+            con.execute('COMMIT')
+        finally: con.close()
+        self.assertEqual(self.count("SELECT COUNT(*) FROM resource_locks WHERE task_id='TASK-U1'"), 1)
+        self.assertEqual(self.count("SELECT state FROM resource_locks WHERE task_id='TASK-U1'"), 'ACTIVE')
+        self.assertTrue(self.events('TASK-U1', {'LOCK_DENIED_CONFLICT'}))
+
+    # --- AC-4: atomic set, deterministic order, idempotency ----------------
+    def test_partial_conflict_gives_up_the_whole_set_without_half_locks(self):
+        self.add('TASK-B1', ['a.py'], ['db:b:exclusive'])
+        self.add('TASK-B2', ['b.py'], ['db:a:shared', 'db:b:shared', 'db:c:shared'])
+        self.ready_then_dispatch('TASK-B1', 'hostA:1')
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_ready(self.root, 'TASK-B2')
+        with self.assertRaises(orch.ResourceError) as cm: self.dispatch('TASK-B2', 'hostB:2')
+        self.assertIn('MODE_CONFLICT', str(cm.exception))
+        self.assertEqual(self.count("SELECT COUNT(*) FROM resource_locks WHERE task_id='TASK-B2' "
+                                    "AND state<>'RELEASED'"), 0)         # invariant 5: zero residue
+        self.assertEqual(self.count("SELECT COUNT(*) FROM locks WHERE task_id='TASK-B2'"), 0)
+        self.assertEqual(self.count("SELECT status FROM tasks WHERE id='TASK-B2'"), 'READY')
+        rollback = self.events('TASK-B2', {'LOCK_SET_ROLLED_BACK'})
+        self.assertEqual(len(rollback), 1)
+        self.assertIn('2 of 3', rollback[0]['reason'])
+        self.assertEqual(len(self.events('TASK-B2', {'LOCK_DENIED_CONFLICT'})), 1)
+
+    def test_acquisition_order_and_fingerprint_ignore_caller_order(self):
+        entries_a = orch.order_resource_entries(orch.parse_resource_specs(['db:z:shared', 'db:a:exclusive', 'db:m:shared']))
+        entries_b = orch.order_resource_entries(orch.parse_resource_specs(['db:m:shared', 'db:z:shared', 'db:a:exclusive']))
+        self.assertEqual([e['resource_id'] for e in entries_a], ['db:a', 'db:m', 'db:z'])
+        self.assertEqual(orch.resource_fingerprint(entries_a), orch.resource_fingerprint(entries_b))
+        self.assertEqual(len(orch.resource_fingerprint(entries_a)), 64)
+
+    def test_repeat_dispatch_of_the_same_set_is_idempotent(self):
+        self.add('TASK-I1', ['a.py'], ['db:test/main:shared'])
+        self.ready_then_dispatch('TASK-I1', 'hostA:1')
+        before = self.rows("SELECT lock_id,lease_until,renewed_at,generation FROM resource_locks WHERE task_id='TASK-I1'")
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            result = orch.acquire_resource_set(con, 'TASK-I1', orch.resolve_resource_entries(self.root, ['db:test/main:shared']), 'hostA:1')
+            con.execute('COMMIT')
+        finally: con.close()
+        self.assertEqual(result['status'], 'ALREADY_HELD')
+        after = self.rows("SELECT lock_id,lease_until,renewed_at,generation FROM resource_locks WHERE task_id='TASK-I1'")
+        self.assertEqual(before, after)                       # no new row, no refreshed lease
+        self.assertEqual(self.count("SELECT COUNT(*) FROM resource_locks WHERE task_id='TASK-I1'"), 1)
+        self.assertTrue(any('ALREADY_HELD' in e['reason'] for e in self.events('TASK-I1', {'LOCK_GRANTED'})))
+
+    def test_smaller_set_mismatch_is_refused_and_quarantined(self):
+        self.add('TASK-M1', ['a.py'], ['db:a:shared', 'db:b:shared'])
+        self.ready_then_dispatch('TASK-M1', 'hostA:1')
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            with self.assertRaises(orch.ResourceDenied) as cm:
+                orch.acquire_resource_set(con, 'TASK-M1', orch.resolve_resource_entries(self.root, ['db:a:shared']), 'hostA:1')
+            self.assertEqual(cm.exception.code, 'LOCK_SET_MISMATCH')
+            con.execute('COMMIT')
+        finally: con.close()
+        states = {r['resource_id']: r['state'] for r in self.rows("SELECT * FROM resource_locks WHERE task_id='TASK-M1'")}
+        self.assertEqual(states, {'db:a': 'QUARANTINED', 'db:b': 'QUARANTINED'})
+        self.assertEqual(len(self.events('TASK-M1', {'LOCK_QUARANTINED'})), 2)
+        self.assertFalse({r['resource_id'] for r in self.rows("SELECT resource_id FROM resource_locks WHERE state='RELEASED'")})
+
+    def test_growing_set_extends_and_keeps_the_original_locks(self):
+        self.add('TASK-G1', ['a.py'], ['db:a:shared'])
+        self.add('TASK-G2', ['b.py'], ['db:b:exclusive'])
+        self.ready_then_dispatch('TASK-G1', 'hostA:1')
+        self.ready_then_dispatch('TASK-G2', 'hostB:2')
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            with self.assertRaises(orch.ResourceDenied) as cm:
+                orch.acquire_resource_set(con, 'TASK-G1',
+                                          orch.resolve_resource_entries(self.root, ['db:a:shared', 'db:b:shared']), 'hostA:1')
+            self.assertEqual(cm.exception.code, 'MODE_CONFLICT')
+            con.execute('COMMIT')
+        finally: con.close()
+        remaining = self.rows("SELECT resource_id,state FROM resource_locks WHERE task_id='TASK-G1'")
+        self.assertEqual(remaining, [{'resource_id': 'db:a', 'state': 'ACTIVE'}])   # extension left no partial lock
+        self.assertIn('1 of 1', [e for e in self.events('TASK-G1', {'LOCK_SET_ROLLED_BACK'})][-1]['reason'])
+
+    # --- AC-5: lifecycle ----------------------------------------------------
+    def test_verified_and_canceled_release_but_failed_and_blocked_keep(self):
+        for tid, dest, want in (('TASK-L1', 'VERIFIED', 0), ('TASK-L2', 'CANCELED', 0),
+                                ('TASK-L3', 'FAILED', 1), ('TASK-L4', 'BLOCKED', 1)):
+            with self.subTest(task=tid, dest=dest):
+                self.add(tid, [f'{tid}.py'], ['db:lifecycle:shared'])
+                self.ready_then_dispatch(tid, f'host{tid}:1')
+                self.advance(tid, 'IN_PROGRESS')
+                if dest == 'VERIFIED':
+                    self.advance(tid, 'REVIEW_READY'); self.advance(tid, 'MASTER_REVIEW')
+                    self.advance(tid, 'APPROVED', head_sha='a' * 40)
+                    self.advance(tid, 'MERGED', merge_sha='b' * 40)
+                    self.advance(tid, dest, note='terminal evidence')
+                elif dest == 'CANCELED':
+                    self.advance(tid, dest, note='cancelled by the owner')
+                else:
+                    self.advance(tid, dest, note='stopped without proof of release')
+                self.assertEqual(self.count('SELECT COUNT(*) FROM resource_locks WHERE task_id=? '
+                                            "AND state<>'RELEASED'", (tid,)), want)
+        releases = self.rows("SELECT task_id,release_reason,reason FROM resource_locks WHERE state='RELEASED'")
+        self.assertEqual({r['task_id']: r['release_reason'] for r in releases},
+                         {'TASK-L1': 'NORMAL_COMPLETE', 'TASK-L2': 'CANCELED'})
+        self.assertEqual(len(self.events('TASK-L1', {'LOCK_RELEASED'})), 1)
+
+    def test_needs_human_decision_quarantines_instead_of_releasing(self):
+        self.add('TASK-Q1', ['a.py'], ['db:q:exclusive'])
+        self.ready_then_dispatch('TASK-Q1', 'hostA:1')
+        self.advance('TASK-Q1', 'NEEDS_HUMAN_DECISION', note='state unknown; stop dispatching')
+        self.assertEqual(self.count("SELECT state FROM resource_locks WHERE task_id='TASK-Q1'"), 'QUARANTINED')
+        self.assertEqual(self.count('SELECT COUNT(*) FROM resource_locks WHERE task_id=? '
+                                    "AND state='RELEASED'", ('TASK-Q1',)), 0)
+        self.assertTrue(self.events('TASK-Q1', {'LOCK_QUARANTINED'}))
+
+    def test_expired_lease_still_conflicts_and_is_not_released(self):
+        self.config(resource_lease_ttl=1)
+        self.add('TASK-P1', ['a.py'], ['db:exp:exclusive'])
+        self.add('TASK-P2', ['b.py'], ['db:exp:exclusive'])
+        self.ready_then_dispatch('TASK-P1', 'hostA:1')
+        time.sleep(1.2)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.rows('SELECT 1')                        # plain read does not expire anything
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE'); orch.expire_due_locks(con); con.execute('COMMIT')
+        finally: con.close()
+        self.assertEqual(self.count("SELECT state FROM resource_locks WHERE task_id='TASK-P1'"), 'EXPIRED')
+        self.assertEqual(self.count('SELECT COUNT(*) FROM resource_locks WHERE task_id=? '
+                                    "AND state='RELEASED'", ('TASK-P1',)), 0)
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_ready(self.root, 'TASK-P2')
+        with self.assertRaises(orch.ResourceError) as cm: self.dispatch('TASK-P2', 'hostB:2')
+        self.assertIn('MODE_CONFLICT', str(cm.exception))
+        self.assertIn('EXPIRED', str(cm.exception))
+        self.assertTrue(self.events('TASK-P1', {'LOCK_EXPIRED'}))
+
+    def test_renewal_extends_only_own_locks_and_reactivates_expired(self):
+        self.config(resource_lease_ttl=1)
+        self.add('TASK-R1', ['a.py'], ['db:ren:shared'])
+        self.add('TASK-R2', ['b.py'], ['db:ren:shared'])
+        self.ready_then_dispatch('TASK-R1', 'hostA:1')
+        self.ready_then_dispatch('TASK-R2', 'hostB:2')
+        time.sleep(1.2)
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE'); orch.expire_due_locks(con)
+            renewed = orch.renew_resource_locks(con, 'TASK-R1', 'hostA:1', 600, 'heartbeat restored', 'ops-log')
+            con.execute('COMMIT')
+        finally: con.close()
+        self.assertEqual(len(renewed), 1)
+        states = {r['task_id']: r['state'] for r in self.rows('SELECT task_id,state FROM resource_locks')}
+        self.assertEqual(states, {'TASK-R1': 'ACTIVE', 'TASK-R2': 'EXPIRED'})
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            with self.assertRaises(orch.ResourceError) as cm:
+                orch.renew_resource_locks(con, 'TASK-R2', 'hostA:1', 600, 'not mine', 'ops-log')
+            self.assertEqual(cm.exception.code, 'LOCK_NOT_HELD')
+            con.execute('ROLLBACK')
+        finally: con.close()
+
+    def test_reclaim_needs_expiry_cool_down_and_evidence(self):
+        self.config(resource_lease_ttl=1, resource_reclaim_grace=3600)
+        self.add('TASK-C1', ['a.py'], ['db:rec:exclusive'])
+        self.ready_then_dispatch('TASK-C1', 'hostA:1')
+        args = SimpleNamespace(id='TASK-C1', resource='db:rec', reason='holder process gone',
+                               evidence='ops-log 9', actor='ops')
+        # A live lease is never reclaimed, not even with a reason and evidence.
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            with self.assertRaises(orch.ResourceError) as cm:
+                orch.reclaim_resource_lock(con, 'db:rec#exclusive#TASK-C1#0', 'holder gone', 'ops-log 9', 3600)
+            self.assertEqual(cm.exception.code, 'NOT_EXPIRED')
+            con.execute('ROLLBACK')
+        finally: con.close()
+        time.sleep(1.2)
+        # task reclaim expires first, then refuses because the cool-down has not passed.
+        with self.assertRaises(orch.ResourceError) as cm: orch.task_reclaim(self.root, args)
+        self.assertEqual(cm.exception.code, 'GRACE_NOT_ELAPSED')
+        # A refused reclaim rolls back as a whole: nothing is released and no
+        # reclaim event survives, so the lock cannot be lost by trying too early.
+        self.assertNotEqual(self.count("SELECT state FROM resource_locks WHERE task_id='TASK-C1'"), 'RELEASED')
+        self.assertFalse(self.events('TASK-C1', {'LOCK_RECLAIMED'}))
+        self.config(resource_reclaim_grace=0)
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_reclaim(self.root, args)
+        row = self.rows("SELECT state,release_reason,evidence_ref FROM resource_locks WHERE task_id='TASK-C1'")[0]
+        self.assertEqual((row['state'], row['release_reason']), ('RELEASED', 'LEASE_RECLAIMED'))
+        self.assertEqual(row['evidence_ref'], 'ops-log 9')
+        self.assertTrue(self.events('TASK-C1', {'LOCK_RECLAIMED'}))
+
+    # --- AC-5: forced unlock ------------------------------------------------
+    def test_forced_unlock_requires_reason_and_authorization_and_blocks_later_writes(self):
+        self.add('TASK-F1', ['a.py'], ['db:force:exclusive'])
+        self.ready_then_dispatch('TASK-F1', 'hostA:1')
+        with self.assertRaises(orch.ResourceError) as cm:
+            self.unlock('TASK-F1', resource='db:force', reason='   ', force=True, evidence='log')
+        self.assertEqual(cm.exception.code, 'REASON_REQUIRED')
+        with self.assertRaises(orch.ResourceError) as cm:
+            self.unlock('TASK-F1', resource='db:force', reason='holder gone', force=True, evidence='log')
+        self.assertEqual(cm.exception.code, 'AUTHORIZATION_REQUIRED')
+        self.assertEqual(self.count("SELECT state FROM resource_locks WHERE task_id='TASK-F1'"), 'ACTIVE')
+        self.unlock('TASK-F1', resource='db:force', reason='holder crashed; process 8842 gone',
+                    force=True, evidence='ops-log 12', authorized_by='operator-csad')
+        row = self.rows("SELECT state,release_reason,reason,evidence_ref FROM resource_locks WHERE task_id='TASK-F1'")[0]
+        self.assertEqual((row['state'], row['release_reason']), ('RELEASED', 'FORCED_UNLOCK'))
+        self.assertIn('process 8842 gone', row['reason'])
+        forced = self.events('TASK-F1', {'LOCK_FORCED'})[0]
+        self.assertEqual(forced['actor'], 'operator-csad')
+        self.assertIn('operator-csad', forced['reason'])
+        # A forced unlock must stop the old task from writing again.
+        with self.assertRaises(orch.ResourceError) as cm:
+            orch.task_renew(self.root, SimpleNamespace(id='TASK-F1', holder='hostA:1', reason='x', evidence='x'))
+        self.assertEqual(cm.exception.code, 'LOCK_NOT_HELD')
+
+    def test_release_twice_is_reported_without_a_new_transition(self):
+        self.add('TASK-D1', ['a.py'], ['db:dup:shared'])
+        self.ready_then_dispatch('TASK-D1', 'hostA:1')
+        self.advance('TASK-D1', 'CANCELED', note='cancelled by owner')
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            row = orch.resource_row(con, 'db:dup#shared#TASK-D1#0')
+            with self.assertRaises(orch.ResourceError) as cm:
+                orch.release_resource_set(con, 'TASK-D1', 'CANCELED', 'again', 'orchestrator', 'log', rows=[row])
+            self.assertIn('ALREADY_RELEASED', str(cm.exception))
+            con.execute('COMMIT')
+        finally: con.close()
+        rejected = self.events('TASK-D1', {'LOCK_TRANSITION_REJECTED'})
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(self.count("SELECT COUNT(*) FROM resource_locks WHERE task_id='TASK-D1' "
+                                    "AND release_reason='CANCELED'"), 1)
+
+    def test_illegal_transition_is_rejected_and_the_record_is_kept(self):
+        self.add('TASK-T1', ['a.py'], ['db:tr:shared'])
+        self.ready_then_dispatch('TASK-T1', 'hostA:1')
+        con = orch.connect(self.root)
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            row = orch.resource_row(con, 'db:tr#shared#TASK-T1#0')
+            orch.transition_resource(con, row, 'RELEASED', 'LOCK_RELEASED', 'ops', 'manual', 'log', orch.now(),
+                                     release_reason='NORMAL_COMPLETE', released_at=orch.now())
+            released = orch.resource_row(con, 'db:tr#shared#TASK-T1#0')
+            with self.assertRaises(orch.ResourceError) as cm:
+                orch.transition_resource(con, released, 'ACTIVE', 'LOCK_RENEWED', 'ops', 'revive', 'log', orch.now())
+            self.assertEqual(cm.exception.code, 'TRANSITION_REJECTED')
+            con.execute('COMMIT')
+        finally: con.close()
+        self.assertEqual(self.count("SELECT state FROM resource_locks WHERE task_id='TASK-T1'"), 'RELEASED')
+        self.assertTrue(self.events('TASK-T1', {'LOCK_TRANSITION_REJECTED'}))
+
+    def test_event_id_is_idempotent(self):
+        self.add('TASK-V1', ['a.py'], ['db:ev:shared'])
+        con = orch.connect(self.root)
+        try:
+            first = orch.resource_event(con, 'RESOURCE_REGISTERED', 'TASK-V1', 'db:ev', 'shared', '(none)', '(none)',
+                                        'f' * 64, 'first write', 'log', 'ops', orch.now(), event_id=4242)
+            second = orch.resource_event(con, 'RESOURCE_REGISTERED', 'TASK-V1', 'db:ev', 'shared', '(none)', '(none)',
+                                         'f' * 64, 'duplicate write', 'log', 'ops', orch.now(), event_id=4242)
+        finally: con.close()
+        self.assertEqual((first, second), (4242, 4242))
+        self.assertEqual(self.count('SELECT COUNT(*) FROM resource_lock_events WHERE event_id=4242'), 1)
+        self.assertEqual(self.events('TASK-V1', {'RESOURCE_REGISTERED'})[0]['reason'], 'first write')
+
+    def test_generic_holder_is_refused(self):
+        self.add('TASK-H1', ['a.py'], ['db:holder:shared'])
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_ready(self.root, 'TASK-H1')
+        with self.assertRaises(orch.ResourceError) as cm: self.dispatch('TASK-H1', 'agent')
+        self.assertEqual(cm.exception.code, 'HOLDER_INVALID')
+        self.assertEqual(self.count("SELECT COUNT(*) FROM resource_locks WHERE task_id='TASK-H1'"), 0)
+
+    def test_missing_lease_ttl_refuses_dispatch_without_side_effects(self):
+        self.config(resource_lease_ttl=None)
+        self.add('TASK-N1', ['a.py'], ['db:cfg:shared'])
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_ready(self.root, 'TASK-N1')
+        with self.assertRaises(orch.ResourceError) as cm: self.dispatch('TASK-N1')
+        self.assertEqual(cm.exception.code, 'RESOURCE_CONFIG_INVALID')
+        self.assertIn('resource_lease_ttl', str(cm.exception))
+        self.assertEqual(self.count("SELECT COUNT(*) FROM resource_locks"), 0)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM locks'), 0)
+
+    def test_task_without_resources_never_touches_the_resource_tables(self):
+        self.add('TASK-Z1', ['only.py'])
+        self.ready_then_dispatch('TASK-Z1', 'hostA:1')
+        self.assertEqual(self.count('SELECT COUNT(*) FROM resource_lock_events'), 0)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM resource_locks'), 0)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM locks'), 1)
+
+    # --- AC-6: inspection ---------------------------------------------------
+    def test_listing_show_and_resources_expose_lease_holder_and_blocking(self):
+        self.add('TASK-I2', ['a.py'], ['db:visible/main:exclusive'])
+        self.add('TASK-I3', ['b.py'], ['db:visible/main:shared'])
+        self.ready_then_dispatch('TASK-I2', 'hostA:1')
+        with contextlib.redirect_stdout(io.StringIO()): orch.task_ready(self.root, 'TASK-I3')
+        with self.assertRaises(orch.ResourceError):
+            with contextlib.redirect_stdout(io.StringIO()): self.dispatch('TASK-I3', 'hostB:2')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out): orch.task_resources(self.root, SimpleNamespace(resource='', all=False))
+        listing = out.getvalue()
+        for needle in ('db:visible/main', 'exclusive', 'ACTIVE', 'lease_until=', 'holder=hostA:1', 'task=TASK-I2',
+                       'blocks=exclusive+shared'):
+            self.assertIn(needle, listing)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out): orch.task_list(self.root, SimpleNamespace(active_only=False))
+        self.assertIn('resources: db:visible/main:exclusive', out.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out): orch.task_show(self.root, 'TASK-I3')
+        self.assertIn('blocking reason', out.getvalue())
+        self.assertIn('MODE_CONFLICT', out.getvalue())
+
+    def test_github_backend_wording_is_advisory_only(self):
+        self.assertIn('not an atomic lock', orch.resource_backend_note('github'))
+        self.assertIn('advisory registration', orch.resource_backend_note('github'))
+        self.assertIn('SQLite BEGIN IMMEDIATE', orch.resource_backend_note('local'))
+
+    # --- AC-9: real multi-process race --------------------------------------
+    def test_two_processes_racing_one_exclusive_resource(self):
+        self.add('TASK-RACE1', ['race1/'], ['db:race/main:exclusive'])
+        self.add('TASK-RACE2', ['race2/'], ['db:race/main:exclusive'])
+        worker = self.root / 'race_worker.py'
+        worker.write_text(CONCURRENCY_WORKER, encoding='utf-8')
+        start = time.time() + 1.2
+        script = Path(__file__).resolve().parents[1] / 'scripts' / 'orchestrator.py'
+        processes = [
+            subprocess.Popen([sys.executable, str(worker), str(script), str(self.root), tid, f'race-{index}:{index}',
+                              'db:race/main:exclusive', str(start)],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for index, tid in enumerate(('TASK-RACE1', 'TASK-RACE2'), 1)
+        ]
+        results = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=120)
+            self.assertEqual(process.returncode, 0, stderr)
+            results.append(json.loads(stdout.strip().splitlines()[-1]))
+        granted = [r for r in results if r['status'] == 'GRANTED']
+        denied = [r for r in results if r['status'] == 'DENIED']
+        self.assertEqual(len(granted), 1, results)
+        self.assertEqual(len(denied), 1, results)
+        self.assertEqual(denied[0]['code'], 'MODE_CONFLICT')
+        self.assertEqual(self.count("SELECT COUNT(*) FROM resource_locks WHERE resource_id='db:race/main' "
+                                    "AND state<>'RELEASED'"), 1)                 # one owner, no duplicate
+        self.assertEqual(self.count('SELECT COUNT(*) FROM resource_locks WHERE task_id=?', (denied[0]['task'],)), 0)
+        self.assertEqual(self.count("SELECT COUNT(DISTINCT holder) FROM resource_locks "
+                                    "WHERE resource_id='db:race/main' AND state<>'RELEASED'"), 1)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM locks'), 0)          # neither wrote a path lock
+        self.assertTrue(self.events(denied[0]['task'], {'LOCK_SET_ROLLED_BACK'}))
+
+    # --- AC-10: recovery ----------------------------------------------------
+    def test_reconcile_quarantines_lock_rows_without_events(self):
+        self.add('TASK-W1', ['a.py'], ['db:rec2:shared'])
+        self.ready_then_dispatch('TASK-W1', 'hostA:1')
+        con = sqlite3.connect(orch.db_path(self.root))
+        con.execute('DELETE FROM resource_lock_events')     # simulate lost evidence
+        con.commit(); con.close()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            orch.task_reconcile(self.root, SimpleNamespace(reason='new session took over', evidence='session-2'))
+        self.assertIn('missing-evidence', out.getvalue())
+        self.assertEqual(self.count("SELECT state FROM resource_locks WHERE task_id='TASK-W1'"), 'QUARANTINED')
+        self.assertTrue(self.events('TASK-W1', {'LOCK_QUARANTINED'}))
+
+    def test_reconcile_does_not_let_its_own_expiry_event_count_as_evidence(self):
+        self.config(resource_lease_ttl=1)
+        self.add('TASK-W2', ['b.py'], ['db:rec3:shared'])
+        self.ready_then_dispatch('TASK-W2', 'hostA:1')
+        time.sleep(1.2)
+        con = sqlite3.connect(orch.db_path(self.root))
+        con.execute('DELETE FROM resource_lock_events')     # only the lease survived
+        con.commit(); con.close()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            orch.task_reconcile(self.root, SimpleNamespace(reason='session take-over', evidence='session-3'))
+        self.assertIn('missing-evidence', out.getvalue())
+        self.assertNotIn('kept EXPIRED', out.getvalue())
+        self.assertEqual(self.count("SELECT state FROM resource_locks WHERE task_id='TASK-W2'"), 'QUARANTINED')
+
+
+class ResourceLifecycleOnStatusTests(unittest.TestCase):
+    """The terminal release is driven by task status, not by a separate command."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
+        (self.root / 'docs').mkdir(parents=True, exist_ok=True)
+        (self.root / 'docs' / 'PROJECT.md').write_text('# Project\n\n- `edition`：`local`\n', encoding='utf-8')
+        with contextlib.redirect_stdout(io.StringIO()): orch.init(self.root)
+        config = self.root / '.orchestration' / 'config.json'
+        data = json.loads(config.read_text(encoding='utf-8')); data['resource_lease_ttl'] = 600
+        config.write_text(json.dumps(data), encoding='utf-8')
+
+    def tearDown(self):
+        try: self.tmp.cleanup()
+        except PermissionError: pass
+
+    def test_path_locks_only_task_still_releases_exactly_once(self):
+        args = SimpleNamespace(id='TASK-ONLY', title='t', description='', paths=['one.py'], depends=[],
+                               acceptance=['works'], resources=[])
+        with contextlib.redirect_stdout(io.StringIO()):
+            orch.task_add(self.root, args); orch.task_ready(self.root, 'TASK-ONLY')
+            orch.task_dispatch(self.root, 'TASK-ONLY', SimpleNamespace(holder='h:1', resource=[], evidence='x'))
+            orch.task_status(self.root, SimpleNamespace(id='TASK-ONLY', status='IN_PROGRESS', head_sha=None,
+                                                        merge_sha=None, note=''))
+            orch.task_status(self.root, SimpleNamespace(id='TASK-ONLY', status='CANCELED', head_sha=None,
+                                                        merge_sha=None, note='cancel smoke'))
+        con = orch.connect(self.root)
+        try:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM locks').fetchone()[0], 0)
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM resource_locks').fetchone()[0], 0)
+            actions = [r[0] for r in con.execute("SELECT action FROM events WHERE task_id='TASK-ONLY'")]
+            self.assertEqual(actions.count('LOCKS_RELEASED'), 1)
+        finally: con.close()
+
 
 if __name__=='__main__': unittest.main()
