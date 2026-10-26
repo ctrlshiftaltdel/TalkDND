@@ -4,7 +4,7 @@
 
 本文件给开发者。玩游戏需要的书、存档、裁定、战斗数据和程序都在 `LetsPlay/` 里。根目录只放源码、开发文档、CI 和 AgentOrch 套件。
 
-开发契约是 `AGENTS.md`。项目章程是 `docs/PROJECT-CHARTER.md`。
+开发契约是 `AGENTS.md`。项目配置是 `docs/PROJECT.md`，设计目标是 `docs/PLAN.md`，项目章程是 `docs/PROJECT-CHARTER.md`。AgentOrch 的入口是 `kit/orchestration.md`；任务与证据在 GitHub Issues / PR / CI，不建本地任务库。
 
 ## 程序放在哪
 
@@ -59,9 +59,10 @@ cargo deny --manifest-path tools/combat-sim/Cargo.toml check
 cargo deny --manifest-path tools/talkdnd/Cargo.toml check
 cargo deny --manifest-path tools/talkdnd-dev/Cargo.toml check
 
-# AgentOrch 套件
-uv run --no-project python scripts/validate_kit.py
-uv run --no-project python -m unittest tests/test_orchestrator.py
+# AgentOrch 套件（Format 1.6）
+uv run --no-project python scripts/validate_kit.py --project-ready
+uv run --no-project python -m unittest discover -s tests
+uv run --no-project python -m compileall -q scripts tests
 
 # 版权与游玩根目录
 cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks

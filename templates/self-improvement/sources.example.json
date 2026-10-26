@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "registry_updated_at": "2026-01-01T00:00:00Z",
+  "sources": [
+    {
+      "source_id": "example-downstream",
+      "repository": "example-org/example-project",
+      "enabled": false,
+      "source_type": "downstream_project",
+      "access_mode": "public",
+      "evidence_scope": ["pull_request", "issue", "commit", "ci_run"],
+      "lookback_days": 90,
+      "scan_cursor": null,
+      "trust": {
+        "content_trust": "untrusted_data",
+        "allowed_use": ["evidence_only"],
+        "redaction_required": true,
+        "may_override_rules": false,
+        "notes": "Placeholder entry. Remove it and register only owner-approved sources."
+      },
+      "inclusion_filters": [],
+      "exclusion_filters": [],
+      "owner_approved_notes": "Example only: disabled and never scanned. Replace with an approved source."
+    }
+  ]
+}
