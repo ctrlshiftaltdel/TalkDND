@@ -741,6 +741,30 @@ class MarkdownLinkScanTests(unittest.TestCase):
             errors, _ = validate.validate_kit(root)
             self.assertFalse(any('broken relative link' in e for e in errors), errors)
 
+    def test_local_books_and_generated_dirs_are_not_scanned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            book = root / 'LetsPlay' / 'Adventures' / 'example' / 'index' / 'index.md'
+            book.parent.mkdir(parents=True)
+            book.write_text('[broken](missing.md)\n', encoding='utf-8')
+            rulebook = root / 'LetsPlay' / 'Rules' / '2014' / 'example' / 'index' / 'index.md'
+            rulebook.parent.mkdir(parents=True)
+            rulebook.write_text('[broken](missing.md)\n', encoding='utf-8')
+            generated = root / '.md' / 'example' / 'page.md'
+            generated.parent.mkdir(parents=True)
+            generated.write_text('[broken](missing.md)\n', encoding='utf-8')
+            (root / 'README.md').write_text('[broken](missing.md)\n', encoding='utf-8')
+            saved_readme = root / 'LetsPlay' / 'Saves' / 'README.md'
+            saved_readme.parent.mkdir(parents=True)
+            saved_readme.write_text('[broken](missing.md)\n', encoding='utf-8')
+            errors, _ = validate.validate_kit(root)
+            messages = '\n'.join(errors)
+            self.assertIn('README.md: broken relative link: missing.md', messages)
+            self.assertIn('LetsPlay/Saves/README.md: broken relative link: missing.md', messages)
+            self.assertNotIn('LetsPlay/Adventures', messages)
+            self.assertNotIn('LetsPlay/Rules', messages)
+            self.assertNotIn('.md/example', messages)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -73,7 +73,7 @@
 
 本树是 **AgentOrch Format 1.6**，安装官方 `AgentOrch-1.6.zip` 的 90 个 `REQUIRED` 文件与官方 `MANIFEST.json` 基线。由于上游 1.6 包在“下游项目有 `docs/`”场景存在缺陷（详见 AgentOrch Issue #85），本树保留以下有意差异：
 
-- `scripts/validate_kit.py`：下游模式。有 `docs/` 且没有 `docs/upgrade.md` 时，只检查 `docs/PROJECT.md` / `docs/PLAN.md` 和清单结构，不因本地修改的 core 文件失败；发布包（无 `docs/`）与上游 checkout 仍严格校验哈希。漂移由 `scripts/check_drift.py` 报告。
+- `scripts/validate_kit.py`：下游模式。有 `docs/` 且没有 `docs/upgrade.md` 时，只检查 `docs/PROJECT.md` / `docs/PLAN.md` 和清单结构，不因本地修改的 core 文件失败；发布包（无 `docs/`）与上游 checkout 仍严格校验哈希。链接扫描跳过 gitignored 玩家书籍/存档（保留其 README）、pdf2md `.md/` 输出、`.worktrees`、`target` 与本地缓存，被跟踪文档的真实断链仍会报告。漂移由 `scripts/check_drift.py` 报告。
 - `scripts/check_drift.py`：`SKIP_DIRS` 增加 Rust 与本地工具缓存（`target`、`.pytest_cache`、`.codegraph`、`.opencode`），避免把构建产物当成项目扩展。
 - `tests/test_validate_kit.py`：上游仓库专用测试按 `docs/README.md` / `docs/upgrade.md` 是否存在 skip；新增下游模式测试。没有删除断言。
 - `AGENTS.md`、`kit/orchestration.md`、`templates/project-charter.md`：把 `MASTER.md` / `START-MASTER-*.md` 的旧路径改为实际存在的 `master.md` 及章节。
