@@ -162,6 +162,10 @@ Validation is the kit check, the full kit test suite and the leak check in Succe
 
 ## Decision Log
 
+### 2026-10-27 — Validator ignores local books and caches (TASK-0101)
+
+The post-merge check on a developer machine with the player's local books exposed that the 1.6 global Markdown link scan read `LetsPlay/Adventures/*/index/` and `LetsPlay/Rules/*/*/index/` and failed on generated cross-links. The 1.1 validator had a local-only skip; 1.6 lost it. The validator now skips gitignored player trees (except their tracked README), pdf2md `.md/` output, `.worktrees`, `target`, `.pytest_cache`, `.codegraph` and `.opencode`; tracked documentation links are still checked. A regression test covers both sides. No product code or save schema change. CI has no books, so the test and the new skip are the durable guard.
+
 ### 2026-10-27 — AgentOrch 1.6 upgrade with an official baseline (TASK-0100)
 
 The owner asked on 2026-10-27 to bring the project's AgentOrch to the latest release and to open an upstream issue first when a downstream gap blocks it. The kit is upgraded from Format 1.1 to **Format 1.6** (`AgentOrch-1.6.zip`, SHA256 `bc0a64e35f0d70b937a4a40d923f03638376c97af5d3c55026084d12c04f8d57`) and the official `MANIFEST.json` is installed as the baseline for future updates. This is a manual 1.1 → 1.6 migration: the release page has no v1.1 asset or manifest, so the update entry cannot verify a 1.1 baseline (`STOPPED_INVALID_BASELINE`); after this migration the 1.6 baseline is `VALID` and a future 1.7 release can use the update entry. The layout migration is the 1.5 one plus the 1.6 additions: `AGENT-BOOTSTRAP.md` + `AGENT-ORCHESTRATION.md` + `AGENT-ORCHESTRATION-ACCEPTANCE.md` become `kit/orchestration.md`; `ORCHESTRATION-PROJECT.md` becomes `docs/PROJECT.md`; `docs/PLAN.md` is added as the design-goal authority; editions shrink from 14 to 7 lowercase files; templates become the 1.6 lowercase set; `prompts/` is removed; `VERSION.txt`/`LICENSE.txt` become `VERSION.md`/`LICENSE.md`; the 1.6 scripts, self-improvement/update/architecture modules, and tests are installed.
@@ -449,6 +453,7 @@ Alternative considered: rely on DM discipline alone. Rejected: the new tools mak
 | 2026-10-23 | v0.8.0 information discipline: scene-scoped reading, known list, secret terms/guard, hidden original aspects, player-facing name masking, option-writing rules, per-save dice display and roll log; schema 5. |
 | 2026-10-23 | v0.9.0 party companions live in `Characters/` next to the PC, told apart by `controller: player|dm` in `sheets/<id>.yaml`; `talkdnd companion`; `NPCs/` is for story NPCs only; schema 6 migration. |
 | 2026-10-27 | AgentOrch Format 1.1 → 1.6 upgrade (TASK-0100): `kit/orchestration.md`, `docs/PROJECT.md`, `docs/PLAN.md`, 1.6 scripts/tests, official `MANIFEST.json` baseline, downstream validator mode; no product behavior change. |
+| 2026-10-27 | TASK-0101 post-merge fix: validator skips local player books/saves, pdf2md output and build/cache dirs; tracked doc links still checked. |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 

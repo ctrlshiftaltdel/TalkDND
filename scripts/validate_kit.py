@@ -178,6 +178,29 @@ def markdown_links(text):
     return MD_LINK_RE.findall(text)
 EXTERNAL_LINK_PREFIXES = ('http://', 'https://', 'mailto:', '#')
 
+# Generated / local-only trees that the kit must never scan. Player books and
+# saves are gitignored local content (only their README files are tracked), and
+# pdf2md writes its Markdown under `.md/`; scanning them made validate_kit fail
+# on any developer machine that has books. See TASK-0101.
+LOCAL_ONLY_DIRS = frozenset({
+    '.git', '.venv', '.worktrees', '.md', '.pdf2md', 'target',
+    '.pytest_cache', '.codegraph', '.opencode', 'node_modules',
+})
+PLAYER_TREES = (
+    ('LetsPlay', 'Rules', '2014'),
+    ('LetsPlay', 'Rules', '2024'),
+    ('LetsPlay', 'Adventures'),
+    ('LetsPlay', 'Saves'),
+)
+
+
+def local_only(rel):
+    """True for generated / local-only paths; tracked READMEs stay visible."""
+    if LOCAL_ONLY_DIRS & set(rel.parts[:-1]):
+        return True
+    return any(rel.parts[:len(tree)] == tree and rel.name != 'README.md'
+               for tree in PLAYER_TREES)
+
 # --- Evidence matrix contract -------------------------------------------------
 # The field names, the status enum and the G1 rules are defined once, in
 # kit/orchestration.md 4.1. This module reads that definition back (it does not
@@ -824,6 +847,8 @@ def validate_kit(root=ROOT, project_ready=False):
         if not p.is_file():
             continue
         rel = p.relative_to(root)
+        if local_only(rel):
+            continue
         if rel.suffix.lower() not in doc_suffixes:
             continue
         if excluded_dirs & set(rel.parts):
@@ -841,7 +866,12 @@ def validate_kit(root=ROOT, project_ready=False):
     # messages by template_structure_errors(), so skip them here to avoid one
     # break being reported twice.
     for md in root.rglob('*.md'):
-        if md.relative_to(root).as_posix() in TEMPLATE_SECTIONS:
+        if not md.is_file():
+            continue
+        rel = md.relative_to(root)
+        if local_only(rel):
+            continue
+        if rel.as_posix() in TEMPLATE_SECTIONS:
             continue
         content = md.read_text(encoding='utf-8')
         for target in markdown_links(content):
@@ -849,7 +879,7 @@ def validate_kit(root=ROOT, project_ready=False):
                 continue
             target = target.split('#', 1)[0]
             if target and not (md.parent / target).exists():
-                errors.append(f'{md.relative_to(root)}: broken relative link: {target}')
+                errors.append(f'{rel}: broken relative link: {target}')
     if project_ready:
         cfg_path = root / 'docs' / 'PROJECT.md'
         if not cfg_path.is_file():
