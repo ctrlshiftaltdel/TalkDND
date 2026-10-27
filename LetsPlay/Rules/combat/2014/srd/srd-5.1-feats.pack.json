@@ -1,0 +1,79 @@
+{
+  "pack": {
+    "id": "srd-5.1-feats",
+    "name": "SRD 5.1 Feats",
+    "edition": "2014",
+    "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+    "license": "CC-BY-4.0",
+    "distribution": "srd",
+    "schema_version": 1,
+    "content_hash": "fnv1a64:fbcf69ae153189d6:1057",
+    "created_at": null,
+    "description": "SRD 5.1 feats from github.com/5e-bits/5e-database."
+  },
+  "index": {
+    "entries": [
+      {
+        "id": "grappler",
+        "kind": "feat",
+        "name": "Grappler",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      }
+    ],
+    "images": []
+  },
+  "content": {
+    "conditions": null,
+    "masteries": null,
+    "abilities": null,
+    "creatures": null,
+    "ai_templates": null,
+    "scenes": null,
+    "encounters": null,
+    "items": null,
+    "classes": null,
+    "subclasses": null,
+    "species": null,
+    "backgrounds": null,
+    "feats": [
+      {
+        "id": "grappler",
+        "name": "Grappler",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You’ve developed the Skills necessary to hold your own in close--quarters Grappling. You gain the following benefits:\n\n- You have advantage on Attack Rolls against a creature you are Grappling.\n\n- You can use your action to try to pin a creature Grappled by you. To do so, make another grapple check. If you succeed, you and the creature are both Restrained until the grapple ends.",
+        "refs": [],
+        "data": {
+          "index": "grappler",
+          "name": "Grappler",
+          "prerequisites": [
+            {
+              "ability_score": {
+                "index": "str",
+                "name": "STR",
+                "url": "/api/2014/ability-scores/str"
+              },
+              "minimum_score": 13
+            }
+          ],
+          "url": "/api/2014/feats/grappler"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      }
+    ],
+    "rule_sections": null,
+    "tables": null,
+    "rules": null
+  }
+}

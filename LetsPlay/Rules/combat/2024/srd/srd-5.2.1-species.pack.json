@@ -1,0 +1,5502 @@
+{
+  "pack": {
+    "id": "srd-5.2.1-species",
+    "name": "SRD 5.2.1 Species",
+    "edition": "2024",
+    "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+    "license": "CC-BY-4.0",
+    "distribution": "srd",
+    "schema_version": 1,
+    "content_hash": "fnv1a64:f13707a1f0523347:90526",
+    "created_at": null,
+    "description": "SRD 5.2.1 species, subspecies and traits from github.com/5e-bits/5e-database."
+  },
+  "index": {
+    "entries": [
+      {
+        "id": "adrenaline-rush",
+        "kind": "rule-section",
+        "name": "Adrenaline Rush",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "brave",
+        "kind": "rule-section",
+        "name": "Brave",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "darkvision-120",
+        "kind": "rule-section",
+        "name": "Darkvision (120 ft.)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "darkvision-60",
+        "kind": "rule-section",
+        "name": "Darkvision (60 ft.)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-breath-weapon-acid",
+        "kind": "rule-section",
+        "name": "Breath Weapon: Acid",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-breath-weapon-cold",
+        "kind": "rule-section",
+        "name": "Breath Weapon: Cold",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-breath-weapon-fire",
+        "kind": "rule-section",
+        "name": "Breath Weapon: Fire",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-breath-weapon-lightning",
+        "kind": "rule-section",
+        "name": "Breath Weapon: Lightning",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-breath-weapon-poison",
+        "kind": "rule-section",
+        "name": "Breath Weapon: Poison",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-damage-resistance-acid",
+        "kind": "rule-section",
+        "name": "Damage Resistance: Acid",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-damage-resistance-cold",
+        "kind": "rule-section",
+        "name": "Damage Resistance: Cold",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-damage-resistance-fire",
+        "kind": "rule-section",
+        "name": "Damage Resistance: Fire",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-damage-resistance-lightning",
+        "kind": "rule-section",
+        "name": "Damage Resistance: Lightning",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-damage-resistance-poison",
+        "kind": "rule-section",
+        "name": "Damage Resistance: Poison",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-flight",
+        "kind": "rule-section",
+        "name": "Draconic Flight",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "dwarven-resilience",
+        "kind": "rule-section",
+        "name": "Dwarven Resilience",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "dwarven-toughness",
+        "kind": "rule-section",
+        "name": "Dwarven Toughness",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "elven-lineage",
+        "kind": "rule-section",
+        "name": "Elven Lineage",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "fey-ancestry",
+        "kind": "rule-section",
+        "name": "Fey Ancestry",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "fiendish-legacy",
+        "kind": "rule-section",
+        "name": "Fiendish Legacy",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry",
+        "kind": "rule-section",
+        "name": "Giant Ancestry",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-clouds-jaunt",
+        "kind": "rule-section",
+        "name": "Giant Ancestry: Cloud's Jaunt",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-fires-burn",
+        "kind": "rule-section",
+        "name": "Giant Ancestry: Fire's Burn",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-frosts-chill",
+        "kind": "rule-section",
+        "name": "Giant Ancestry: Frost's Chill",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-hills-tumble",
+        "kind": "rule-section",
+        "name": "Giant Ancestry: Hill's Tumble",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-stones-endurance",
+        "kind": "rule-section",
+        "name": "Giant Ancestry: Stone's Endurance",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-storms-thunder",
+        "kind": "rule-section",
+        "name": "Giant Ancestry: Storm's Thunder",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "gnomish-cunning",
+        "kind": "rule-section",
+        "name": "Gnomish Cunning",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "gnomish-lineage",
+        "kind": "rule-section",
+        "name": "Gnomish Lineage",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "gnomish-lineage-forest-gnome",
+        "kind": "rule-section",
+        "name": "Gnomish Lineage: Forest Gnome",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "gnomish-lineage-rock-gnome",
+        "kind": "rule-section",
+        "name": "Gnomish Lineage: Rock Gnome",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "halfling-nimbleness",
+        "kind": "rule-section",
+        "name": "Halfling Nimbleness",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "high-elf-cantrip-versatility",
+        "kind": "rule-section",
+        "name": "High Elf: Cantrip Versatility",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "keen-senses",
+        "kind": "rule-section",
+        "name": "Keen Senses",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "large-form",
+        "kind": "rule-section",
+        "name": "Large Form",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-resistance-fire",
+        "kind": "rule-section",
+        "name": "Damage Resistance: Fire",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-resistance-necrotic",
+        "kind": "rule-section",
+        "name": "Damage Resistance: Necrotic",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-resistance-poison",
+        "kind": "rule-section",
+        "name": "Damage Resistance: Poison",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-chill-touch",
+        "kind": "rule-section",
+        "name": "Chill Touch",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-dancing-lights",
+        "kind": "rule-section",
+        "name": "Dancing Lights",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-darkness",
+        "kind": "rule-section",
+        "name": "Darkness",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-detect-magic",
+        "kind": "rule-section",
+        "name": "Detect Magic",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-faerie-fire",
+        "kind": "rule-section",
+        "name": "Faerie Fire",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-false-life",
+        "kind": "rule-section",
+        "name": "False Life",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-fire-bolt",
+        "kind": "rule-section",
+        "name": "Fire Bolt",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-hellish-rebuke",
+        "kind": "rule-section",
+        "name": "Hellish Rebuke",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-hold-person",
+        "kind": "rule-section",
+        "name": "Hold Person",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-longstrider",
+        "kind": "rule-section",
+        "name": "Longstrider",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-mending",
+        "kind": "rule-section",
+        "name": "Mending",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-minor-illusion",
+        "kind": "rule-section",
+        "name": "Minor Illusion",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-misty-step",
+        "kind": "rule-section",
+        "name": "Misty Step",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-pass-without-trace",
+        "kind": "rule-section",
+        "name": "Pass without Trace",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-poison-spray",
+        "kind": "rule-section",
+        "name": "Poison Spray",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-ray-of-enfeeblement",
+        "kind": "rule-section",
+        "name": "Ray of Enfeeblement",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lineage-spell-ray-of-sickness",
+        "kind": "rule-section",
+        "name": "Ray of Sickness",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "luck",
+        "kind": "rule-section",
+        "name": "Luck",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "naturally-stealthy",
+        "kind": "rule-section",
+        "name": "Naturally Stealthy",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "otherworldly-presence",
+        "kind": "rule-section",
+        "name": "Otherworldly Presence",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "powerful-build",
+        "kind": "rule-section",
+        "name": "Powerful Build",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "relentless-endurance",
+        "kind": "rule-section",
+        "name": "Relentless Endurance",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "resourceful",
+        "kind": "rule-section",
+        "name": "Resourceful",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "skillful",
+        "kind": "rule-section",
+        "name": "Skillful",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "stonecunning",
+        "kind": "rule-section",
+        "name": "Stonecunning",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "trance",
+        "kind": "rule-section",
+        "name": "Trance",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "versatile",
+        "kind": "rule-section",
+        "name": "Versatile",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "wood-elf-speed-increase",
+        "kind": "rule-section",
+        "name": "Wood Elf: Movement Speed Increase",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-black",
+        "kind": "species",
+        "name": "Draconic Ancestor: Black",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-blue",
+        "kind": "species",
+        "name": "Draconic Ancestor: Blue",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-brass",
+        "kind": "species",
+        "name": "Draconic Ancestor: Brass",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-bronze",
+        "kind": "species",
+        "name": "Draconic Ancestor: Bronze",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-copper",
+        "kind": "species",
+        "name": "Draconic Ancestor: Copper",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-gold",
+        "kind": "species",
+        "name": "Draconic Ancestor: Gold",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-green",
+        "kind": "species",
+        "name": "Draconic Ancestor: Green",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-red",
+        "kind": "species",
+        "name": "Draconic Ancestor: Red",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-silver",
+        "kind": "species",
+        "name": "Draconic Ancestor: Silver",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestor-white",
+        "kind": "species",
+        "name": "Draconic Ancestor: White",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "dragonborn",
+        "kind": "species",
+        "name": "Dragonborn",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "dwarf",
+        "kind": "species",
+        "name": "Dwarf",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "elf",
+        "kind": "species",
+        "name": "Elf",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "elven-lineage-drow",
+        "kind": "species",
+        "name": "Elven Lineage: Drow",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "elven-lineage-high-elf",
+        "kind": "species",
+        "name": "Elven Lineage: High Elf",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "elven-lineage-wood-elf",
+        "kind": "species",
+        "name": "Elven Lineage: Wood Elf",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "fiendish-legacy-abyssal",
+        "kind": "species",
+        "name": "Fiendish Legacy: Abyssal",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "fiendish-legacy-chthonic",
+        "kind": "species",
+        "name": "Fiendish Legacy: Chthonic",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "fiendish-legacy-infernal",
+        "kind": "species",
+        "name": "Fiendish Legacy: Infernal",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-clouds-jaunt",
+        "kind": "species",
+        "name": "Giant Ancestry: Cloud's Jaunt",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-fires-burn",
+        "kind": "species",
+        "name": "Giant Ancestry: Fire's Burn",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-frosts-chill",
+        "kind": "species",
+        "name": "Giant Ancestry: Frost's Chill",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-hills-tumble",
+        "kind": "species",
+        "name": "Giant Ancestry: Hill's Tumble",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-stones-endurance",
+        "kind": "species",
+        "name": "Giant Ancestry: Stone's Endurance",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "giant-ancestry-storms-thunder",
+        "kind": "species",
+        "name": "Giant Ancestry: Storm's Thunder",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "gnome",
+        "kind": "species",
+        "name": "Gnome",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "gnomish-lineage-forest-gnome",
+        "kind": "species",
+        "name": "Gnomish Lineage: Forest Gnome",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "gnomish-lineage-rock-gnome",
+        "kind": "species",
+        "name": "Gnomish Lineage: Rock Gnome",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "goliath",
+        "kind": "species",
+        "name": "Goliath",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "halfling",
+        "kind": "species",
+        "name": "Halfling",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "human",
+        "kind": "species",
+        "name": "Human",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "orc",
+        "kind": "species",
+        "name": "Orc",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "tiefling",
+        "kind": "species",
+        "name": "Tiefling",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      }
+    ],
+    "images": []
+  },
+  "content": {
+    "conditions": null,
+    "masteries": null,
+    "abilities": null,
+    "creatures": null,
+    "ai_templates": null,
+    "scenes": null,
+    "encounters": null,
+    "items": null,
+    "classes": null,
+    "subclasses": null,
+    "species": [
+      {
+        "id": "dragonborn",
+        "name": "Dragonborn",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nSpeed: 30\nSize: Medium\nCreature Type: Humanoid\nTraits: Darkvision (60 ft.), Draconic Flight",
+        "refs": [],
+        "data": {
+          "index": "dragonborn",
+          "name": "Dragonborn",
+          "size": "Medium",
+          "speed": 30,
+          "subspecies": [
+            {
+              "index": "draconic-ancestor-black",
+              "name": "Draconic Ancestor: Black",
+              "url": "/api/2024/subspecies/draconic-ancestor-black"
+            },
+            {
+              "index": "draconic-ancestor-blue",
+              "name": "Draconic Ancestor: Blue",
+              "url": "/api/2024/subspecies/draconic-ancestor-blue"
+            },
+            {
+              "index": "draconic-ancestor-brass",
+              "name": "Draconic Ancestor: Brass",
+              "url": "/api/2024/subspecies/draconic-ancestor-brass"
+            },
+            {
+              "index": "draconic-ancestor-bronze",
+              "name": "Draconic Ancestor: Bronze",
+              "url": "/api/2024/subspecies/draconic-ancestor-bronze"
+            },
+            {
+              "index": "draconic-ancestor-copper",
+              "name": "Draconic Ancestor: Copper",
+              "url": "/api/2024/subspecies/draconic-ancestor-copper"
+            },
+            {
+              "index": "draconic-ancestor-gold",
+              "name": "Draconic Ancestor: Gold",
+              "url": "/api/2024/subspecies/draconic-ancestor-gold"
+            },
+            {
+              "index": "draconic-ancestor-green",
+              "name": "Draconic Ancestor: Green",
+              "url": "/api/2024/subspecies/draconic-ancestor-green"
+            },
+            {
+              "index": "draconic-ancestor-red",
+              "name": "Draconic Ancestor: Red",
+              "url": "/api/2024/subspecies/draconic-ancestor-red"
+            },
+            {
+              "index": "draconic-ancestor-silver",
+              "name": "Draconic Ancestor: Silver",
+              "url": "/api/2024/subspecies/draconic-ancestor-silver"
+            },
+            {
+              "index": "draconic-ancestor-white",
+              "name": "Draconic Ancestor: White",
+              "url": "/api/2024/subspecies/draconic-ancestor-white"
+            }
+          ],
+          "traits": [
+            {
+              "index": "darkvision-60",
+              "name": "Darkvision (60 ft.)",
+              "url": "/api/2024/traits/darkvision-60"
+            },
+            {
+              "index": "draconic-flight",
+              "name": "Draconic Flight",
+              "url": "/api/2024/traits/draconic-flight"
+            }
+          ],
+          "type": "Humanoid",
+          "url": "/api/2024/species/dragonborn"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "dwarf",
+        "name": "Dwarf",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nSpeed: 30\nSize: Medium\nCreature Type: Humanoid\nTraits: Darkvision (120 ft.), Dwarven Resilience, Dwarven Toughness, Stonecunning",
+        "refs": [],
+        "data": {
+          "index": "dwarf",
+          "name": "Dwarf",
+          "size": "Medium",
+          "speed": 30,
+          "traits": [
+            {
+              "index": "darkvision-120",
+              "name": "Darkvision (120 ft.)",
+              "url": "/api/2024/traits/darkvision-120"
+            },
+            {
+              "index": "dwarven-resilience",
+              "name": "Dwarven Resilience",
+              "url": "/api/2024/traits/dwarven-resilience"
+            },
+            {
+              "index": "dwarven-toughness",
+              "name": "Dwarven Toughness",
+              "url": "/api/2024/traits/dwarven-toughness"
+            },
+            {
+              "index": "stonecunning",
+              "name": "Stonecunning",
+              "url": "/api/2024/traits/stonecunning"
+            }
+          ],
+          "type": "Humanoid",
+          "url": "/api/2024/species/dwarf"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "elf",
+        "name": "Elf",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nSpeed: 30\nSize: Medium\nCreature Type: Humanoid\nTraits: Darkvision (60 ft.), Elven Lineage, Fey Ancestry, Keen Senses, Trance",
+        "refs": [],
+        "data": {
+          "index": "elf",
+          "name": "Elf",
+          "size": "Medium",
+          "speed": 30,
+          "subspecies": [
+            {
+              "index": "elven-lineage-drow",
+              "name": "Elven Lineage: Drow",
+              "url": "/api/2024/subspecies/elven-lineage-drow"
+            },
+            {
+              "index": "elven-lineage-high-elf",
+              "name": "Elven Lineage: High Elf",
+              "url": "/api/2024/subspecies/elven-lineage-high-elf"
+            },
+            {
+              "index": "elven-lineage-wood-elf",
+              "name": "Elven Lineage: Wood Elf",
+              "url": "/api/2024/subspecies/elven-lineage-wood-elf"
+            }
+          ],
+          "traits": [
+            {
+              "index": "darkvision-60",
+              "name": "Darkvision (60 ft.)",
+              "url": "/api/2024/traits/darkvision-60"
+            },
+            {
+              "index": "elven-lineage",
+              "name": "Elven Lineage",
+              "url": "/api/2024/traits/elven-lineage"
+            },
+            {
+              "index": "fey-ancestry",
+              "name": "Fey Ancestry",
+              "url": "/api/2024/traits/fey-ancestry"
+            },
+            {
+              "index": "keen-senses",
+              "name": "Keen Senses",
+              "url": "/api/2024/traits/keen-senses"
+            },
+            {
+              "index": "trance",
+              "name": "Trance",
+              "url": "/api/2024/traits/trance"
+            }
+          ],
+          "type": "Humanoid",
+          "url": "/api/2024/species/elf"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "gnome",
+        "name": "Gnome",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nSpeed: 30\nSize: Small\nCreature Type: Humanoid\nTraits: Darkvision (60 ft.), Gnomish Cunning, Gnomish Lineage",
+        "refs": [],
+        "data": {
+          "index": "gnome",
+          "name": "Gnome",
+          "size": "Small",
+          "speed": 30,
+          "subspecies": [
+            {
+              "index": "gnomish-lineage-forest-gnome",
+              "name": "Gnomish Lineage: Forest Gnome",
+              "url": "/api/2024/subspecies/gnomish-lineage-forest-gnome"
+            },
+            {
+              "index": "gnomish-lineage-rock-gnome",
+              "name": "Gnomish Lineage: Rock Gnome",
+              "url": "/api/2024/subspecies/gnomish-lineage-rock-gnome"
+            }
+          ],
+          "traits": [
+            {
+              "index": "darkvision-60",
+              "name": "Darkvision (60 ft.)",
+              "url": "/api/2024/traits/darkvision-60"
+            },
+            {
+              "index": "gnomish-cunning",
+              "name": "Gnomish Cunning",
+              "url": "/api/2024/traits/gnomish-cunning"
+            },
+            {
+              "index": "gnomish-lineage",
+              "name": "Gnomish Lineage",
+              "url": "/api/2024/traits/gnomish-lineage"
+            }
+          ],
+          "type": "Humanoid",
+          "url": "/api/2024/species/gnome"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "goliath",
+        "name": "Goliath",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nSpeed: 35\nSize: Medium\nCreature Type: Humanoid\nTraits: Giant Ancestry, Large Form, Powerful Build",
+        "refs": [],
+        "data": {
+          "index": "goliath",
+          "name": "Goliath",
+          "size": "Medium",
+          "speed": 35,
+          "subspecies": [
+            {
+              "index": "giant-ancestry-clouds-jaunt",
+              "name": "Giant Ancestry: Cloud's Jaunt",
+              "url": "/api/2024/subspecies/giant-ancestry-clouds-jaunt"
+            },
+            {
+              "index": "giant-ancestry-fires-burn",
+              "name": "Giant Ancestry: Fire's Burn",
+              "url": "/api/2024/subspecies/giant-ancestry-fires-burn"
+            },
+            {
+              "index": "giant-ancestry-frosts-chill",
+              "name": "Giant Ancestry: Frost's Chill",
+              "url": "/api/2024/subspecies/giant-ancestry-frosts-chill"
+            },
+            {
+              "index": "giant-ancestry-hills-tumble",
+              "name": "Giant Ancestry: Hill's Tumble",
+              "url": "/api/2024/subspecies/giant-ancestry-hills-tumble"
+            },
+            {
+              "index": "giant-ancestry-stones-endurance",
+              "name": "Giant Ancestry: Stone's Endurance",
+              "url": "/api/2024/subspecies/giant-ancestry-stones-endurance"
+            },
+            {
+              "index": "giant-ancestry-storms-thunder",
+              "name": "Giant Ancestry: Storm's Thunder",
+              "url": "/api/2024/subspecies/giant-ancestry-storms-thunder"
+            }
+          ],
+          "traits": [
+            {
+              "index": "giant-ancestry",
+              "name": "Giant Ancestry",
+              "url": "/api/2024/traits/giant-ancestry"
+            },
+            {
+              "index": "large-form",
+              "name": "Large Form",
+              "url": "/api/2024/traits/large-form"
+            },
+            {
+              "index": "powerful-build",
+              "name": "Powerful Build",
+              "url": "/api/2024/traits/powerful-build"
+            }
+          ],
+          "type": "Humanoid",
+          "url": "/api/2024/species/goliath"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "halfling",
+        "name": "Halfling",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nSpeed: 30\nSize: Small\nCreature Type: Humanoid\nTraits: Brave, Halfling Nimbleness, Luck, Naturally Stealthy",
+        "refs": [],
+        "data": {
+          "index": "halfling",
+          "name": "Halfling",
+          "size": "Small",
+          "speed": 30,
+          "traits": [
+            {
+              "index": "brave",
+              "name": "Brave",
+              "url": "/api/2024/traits/brave"
+            },
+            {
+              "index": "halfling-nimbleness",
+              "name": "Halfling Nimbleness",
+              "url": "/api/2024/traits/halfling-nimbleness"
+            },
+            {
+              "index": "luck",
+              "name": "Luck",
+              "url": "/api/2024/traits/luck"
+            },
+            {
+              "index": "naturally-stealthy",
+              "name": "Naturally Stealthy",
+              "url": "/api/2024/traits/naturally-stealthy"
+            }
+          ],
+          "type": "Humanoid",
+          "url": "/api/2024/species/halfling"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "human",
+        "name": "Human",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nSpeed: 30\nSize: Medium\nCreature Type: Humanoid\nTraits: Resourceful, Skillful, Versatile",
+        "refs": [],
+        "data": {
+          "index": "human",
+          "name": "Human",
+          "size": "Medium",
+          "speed": 30,
+          "traits": [
+            {
+              "index": "resourceful",
+              "name": "Resourceful",
+              "url": "/api/2024/traits/resourceful"
+            },
+            {
+              "index": "skillful",
+              "name": "Skillful",
+              "url": "/api/2024/traits/skillful"
+            },
+            {
+              "index": "versatile",
+              "name": "Versatile",
+              "url": "/api/2024/traits/versatile"
+            }
+          ],
+          "type": "Humanoid",
+          "url": "/api/2024/species/human"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "orc",
+        "name": "Orc",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nSpeed: 30\nSize: Medium\nCreature Type: Humanoid\nTraits: Adrenaline Rush, Darkvision (120 ft.), Relentless Endurance",
+        "refs": [],
+        "data": {
+          "index": "orc",
+          "name": "Orc",
+          "size": "Medium",
+          "speed": 30,
+          "traits": [
+            {
+              "index": "adrenaline-rush",
+              "name": "Adrenaline Rush",
+              "url": "/api/2024/traits/adrenaline-rush"
+            },
+            {
+              "index": "darkvision-120",
+              "name": "Darkvision (120 ft.)",
+              "url": "/api/2024/traits/darkvision-120"
+            },
+            {
+              "index": "relentless-endurance",
+              "name": "Relentless Endurance",
+              "url": "/api/2024/traits/relentless-endurance"
+            }
+          ],
+          "type": "Humanoid",
+          "url": "/api/2024/species/orc"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "tiefling",
+        "name": "Tiefling",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nSpeed: 30\nCreature Type: Humanoid\nTraits: Darkvision (60 ft.), Fiendish Legacy, Otherworldly Presence",
+        "refs": [],
+        "data": {
+          "index": "tiefling",
+          "name": "Tiefling",
+          "size_options": {
+            "choose": 1,
+            "desc": "Choose a size when you select this species.",
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "option_type": "size",
+                  "size": "Small"
+                },
+                {
+                  "option_type": "size",
+                  "size": "Medium"
+                }
+              ]
+            },
+            "type": "size_categories"
+          },
+          "speed": 30,
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-abyssal",
+              "name": "Fiendish Legacy: Abyssal",
+              "url": "/api/2024/subspecies/fiendish-legacy-abyssal"
+            },
+            {
+              "index": "fiendish-legacy-chthonic",
+              "name": "Fiendish Legacy: Chthonic",
+              "url": "/api/2024/subspecies/fiendish-legacy-chthonic"
+            },
+            {
+              "index": "fiendish-legacy-infernal",
+              "name": "Fiendish Legacy: Infernal",
+              "url": "/api/2024/subspecies/fiendish-legacy-infernal"
+            }
+          ],
+          "traits": [
+            {
+              "index": "darkvision-60",
+              "name": "Darkvision (60 ft.)",
+              "url": "/api/2024/traits/darkvision-60"
+            },
+            {
+              "index": "fiendish-legacy",
+              "name": "Fiendish Legacy",
+              "url": "/api/2024/traits/fiendish-legacy"
+            },
+            {
+              "index": "otherworldly-presence",
+              "name": "Otherworldly Presence",
+              "url": "/api/2024/traits/otherworldly-presence"
+            }
+          ],
+          "type": "Humanoid",
+          "url": "/api/2024/species/tiefling"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-black",
+        "name": "Draconic Ancestor: Black",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Acid, Damage Resistance: Acid",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "acid",
+            "name": "Acid",
+            "url": "/api/2024/damage-types/acid"
+          },
+          "index": "draconic-ancestor-black",
+          "name": "Draconic Ancestor: Black",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-acid",
+              "level": 1,
+              "name": "Breath Weapon: Acid",
+              "url": "/api/2024/traits/draconic-breath-weapon-acid"
+            },
+            {
+              "index": "draconic-damage-resistance-acid",
+              "level": 1,
+              "name": "Damage Resistance: Acid",
+              "url": "/api/2024/traits/draconic-damage-resistance-acid"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-black"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-blue",
+        "name": "Draconic Ancestor: Blue",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Lightning, Damage Resistance: Lightning",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "lightning",
+            "name": "Lightning",
+            "url": "/api/2024/damage-types/lightning"
+          },
+          "index": "draconic-ancestor-blue",
+          "name": "Draconic Ancestor: Blue",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-lightning",
+              "level": 1,
+              "name": "Breath Weapon: Lightning",
+              "url": "/api/2024/traits/draconic-breath-weapon-lightning"
+            },
+            {
+              "index": "draconic-damage-resistance-lightning",
+              "level": 1,
+              "name": "Damage Resistance: Lightning",
+              "url": "/api/2024/traits/draconic-damage-resistance-lightning"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-blue"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-brass",
+        "name": "Draconic Ancestor: Brass",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Fire, Damage Resistance: Fire",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "fire",
+            "name": "Fire",
+            "url": "/api/2024/damage-types/fire"
+          },
+          "index": "draconic-ancestor-brass",
+          "name": "Draconic Ancestor: Brass",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-fire",
+              "level": 1,
+              "name": "Breath Weapon: Fire",
+              "url": "/api/2024/traits/draconic-breath-weapon-fire"
+            },
+            {
+              "index": "draconic-damage-resistance-fire",
+              "level": 1,
+              "name": "Damage Resistance: Fire",
+              "url": "/api/2024/traits/draconic-damage-resistance-fire"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-brass"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-bronze",
+        "name": "Draconic Ancestor: Bronze",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Lightning, Damage Resistance: Lightning",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "lightning",
+            "name": "Lightning",
+            "url": "/api/2024/damage-types/lightning"
+          },
+          "index": "draconic-ancestor-bronze",
+          "name": "Draconic Ancestor: Bronze",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-lightning",
+              "level": 1,
+              "name": "Breath Weapon: Lightning",
+              "url": "/api/2024/traits/draconic-breath-weapon-lightning"
+            },
+            {
+              "index": "draconic-damage-resistance-lightning",
+              "level": 1,
+              "name": "Damage Resistance: Lightning",
+              "url": "/api/2024/traits/draconic-damage-resistance-lightning"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-bronze"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-copper",
+        "name": "Draconic Ancestor: Copper",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Acid, Damage Resistance: Acid",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "acid",
+            "name": "Acid",
+            "url": "/api/2024/damage-types/acid"
+          },
+          "index": "draconic-ancestor-copper",
+          "name": "Draconic Ancestor: Copper",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-acid",
+              "level": 1,
+              "name": "Breath Weapon: Acid",
+              "url": "/api/2024/traits/draconic-breath-weapon-acid"
+            },
+            {
+              "index": "draconic-damage-resistance-acid",
+              "level": 1,
+              "name": "Damage Resistance: Acid",
+              "url": "/api/2024/traits/draconic-damage-resistance-acid"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-copper"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-gold",
+        "name": "Draconic Ancestor: Gold",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Fire, Damage Resistance: Fire",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "fire",
+            "name": "Fire",
+            "url": "/api/2024/damage-types/fire"
+          },
+          "index": "draconic-ancestor-gold",
+          "name": "Draconic Ancestor: Gold",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-fire",
+              "level": 1,
+              "name": "Breath Weapon: Fire",
+              "url": "/api/2024/traits/draconic-breath-weapon-fire"
+            },
+            {
+              "index": "draconic-damage-resistance-fire",
+              "level": 1,
+              "name": "Damage Resistance: Fire",
+              "url": "/api/2024/traits/draconic-damage-resistance-fire"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-gold"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-green",
+        "name": "Draconic Ancestor: Green",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Poison, Damage Resistance: Poison",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "poison",
+            "name": "Poison",
+            "url": "/api/2024/damage-types/poison"
+          },
+          "index": "draconic-ancestor-green",
+          "name": "Draconic Ancestor: Green",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-poison",
+              "level": 1,
+              "name": "Breath Weapon: Poison",
+              "url": "/api/2024/traits/draconic-breath-weapon-poison"
+            },
+            {
+              "index": "draconic-damage-resistance-poison",
+              "level": 1,
+              "name": "Damage Resistance: Poison",
+              "url": "/api/2024/traits/draconic-damage-resistance-poison"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-green"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-red",
+        "name": "Draconic Ancestor: Red",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Fire, Damage Resistance: Fire",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "fire",
+            "name": "Fire",
+            "url": "/api/2024/damage-types/fire"
+          },
+          "index": "draconic-ancestor-red",
+          "name": "Draconic Ancestor: Red",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-fire",
+              "level": 1,
+              "name": "Breath Weapon: Fire",
+              "url": "/api/2024/traits/draconic-breath-weapon-fire"
+            },
+            {
+              "index": "draconic-damage-resistance-fire",
+              "level": 1,
+              "name": "Damage Resistance: Fire",
+              "url": "/api/2024/traits/draconic-damage-resistance-fire"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-red"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-silver",
+        "name": "Draconic Ancestor: Silver",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Cold, Damage Resistance: Cold",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "cold",
+            "name": "Cold",
+            "url": "/api/2024/damage-types/cold"
+          },
+          "index": "draconic-ancestor-silver",
+          "name": "Draconic Ancestor: Silver",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-cold",
+              "level": 1,
+              "name": "Breath Weapon: Cold",
+              "url": "/api/2024/traits/draconic-breath-weapon-cold"
+            },
+            {
+              "index": "draconic-damage-resistance-cold",
+              "level": 1,
+              "name": "Damage Resistance: Cold",
+              "url": "/api/2024/traits/draconic-damage-resistance-cold"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-silver"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestor-white",
+        "name": "Draconic Ancestor: White",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Breath Weapon: Cold, Damage Resistance: Cold",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "damage_type": {
+            "index": "cold",
+            "name": "Cold",
+            "url": "/api/2024/damage-types/cold"
+          },
+          "index": "draconic-ancestor-white",
+          "name": "Draconic Ancestor: White",
+          "species": {
+            "index": "dragonborn",
+            "name": "Dragonborn",
+            "url": "/api/2024/species/dragonborn"
+          },
+          "traits": [
+            {
+              "index": "draconic-breath-weapon-cold",
+              "level": 1,
+              "name": "Breath Weapon: Cold",
+              "url": "/api/2024/traits/draconic-breath-weapon-cold"
+            },
+            {
+              "index": "draconic-damage-resistance-cold",
+              "level": 1,
+              "name": "Damage Resistance: Cold",
+              "url": "/api/2024/traits/draconic-damage-resistance-cold"
+            }
+          ],
+          "url": "/api/2024/subspecies/draconic-ancestor-white"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "elven-lineage-drow",
+        "name": "Elven Lineage: Drow",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Darkvision (120 ft.), Dancing Lights, Faerie Fire, Darkness",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "index": "elven-lineage-drow",
+          "name": "Elven Lineage: Drow",
+          "species": {
+            "index": "elf",
+            "name": "Elf",
+            "url": "/api/2024/species/elf"
+          },
+          "traits": [
+            {
+              "index": "darkvision-120",
+              "level": 1,
+              "name": "Darkvision (120 ft.)",
+              "url": "/api/2024/traits/darkvision-120"
+            },
+            {
+              "index": "lineage-spell-dancing-lights",
+              "level": 1,
+              "name": "Dancing Lights",
+              "url": "/api/2024/traits/lineage-spell-dancing-lights"
+            },
+            {
+              "index": "lineage-spell-faerie-fire",
+              "level": 3,
+              "name": "Faerie Fire",
+              "url": "/api/2024/traits/lineage-spell-faerie-fire"
+            },
+            {
+              "index": "lineage-spell-darkness",
+              "level": 5,
+              "name": "Darkness",
+              "url": "/api/2024/traits/lineage-spell-darkness"
+            }
+          ],
+          "url": "/api/2024/subspecies/elven-lineage-drow"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "elven-lineage-high-elf",
+        "name": "Elven Lineage: High Elf",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: High Elf: Cantrip Versatility, Detect Magic, Misty Step",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "index": "elven-lineage-high-elf",
+          "name": "Elven Lineage: High Elf",
+          "species": {
+            "index": "elf",
+            "name": "Elf",
+            "url": "/api/2024/species/elf"
+          },
+          "traits": [
+            {
+              "index": "high-elf-cantrip-versatility",
+              "level": 1,
+              "name": "High Elf: Cantrip Versatility",
+              "url": "/api/2024/traits/high-elf-cantrip-versatility"
+            },
+            {
+              "index": "lineage-spell-detect-magic",
+              "level": 3,
+              "name": "Detect Magic",
+              "url": "/api/2024/traits/lineage-spell-detect-magic"
+            },
+            {
+              "index": "lineage-spell-misty-step",
+              "level": 5,
+              "name": "Misty Step",
+              "url": "/api/2024/traits/lineage-spell-misty-step"
+            }
+          ],
+          "url": "/api/2024/subspecies/elven-lineage-high-elf"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "elven-lineage-wood-elf",
+        "name": "Elven Lineage: Wood Elf",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Wood Elf: Movement Speed Increase, Longstrider, Pass without Trace",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "index": "elven-lineage-wood-elf",
+          "name": "Elven Lineage: Wood Elf",
+          "species": {
+            "index": "elf",
+            "name": "Elf",
+            "url": "/api/2024/species/elf"
+          },
+          "traits": [
+            {
+              "index": "wood-elf-speed-increase",
+              "level": 1,
+              "name": "Wood Elf: Movement Speed Increase",
+              "url": "/api/2024/traits/wood-elf-speed-increase"
+            },
+            {
+              "index": "lineage-spell-longstrider",
+              "level": 3,
+              "name": "Longstrider",
+              "url": "/api/2024/traits/lineage-spell-longstrider"
+            },
+            {
+              "index": "lineage-spell-pass-without-trace",
+              "level": 5,
+              "name": "Pass without Trace",
+              "url": "/api/2024/traits/lineage-spell-pass-without-trace"
+            }
+          ],
+          "url": "/api/2024/subspecies/elven-lineage-wood-elf"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "gnomish-lineage-forest-gnome",
+        "name": "Gnomish Lineage: Forest Gnome",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Gnomish Lineage: Forest Gnome, Minor Illusion",
+        "refs": [
+          "gnome"
+        ],
+        "data": {
+          "index": "gnomish-lineage-forest-gnome",
+          "name": "Gnomish Lineage: Forest Gnome",
+          "species": {
+            "index": "gnome",
+            "name": "Gnome",
+            "url": "/api/2024/species/gnome"
+          },
+          "traits": [
+            {
+              "index": "gnomish-lineage-forest-gnome",
+              "level": 1,
+              "name": "Gnomish Lineage: Forest Gnome",
+              "url": "/api/2024/traits/gnomish-lineage-forest-gnome"
+            },
+            {
+              "index": "lineage-spell-minor-illusion",
+              "level": 1,
+              "name": "Minor Illusion",
+              "url": "/api/2024/traits/lineage-spell-minor-illusion"
+            }
+          ],
+          "url": "/api/2024/subspecies/gnomish-lineage-forest-gnome"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "gnomish-lineage-rock-gnome",
+        "name": "Gnomish Lineage: Rock Gnome",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Gnomish Lineage: Rock Gnome, Mending",
+        "refs": [
+          "gnome"
+        ],
+        "data": {
+          "index": "gnomish-lineage-rock-gnome",
+          "name": "Gnomish Lineage: Rock Gnome",
+          "species": {
+            "index": "gnome",
+            "name": "Gnome",
+            "url": "/api/2024/species/gnome"
+          },
+          "traits": [
+            {
+              "index": "gnomish-lineage-rock-gnome",
+              "level": 1,
+              "name": "Gnomish Lineage: Rock Gnome",
+              "url": "/api/2024/traits/gnomish-lineage-rock-gnome"
+            },
+            {
+              "index": "lineage-spell-mending",
+              "level": 1,
+              "name": "Mending",
+              "url": "/api/2024/traits/lineage-spell-mending"
+            }
+          ],
+          "url": "/api/2024/subspecies/gnomish-lineage-rock-gnome"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-clouds-jaunt",
+        "name": "Giant Ancestry: Cloud's Jaunt",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Giant Ancestry: Cloud's Jaunt",
+        "refs": [
+          "goliath"
+        ],
+        "data": {
+          "index": "giant-ancestry-clouds-jaunt",
+          "name": "Giant Ancestry: Cloud's Jaunt",
+          "species": {
+            "index": "goliath",
+            "name": "Goliath",
+            "url": "/api/2024/species/goliath"
+          },
+          "traits": [
+            {
+              "index": "giant-ancestry-clouds-jaunt",
+              "level": 1,
+              "name": "Giant Ancestry: Cloud's Jaunt",
+              "url": "/api/2024/traits/giant-ancestry-clouds-jaunt"
+            }
+          ],
+          "url": "/api/2024/subspecies/giant-ancestry-clouds-jaunt"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-fires-burn",
+        "name": "Giant Ancestry: Fire's Burn",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Giant Ancestry: Fire's Burn",
+        "refs": [
+          "goliath"
+        ],
+        "data": {
+          "index": "giant-ancestry-fires-burn",
+          "name": "Giant Ancestry: Fire's Burn",
+          "species": {
+            "index": "goliath",
+            "name": "Goliath",
+            "url": "/api/2024/species/goliath"
+          },
+          "traits": [
+            {
+              "index": "giant-ancestry-fires-burn",
+              "level": 1,
+              "name": "Giant Ancestry: Fire's Burn",
+              "url": "/api/2024/traits/giant-ancestry-fires-burn"
+            }
+          ],
+          "url": "/api/2024/subspecies/giant-ancestry-fires-burn"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-frosts-chill",
+        "name": "Giant Ancestry: Frost's Chill",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Giant Ancestry: Frost's Chill",
+        "refs": [
+          "goliath"
+        ],
+        "data": {
+          "index": "giant-ancestry-frosts-chill",
+          "name": "Giant Ancestry: Frost's Chill",
+          "species": {
+            "index": "goliath",
+            "name": "Goliath",
+            "url": "/api/2024/species/goliath"
+          },
+          "traits": [
+            {
+              "index": "giant-ancestry-frosts-chill",
+              "level": 1,
+              "name": "Giant Ancestry: Frost's Chill",
+              "url": "/api/2024/traits/giant-ancestry-frosts-chill"
+            }
+          ],
+          "url": "/api/2024/subspecies/giant-ancestry-frosts-chill"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-hills-tumble",
+        "name": "Giant Ancestry: Hill's Tumble",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Giant Ancestry: Hill's Tumble",
+        "refs": [
+          "goliath"
+        ],
+        "data": {
+          "index": "giant-ancestry-hills-tumble",
+          "name": "Giant Ancestry: Hill's Tumble",
+          "species": {
+            "index": "goliath",
+            "name": "Goliath",
+            "url": "/api/2024/species/goliath"
+          },
+          "traits": [
+            {
+              "index": "giant-ancestry-hills-tumble",
+              "level": 1,
+              "name": "Giant Ancestry: Hill's Tumble",
+              "url": "/api/2024/traits/giant-ancestry-hills-tumble"
+            }
+          ],
+          "url": "/api/2024/subspecies/giant-ancestry-hills-tumble"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-stones-endurance",
+        "name": "Giant Ancestry: Stone's Endurance",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Giant Ancestry: Stone's Endurance",
+        "refs": [
+          "goliath"
+        ],
+        "data": {
+          "index": "giant-ancestry-stones-endurance",
+          "name": "Giant Ancestry: Stone's Endurance",
+          "species": {
+            "index": "goliath",
+            "name": "Goliath",
+            "url": "/api/2024/species/goliath"
+          },
+          "traits": [
+            {
+              "index": "giant-ancestry-stones-endurance",
+              "level": 1,
+              "name": "Giant Ancestry: Stone's Endurance",
+              "url": "/api/2024/traits/giant-ancestry-stones-endurance"
+            }
+          ],
+          "url": "/api/2024/subspecies/giant-ancestry-stones-endurance"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-storms-thunder",
+        "name": "Giant Ancestry: Storm's Thunder",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Giant Ancestry: Storm's Thunder",
+        "refs": [
+          "goliath"
+        ],
+        "data": {
+          "index": "giant-ancestry-storms-thunder",
+          "name": "Giant Ancestry: Storm's Thunder",
+          "species": {
+            "index": "goliath",
+            "name": "Goliath",
+            "url": "/api/2024/species/goliath"
+          },
+          "traits": [
+            {
+              "index": "giant-ancestry-storms-thunder",
+              "level": 1,
+              "name": "Giant Ancestry: Storm's Thunder",
+              "url": "/api/2024/traits/giant-ancestry-storms-thunder"
+            }
+          ],
+          "url": "/api/2024/subspecies/giant-ancestry-storms-thunder"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "fiendish-legacy-abyssal",
+        "name": "Fiendish Legacy: Abyssal",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Damage Resistance: Poison, Poison Spray, Ray of Sickness, Hold Person",
+        "refs": [
+          "tiefling"
+        ],
+        "data": {
+          "index": "fiendish-legacy-abyssal",
+          "name": "Fiendish Legacy: Abyssal",
+          "species": {
+            "index": "tiefling",
+            "name": "Tiefling",
+            "url": "/api/2024/species/tiefling"
+          },
+          "traits": [
+            {
+              "index": "lineage-resistance-poison",
+              "level": 1,
+              "name": "Damage Resistance: Poison",
+              "url": "/api/2024/traits/lineage-resistance-poison"
+            },
+            {
+              "index": "lineage-spell-poison-spray",
+              "level": 1,
+              "name": "Poison Spray",
+              "url": "/api/2024/traits/lineage-spell-poison-spray"
+            },
+            {
+              "index": "lineage-spell-ray-of-sickness",
+              "level": 3,
+              "name": "Ray of Sickness",
+              "url": "/api/2024/traits/lineage-spell-ray-of-sickness"
+            },
+            {
+              "index": "lineage-spell-hold-person",
+              "level": 5,
+              "name": "Hold Person",
+              "url": "/api/2024/traits/lineage-spell-hold-person"
+            }
+          ],
+          "url": "/api/2024/subspecies/fiendish-legacy-abyssal"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "fiendish-legacy-chthonic",
+        "name": "Fiendish Legacy: Chthonic",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Damage Resistance: Necrotic, Chill Touch, False Life, Ray of Enfeeblement",
+        "refs": [
+          "tiefling"
+        ],
+        "data": {
+          "index": "fiendish-legacy-chthonic",
+          "name": "Fiendish Legacy: Chthonic",
+          "species": {
+            "index": "tiefling",
+            "name": "Tiefling",
+            "url": "/api/2024/species/tiefling"
+          },
+          "traits": [
+            {
+              "index": "lineage-resistance-necrotic",
+              "level": 1,
+              "name": "Damage Resistance: Necrotic",
+              "url": "/api/2024/traits/lineage-resistance-necrotic"
+            },
+            {
+              "index": "lineage-spell-chill-touch",
+              "level": 1,
+              "name": "Chill Touch",
+              "url": "/api/2024/traits/lineage-spell-chill-touch"
+            },
+            {
+              "index": "lineage-spell-false-life",
+              "level": 3,
+              "name": "False Life",
+              "url": "/api/2024/traits/lineage-spell-false-life"
+            },
+            {
+              "index": "lineage-spell-ray-of-enfeeblement",
+              "level": 5,
+              "name": "Ray of Enfeeblement",
+              "url": "/api/2024/traits/lineage-spell-ray-of-enfeeblement"
+            }
+          ],
+          "url": "/api/2024/subspecies/fiendish-legacy-chthonic"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "fiendish-legacy-infernal",
+        "name": "Fiendish Legacy: Infernal",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "\n\nTraits: Damage Resistance: Fire, Fire Bolt, Hellish Rebuke, Darkness",
+        "refs": [
+          "tiefling"
+        ],
+        "data": {
+          "index": "fiendish-legacy-infernal",
+          "name": "Fiendish Legacy: Infernal",
+          "species": {
+            "index": "tiefling",
+            "name": "Tiefling",
+            "url": "/api/2024/species/tiefling"
+          },
+          "traits": [
+            {
+              "index": "lineage-resistance-fire",
+              "level": 1,
+              "name": "Damage Resistance: Fire",
+              "url": "/api/2024/traits/lineage-resistance-fire"
+            },
+            {
+              "index": "lineage-spell-fire-bolt",
+              "level": 1,
+              "name": "Fire Bolt",
+              "url": "/api/2024/traits/lineage-spell-fire-bolt"
+            },
+            {
+              "index": "lineage-spell-hellish-rebuke",
+              "level": 3,
+              "name": "Hellish Rebuke",
+              "url": "/api/2024/traits/lineage-spell-hellish-rebuke"
+            },
+            {
+              "index": "lineage-spell-darkness",
+              "level": 5,
+              "name": "Darkness",
+              "url": "/api/2024/traits/lineage-spell-darkness"
+            }
+          ],
+          "url": "/api/2024/subspecies/fiendish-legacy-infernal"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      }
+    ],
+    "backgrounds": null,
+    "feats": null,
+    "rule_sections": [
+      {
+        "id": "adrenaline-rush",
+        "name": "Adrenaline Rush",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You can take the Dash action as a Bonus Action. When you do so, you gain a number of Temporary Hit Points equal to your Proficiency Bonus.\nYou can use this trait a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Short or Long Rest.",
+        "refs": [
+          "orc"
+        ],
+        "data": {
+          "index": "adrenaline-rush",
+          "name": "Adrenaline Rush",
+          "species": [
+            {
+              "index": "orc",
+              "name": "Orc",
+              "url": "/api/2024/species/orc"
+            }
+          ],
+          "url": "/api/2024/traits/adrenaline-rush"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "brave",
+        "name": "Brave",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Advantage on saving throws you make to avoid or end the Frightened condition.",
+        "refs": [
+          "halfling"
+        ],
+        "data": {
+          "index": "brave",
+          "name": "Brave",
+          "species": [
+            {
+              "index": "halfling",
+              "name": "Halfling",
+              "url": "/api/2024/species/halfling"
+            }
+          ],
+          "url": "/api/2024/traits/brave"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-breath-weapon-acid",
+        "name": "Breath Weapon: Acid",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you take the Attack action on your turn, you can replace one of your attacks with an exhalation of magical energy in either a 15-foot Cone or a 30-foot Line that is 5 feet wide (choose the shape each time). Each creature in that area must make a Dexterity saving throw (DC 8 plus your Constitution modifier and Proficiency Bonus). On a failed save, a creature takes 1d10 acid damage. On a successful save, a creature takes half as much damage. This damage increases by 1d10 when you reach character levels 5 (2d10), 11 (3d10), and 17 (4d10).\nYou can use this Breath Weapon a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.",
+        "refs": [
+          "dragonborn",
+          "draconic-ancestor-black",
+          "draconic-ancestor-copper"
+        ],
+        "data": {
+          "index": "draconic-breath-weapon-acid",
+          "name": "Breath Weapon: Acid",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "draconic-ancestor-black",
+              "name": "Draconic Ancestor: Black",
+              "url": "/api/2024/subspecies/draconic-ancestor-black"
+            },
+            {
+              "index": "draconic-ancestor-copper",
+              "name": "Draconic Ancestor: Copper",
+              "url": "/api/2024/subspecies/draconic-ancestor-copper"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-breath-weapon-acid"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-breath-weapon-cold",
+        "name": "Breath Weapon: Cold",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you take the Attack action on your turn, you can replace one of your attacks with an exhalation of magical energy in either a 15-foot Cone or a 30-foot Line that is 5 feet wide (choose the shape each time). Each creature in that area must make a Dexterity saving throw (DC 8 plus your Constitution modifier and Proficiency Bonus). On a failed save, a creature takes 1d10 cold damage. On a successful save, a creature takes half as much damage. This damage increases by 1d10 when you reach character levels 5 (2d10), 11 (3d10), and 17 (4d10).\nYou can use this Breath Weapon a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.",
+        "refs": [
+          "dragonborn",
+          "draconic-ancestor-silver",
+          "draconic-ancestor-white"
+        ],
+        "data": {
+          "index": "draconic-breath-weapon-cold",
+          "name": "Breath Weapon: Cold",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "draconic-ancestor-silver",
+              "name": "Draconic Ancestor: Silver",
+              "url": "/api/2024/subspecies/draconic-ancestor-silver"
+            },
+            {
+              "index": "draconic-ancestor-white",
+              "name": "Draconic Ancestor: White",
+              "url": "/api/2024/subspecies/draconic-ancestor-white"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-breath-weapon-cold"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-breath-weapon-fire",
+        "name": "Breath Weapon: Fire",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you take the Attack action on your turn, you can replace one of your attacks with an exhalation of magical energy in either a 15-foot Cone or a 30-foot Line that is 5 feet wide (choose the shape each time). Each creature in that area must make a Dexterity saving throw (DC 8 plus your Constitution modifier and Proficiency Bonus). On a failed save, a creature takes 1d10 fire damage. On a successful save, a creature takes half as much damage. This damage increases by 1d10 when you reach character levels 5 (2d10), 11 (3d10), and 17 (4d10).\nYou can use this Breath Weapon a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.",
+        "refs": [
+          "dragonborn",
+          "draconic-ancestor-brass",
+          "draconic-ancestor-gold",
+          "draconic-ancestor-red"
+        ],
+        "data": {
+          "index": "draconic-breath-weapon-fire",
+          "name": "Breath Weapon: Fire",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "draconic-ancestor-brass",
+              "name": "Draconic Ancestor: Brass",
+              "url": "/api/2024/subspecies/draconic-ancestor-brass"
+            },
+            {
+              "index": "draconic-ancestor-gold",
+              "name": "Draconic Ancestor: Gold",
+              "url": "/api/2024/subspecies/draconic-ancestor-gold"
+            },
+            {
+              "index": "draconic-ancestor-red",
+              "name": "Draconic Ancestor: Red",
+              "url": "/api/2024/subspecies/draconic-ancestor-red"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-breath-weapon-fire"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-breath-weapon-lightning",
+        "name": "Breath Weapon: Lightning",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you take the Attack action on your turn, you can replace one of your attacks with an exhalation of magical energy in either a 15-foot Cone or a 30-foot Line that is 5 feet wide (choose the shape each time). Each creature in that area must make a Dexterity saving throw (DC 8 plus your Constitution modifier and Proficiency Bonus). On a failed save, a creature takes 1d10 lightning damage. On a successful save, a creature takes half as much damage. This damage increases by 1d10 when you reach character levels 5 (2d10), 11 (3d10), and 17 (4d10).\nYou can use this Breath Weapon a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.",
+        "refs": [
+          "dragonborn",
+          "draconic-ancestor-blue",
+          "draconic-ancestor-bronze"
+        ],
+        "data": {
+          "index": "draconic-breath-weapon-lightning",
+          "name": "Breath Weapon: Lightning",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "draconic-ancestor-blue",
+              "name": "Draconic Ancestor: Blue",
+              "url": "/api/2024/subspecies/draconic-ancestor-blue"
+            },
+            {
+              "index": "draconic-ancestor-bronze",
+              "name": "Draconic Ancestor: Bronze",
+              "url": "/api/2024/subspecies/draconic-ancestor-bronze"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-breath-weapon-lightning"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-breath-weapon-poison",
+        "name": "Breath Weapon: Poison",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you take the Attack action on your turn, you can replace one of your attacks with an exhalation of magical energy in either a 15-foot Cone or a 30-foot Line that is 5 feet wide (choose the shape each time). Each creature in that area must make a Dexterity saving throw (DC 8 plus your Constitution modifier and Proficiency Bonus). On a failed save, a creature takes 1d10 poison damage. On a successful save, a creature takes half as much damage. This damage increases by 1d10 when you reach character levels 5 (2d10), 11 (3d10), and 17 (4d10).\nYou can use this Breath Weapon a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.",
+        "refs": [
+          "dragonborn",
+          "draconic-ancestor-green"
+        ],
+        "data": {
+          "index": "draconic-breath-weapon-poison",
+          "name": "Breath Weapon: Poison",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "draconic-ancestor-green",
+              "name": "Draconic Ancestor: Green",
+              "url": "/api/2024/subspecies/draconic-ancestor-green"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-breath-weapon-poison"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-damage-resistance-acid",
+        "name": "Damage Resistance: Acid",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Resistance to acid damage, as determined by your Draconic Ancestry trait.",
+        "refs": [
+          "dragonborn",
+          "draconic-ancestor-black",
+          "draconic-ancestor-copper"
+        ],
+        "data": {
+          "index": "draconic-damage-resistance-acid",
+          "name": "Damage Resistance: Acid",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "draconic-ancestor-black",
+              "name": "Draconic Ancestor: Black",
+              "url": "/api/2024/subspecies/draconic-ancestor-black"
+            },
+            {
+              "index": "draconic-ancestor-copper",
+              "name": "Draconic Ancestor: Copper",
+              "url": "/api/2024/subspecies/draconic-ancestor-copper"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-damage-resistance-acid"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-damage-resistance-cold",
+        "name": "Damage Resistance: Cold",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Resistance to cold damage, as determined by your Draconic Ancestry trait.",
+        "refs": [
+          "dragonborn",
+          "draconic-ancestor-silver",
+          "draconic-ancestor-white"
+        ],
+        "data": {
+          "index": "draconic-damage-resistance-cold",
+          "name": "Damage Resistance: Cold",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "draconic-ancestor-silver",
+              "name": "Draconic Ancestor: Silver",
+              "url": "/api/2024/subspecies/draconic-ancestor-silver"
+            },
+            {
+              "index": "draconic-ancestor-white",
+              "name": "Draconic Ancestor: White",
+              "url": "/api/2024/subspecies/draconic-ancestor-white"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-damage-resistance-cold"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-damage-resistance-fire",
+        "name": "Damage Resistance: Fire",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Resistance to fire damage, as determined by your Draconic Ancestry trait.",
+        "refs": [
+          "dragonborn",
+          "draconic-ancestor-brass",
+          "draconic-ancestor-gold",
+          "draconic-ancestor-red"
+        ],
+        "data": {
+          "index": "draconic-damage-resistance-fire",
+          "name": "Damage Resistance: Fire",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "draconic-ancestor-brass",
+              "name": "Draconic Ancestor: Brass",
+              "url": "/api/2024/subspecies/draconic-ancestor-brass"
+            },
+            {
+              "index": "draconic-ancestor-gold",
+              "name": "Draconic Ancestor: Gold",
+              "url": "/api/2024/subspecies/draconic-ancestor-gold"
+            },
+            {
+              "index": "draconic-ancestor-red",
+              "name": "Draconic Ancestor: Red",
+              "url": "/api/2024/subspecies/draconic-ancestor-red"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-damage-resistance-fire"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-damage-resistance-lightning",
+        "name": "Damage Resistance: Lightning",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Resistance to lightning damage, as determined by your Draconic Ancestry trait.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-damage-resistance-lightning",
+          "name": "Damage Resistance: Lightning",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-damage-resistance-lightning"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-damage-resistance-poison",
+        "name": "Damage Resistance: Poison",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Resistance to poison damage, as determined by your Draconic Ancestry trait.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-damage-resistance-poison",
+          "name": "Damage Resistance: Poison",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-damage-resistance-poison"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "darkvision-60",
+        "name": "Darkvision (60 ft.)",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Darkvision with a range of 60 feet.",
+        "refs": [
+          "dragonborn",
+          "elf",
+          "gnome",
+          "tiefling"
+        ],
+        "data": {
+          "index": "darkvision-60",
+          "name": "Darkvision (60 ft.)",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            },
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            },
+            {
+              "index": "gnome",
+              "name": "Gnome",
+              "url": "/api/2024/species/gnome"
+            },
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "url": "/api/2024/traits/darkvision-60"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "darkvision-120",
+        "name": "Darkvision (120 ft.)",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Darkvision with a range of 120 feet.",
+        "refs": [
+          "dwarf",
+          "orc",
+          "elven-lineage-drow"
+        ],
+        "data": {
+          "index": "darkvision-120",
+          "name": "Darkvision (120 ft.)",
+          "species": [
+            {
+              "index": "dwarf",
+              "name": "Dwarf",
+              "url": "/api/2024/species/dwarf"
+            },
+            {
+              "index": "orc",
+              "name": "Orc",
+              "url": "/api/2024/species/orc"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "elven-lineage-drow",
+              "name": "Elven Lineage: Drow",
+              "url": "/api/2024/subspecies/elven-lineage-drow"
+            }
+          ],
+          "url": "/api/2024/traits/darkvision-120"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry",
+        "name": "Draconic Ancestry",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Your lineage stems from a dragon progenitor. Choose the kind of dragon from the Draconic Ancestors table. Your choice affects your Breath Weapon and Damage Resistance traits as well as your appearance.\nDraconic Ancestors\nDragon / Damage Type\nBlack / Acid\nBlue / Lightning\nBrass / Fire\nBronze / Lightning\nCopper / Acid\nGreen / Poison\nGold / Fire\nRed / Fire\nSilver / Cold\nWhite / Cold",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry",
+          "name": "Draconic Ancestry",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-ancestry"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-flight",
+        "name": "Draconic Flight",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you reach character level 5, you can channel draconic magic to give yourself temporary flight. As a Bonus Action, you sprout spectral wings on your back that last for 10 minutes or until you retract the wings (no action required) or have the Incapacitated condition. During that time, you have a Fly Speed equal to your Speed. Your wings appear to be made of the same energy as your Breath Weapon. Once you use this trait, you can't use it again until you finish a Long Rest.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-flight",
+          "name": "Draconic Flight",
+          "species": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2024/species/dragonborn"
+            }
+          ],
+          "url": "/api/2024/traits/draconic-flight"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "dwarven-resilience",
+        "name": "Dwarven Resilience",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Resistance to Poison damage. You also have Advantage on saving throws you make to avoid or end the Poisoned condition.",
+        "refs": [
+          "dwarf"
+        ],
+        "data": {
+          "index": "dwarven-resilience",
+          "name": "Dwarven Resilience",
+          "species": [
+            {
+              "index": "dwarf",
+              "name": "Dwarf",
+              "url": "/api/2024/species/dwarf"
+            }
+          ],
+          "url": "/api/2024/traits/dwarven-resilience"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "dwarven-toughness",
+        "name": "Dwarven Toughness",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Your Hit Point maximum increases by 1, and it increases by 1 again whenever you gain a level.",
+        "refs": [
+          "dwarf"
+        ],
+        "data": {
+          "index": "dwarven-toughness",
+          "name": "Dwarven Toughness",
+          "species": [
+            {
+              "index": "dwarf",
+              "name": "Dwarf",
+              "url": "/api/2024/species/dwarf"
+            }
+          ],
+          "url": "/api/2024/traits/dwarven-toughness"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "elven-lineage",
+        "name": "Elven Lineage",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You are part of a lineage that grants you supernatural abilities. Choose a lineage from the Elven Lineages table. You gain the level 1 benefit of that lineage.\nWhen you reach character levels 3 and 5, you learn a higher-level spell, as shown on the table.\nYou always have that spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest. You can also cast the spell using any spell slots you have of the appropriate level.\nElven Lineages\nDrow\nLevel 1. The range of your Darkvision increases to 120 feet. You also know the Dancing Lights cantrip.\nLevel 3. Faerie Fire\nLevel 5. Darkness\nHigh Elf\nLevel 1. You know the Prestidigitation cantrip. Whenever you finish a Long Rest, you can replace that cantrip with a different cantrip from the Wizard spell list.\nLevel 3. Detect Magic\nLevel 5. Misty Step\nWood Elf\nLevel 1. Your Speed increases to 35 feet. You also know the Druidcraft cantrip.\nLevel 3. Longstrider\nLevel 5. Pass without Trace\nIntelligence, Wisdom, or Charisma is your spellcasting ability for the spells you cast with this trait (choose the ability when you select the lineage).",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "index": "elven-lineage",
+          "name": "Elven Lineage",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "url": "/api/2024/traits/elven-lineage"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "fey-ancestry",
+        "name": "Fey Ancestry",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Advantage on saving throws you make to avoid or end the Charmed condition.",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "index": "fey-ancestry",
+          "name": "Fey Ancestry",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "url": "/api/2024/traits/fey-ancestry"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "fiendish-legacy",
+        "name": "Fiendish Legacy",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You are the recipient of a legacy that grants you supernatural abilities. Choose a legacy from the Fiendish Legacies table. You gain the level 1 benefit of the chosen legacy.\nWhen you reach character levels 3 and 5, you learn a higher-level spell, as shown on the table.\nYou always have that spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest. You can also cast the spell using any spell slots you have of the appropriate level.\nIntelligence, Wisdom, or Charisma is your spell-casting ability for the spells you cast with this trait (choose the ability when you select the legacy).\nFiendish Legacies\nAbyssal.\nLevel 1. You have Resistance to Poison damage. You also know the Poison Spray cantrip.\nLevel 3. Ray of Sickness\nLevel 5. Hold Person\nChthonic.\nLevel 1. You have Resistance to Necrotic damage. You also know the Chill Touch cantrip.\nLevel 3. False Life\nLevel 5. Ray of Enfeeblement\nInfernal.\nLevel 1. You have Resistance to Fire damage. You also know the Fire Bolt cantrip.\nLevel 3. Hellish Rebuke\nLevel 5. Darkness",
+        "refs": [
+          "tiefling"
+        ],
+        "data": {
+          "index": "fiendish-legacy",
+          "name": "Fiendish Legacy",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "url": "/api/2024/traits/fiendish-legacy"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry",
+        "name": "Giant Ancestry",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You are descended from Giants. Choose one of the following benefits-a supernatural boon from your ancestry; you can use the chosen benefit a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest:\nCloud's Jaunt (Cloud Giant). As a Bonus Action, you magically teleport up to 30 feet to an unoccupied space you can see.\nFire's Burn (Fire Giant). When you hit a target with an attack roll and deal damage to it, you can also deal 1d10 Fire damage to that target.\nFrost's Chill (Frost Giant). When you hit a target with an attack roll and deal damage to it, you can also deal 1d6 Cold damage to that target and reduce its Speed by 10 feet until the start of your next turn.\nHill's Tumble (Hill Giant). When you hit a Large or smaller creature with an attack roll and deal damage to it, you can give that target the Prone condition.\nStone's Endurance (Stone Giant). When you take damage, you can take a Reaction to roll 1d12. Add your Constitution modifier to the number rolled and reduce the damage by that total.\n- Storm's Thunder (Storm Giant). When you take damage from a creature within 60 feet of you, you can take a Reaction to deal 1d8 Thunder damage to that creature.",
+        "refs": [
+          "goliath"
+        ],
+        "data": {
+          "index": "giant-ancestry",
+          "name": "Giant Ancestry",
+          "species": [
+            {
+              "index": "goliath",
+              "name": "Goliath",
+              "url": "/api/2024/species/goliath"
+            }
+          ],
+          "url": "/api/2024/traits/giant-ancestry"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-clouds-jaunt",
+        "name": "Giant Ancestry: Cloud's Jaunt",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "As a Bonus Action, you magically teleport up to 30 feet to an unoccupied space you can see.",
+        "refs": [
+          "goliath",
+          "giant-ancestry-clouds-jaunt"
+        ],
+        "data": {
+          "index": "giant-ancestry-clouds-jaunt",
+          "name": "Giant Ancestry: Cloud's Jaunt",
+          "species": [
+            {
+              "index": "goliath",
+              "name": "Goliath",
+              "url": "/api/2024/species/goliath"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "giant-ancestry-clouds-jaunt",
+              "name": "Giant Ancestry: Cloud's Jaunt",
+              "url": "/api/2024/subspecies/giant-ancestry-clouds-jaunt"
+            }
+          ],
+          "url": "/api/2024/traits/giant-ancestry-clouds-jaunt"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-fires-burn",
+        "name": "Giant Ancestry: Fire's Burn",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you hit a target with an attack roll and deal damage to it, you can also deal 1d10 Fire damage to that target.",
+        "refs": [
+          "goliath",
+          "giant-ancestry-fires-burn"
+        ],
+        "data": {
+          "index": "giant-ancestry-fires-burn",
+          "name": "Giant Ancestry: Fire's Burn",
+          "species": [
+            {
+              "index": "goliath",
+              "name": "Goliath",
+              "url": "/api/2024/species/goliath"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "giant-ancestry-fires-burn",
+              "name": "Giant Ancestry: Fire's Burn",
+              "url": "/api/2024/subspecies/giant-ancestry-fires-burn"
+            }
+          ],
+          "url": "/api/2024/traits/giant-ancestry-fires-burn"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-frosts-chill",
+        "name": "Giant Ancestry: Frost's Chill",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you hit a target with an attack roll and deal damage to it, you can also deal 1d6 Cold damage to that target and reduce its Speed by 10 feet until the start of your next turn.",
+        "refs": [
+          "goliath",
+          "giant-ancestry-frosts-chill"
+        ],
+        "data": {
+          "index": "giant-ancestry-frosts-chill",
+          "name": "Giant Ancestry: Frost's Chill",
+          "species": [
+            {
+              "index": "goliath",
+              "name": "Goliath",
+              "url": "/api/2024/species/goliath"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "giant-ancestry-frosts-chill",
+              "name": "Giant Ancestry: Frost's Chill",
+              "url": "/api/2024/subspecies/giant-ancestry-frosts-chill"
+            }
+          ],
+          "url": "/api/2024/traits/giant-ancestry-frosts-chill"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-hills-tumble",
+        "name": "Giant Ancestry: Hill's Tumble",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you hit a Large or smaller creature with an attack roll and deal damage to it, you can give that target the Prone condition.",
+        "refs": [
+          "goliath",
+          "giant-ancestry-hills-tumble"
+        ],
+        "data": {
+          "index": "giant-ancestry-hills-tumble",
+          "name": "Giant Ancestry: Hill's Tumble",
+          "species": [
+            {
+              "index": "goliath",
+              "name": "Goliath",
+              "url": "/api/2024/species/goliath"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "giant-ancestry-hills-tumble",
+              "name": "Giant Ancestry: Hill's Tumble",
+              "url": "/api/2024/subspecies/giant-ancestry-hills-tumble"
+            }
+          ],
+          "url": "/api/2024/traits/giant-ancestry-hills-tumble"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-stones-endurance",
+        "name": "Giant Ancestry: Stone's Endurance",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you take damage, you can take a Reaction to roll 1d12. Add your Constitution modifier to the number rolled and reduce the damage by that total.",
+        "refs": [
+          "goliath",
+          "giant-ancestry-stones-endurance"
+        ],
+        "data": {
+          "index": "giant-ancestry-stones-endurance",
+          "name": "Giant Ancestry: Stone's Endurance",
+          "species": [
+            {
+              "index": "goliath",
+              "name": "Goliath",
+              "url": "/api/2024/species/goliath"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "giant-ancestry-stones-endurance",
+              "name": "Giant Ancestry: Stone's Endurance",
+              "url": "/api/2024/subspecies/giant-ancestry-stones-endurance"
+            }
+          ],
+          "url": "/api/2024/traits/giant-ancestry-stones-endurance"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "giant-ancestry-storms-thunder",
+        "name": "Giant Ancestry: Storm's Thunder",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you take damage from a creature within 60 feet of you, you can take a Reaction to deal 1d8 Thunder damage to that creature.",
+        "refs": [
+          "goliath",
+          "giant-ancestry-storms-thunder"
+        ],
+        "data": {
+          "index": "giant-ancestry-storms-thunder",
+          "name": "Giant Ancestry: Storm's Thunder",
+          "species": [
+            {
+              "index": "goliath",
+              "name": "Goliath",
+              "url": "/api/2024/species/goliath"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "giant-ancestry-storms-thunder",
+              "name": "Giant Ancestry: Storm's Thunder",
+              "url": "/api/2024/subspecies/giant-ancestry-storms-thunder"
+            }
+          ],
+          "url": "/api/2024/traits/giant-ancestry-storms-thunder"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "gnomish-cunning",
+        "name": "Gnomish Cunning",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Advantage on Intelligence, Wisdom, and Charisma saving throws.",
+        "refs": [
+          "gnome"
+        ],
+        "data": {
+          "index": "gnomish-cunning",
+          "name": "Gnomish Cunning",
+          "species": [
+            {
+              "index": "gnome",
+              "name": "Gnome",
+              "url": "/api/2024/species/gnome"
+            }
+          ],
+          "url": "/api/2024/traits/gnomish-cunning"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "gnomish-lineage",
+        "name": "Gnomish Lineage",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You are part of a lineage that grants you supernatural abilities. Choose one of the following options; whichever one you choose, Intelligence, Wisdom, or Charisma is your spellcasting ability for the spells you cast with this trait (choose the ability when you select the lineage):\nForest Gnome. You know the Minor Illusion cantrip. You also always have the Speak with Animals spell prepared. You can cast it without a spell slot a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest. You can also use any spell slots you have to cast the spell.\nRock Gnome. You know the Mending and Prestidigitation cantrips. In addition, you can spend 10 minutes casting Prestidigitation to create a Tiny clockwork device (AC 5, 1 HP), such as a toy, fire starter, or music box. When you create the device, you determine its function by choosing one effect from Prestidigitation; the device produces that effect whenever you or another creature takes a Bonus Action to activate it with a touch. If the chosen effect has options within it, you choose one of those options for the device when you create it.\nFor example, if you choose the spell's ignite-extinguish effect, you determine whether the device ignites or extinguishes fire; the device doesn't do both. You can have three such devices in existence at a time, and each falls apart 8 hours after its creation or when you dismantle it with a touch as a Utilize action.",
+        "refs": [
+          "gnome"
+        ],
+        "data": {
+          "index": "gnomish-lineage",
+          "name": "Gnomish Lineage",
+          "species": [
+            {
+              "index": "gnome",
+              "name": "Gnome",
+              "url": "/api/2024/species/gnome"
+            }
+          ],
+          "url": "/api/2024/traits/gnomish-lineage"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "gnomish-lineage-forest-gnome",
+        "name": "Gnomish Lineage: Forest Gnome",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You always have the Speak with Animals spell prepared. You can cast it without a spell slot a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest. You can also use any spell slots you have to cast the spell.",
+        "refs": [
+          "gnome",
+          "gnomish-lineage-forest-gnome"
+        ],
+        "data": {
+          "index": "gnomish-lineage-forest-gnome",
+          "name": "Gnomish Lineage: Forest Gnome",
+          "species": [
+            {
+              "index": "gnome",
+              "name": "Gnome",
+              "url": "/api/2024/species/gnome"
+            }
+          ],
+          "spells": [
+            {
+              "recovery": "Long Rest",
+              "spell": {
+                "index": "speak-with-animals",
+                "name": "Speak with Animals",
+                "url": "/api/2024/spells/speak-with-animals"
+              },
+              "uses": "Proficiency Bonus"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "gnomish-lineage-forest-gnome",
+              "name": "Gnomish Lineage: Forest Gnome",
+              "url": "/api/2024/subspecies/gnomish-lineage-forest-gnome"
+            }
+          ],
+          "url": "/api/2024/traits/gnomish-lineage-forest-gnome"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "gnomish-lineage-rock-gnome",
+        "name": "Gnomish Lineage: Rock Gnome",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the Prestidigitation cantrip. In addition, you can spend 10 minutes casting Prestidigitation to create a Tiny clockwork device (AC 5, 1 HP), such as a toy, fire starter, or music box. When you create the device, you determine its function by choosing one effect from Prestidigitation; the device produces that effect whenever you or another creature takes a Bonus Action to activate it with a touch. If the chosen effect has options within it, you choose one of those options for the device when you create it. For example, if you choose the spell’s ignite-extinguish effect, you determine whether the device ignites or extinguishes fire; the device doesn’t do both. You can have three such devices in existence at a time, and each falls apart 8 hours after its creation or when you dismantle it with a touch as a Utilize action.",
+        "refs": [
+          "gnome",
+          "gnomish-lineage-rock-gnome"
+        ],
+        "data": {
+          "index": "gnomish-lineage-rock-gnome",
+          "name": "Gnomish Lineage: Rock Gnome",
+          "species": [
+            {
+              "index": "gnome",
+              "name": "Gnome",
+              "url": "/api/2024/species/gnome"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "prestidigitation",
+                "name": "Prestidigitation",
+                "url": "/api/2024/spells/prestidigitation"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "gnomish-lineage-rock-gnome",
+              "name": "Gnomish Lineage: Rock Gnome",
+              "url": "/api/2024/subspecies/gnomish-lineage-rock-gnome"
+            }
+          ],
+          "url": "/api/2024/traits/gnomish-lineage-rock-gnome"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "halfling-nimbleness",
+        "name": "Halfling Nimbleness",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You can move through the space of any creature that is a size larger than you, but you can't stop in the same space.",
+        "refs": [
+          "halfling"
+        ],
+        "data": {
+          "index": "halfling-nimbleness",
+          "name": "Halfling Nimbleness",
+          "species": [
+            {
+              "index": "halfling",
+              "name": "Halfling",
+              "url": "/api/2024/species/halfling"
+            }
+          ],
+          "url": "/api/2024/traits/halfling-nimbleness"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "high-elf-cantrip-versatility",
+        "name": "High Elf: Cantrip Versatility",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the Prestidigitation cantrip. Whenever you finish a Long Rest, you can replace that cantrip with a different cantrip from the Wizard spell list.",
+        "refs": [
+          "elf",
+          "elven-lineage-high-elf"
+        ],
+        "data": {
+          "index": "high-elf-cantrip-versatility",
+          "name": "High Elf: Cantrip Versatility",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "prestidigitation",
+                "name": "Prestidigitation",
+                "url": "/api/2024/spells/prestidigitation"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "elven-lineage-high-elf",
+              "name": "Elven Lineage: High Elf",
+              "url": "/api/2024/subspecies/elven-lineage-high-elf"
+            }
+          ],
+          "url": "/api/2024/traits/high-elf-cantrip-versatility"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "keen-senses",
+        "name": "Keen Senses",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have proficiency in the Insight, Perception, or Survival skill.",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "index": "keen-senses",
+          "name": "Keen Senses",
+          "proficiency_choices": {
+            "choose": 1,
+            "desc": "Choose one of the following skills: Insight, Perception, or Survival.",
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "item": {
+                    "index": "insight",
+                    "name": "Insight",
+                    "url": "/api/2024/skills/insight"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "perception",
+                    "name": "Perception",
+                    "url": "/api/2024/skills/perception"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "survival",
+                    "name": "Survival",
+                    "url": "/api/2024/skills/survival"
+                  },
+                  "option_type": "reference"
+                }
+              ]
+            },
+            "type": "proficiencies"
+          },
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "url": "/api/2024/traits/keen-senses"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "large-form",
+        "name": "Large Form",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Starting at character level 5, you can change your size to Large as a Bonus Action if you're in a big enough space. This transformation lasts for 10 minutes or until you end it (no action required). For that duration, you have Advantage on Strength checks, and your Speed increases by 10 feet. Once you use this trait, you can't use it again until you finish a Long Rest.",
+        "refs": [
+          "goliath"
+        ],
+        "data": {
+          "index": "large-form",
+          "name": "Large Form",
+          "species": [
+            {
+              "index": "goliath",
+              "name": "Goliath",
+              "url": "/api/2024/species/goliath"
+            }
+          ],
+          "url": "/api/2024/traits/large-form"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-resistance-fire",
+        "name": "Damage Resistance: Fire",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Resistance to Fire damage.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-infernal"
+        ],
+        "data": {
+          "index": "lineage-resistance-fire",
+          "name": "Damage Resistance: Fire",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-infernal",
+              "name": "Fiendish Legacy: Infernal",
+              "url": "/api/2024/subspecies/fiendish-legacy-infernal"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-resistance-fire"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-resistance-necrotic",
+        "name": "Damage Resistance: Necrotic",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Resistance to Necrotic damage.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-chthonic"
+        ],
+        "data": {
+          "index": "lineage-resistance-necrotic",
+          "name": "Damage Resistance: Necrotic",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-chthonic",
+              "name": "Fiendish Legacy: Chthonic",
+              "url": "/api/2024/subspecies/fiendish-legacy-chthonic"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-resistance-necrotic"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-resistance-poison",
+        "name": "Damage Resistance: Poison",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Resistance to Poison damage.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-abyssal"
+        ],
+        "data": {
+          "index": "lineage-resistance-poison",
+          "name": "Damage Resistance: Poison",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-abyssal",
+              "name": "Fiendish Legacy: Abyssal",
+              "url": "/api/2024/subspecies/fiendish-legacy-abyssal"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-resistance-poison"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-chill-touch",
+        "name": "Chill Touch",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Chill Touch.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-chthonic"
+        ],
+        "data": {
+          "index": "lineage-spell-chill-touch",
+          "name": "Chill Touch",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "chill-touch",
+                "name": "Chill Touch",
+                "url": "/api/2024/spells/chill-touch"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-chthonic",
+              "name": "Fiendish Legacy: Chthonic",
+              "url": "/api/2024/subspecies/fiendish-legacy-chthonic"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-chill-touch"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-dancing-lights",
+        "name": "Dancing Lights",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Dancing Lights.",
+        "refs": [
+          "elf",
+          "elven-lineage-drow"
+        ],
+        "data": {
+          "index": "lineage-spell-dancing-lights",
+          "name": "Dancing Lights",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "dancing-lights",
+                "name": "Dancing Lights",
+                "url": "/api/2024/spells/dancing-lights"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "elven-lineage-drow",
+              "name": "Elven Lineage: Drow",
+              "url": "/api/2024/subspecies/elven-lineage-drow"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-dancing-lights"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-darkness",
+        "name": "Darkness",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Darkness.",
+        "refs": [
+          "elf",
+          "tiefling",
+          "elven-lineage-drow",
+          "fiendish-legacy-infernal"
+        ],
+        "data": {
+          "index": "lineage-spell-darkness",
+          "name": "Darkness",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            },
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "darkness",
+                "name": "Darkness",
+                "url": "/api/2024/spells/darkness"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "elven-lineage-drow",
+              "name": "Elven Lineage: Drow",
+              "url": "/api/2024/subspecies/elven-lineage-drow"
+            },
+            {
+              "index": "fiendish-legacy-infernal",
+              "name": "Fiendish Legacy: Infernal",
+              "url": "/api/2024/subspecies/fiendish-legacy-infernal"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-darkness"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-detect-magic",
+        "name": "Detect Magic",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Detect Magic.",
+        "refs": [
+          "elf",
+          "elven-lineage-high-elf"
+        ],
+        "data": {
+          "index": "lineage-spell-detect-magic",
+          "name": "Detect Magic",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "detect-magic",
+                "name": "Detect Magic",
+                "url": "/api/2024/spells/detect-magic"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "elven-lineage-high-elf",
+              "name": "Elven Lineage: High Elf",
+              "url": "/api/2024/subspecies/elven-lineage-high-elf"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-detect-magic"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-faerie-fire",
+        "name": "Faerie Fire",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Faerie Fire.",
+        "refs": [
+          "elf",
+          "elven-lineage-drow"
+        ],
+        "data": {
+          "index": "lineage-spell-faerie-fire",
+          "name": "Faerie Fire",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "faerie-fire",
+                "name": "Faerie Fire",
+                "url": "/api/2024/spells/faerie-fire"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "elven-lineage-drow",
+              "name": "Elven Lineage: Drow",
+              "url": "/api/2024/subspecies/elven-lineage-drow"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-faerie-fire"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-false-life",
+        "name": "False Life",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell False Life.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-chthonic"
+        ],
+        "data": {
+          "index": "lineage-spell-false-life",
+          "name": "False Life",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "false-life",
+                "name": "False Life",
+                "url": "/api/2024/spells/false-life"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-chthonic",
+              "name": "Fiendish Legacy: Chthonic",
+              "url": "/api/2024/subspecies/fiendish-legacy-chthonic"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-false-life"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-fire-bolt",
+        "name": "Fire Bolt",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Fire Bolt.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-infernal"
+        ],
+        "data": {
+          "index": "lineage-spell-fire-bolt",
+          "name": "Fire Bolt",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "fire-bolt",
+                "name": "Fire Bolt",
+                "url": "/api/2024/spells/fire-bolt"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-infernal",
+              "name": "Fiendish Legacy: Infernal",
+              "url": "/api/2024/subspecies/fiendish-legacy-infernal"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-fire-bolt"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-hellish-rebuke",
+        "name": "Hellish Rebuke",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Hellish Rebuke.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-infernal"
+        ],
+        "data": {
+          "index": "lineage-spell-hellish-rebuke",
+          "name": "Hellish Rebuke",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "hellish-rebuke",
+                "name": "Hellish Rebuke",
+                "url": "/api/2024/spells/hellish-rebuke"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-infernal",
+              "name": "Fiendish Legacy: Infernal",
+              "url": "/api/2024/subspecies/fiendish-legacy-infernal"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-hellish-rebuke"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-hold-person",
+        "name": "Hold Person",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Hold Person.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-abyssal"
+        ],
+        "data": {
+          "index": "lineage-spell-hold-person",
+          "name": "Hold Person",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "hold-person",
+                "name": "Hold Person",
+                "url": "/api/2024/spells/hold-person"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-abyssal",
+              "name": "Fiendish Legacy: Abyssal",
+              "url": "/api/2024/subspecies/fiendish-legacy-abyssal"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-hold-person"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-longstrider",
+        "name": "Longstrider",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You learn the spell Longstrider.",
+        "refs": [
+          "elf",
+          "elven-lineage-wood-elf"
+        ],
+        "data": {
+          "index": "lineage-spell-longstrider",
+          "name": "Longstrider",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "longstrider",
+                "name": "Longstrider",
+                "url": "/api/2024/spells/longstrider"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "elven-lineage-wood-elf",
+              "name": "Elven Lineage: Wood Elf",
+              "url": "/api/2024/subspecies/elven-lineage-wood-elf"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-longstrider"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-mending",
+        "name": "Mending",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the cantrip Mending.",
+        "refs": [
+          "gnome",
+          "gnomish-lineage-rock-gnome"
+        ],
+        "data": {
+          "index": "lineage-spell-mending",
+          "name": "Mending",
+          "species": [
+            {
+              "index": "gnome",
+              "name": "Gnome",
+              "url": "/api/2024/species/gnome"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "mending",
+                "name": "Mending",
+                "url": "/api/2024/spells/mending"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "gnomish-lineage-rock-gnome",
+              "name": "Gnomish Lineage: Rock Gnome",
+              "url": "/api/2024/subspecies/gnomish-lineage-rock-gnome"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-mending"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-minor-illusion",
+        "name": "Minor Illusion",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Minor Illusion.",
+        "refs": [
+          "gnome",
+          "gnomish-lineage-forest-gnome"
+        ],
+        "data": {
+          "index": "lineage-spell-minor-illusion",
+          "name": "Minor Illusion",
+          "species": [
+            {
+              "index": "gnome",
+              "name": "Gnome",
+              "url": "/api/2024/species/gnome"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "minor-illusion",
+                "name": "Minor Illusion",
+                "url": "/api/2024/spells/minor-illusion"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "gnomish-lineage-forest-gnome",
+              "name": "Gnomish Lineage: Forest Gnome",
+              "url": "/api/2024/subspecies/gnomish-lineage-forest-gnome"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-minor-illusion"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-misty-step",
+        "name": "Misty Step",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Misty Step.",
+        "refs": [
+          "elf",
+          "elven-lineage-high-elf"
+        ],
+        "data": {
+          "index": "lineage-spell-misty-step",
+          "name": "Misty Step",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "misty-step",
+                "name": "Misty Step",
+                "url": "/api/2024/spells/misty-step"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "elven-lineage-high-elf",
+              "name": "Elven Lineage: High Elf",
+              "url": "/api/2024/subspecies/elven-lineage-high-elf"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-misty-step"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-pass-without-trace",
+        "name": "Pass without Trace",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You learn the spell Pass without Trace.",
+        "refs": [
+          "elf",
+          "elven-lineage-wood-elf"
+        ],
+        "data": {
+          "index": "lineage-spell-pass-without-trace",
+          "name": "Pass without Trace",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "pass-without-trace",
+                "name": "Pass without Trace",
+                "url": "/api/2024/spells/pass-without-trace"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "elven-lineage-wood-elf",
+              "name": "Elven Lineage: Wood Elf",
+              "url": "/api/2024/subspecies/elven-lineage-wood-elf"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-pass-without-trace"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-poison-spray",
+        "name": "Poison Spray",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Poison Spray.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-abyssal"
+        ],
+        "data": {
+          "index": "lineage-spell-poison-spray",
+          "name": "Poison Spray",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "poison-spray",
+                "name": "Poison Spray",
+                "url": "/api/2024/spells/poison-spray"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-abyssal",
+              "name": "Fiendish Legacy: Abyssal",
+              "url": "/api/2024/subspecies/fiendish-legacy-abyssal"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-poison-spray"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-ray-of-enfeeblement",
+        "name": "Ray of Enfeeblement",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Ray of Enfeeblement.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-chthonic"
+        ],
+        "data": {
+          "index": "lineage-spell-ray-of-enfeeblement",
+          "name": "Ray of Enfeeblement",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "ray-of-enfeeblement",
+                "name": "Ray of Enfeeblement",
+                "url": "/api/2024/spells/ray-of-enfeeblement"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-chthonic",
+              "name": "Fiendish Legacy: Chthonic",
+              "url": "/api/2024/subspecies/fiendish-legacy-chthonic"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-ray-of-enfeeblement"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lineage-spell-ray-of-sickness",
+        "name": "Ray of Sickness",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the spell Ray of Sickness.",
+        "refs": [
+          "tiefling",
+          "fiendish-legacy-abyssal"
+        ],
+        "data": {
+          "index": "lineage-spell-ray-of-sickness",
+          "name": "Ray of Sickness",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "spells": [
+            {
+              "spell": {
+                "index": "ray-of-sickness",
+                "name": "Ray of Sickness",
+                "url": "/api/2024/spells/ray-of-sickness"
+              }
+            }
+          ],
+          "subspecies": [
+            {
+              "index": "fiendish-legacy-abyssal",
+              "name": "Fiendish Legacy: Abyssal",
+              "url": "/api/2024/subspecies/fiendish-legacy-abyssal"
+            }
+          ],
+          "url": "/api/2024/traits/lineage-spell-ray-of-sickness"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "luck",
+        "name": "Luck",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you roll a 1 on the d20 of a D20 Test, you can reroll the die, and you must use the new roll.",
+        "refs": [
+          "halfling"
+        ],
+        "data": {
+          "index": "luck",
+          "name": "Luck",
+          "species": [
+            {
+              "index": "halfling",
+              "name": "Halfling",
+              "url": "/api/2024/species/halfling"
+            }
+          ],
+          "url": "/api/2024/traits/luck"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "naturally-stealthy",
+        "name": "Naturally Stealthy",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You can take the Hide action even when you are obscured only by a creature that is at least one size larger than you.",
+        "refs": [
+          "halfling"
+        ],
+        "data": {
+          "index": "naturally-stealthy",
+          "name": "Naturally Stealthy",
+          "species": [
+            {
+              "index": "halfling",
+              "name": "Halfling",
+              "url": "/api/2024/species/halfling"
+            }
+          ],
+          "url": "/api/2024/traits/naturally-stealthy"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "otherworldly-presence",
+        "name": "Otherworldly Presence",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the Thaumaturgy cantrip. When you cast it with this trait, the spell uses the same spellcasting ability you use for your Fiendish Legacy trait.",
+        "refs": [
+          "tiefling"
+        ],
+        "data": {
+          "index": "otherworldly-presence",
+          "name": "Otherworldly Presence",
+          "species": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2024/species/tiefling"
+            }
+          ],
+          "url": "/api/2024/traits/otherworldly-presence"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "powerful-build",
+        "name": "Powerful Build",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have Advantage on any ability check you make to end the Grappled condition. You also count as one size larger when determining your carrying capacity.",
+        "refs": [
+          "goliath"
+        ],
+        "data": {
+          "index": "powerful-build",
+          "name": "Powerful Build",
+          "species": [
+            {
+              "index": "goliath",
+              "name": "Goliath",
+              "url": "/api/2024/species/goliath"
+            }
+          ],
+          "url": "/api/2024/traits/powerful-build"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "relentless-endurance",
+        "name": "Relentless Endurance",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you are reduced to 0 Hit Points but not killed outright, you can drop to 1 Hit Point instead. Once you use this trait, you can't do so again until you finish a Long Rest.",
+        "refs": [
+          "orc"
+        ],
+        "data": {
+          "index": "relentless-endurance",
+          "name": "Relentless Endurance",
+          "species": [
+            {
+              "index": "orc",
+              "name": "Orc",
+              "url": "/api/2024/species/orc"
+            }
+          ],
+          "url": "/api/2024/traits/relentless-endurance"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "resourceful",
+        "name": "Resourceful",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain Heroic Inspiration whenever you finish a Long Rest.",
+        "refs": [
+          "human"
+        ],
+        "data": {
+          "index": "resourceful",
+          "name": "Resourceful",
+          "species": [
+            {
+              "index": "human",
+              "name": "Human",
+              "url": "/api/2024/species/human"
+            }
+          ],
+          "url": "/api/2024/traits/resourceful"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "skillful",
+        "name": "Skillful",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain proficiency in one skill of your choice.",
+        "refs": [
+          "human"
+        ],
+        "data": {
+          "index": "skillful",
+          "name": "Skillful",
+          "proficiency_choices": {
+            "choose": 1,
+            "desc": "Choose any skill.",
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "item": {
+                    "index": "acrobatics",
+                    "name": "Acrobatics",
+                    "url": "/api/2024/skills/acrobatics"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "animal-handling",
+                    "name": "Animal Handling",
+                    "url": "/api/2024/skills/animal-handling"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "arcana",
+                    "name": "Arcana",
+                    "url": "/api/2024/skills/arcana"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "athletics",
+                    "name": "Athletics",
+                    "url": "/api/2024/skills/athletics"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "deception",
+                    "name": "Deception",
+                    "url": "/api/2024/skills/deception"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "history",
+                    "name": "History",
+                    "url": "/api/2024/skills/history"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "insight",
+                    "name": "Insight",
+                    "url": "/api/2024/skills/insight"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "intimidation",
+                    "name": "Intimidation",
+                    "url": "/api/2024/skills/intimidation"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "investigation",
+                    "name": "Investigation",
+                    "url": "/api/2024/skills/investigation"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "medicine",
+                    "name": "Medicine",
+                    "url": "/api/2024/skills/medicine"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "nature",
+                    "name": "Nature",
+                    "url": "/api/2024/skills/nature"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "perception",
+                    "name": "Perception",
+                    "url": "/api/2024/skills/perception"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "performance",
+                    "name": "Performance",
+                    "url": "/api/2024/skills/performance"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "persuasion",
+                    "name": "Persuasion",
+                    "url": "/api/2024/skills/persuasion"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "religion",
+                    "name": "Religion",
+                    "url": "/api/2024/skills/religion"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "sleight-of-hand",
+                    "name": "Sleight of Hand",
+                    "url": "/api/2024/skills/sleight-of-hand"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "stealth",
+                    "name": "Stealth",
+                    "url": "/api/2024/skills/stealth"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "survival",
+                    "name": "Survival",
+                    "url": "/api/2024/skills/survival"
+                  },
+                  "option_type": "reference"
+                }
+              ]
+            },
+            "type": "proficiencies"
+          },
+          "species": [
+            {
+              "index": "human",
+              "name": "Human",
+              "url": "/api/2024/species/human"
+            }
+          ],
+          "url": "/api/2024/traits/skillful"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "stonecunning",
+        "name": "Stonecunning",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "As a Bonus Action, you gain Tremorsense with a range of 60 feet for 10 minutes. You must be on a stone surface or touching a stone surface to use this Tremorsense. The stone can be natural or worked.\nYou can use this Bonus Action a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.",
+        "refs": [
+          "dwarf"
+        ],
+        "data": {
+          "index": "stonecunning",
+          "name": "Stonecunning",
+          "species": [
+            {
+              "index": "dwarf",
+              "name": "Dwarf",
+              "url": "/api/2024/species/dwarf"
+            }
+          ],
+          "url": "/api/2024/traits/stonecunning"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "trance",
+        "name": "Trance",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You don't need to sleep, and magic can't put you to sleep. You can finish a Long Rest in 4 hours if you spend those hours in a trancelike meditation, during which you retain consciousness.",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "index": "trance",
+          "name": "Trance",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "url": "/api/2024/traits/trance"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "versatile",
+        "name": "Versatile",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain an Origin feat of your choice (see \"Feats\"). Skilled is recommended.",
+        "refs": [
+          "human"
+        ],
+        "data": {
+          "index": "versatile",
+          "name": "Versatile",
+          "species": [
+            {
+              "index": "human",
+              "name": "Human",
+              "url": "/api/2024/species/human"
+            }
+          ],
+          "url": "/api/2024/traits/versatile"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "wood-elf-speed-increase",
+        "name": "Wood Elf: Movement Speed Increase",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Your Movement Speed increases to 35 feet.",
+        "refs": [
+          "elf",
+          "elven-lineage-wood-elf"
+        ],
+        "data": {
+          "index": "wood-elf-speed-increase",
+          "name": "Wood Elf: Movement Speed Increase",
+          "species": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2024/species/elf"
+            }
+          ],
+          "speed": 35,
+          "subspecies": [
+            {
+              "index": "elven-lineage-wood-elf",
+              "name": "Elven Lineage: Wood Elf",
+              "url": "/api/2024/subspecies/elven-lineage-wood-elf"
+            }
+          ],
+          "url": "/api/2024/traits/wood-elf-speed-increase"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      }
+    ],
+    "tables": null,
+    "rules": null
+  }
+}

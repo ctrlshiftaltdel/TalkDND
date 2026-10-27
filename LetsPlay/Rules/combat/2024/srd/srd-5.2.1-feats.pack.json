@@ -1,0 +1,653 @@
+{
+  "pack": {
+    "id": "srd-5.2.1-feats",
+    "name": "SRD 5.2.1 Feats",
+    "edition": "2024",
+    "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+    "license": "CC-BY-4.0",
+    "distribution": "srd",
+    "schema_version": 1,
+    "content_hash": "fnv1a64:ccc42865e30a4a1b:12859",
+    "created_at": null,
+    "description": "SRD 5.2.1 feats from github.com/5e-bits/5e-database."
+  },
+  "index": {
+    "entries": [
+      {
+        "id": "ability-score-improvement",
+        "kind": "feat",
+        "name": "Ability Score Improvement",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "alert",
+        "kind": "feat",
+        "name": "Alert",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "archery",
+        "kind": "feat",
+        "name": "Archery",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "boon-of-combat-prowess",
+        "kind": "feat",
+        "name": "Boon of Combat Prowess",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "boon-of-dimensional-travel",
+        "kind": "feat",
+        "name": "Boon of Dimensional Travel",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "boon-of-fate",
+        "kind": "feat",
+        "name": "Boon of Fate",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "boon-of-irresistible-offense",
+        "kind": "feat",
+        "name": "Boon of Irresistible Offense",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "boon-of-spell-recall",
+        "kind": "feat",
+        "name": "Boon of Spell Recall",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "boon-of-the-night-spirit",
+        "kind": "feat",
+        "name": "Boon of the Night Spirit",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "boon-of-truesight",
+        "kind": "feat",
+        "name": "Boon of Truesight",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "defense",
+        "kind": "feat",
+        "name": "Defense",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "grappler",
+        "kind": "feat",
+        "name": "Grappler",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "great-weapon-fighting",
+        "kind": "feat",
+        "name": "Great Weapon Fighting",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "magic-initiate",
+        "kind": "feat",
+        "name": "Magic Initiate",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "savage-attacker",
+        "kind": "feat",
+        "name": "Savage Attacker",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "skilled",
+        "kind": "feat",
+        "name": "Skilled",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      },
+      {
+        "id": "two-weapon-fighting",
+        "kind": "feat",
+        "name": "Two Weapon Fighting",
+        "aliases": [],
+        "page": null,
+        "section": "Feats",
+        "refs": []
+      }
+    ],
+    "images": []
+  },
+  "content": {
+    "conditions": null,
+    "masteries": null,
+    "abilities": null,
+    "creatures": null,
+    "ai_templates": null,
+    "scenes": null,
+    "encounters": null,
+    "items": null,
+    "classes": null,
+    "subclasses": null,
+    "species": null,
+    "backgrounds": null,
+    "feats": [
+      {
+        "id": "ability-score-improvement",
+        "name": "Ability Score Improvement",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Increase one ability score of your choice by 2, or increase two ability scores of your choice by 1. This feat can't increase an ability score above 20.\n\nType: general",
+        "refs": [],
+        "data": {
+          "index": "ability-score-improvement",
+          "name": "Ability Score Improvement",
+          "prerequisites": {
+            "minimum_level": 4
+          },
+          "repeatable": "You can take this feat more than once.",
+          "type": "general",
+          "url": "/api/2024/feats/ability-score-improvement"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "alert",
+        "name": "Alert",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Initiative Proficiency.** When you roll Initiative, you can add your Proficiency Bonus to the roll.\n**Initiative Swap.** Immediately after you roll Initiative, you can swap your Initiative with the Initiative of one willing ally in the same combat. You can't make this swap if you or the ally has the Incapacitated condition.\n\nType: origin",
+        "refs": [],
+        "data": {
+          "index": "alert",
+          "name": "Alert",
+          "type": "origin",
+          "url": "/api/2024/feats/alert"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "archery",
+        "name": "Archery",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain a +2 bonus to attack rolls you make with Ranged weapons.\n\nType: fighting-style",
+        "refs": [],
+        "data": {
+          "index": "archery",
+          "name": "Archery",
+          "prerequisites": {
+            "feature_named": "Fighting Style"
+          },
+          "type": "fighting-style",
+          "url": "/api/2024/feats/archery"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "boon-of-combat-prowess",
+        "name": "Boon of Combat Prowess",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Ability Score Increase.** Increase one ability score of your choice by 1, to a maximum of 30.\n**Peerless Aim.** When you miss with an attack roll, you can hit instead. Once you use this benefit, you can't use it again until the start of your next turn.\n\nType: epic-boon",
+        "refs": [],
+        "data": {
+          "index": "boon-of-combat-prowess",
+          "name": "Boon of Combat Prowess",
+          "prerequisites": {
+            "minimum_level": 19
+          },
+          "type": "epic-boon",
+          "url": "/api/2024/feats/boon-of-combat-prowess"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "boon-of-dimensional-travel",
+        "name": "Boon of Dimensional Travel",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Ability Score Increase.** Increase one ability score of your choice by 1, to a maximum of 30.\n**Blink Steps.** Immediately after you take the Attack action or the Magic action, you can teleport up to 30 feet to an unoccupied space you can see.\n\nType: epic-boon",
+        "refs": [],
+        "data": {
+          "index": "boon-of-dimensional-travel",
+          "name": "Boon of Dimensional Travel",
+          "prerequisites": {
+            "minimum_level": 19
+          },
+          "type": "epic-boon",
+          "url": "/api/2024/feats/boon-of-dimensional-travel"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "boon-of-fate",
+        "name": "Boon of Fate",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Ability Score Increase.** Increase one ability score of your choice by 1, to a maximum of 30.\n**Improve Fate.** When you or another creature within 60 feet of you succeeds on or fails a D20 Test, you can roll 2d4 and apply the total rolled as a bonus or penalty to the d20 roll. Once you use this benefit, you can't use it again until you roll Initiative or finish a Short or Long Rest.\n\nType: epic-boon",
+        "refs": [],
+        "data": {
+          "index": "boon-of-fate",
+          "name": "Boon of Fate",
+          "prerequisites": {
+            "minimum_level": 19
+          },
+          "type": "epic-boon",
+          "url": "/api/2024/feats/boon-of-fate"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "boon-of-irresistible-offense",
+        "name": "Boon of Irresistible Offense",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Ability Score Increase.** Increase one ability score of your choice by 1, to a maximum of 30.\n**Overcome Defenses.** The Bludgeoning, Piercing, and Slashing damage you deal always ignores Resistance.\n**Overwhelming Strike.** When you roll a 20 on the d20 for an attack roll, you can deal extra damage to the target equal to the ability score increased by this feat. The extra damage's type is the same as the attack's type.\n\nType: epic-boon",
+        "refs": [],
+        "data": {
+          "index": "boon-of-irresistible-offense",
+          "name": "Boon of Irresistible Offense",
+          "prerequisites": {
+            "minimum_level": 19
+          },
+          "type": "epic-boon",
+          "url": "/api/2024/feats/boon-of-irresistible-offense"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "boon-of-spell-recall",
+        "name": "Boon of Spell Recall",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Ability Score Increase.** Increase one ability score of your choice by 1, to a maximum of 30.\n**Free Casting.** Whenever you cast a spell with a level 1–4 spell slot, roll 1d4. If the number you roll is the same as the slot's level, the slot isn't expended.\n\nType: epic-boon",
+        "refs": [],
+        "data": {
+          "index": "boon-of-spell-recall",
+          "name": "Boon of Spell Recall",
+          "prerequisites": {
+            "feature_named": "Spellcasting",
+            "minimum_level": 19
+          },
+          "type": "epic-boon",
+          "url": "/api/2024/feats/boon-of-spell-recall"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "boon-of-the-night-spirit",
+        "name": "Boon of the Night Spirit",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Ability Score Increase.** Increase one ability score of your choice by 1, to a maximum of 30.\n**Merge with Shadows.** While within Dim Light or Darkness, you can give yourself the Invisible condition as a Bonus Action. The condition ends on you immediately after you take an action, a Bonus Action, or a Reaction.\n**Shadowy form.** While within Dim Light or Darkness, you have Resistance to all damage except Psychic and Radiant.\n\nType: epic-boon",
+        "refs": [],
+        "data": {
+          "index": "boon-of-the-night-spirit",
+          "name": "Boon of the Night Spirit",
+          "prerequisites": {
+            "minimum_level": 19
+          },
+          "type": "epic-boon",
+          "url": "/api/2024/feats/boon-of-the-night-spirit"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "boon-of-truesight",
+        "name": "Boon of Truesight",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Ability Score Increase.** Increase one ability score of your choice by 1, to a maximum of 30.\n**Truesight.** You have Truesight with a range of 60 feet.\n\nType: epic-boon",
+        "refs": [],
+        "data": {
+          "index": "boon-of-truesight",
+          "name": "Boon of Truesight",
+          "prerequisites": {
+            "minimum_level": 19
+          },
+          "type": "epic-boon",
+          "url": "/api/2024/feats/boon-of-truesight"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "defense",
+        "name": "Defense",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "While you're wearing Light, Medium, or Heavy armor, you gain a +1 bonus to Armor Class.\n\nType: fighting-style",
+        "refs": [],
+        "data": {
+          "index": "defense",
+          "name": "Defense",
+          "prerequisites": {
+            "feature_named": "Fighting Style"
+          },
+          "type": "fighting-style",
+          "url": "/api/2024/feats/defense"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "grappler",
+        "name": "Grappler",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Ability Score Increase.** Increase your Strength or Dexterity score by 1, to a maximum of 20.\n**Punch and Grab.** When you hit a creature with an Unarmed Strike as part of the Attack action on your turn, you can use both the Damage and the Grapple option. You can use this benefit only once per turn.\n**Attack Advantage.** You have Advantage on attack rolls against a creature Grappled by you.\n**Fast Wrestler.** You don't have to spend extra movement to move a creature Grappled by you if the creature is your size or smaller.\n\nType: general",
+        "refs": [],
+        "data": {
+          "index": "grappler",
+          "name": "Grappler",
+          "prerequisite_options": {
+            "choose": 1,
+            "desc": "Strength or Dexterity 13+",
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "ability_score": {
+                    "index": "str",
+                    "name": "STR",
+                    "url": "/api/2024/ability-scores/str"
+                  },
+                  "minimum_score": 13,
+                  "option_type": "score_prerequisite"
+                },
+                {
+                  "ability_score": {
+                    "index": "dex",
+                    "name": "DEX",
+                    "url": "/api/2024/ability-scores/dex"
+                  },
+                  "minimum_score": 13,
+                  "option_type": "score_prerequisite"
+                }
+              ]
+            },
+            "type": "ability-scores"
+          },
+          "prerequisites": {
+            "minimum_level": 4
+          },
+          "type": "general",
+          "url": "/api/2024/feats/grappler"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "great-weapon-fighting",
+        "name": "Great Weapon Fighting",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you roll damage for an attack you make with a Melee weapon that you are holding with two hands, you can treat any 1 or 2 on a damage die as a 3. The weapon must have the Two-Handed or Versatile property to gain this benefit.\n\nType: fighting-style",
+        "refs": [],
+        "data": {
+          "index": "great-weapon-fighting",
+          "name": "Great Weapon Fighting",
+          "prerequisites": {
+            "feature_named": "Fighting Style"
+          },
+          "type": "fighting-style",
+          "url": "/api/2024/feats/great-weapon-fighting"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "magic-initiate",
+        "name": "Magic Initiate",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain the following benefits.\n**Two Cantrips.** You learn two cantrips of your choice from the Cleric, Druid, or Wizard spell list. Intelligence, Wisdom, or Charisma is your spellcasting ability for this feat's spells (choose when you select this feat).\n**Level 1 Spell.** Choose a level 1 spell from the same list you selected for this feat's cantrips. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest. You can also cast the spell using any spell slots you have.\n**Spell Change.** Whenever you gain a new level, you can replace one of the spells you chose for this feat with a different spell of the same level from the chosen spell list.\n\nType: origin",
+        "refs": [],
+        "data": {
+          "index": "magic-initiate",
+          "name": "Magic Initiate",
+          "repeatable": "You can take this feat more than once, but you must choose a different spell list each time.",
+          "type": "origin",
+          "url": "/api/2024/feats/magic-initiate"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "savage-attacker",
+        "name": "Savage Attacker",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You've trained to deal particularly damaging strikes. Once per turn when you hit a target with a weapon, you can roll the weapon's damage dice twice and use either roll against the target.\n\nType: origin",
+        "refs": [],
+        "data": {
+          "index": "savage-attacker",
+          "name": "Savage Attacker",
+          "type": "origin",
+          "url": "/api/2024/feats/savage-attacker"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "skilled",
+        "name": "Skilled",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain proficiency in any combination of three skills or tools of your choice.\n\nType: origin",
+        "refs": [],
+        "data": {
+          "index": "skilled",
+          "name": "Skilled",
+          "repeatable": "You can take this feat more than once.",
+          "type": "origin",
+          "url": "/api/2024/feats/skilled"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "two-weapon-fighting",
+        "name": "Two Weapon Fighting",
+        "source": "SRD 5.2.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Feats",
+        "tags": [
+          "feat",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you make an extra attack as a result of using a weapon that has the Light property, you can add your ability modifier to the damage of that attack if you aren't already adding it to the damage.\n\nType: fighting-style",
+        "refs": [],
+        "data": {
+          "index": "two-weapon-fighting",
+          "name": "Two Weapon Fighting",
+          "prerequisites": {
+            "feature_named": "Fighting Style"
+          },
+          "type": "fighting-style",
+          "url": "/api/2024/feats/two-weapon-fighting"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      }
+    ],
+    "rule_sections": null,
+    "tables": null,
+    "rules": null
+  }
+}

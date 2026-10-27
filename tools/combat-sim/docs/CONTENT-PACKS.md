@@ -99,8 +99,11 @@ existing entity in the pack. An empty index is valid.
 
 - Pack files are scanned by the same deterministic source walker as other
   content (libraries, adventures, characters).
-- Packs and ordinary YAML/JSON/Markdown files can be mixed. Later sources still
-  override earlier sources by entity id within each kind.
+- Packs and ordinary YAML/JSON/Markdown files can be mixed. **Packs are the
+  base layer**: within each source directory they load before ordinary content,
+  so hand-written YAML/JSON overrides a pack by entity id. Path order still
+  decides between ordinary files and between packs.
+- The suffix `.pack.json`, `.pack.yaml` or `.pack.yml` marks a pack file.
 - Pack metadata is recorded in `ContentRegistry.packs`; old state files without
   this map load with an empty map.
 - A duplicate pack id, duplicate entity id inside a pack, bad index reference,
@@ -119,6 +122,21 @@ combat-sim content pack verify --lib <dir>
 `verify` reports the loaded pack metadata and runs the normal content check.
 Because the loader verifies the hash before returning, a loaded pack is already
 hash-checked; a mismatch fails before `verify` can run.
+
+## SRD packs
+
+The SRD 5.1 and SRD 5.2.1 packs live next to their edition layer, so the normal
+`library: [Rules/combat]` entry loads only the save's ruleset:
+
+- `LetsPlay/Rules/combat/2014/srd/srd-5.1-*.pack.json`
+- `LetsPlay/Rules/combat/2024/srd/srd-5.2.1-*.pack.json`
+
+They are generated from the 5e-database JSON with
+`combat-sim content import-srd-pack --edition <2014|2024> --src <dir> --out <dir>`;
+see `DATA.md` for the upstream commit, counts and known gaps. Regenerate rather
+than hand-edit. The older `srd-monsters.yaml` / `srd-spells.yaml` stay as the
+engine overlay for 2014: they load after the packs and keep the automated
+attack/spell fields.
 
 ## Distribution policy
 

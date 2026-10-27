@@ -739,6 +739,10 @@ impl ContentSources {
             for path in source {
                 let mut files = Vec::new();
                 collect_files(path, &mut files, &ruleset)?;
+                // Packs are the base layer; ordinary content overrides them by
+                // entity id. `sort_by_key` is stable, so files keep their path
+                // order inside each group.
+                files.sort_by_key(|file| !super::pack::is_pack_path(file));
                 for file in files {
                     load_file(&file, &mut registry)?;
                 }
