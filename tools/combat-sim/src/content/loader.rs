@@ -735,7 +735,7 @@ impl ContentSources {
         // for the other edition is a hard error (one save, one ruleset).
         let mut srd_libraries = Vec::new();
         let mut full_libraries = Vec::new();
-        let mut handwritten_libraries = Vec::new();
+        let mut handwritten_libraries: Vec<HandwrittenSource> = Vec::new();
         for path in libraries {
             if super::pack::is_pack_path(&path) {
                 let meta = read_pack_header(&path)?;
@@ -769,17 +769,35 @@ impl ContentSources {
                         full_libraries.push(path);
                     }
                     super::pack::Distribution::Srd => srd_libraries.push(path),
-                    super::pack::Distribution::Local => handwritten_libraries.push(path),
+                    super::pack::Distribution::Local => {
+                        handwritten_libraries.push(HandwrittenSource {
+                            path,
+                            exclude: None,
+                        })
+                    }
                 }
                 continue;
             }
             // A layered library (`common/` + edition folders) is the SRD
             // base; every other directory is hand-written or campaign content
-            // and loads after the full packs.
+            // and loads after the full packs. For FULL, split the edition
+            // folder so only `common/` and `<edition>/srd/` stay in the SRD
+            // layer; the edition's other files (monsters/, spells.yaml, ...)
+            // keep overriding the full pack. `*-srd` keeps the old whole-layer
+            // order.
             if path.is_dir() && path.join("common").is_dir() {
-                srd_libraries.push(path);
+                if strict && ruleset.is_full() {
+                    let (srd, hand) = full_layers(&path, ruleset.edition());
+                    srd_libraries.extend(srd);
+                    handwritten_libraries.extend(hand);
+                } else {
+                    srd_libraries.push(path);
+                }
             } else {
-                handwritten_libraries.push(path);
+                handwritten_libraries.push(HandwrittenSource {
+                    path,
+                    exclude: None,
+                });
             }
         }
 
@@ -787,24 +805,20 @@ impl ContentSources {
             .iter()
             .flat_map(|path| expand_layers(path, ruleset.edition()))
             .collect();
-        for source in [
-            &srd_libraries,
-            &full_libraries,
-            &handwritten_libraries,
-            &adventures,
-            &characters,
-        ] {
-            for path in source {
-                let mut files = Vec::new();
-                collect_files(path, &mut files, ruleset.edition())?;
-                // Packs are the base layer; ordinary content overrides them by
-                // entity id. `sort_by_key` is stable, so files keep their path
-                // order inside each group.
-                files.sort_by_key(|file| !super::pack::is_pack_path(file));
-                for file in files {
-                    load_file(&file, ruleset, strict, &mut registry)?;
-                }
-            }
+        for source in srd_libraries.iter().chain(full_libraries.iter()) {
+            load_source(source, None, ruleset, strict, &mut registry)?;
+        }
+        for source in &handwritten_libraries {
+            load_source(
+                &source.path,
+                source.exclude.as_deref(),
+                ruleset,
+                strict,
+                &mut registry,
+            )?;
+        }
+        for source in adventures.iter().chain(characters.iter()) {
+            load_source(source, None, ruleset, strict, &mut registry)?;
         }
 
         // Fail closed: FULL must actually add full-book content. Packs reached
@@ -924,6 +938,60 @@ impl fmt::Display for Ruleset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.display())
     }
+}
+
+/// A source that loads after the full packs. `exclude` drops the SRD subfolder
+/// from a full-mode layered edition layer.
+#[derive(Debug, Clone)]
+struct HandwrittenSource {
+    path: PathBuf,
+    exclude: Option<PathBuf>,
+}
+
+/// Split a layered library for a FULL save: `common/` and `<edition>/srd/`
+/// stay in the SRD base; the rest of `<edition>/` is hand-written/overlay
+/// content and loads after the full packs. `*-srd` keeps using
+/// [`expand_layers`] unchanged.
+fn full_layers(path: &Path, edition: &str) -> (Vec<PathBuf>, Vec<HandwrittenSource>) {
+    let mut srd = Vec::new();
+    let common = path.join("common");
+    if common.is_dir() {
+        srd.push(common);
+    }
+    let mut hand = Vec::new();
+    let edition_dir = path.join(edition);
+    if edition_dir.is_dir() {
+        let srd_dir = edition_dir.join("srd");
+        if srd_dir.is_dir() {
+            srd.push(srd_dir.clone());
+        }
+        hand.push(HandwrittenSource {
+            path: edition_dir,
+            exclude: Some(srd_dir),
+        });
+    }
+    (srd, hand)
+}
+
+fn load_source(
+    source: &Path,
+    exclude: Option<&Path>,
+    ruleset: Ruleset,
+    strict: bool,
+    registry: &mut ContentRegistry,
+) -> Result<()> {
+    let mut files = Vec::new();
+    collect_files(source, &mut files, ruleset.edition())?;
+    if let Some(exclude) = exclude {
+        files.retain(|file| !file.starts_with(exclude));
+    }
+    // Packs are the base layer; ordinary content overrides them by entity id.
+    // `sort_by_key` is stable, so files keep their path order inside each group.
+    files.sort_by_key(|file| !super::pack::is_pack_path(file));
+    for file in files {
+        load_file(&file, ruleset, strict, registry)?;
+    }
+    Ok(())
 }
 
 fn full_pack_required_error(ruleset: Ruleset) -> anyhow::Error {

@@ -1,6 +1,6 @@
 # TalkDND —— 在聊天里玩 D&D
 
-TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D 5e（2014）或 5.5e（2024）规则**（每个存档自选）带你跑冒险：
+TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D 5e 或 5.5e 规则**（每个存档自选 **5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD**）带你跑冒险：
 
 - 你扮演自己的角色，AI 负责叙述、扮演同伴和所有 NPC；
 - 每一幕结尾给几个选项，也可以随便输入你想做的事；
@@ -14,14 +14,16 @@ TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D
 
 本目录包含程序说明、原创文档和内置的 SRD 5.1 / 5.2.1 内容包（CC-BY-4.0）。SRD 内容已内置，**不需要自己下载 SRD PDF 也能玩**。冒险书仍需自备。
 
-### 1. 选择规则版本
+### 1. 选择规则集
 
-| 版本 | 存档里写 | 内置内容 | 可选 PDF 放在 |
-|------|----------|----------|----------------|
-| 5e（2014） | `ruleset: "2014"` | SRD 5.1 全量内容包 | `Rules/2014/` |
-| 5.5e（2024） | `ruleset: "2024"` | SRD 5.2.1 全量内容包 + 2024 规则章节 | `Rules/2024/` |
+| 玩家选项 | 存档里写 | 内置内容 | 玩家书 / PDF 放在 |
+|----------|----------|----------|-------------------|
+| 5.5e FULL | `ruleset: "5.5e-full"` | SRD 5.2.1 + 2024 规则章节 | `Rules/2024/` + 已解锁的 `Rules/packs/full-2024-*.pack.json` |
+| 5e FULL | `ruleset: "5e-full"` | SRD 5.1 | `Rules/2014/` + 已解锁的 `Rules/packs/full-2014-*.pack.json` |
+| 5.5e SRD | `ruleset: "5.5e-srd"` | SRD 5.2.1 全量内容包 + 2024 规则章节 | 只用内置 SRD；`Rules/2024/` 可选 |
+| 5e SRD | `ruleset: "5e-srd"` | SRD 5.1 全量内容包 | 只用内置 SRD；`Rules/2014/` 可选 |
 
-放入 SRD PDF 是可选的：`bin/talkdnd start` 会为它建立 pdf2md 索引，DM 在缺图、地图或原文不清时回退查看。完整 PHB/DMG/MM 的解锁与 5.5e FULL / 5e FULL 规则集在 v1.2 提供；当前版本只使用 SRD 内容。每个存档只用一个版本，DM 不会混用两版规则。
+放入 SRD PDF 是可选的：`bin/talkdnd start` 会为它建立 pdf2md 索引，DM 在缺图、地图或原文不清时回退查看。**FULL 必须在对应 edition 至少解锁一本完整书**（PHB/DMG/MM，PDF 放进 `Rules/2014/` 或 `Rules/2024/` 的书文件夹，构建好的内容包放进 `Rules/packs/`）；缺书、未解锁或内容包损坏时 `start` 与 `content check` 会失败并指出缺什么，不会静默退回 SRD。`*-srd` 永不加载完整书内容包。旧存档里的 `ruleset: "2014"` / `"2024"` 仍可读取，分别按 `5e-srd` / `5.5e-srd` 处理，并在下一次写 manifest 时迁移。每个存档只用一套规则，DM 不会混用 5e 与 5.5e。
 
 ### 2. 准备冒险书
 
@@ -37,8 +39,10 @@ Rules/
     SRD_CC_v5.1.pdf                  # 可选：你放的 PDF（用于书页图片/回退）
     index/                           # （自动生成）pdf2md 转换结果：SRD_CC_v5.1.pages.md、index.md、img/ …
   2024/players-handbook-2024/
-    Players Handbook 2024.pdf        # 完整规则书（可选，自有）
+    Players Handbook 2024.pdf        # 完整规则书（可选，自有；FULL 解锁用）
     index/
+  packs/
+    full-2024-phb.pack.json          # FULL 解锁后由本机构建或放入；不入库
 Adventures/
   keys-from-the-golden-vault/
     Keys from the Golden Vault.pdf   # 你要跑的冒险书
@@ -125,22 +129,22 @@ bin\combat-sim.exe roll 1d20+5
 
 ## 开始一局
 
-1. 按上面把规则书放进 `Rules/<版本>/`，冒险书放进 `Adventures/`，程序放进 `bin/`。
+1. 按上面把规则书放进 `Rules/2014/` 或 `Rules/2024/`，冒险书放进 `Adventures/`，程序放进 `bin/`。
 2. 在本目录执行 `bin/combat-sim roll 1d20+5`（Windows 用 `bin\combat-sim.exe roll 1d20+5`）。能出结果就可以继续。
 3. 在本目录打开你的 AI 助手（它会自动读取 `AGENTS.md`），直接说：
 
    | 你说 | 效果 |
    |------|------|
-   | `开新局` | DM 一步步问你：规则版本、冒险、种族、职业、背景、属性生成方式（掷骰后由你分配）、技能、装备、法术、名字，最后给你确认角色卡；再生成同伴给你确认 |
+   | `开新局` | DM 一步步问你：规则集、冒险、种族、职业、背景、属性生成方式（掷骰后由你分配）、技能、装备、法术、名字，最后给你确认角色卡；再生成同伴给你确认 |
    | `继续游戏 2026-10-19-01` | 从该存档最后的存档点继续（程序先生成一页接档摘要，开场更快） |
    | `继续游戏` | 继续最新的存档 |
    | `存档` | 写好存档点 |
 
    想让 DM 替你决定某一项，就说“这项随机”或“你来定”。如果你的 AI 助手不会自动读 `AGENTS.md`，先说一句“请阅读 AGENTS.md”。
-4. 存档在 `Saves/YYYY-MM-DD-NN/`（结构见 `Saves/README.md`），`combat/campaign.yaml` 记录本存档用的规则版本。
+4. 存档在 `Saves/YYYY-MM-DD-NN/`（结构见 `Saves/README.md`），`combat/campaign.yaml` 记录本存档用的规则集。
 5. 想结束时说「今天先到这，存档」。
 
-`AGENTS.md` 是给 AI DM 的核心手册，细节在 `docs/`。`Rules/rulings.md`（通用）和 `Rules/rulings-2014.md` / `Rules/rulings-2024.md`（版本差异）是规则书没写清时的统一裁定，也是你的本机副本；同名的出厂默认在 `Rules/defaults/`，升级不会覆盖你的副本。
+`AGENTS.md` 是给 AI DM 的核心手册，细节在 `docs/`。`Rules/rulings.md`（通用）和 `Rules/rulings-2014.md` / `Rules/rulings-2024.md`（edition 差异）是规则书没写清时的统一裁定，也是你的本机副本；同名的出厂默认在 `Rules/defaults/`，升级不会覆盖你的副本。
 
 ## 骰子和日志
 
@@ -173,9 +177,9 @@ $CS --campaign $M simulate --encounter <遭遇id> --runs 1000
 $CS roll 1d20+5 --adv --dc 15
 ```
 
-人物来自角色卡里的 combat 数据块。怪物、法术、状态、武器精通来自 `Rules/combat/`（按版本分层）。场景和遭遇来自 `Adventures/<冒险>/combat/`。
+人物来自角色卡里的 combat 数据块。怪物、法术、状态、武器精通来自 `Rules/combat/`（按 edition 分层）。场景和遭遇来自 `Adventures/<冒险>/combat/`。
 
-两个版本的差异由数据决定：`Rules/combat/common/` 是通用部分，`Rules/combat/2014/`、`Rules/combat/2024/` 是各版本特有的内容。引擎读存档清单里的 `ruleset` 自动选择。
+两个 edition 的差异由数据决定：`Rules/combat/common/` 是通用部分，`Rules/combat/2014/`、`Rules/combat/2024/` 是各 edition 特有的内容。引擎读存档清单里的 `ruleset` 自动选择；`*-srd` 只用 SRD 层，`*-full` 再叠加已解锁的完整书内容包。
 
 ## 更新到新版本
 

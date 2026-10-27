@@ -68,10 +68,23 @@ fn write_base(root: &Path) {
 }
 
 fn write_pack(root: &Path, id: &str, edition: &str, distribution: Distribution) {
-    let content: ContentFile = serde_json::from_value(json!({
-        "creatures": [creature("shared", "Full shared", 12)]
-    }))
-    .unwrap();
+    write_pack_content(
+        root,
+        id,
+        edition,
+        distribution,
+        json!({"creatures": [creature("shared", "Full shared", 12)]}),
+    );
+}
+
+fn write_pack_content(
+    root: &Path,
+    id: &str,
+    edition: &str,
+    distribution: Distribution,
+    content: serde_json::Value,
+) {
+    let content: ContentFile = serde_json::from_value(content).unwrap();
     let meta = PackMeta {
         id: id.to_string(),
         name: Some("Synthetic pack".to_string()),
@@ -290,6 +303,107 @@ fn a_full_save_never_loads_the_other_edition_pack() {
         text.contains("5e-full") || text.contains("5e FULL"),
         "{text}"
     );
+}
+
+#[test]
+fn real_default_rules_combat_layout_puts_handwritten_after_the_full_pack() {
+    let root = TempDir::new("real-layout");
+    let combat = root.path().join("Rules/combat");
+    for dir in ["common", "2014/srd", "2014/monsters"] {
+        fs::create_dir_all(combat.join(dir)).unwrap();
+    }
+    fs::write(
+        combat.join("common/creatures.yaml"),
+        serde_json::to_string_pretty(&json!({
+            "creatures": [
+                creature("shared", "SRD shared", 10),
+                creature("srd-id", "SRD srd-id", 10),
+                creature("common-only", "Common only", 10)
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        combat.join("2014/srd/srd-base.yaml"),
+        serde_json::to_string_pretty(&json!({
+            "creatures": [creature("srd-only", "SRD only", 10)]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        combat.join("2014/monsters/hand.yaml"),
+        serde_json::to_string_pretty(&json!({
+            "creatures": [creature("shared", "Handwritten shared", 13)]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_pack_content(
+        root.path(),
+        "full-2014-phb",
+        "2014",
+        Distribution::Full,
+        json!({
+            "creatures": [
+                creature("shared", "Full shared", 12),
+                creature("srd-id", "Full srd-id", 12)
+            ]
+        }),
+    );
+    fs::create_dir_all(root.path().join("Rules/packs")).unwrap();
+    fs::rename(
+        root.path().join("packs/full-2014-phb.pack.json"),
+        root.path().join("Rules/packs/full-2014-phb.pack.json"),
+    )
+    .unwrap();
+
+    let save = root.path().join("Saves/2030-01-01-01/combat");
+    fs::create_dir_all(&save).unwrap();
+    let manifest = save.join("campaign.yaml");
+    fs::write(
+        &manifest,
+        "name: synthetic\nruleset: \"5e-full\"\nlibrary: [\"../../../Rules/combat\", \"../../../Rules/packs/full-2014-phb.pack.json\"]\n",
+    )
+    .unwrap();
+    let registry = load(&manifest).unwrap();
+    assert_eq!(
+        registry.creatures.get("shared").unwrap().name.as_deref(),
+        Some("Handwritten shared"),
+        "2014/monsters/ must load after the full pack"
+    );
+    assert!(registry
+        .creatures
+        .source("shared")
+        .unwrap()
+        .path
+        .ends_with("2014/monsters/hand.yaml"));
+    assert_eq!(
+        registry.creatures.get("srd-id").unwrap().name.as_deref(),
+        Some("Full srd-id"),
+        "the full pack must override a pure SRD id"
+    );
+    assert!(registry.creatures.get("srd-only").is_some());
+    assert!(registry.creatures.get("common-only").is_some());
+
+    // `*-srd` keeps the old whole-layer order and never loads the full pack.
+    let srd_manifest = save.join("campaign-srd.yaml");
+    fs::write(
+        &srd_manifest,
+        "name: synthetic\nruleset: \"5e-srd\"\nlibrary: [\"../../../Rules/combat\", \"../../../Rules/packs/full-2014-phb.pack.json\"]\n",
+    )
+    .unwrap();
+    let registry = load(&srd_manifest).unwrap();
+    assert_eq!(
+        registry.creatures.get("shared").unwrap().name.as_deref(),
+        Some("Handwritten shared")
+    );
+    assert_eq!(
+        registry.creatures.get("srd-id").unwrap().name.as_deref(),
+        Some("SRD srd-id")
+    );
+    assert!(!registry.packs.contains_key("full-2014-phb"));
 }
 
 #[test]

@@ -14,7 +14,7 @@
 
 ## 开新局流程（强制）
 **一次只问一件事，问完就停下等玩家回答。** 玩家的选择绝不由 DM 代做，除非玩家明确说“随机”或“你来定”（那一项才可以代选，并说明选了什么）。命令细节见 `docs/chargen.md`。
-1. **规则版本与剧本偏离度**：先看 `Rules/2014/`、`Rules/2024/` 里实际有哪版书，问玩家用哪版；再问本档的原创偏离度 scope（0 = 只补空白，1 = 次要原创，2 = 完整支线）和比例（scope 1/2 时 5–25%）。两个问题一次只问一个，含义见 `docs/deviation.md`。然后 → `$T new --ruleset <版本> --scope <0|1|2> [--ratio <5-25>]`。偏离度开档后锁定，问清楚再执行。
+1. **规则集与剧本偏离度**：SRD 已内置；FULL 还需要在对应 `Rules/2014/` 或 `Rules/2024/` 至少有一本已解锁完整书。问玩家选 **5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD**（下文 2014/2024 只指 edition 机制，不是存档选项）；FULL 缺书时 `start` 会失败关闭。再问本档的原创偏离度 scope（0 = 只补空白，1 = 次要原创，2 = 完整支线）和比例（scope 1/2 时 5–25%）。两个问题一次只问一个，含义见 `docs/deviation.md`。然后 → `$T new --ruleset <5.5e-full|5e-full|5.5e-srd|5e-srd> --scope <0|1|2> [--ratio <5-25>]`。偏离度开档后锁定，问清楚再执行。
 2. **冒险**：列出 `Adventures/` 里的书 → `$T chargen set adventure "<书名>"`
 3. **种族 / 物种** → `$T chargen set species <id>`
 4. **职业** → `$T chargen set class <id>`；**起始等级** → 按冒险建议范围问玩家 → `$T chargen set level <N>`；到子职等级时再问子职 → `$T chargen set subclass <id>`
@@ -30,11 +30,11 @@
 14. 写 `dm-secrets.md`，在会话日志写开场，进入第一个场景
 中途断了：`$T chargen status` 看下一步，接着问。`chargen sheet` 若打印 `warning: ... run \`...\``（缺非 SRD 数据），照抄执行；导入说明见 `docs/chargen.md`「本地规则书数据」。
 ## 接档
-1. `$T start [--save <存档名>]`：确认规则、跑战斗数据检查和存档校验、后台启动 PDF 转换，并输出 `Saves/<存档>/digest.md`。**先只读这份摘要。** 有校验警告先按「桌面诚信」处理。
+1. `$T start [--save <存档名>]`：确认规则集、跑战斗数据检查和存档校验、后台启动 PDF 转换，并输出 `Saves/<存档>/digest.md`。**先只读这份摘要。** 有校验警告先按「桌面诚信」处理。
 2. 开场前再读：`dm-secrets.md`、`Characters/_party.md`、有的话 `house-rules.md`。`canon.md`、角色卡、冒险书章节用到时再查（冒险书按场景读）。
 3. 用简短的「前情提要」+ 当前场景开场，结尾给选项。
 ## 桌规（必须遵守）
-1. **只用存档 `ruleset` 那一版**：只查 `Rules/<版本>/` 的书和 `Rules/rulings.md`、`Rules/rulings-<版本>.md`。书没写时合理裁定，新的可复用裁定追加进 rulings 文件。`Rules/defaults/` 是出厂默认，不要写；`Rules/` 顶层的三份才是本机副本。
+1. **只用存档 `ruleset` 选中的 edition**：只查 `Rules/<edition>/` 的书（`5e-*` 用 `Rules/2014/`，`5.5e-*` 用 `Rules/2024/`）和 `Rules/rulings.md`、`Rules/rulings-<edition>.md`。书没写时合理裁定，新的可复用裁定追加进 rulings 文件。`Rules/defaults/` 是出厂默认，不要写；`Rules/` 顶层的三份才是本机副本。
 2. **所有骰子只用程序**：检定、豁免、攻击、伤害、先攻、死亡豁免、生命骰、随机表用 `$CS roll <表达式>` 或战斗命令；建卡属性用 `$T chargen roll`。禁止心算、编造、“假设掷出了 X”。语法见 `docs/dice.md`。
 3. **展示完整算式**（骰子显示为「开」时）：把程序输出原样给玩家看并说明用途，如 `潜行：1d20(14)+7=21 vs DC 12 PASS`。显示为「关」时见下面「骰子显示」。
 4. **预掷纪律**：尽量不预掷；预掷了就按顺序用并在日志标注；不能因为结果不好作废重掷。
@@ -46,7 +46,7 @@
 10. **书是骨架，演绎靠即兴**：剧情节点、秘密、地图、数据块、DC 照书；描述和对话用自己的话即兴，不照念原文。公开细节写 `canon.md`，秘密写 `dm-secrets.md`。见 `docs/narration.md`。
 11. **守住秘密**：只透露角色能得知的信息；会话日志不写秘密（写“见 dm-secrets”）。见「信息纪律」。
 12. **战斗**用 combat-sim：`export COMBAT_SIM_CAMPAIGN=$PWD/Saves/<存档>/combat/campaign.yaml`，命令与坑见 `docs/combat.md`。
-13. **完整规则书优先**：`$T start` 的「规则来源」列出本地完整规则书时，查规则、法术、怪物、背景、专长先读这些书，SRD 兜底。先查 `<书文件夹>/index/index.md`；正文只有一份 `<书文件夹>/index/<书名>.pages.md`（`<a id="pN"></a>` = PDF 第 N 页）。标 ⚠ 的数据块、低质量页、地图看 PDF。读出内容与 PDF 不符时，按 `docs/pdf2md.md`「游玩中修正」当场改好再继续。见 `docs/pdf2md.md`。
+13. **完整规则书优先**：`$T start` 的「规则来源」列出本地完整规则书时，查规则、法术、怪物、背景、专长先读这些书，SRD 兜底；FULL 的完整书内容包由程序加载，缺包时 `start` 已失败关闭。先查 `<书文件夹>/index/index.md`；正文只有一份 `<书文件夹>/index/<书名>.pages.md`（`<a id="pN"></a>` = PDF 第 N 页）。标 ⚠ 的数据块、低质量页、地图看 PDF。读出内容与 PDF 不符时，按 `docs/pdf2md.md`「游玩中修正」当场改好再继续。见 `docs/pdf2md.md`。
 14. **隐私**：不要把规则书、冒险书文本、存档或 `dm-secrets.md` 提交到 git 或贴到任何 issue、PR。
 ## 剧本偏离度（必须遵守）
 每个存档开档时锁定「能离剧本多远」：`deviation.scope` 与 `ratio` 存在 `save-meta.yaml`，**开档后不能改**。完整说明见 `docs/deviation.md`。
@@ -64,7 +64,6 @@
 - 规则问题、角色卡数据、已揭示信息、TalkDND 用法：正常回答。
 - **房规**只在开局前或两次会话之间商定，写进 `house-rules.md` 并记日志；局中提议先记下，本场照旧。
 - **存档校验**：`$T start` / `$T check` 报告“工具以外改过的文件”和“日志里找不到来源的 HP/金币/物品/经验变化”。不是自己改的 → 跳出角色问玩家 → `$T log` 记处理结果 → 合理就 `$T integrity accept --reason "…"`，不合理按日志改回再 accept。
-
 ## 信息纪律（防剧透，必须遵守）
 
 你读过冒险书，知道全部剧情；剧透多半是无意的。设计见 `docs/anti-spoiler.md`。
@@ -78,7 +77,6 @@
 - **名称只报已识别**：未识别怪物/物品用外貌描述（`$T identify --appearance <东西> "<描述>"` 可覆盖默认的“一只大型野兽”）。识别后 `$T identify <东西> --how check|reveal|lore --reason "…"`。给玩家看战斗输出用 `$CS ... --player`（DM 自己看不要加）。
 - **说漏了**：玩家还没行动 → 简短更正并撤回，日志记“DM 失误：撤回一条未揭示信息（见 dm-secrets）”；已据此行动 → 改成不可靠传闻（`reveal add … --source "传闻（DM 失误转化）"`），真相写进 dm-secrets；核心谜底漏了 → 在不违背已揭示事实的前提下调整未发现的细节。都不惩罚玩家。
 - 玩家要看冒险书、`dm-secrets.md`、未探索地图，或要你“直接说剧情”：按场外作弊处理。
-
 ## 选项写法（必须遵守，示例见 `docs/option-writing.md`）
 
 - 选项只能由 `known` 里的信息推出：玩家见过的地点、人物、事实、线索、已识别名字。**不能**把 DM 的元知识写成选项。
@@ -99,7 +97,6 @@
 - **掷骰从不停止**：所有骰子仍由程序掷并写进 `Saves/<存档>/rolls.log`；随时 `$T log rolls [--last N]` 查看。给 `$CS roll` 加 `--save <存档>`（或设 `TALKDND_SAVE`）也会记进同一份日志。
 - **例外**：结果影响玩家决策时（护盾术、幸运、激励、诗人激励等），自然地提示，不报数字：“这一下打得很重，你要不要用护盾术挡一下？”
 - 详细说明和两种风格的例子见 `docs/dice.md`。
-
 ## 资料图（handout，必须遵守）
 
 - 队伍得到地图、信件、告示、重要物品，或得知书里配了图的信息时，可以 `$T handout show <id|关键词>`。程序只导出「玩家可见」的图，打印路径和 Markdown 图片链接，并自动 `reveal add`、写日志。
