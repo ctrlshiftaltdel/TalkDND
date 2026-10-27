@@ -30,7 +30,7 @@
 
 **非目标：**
 
-- 不发行受版权保护的规则书或冒险书；SRD 5.1 / 5.2.1 内容包按 CC-BY-4.0 随程序分发，玩家不必自备 SRD PDF；自备的完整书只在本机使用。
+- 不发行受版权保护的冒险书或印刷版规则书；SRD 5.1 / 5.2.1 内容包按 CC-BY-4.0 随程序分发，玩家不必自备 SRD PDF；PHB/DMG/MM 完整书内容包按所有者 2026-10-27 的分发授权随程序提供，但保持锁定直到玩家用匹配的 PDF 解锁，玩家自备的 PDF 只在本机使用。
 - 不提交存档、角色卡、会话日志或 DM 秘密；`LetsPlay/Saves/README.md` 是唯一例外。
 - 不在同一存档里混用 2014 与 2024 规则。
 - 不把非 SRD 的怪物、法术或战役硬编码进引擎或已跟踪数据。
@@ -41,7 +41,8 @@
 
 - 平台：本地 CLI；Linux、Windows、macOS 是玩家平台，发布目标为 Linux x86_64、Windows x86_64、macOS arm64。
 - 隐私：书籍、存档、DM 秘密、凭据永不进入 Issue / PR / commit / CI 日志；图片入库前脱敏。
-- 规则数据：只收 SRD 5.1 / 5.2.1，署名见 `NOTICE`；非 SRD 数据只留本地且被 `.gitignore` 覆盖。
+- 规则数据：只收 SRD 5.1 / 5.2.1，署名见 `NOTICE`；非 SRD 数据只留本地且被 `.gitignore` 覆盖。完整书内容包只作发布资产：从本机 pdf2md 索引构建，永不入 Git，CI 只用合成 fixture、不构建或下载。
+- 完整书解锁：玩家提供 PDF 只为按内容识别并解锁对应 full pack；不校验 hash；授权范围变化时撤下或替换 full pack。
 - 版本：三个 crate 版本一致；存档 schema 变更必须带自动迁移并升次版本或主版本；发布前 `CHANGELOG.md` 必须有对应小节。
 - 源码只读：`tools/combat-sim/src` 默认不可写；修改前 `chmod u+w`，验证后 `chmod a-w`。
 - 套件：AgentOrch Format 1.6，官方 `MANIFEST.json` 基线；本地差异与预期漂移记录在 `docs/PROJECT.md`。
@@ -53,7 +54,7 @@
 - `uv run --no-project python scripts/validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 在无书籍、无存档的干净树上通过。
 - 三个 crate 的 `cargo test`、`cargo fmt --check`、`cargo clippy -D warnings` 通过。
 - AgentOrch 完整套件 `unittest discover -s tests` 通过；`check_drift` 只报告 `docs/PROJECT.md` 中列出的预期漂移。
-- 发布自动化产出章程列出的三个平台制品；发布包只含已跟踪的 `LetsPlay/` 内容与二进制。
+- 发布自动化产出章程列出的三个平台制品；发布包只含已跟踪的 `LetsPlay/` 内容与二进制。完整书 pack 作为独立发布资产由本地构建产生，仓库、LetsPlay 包与 CI 日志都不含书籍正文或扫描页。
 - 改变范围、目标、技术栈、规则支持或用户决定的 PR，在同一 PR 内更新 `docs/PROJECT-CHARTER.md`。
 
 ## 计划文件

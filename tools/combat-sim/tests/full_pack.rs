@@ -383,6 +383,7 @@ fn release_manifest_is_sorted_hashed_and_never_embeds_local_paths() {
     assert_eq!(value["packs"][0]["id"], "full-2014-phb");
     assert_eq!(value["packs"][1]["id"], "full-2024-mm");
     assert_eq!(value["packs"][0]["sections"], 4);
+    assert_eq!(value["packs"][0]["chapters"], 2);
     assert_eq!(value["packs"][0]["images"], 2);
     assert!(value["packs"][0]["content_hash"]
         .as_str()
