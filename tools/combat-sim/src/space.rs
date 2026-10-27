@@ -127,6 +127,25 @@ pub enum SpatialError {
     },
     EmptyTerrainId,
     EmptyBlockerId,
+    InvalidMovementMap {
+        width: i32,
+        height: i32,
+        cells: usize,
+    },
+    InvalidBudget {
+        budget_ft: i32,
+    },
+    InvalidDistance {
+        distance_ft: i32,
+    },
+    InvalidDirection {
+        dx: i32,
+        dy: i32,
+    },
+    PoseMismatch {
+        expected: Footprint,
+        actual: Footprint,
+    },
 }
 
 impl fmt::Display for SpatialError {
@@ -194,6 +213,29 @@ impl fmt::Display for SpatialError {
             }
             Self::EmptyTerrainId => f.write_str("terrain volume id must not be empty"),
             Self::EmptyBlockerId => f.write_str("spatial blocker id must not be empty"),
+            Self::InvalidMovementMap {
+                width,
+                height,
+                cells,
+            } => write!(
+                f,
+                "movement map {width}x{height} needs {} cells but got {cells}",
+                i64::from(*width) * i64::from(*height)
+            ),
+            Self::InvalidBudget { budget_ft } => {
+                write!(f, "movement budget {budget_ft} ft must not be negative")
+            }
+            Self::InvalidDistance { distance_ft } => {
+                write!(f, "movement distance {distance_ft} ft must not be negative")
+            }
+            Self::InvalidDirection { dx, dy } => write!(
+                f,
+                "movement direction ({dx}, {dy}) must be one grid step"
+            ),
+            Self::PoseMismatch { expected, actual } => write!(
+                f,
+                "pose footprint {actual:?} does not match the mover footprint {expected:?}"
+            ),
         }
     }
 }
@@ -2667,12 +2709,25 @@ pub fn travel_step_cost(
     terrain: TravelTerrain,
 ) -> TravelStep {
     let (base, squares, ground_rule) = ground_distance(from, to, profile);
-    let mut feet = base;
+    travel_cost_from_base(base, squares, ground_rule, profile, terrain)
+}
+
+/// Shared cost kernel for one travel step. `base_ft` is the edge distance
+/// before terrain multipliers. P3 passes a 5-10-5-adjusted base here so the
+/// diagonal parity cost goes through the same multiplier stack as the kernel.
+fn travel_cost_from_base(
+    base_ft: i32,
+    squares: i32,
+    ground_rule: &'static str,
+    profile: &SpatialProfile,
+    terrain: TravelTerrain,
+) -> TravelStep {
+    let mut feet = base_ft;
     let mut explain = vec![
         Explain::new("travel-base", ground_rule),
         Explain::new(
             "travel-step",
-            "single step only; multi-step pathfinding belongs to TASK-0088",
+            "single step only; multi-step planning uses MovementPlanner",
         ),
     ];
     if terrain.difficult {
@@ -3641,4 +3696,1979 @@ impl<'a> ZoneQuery<'a> {
             )],
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// P3 movement planner (TASK-0088)
+// ---------------------------------------------------------------------------
+//
+// This is a planning seam, not an executor. It reads an explicit movement map,
+// profile and bodies and returns plans; it never changes encounter state. P5
+// (#174) is the only task that wires these results into engine/AI/CLI.
+//
+// Legacy `Space`/`GridSpace`/`ZoneGraph` behaviour is untouched: callers get
+// the new semantics only by constructing a `MovementPlanner` explicitly, which
+// is the "explicitly enabled profile" boundary from the frozen contract.
+//
+// The map is a 2D floor plan with a per-cell floor elevation. A grid step may
+// change the floor by at most `MAX_ELEVATION_STEP_FT` (a climb); larger rises
+// need a route and larger drops belong to P4 falling. Flight/altitude is P4.
+
+/// One grid step may change the floor by at most this many feet.
+pub const MAX_ELEVATION_STEP_FT: i32 = 5;
+
+/// Where a movement cell's floor is: normal ground or water.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MovementMedium {
+    #[default]
+    Ground,
+    Water,
+}
+
+/// State of a door in a movement cell. Closed and locked doors block entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DoorState {
+    #[default]
+    None,
+    Open,
+    Closed,
+    Locked,
+}
+
+/// One cell of a synthetic movement map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MovementCell {
+    /// A wall or an impassable volume.
+    pub blocked: bool,
+    /// Difficult Terrain: each foot costs one extra foot.
+    pub difficult: bool,
+    /// Floor height in feet above the map datum.
+    pub elevation_ft: i32,
+    pub medium: MovementMedium,
+    pub door: DoorState,
+}
+
+impl MovementCell {
+    pub fn open() -> Self {
+        Self::default()
+    }
+
+    pub fn wall() -> Self {
+        Self {
+            blocked: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn difficult() -> Self {
+        Self {
+            difficult: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn water() -> Self {
+        Self {
+            medium: MovementMedium::Water,
+            ..Self::default()
+        }
+    }
+
+    pub fn elevated(height_ft: i32) -> Self {
+        Self {
+            elevation_ft: height_ft,
+            ..Self::default()
+        }
+    }
+
+    pub fn door(state: DoorState) -> Self {
+        Self {
+            door: state,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_difficult(mut self) -> Self {
+        self.difficult = true;
+        self
+    }
+
+    pub fn with_elevation(mut self, height_ft: i32) -> Self {
+        self.elevation_ft = height_ft;
+        self
+    }
+
+    pub fn with_door(mut self, state: DoorState) -> Self {
+        self.door = state;
+        self
+    }
+}
+
+/// A synthetic movement floor. Cells are stored row-major (`y * width + x`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovementMap {
+    width: i32,
+    height: i32,
+    cells: Vec<MovementCell>,
+}
+
+impl MovementMap {
+    pub fn new(width: i32, height: i32, cells: Vec<MovementCell>) -> Result<Self, SpatialError> {
+        let expected = i64::from(width) * i64::from(height);
+        if width <= 0
+            || height <= 0
+            || width > MAX_GRID_COORD
+            || height > MAX_GRID_COORD
+            || expected != cells.len() as i64
+        {
+            return Err(SpatialError::InvalidMovementMap {
+                width,
+                height,
+                cells: cells.len(),
+            });
+        }
+        for cell in &cells {
+            if !(0..=MAX_ALTITUDE_FT).contains(&cell.elevation_ft) {
+                return Err(SpatialError::AltitudeOutOfRange {
+                    z: cell.elevation_ft,
+                });
+            }
+        }
+        Ok(Self {
+            width,
+            height,
+            cells,
+        })
+    }
+
+    /// An all-open ground map. Dimensions must be positive and bounded.
+    pub fn open(width: i32, height: i32) -> Self {
+        assert!(
+            width > 0 && height > 0 && width <= MAX_GRID_COORD && height <= MAX_GRID_COORD,
+            "movement map dimensions must be within 1..=MAX_GRID_COORD"
+        );
+        let count = (width as usize).saturating_mul(height as usize);
+        Self {
+            width,
+            height,
+            cells: vec![MovementCell::open(); count],
+        }
+    }
+
+    pub fn width(&self) -> i32 {
+        self.width
+    }
+
+    pub fn height(&self) -> i32 {
+        self.height
+    }
+
+    fn index(&self, x: i32, y: i32) -> Option<usize> {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            None
+        } else {
+            Some((y * self.width + x) as usize)
+        }
+    }
+
+    pub fn cell(&self, x: i32, y: i32) -> Option<MovementCell> {
+        self.index(x, y).map(|index| self.cells[index])
+    }
+
+    pub fn in_bounds(&self, x: i32, y: i32) -> bool {
+        self.index(x, y).is_some()
+    }
+
+    pub fn bounds(&self) -> GridBounds {
+        GridBounds {
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
+/// Movement modes the planner can select for one edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveMode {
+    Walk,
+    Climb,
+    Swim,
+}
+
+/// Speeds that remove the climb/swim movement penalty. Zero means "no matching
+/// speed". Walk speed is the caller-provided budget, not a capability here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MoveCapabilities {
+    pub climb_ft: i32,
+    pub swim_ft: i32,
+}
+
+impl MoveCapabilities {
+    pub fn with_climb(mut self, feet: i32) -> Self {
+        self.climb_ft = feet;
+        self
+    }
+
+    pub fn with_swim(mut self, feet: i32) -> Self {
+        self.swim_ft = feet;
+        self
+    }
+
+    pub fn has_climb(&self) -> bool {
+        self.climb_ft > 0
+    }
+
+    pub fn has_swim(&self) -> bool {
+        self.swim_ft > 0
+    }
+}
+
+/// Another creature in the scene plus the two facts that change traversal:
+/// whether it is an ally and whether it is Incapacitated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraversalCreature {
+    pub body: SpatialBody,
+    pub ally: bool,
+    pub incapacitated: bool,
+}
+
+impl TraversalCreature {
+    pub fn new(body: SpatialBody, ally: bool, incapacitated: bool) -> Self {
+        Self {
+            body,
+            ally,
+            incapacitated,
+        }
+    }
+
+    pub fn ally(body: SpatialBody) -> Self {
+        Self::new(body, true, false)
+    }
+
+    pub fn hostile(body: SpatialBody) -> Self {
+        Self::new(body, false, false)
+    }
+}
+
+/// An observer whose reach may be left by a voluntary move. The planner only
+/// marks the potential trigger; visibility, reactions and order stay in P5.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpportunityObserver {
+    pub body: SpatialBody,
+    pub reach_ft: i32,
+}
+
+impl OpportunityObserver {
+    pub fn new(body: SpatialBody, reach_ft: i32) -> Self {
+        Self { body, reach_ft }
+    }
+}
+
+/// Why a move is unavailable. Variant order is the reporting priority used
+/// when several frontier blocks compete for one explanation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MoveBlock {
+    Door,
+    LockedDoor,
+    Wall,
+    Occupied,
+    EndOccupied,
+    TooNarrow,
+    OutOfBounds,
+    Height,
+    TooSteep,
+    Drop,
+    NoPath,
+    NotAdjacent,
+    InvalidPose,
+}
+
+impl MoveBlock {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Door => "door",
+            Self::LockedDoor => "locked_door",
+            Self::Wall => "wall",
+            Self::Occupied => "occupied",
+            Self::EndOccupied => "end_occupied",
+            Self::TooNarrow => "too_narrow",
+            Self::OutOfBounds => "out_of_bounds",
+            Self::Height => "height",
+            Self::TooSteep => "too_steep",
+            Self::Drop => "drop",
+            Self::NoPath => "no_path",
+            Self::NotAdjacent => "not_adjacent",
+            Self::InvalidPose => "invalid_pose",
+        }
+    }
+}
+
+/// A point the engine must process; the planner never resolves it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoveTrigger {
+    /// The mover enters a cell; the engine checks area effects there.
+    AreaEntry { at: CellPos },
+    /// The edge squeezes through a narrow opening.
+    Squeeze { at: CellPos, disadvantage: bool },
+    /// The edge changes the floor height.
+    Climb {
+        from: CellPos,
+        to: CellPos,
+        elevation_change_ft: i32,
+    },
+    /// A voluntary move leaves an observer's reach (potential opportunity attack).
+    LeavesReach {
+        observer: String,
+        from: CellPos,
+        to: CellPos,
+    },
+}
+
+/// One planned movement edge. Cost includes terrain multipliers; `distance_ft`
+/// is the base edge distance (5-10-5 and Manhattan included) before them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovementEdge {
+    pub from: SpatialPose,
+    pub to: SpatialPose,
+    pub cost_ft: i32,
+    pub distance_ft: i32,
+    pub mode: MoveMode,
+    pub diagonal: bool,
+    pub elevation_change_ft: i32,
+    pub difficult: bool,
+    pub narrow_opening: bool,
+    pub creature_space: bool,
+    pub squeezed: bool,
+    pub triggers: Vec<MoveTrigger>,
+}
+
+/// Result of evaluating one adjacent step. Blocked steps never carry an edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepResult {
+    pub from: SpatialPose,
+    pub to: SpatialPose,
+    pub edge: Option<MovementEdge>,
+    pub blocked: Option<MoveBlock>,
+    pub blockers: Vec<String>,
+    pub explain: Vec<Explain>,
+}
+
+impl StepResult {
+    pub fn allowed(&self) -> bool {
+        self.blocked.is_none() && self.edge.is_some()
+    }
+}
+
+/// Voluntary or forced movement. Forced movement neither spends the mover's
+/// Speed nor provokes opportunity attacks, but still triggers area effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveKind {
+    Voluntary,
+    Forced,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MoveRules {
+    pub consumes_speed: bool,
+    pub provokes_opportunity_attacks: bool,
+    pub triggers_area_effects: bool,
+}
+
+impl MoveKind {
+    pub fn rules(self) -> MoveRules {
+        match self {
+            Self::Voluntary => MoveRules {
+                consumes_speed: true,
+                provokes_opportunity_attacks: true,
+                triggers_area_effects: true,
+            },
+            Self::Forced => MoveRules {
+                consumes_speed: false,
+                provokes_opportunity_attacks: false,
+                triggers_area_effects: true,
+            },
+        }
+    }
+}
+
+/// A planned voluntary route. `total_cost_ft` is the sum of step costs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovementPath {
+    pub start: SpatialPose,
+    pub goal: SpatialPose,
+    pub steps: Vec<MovementEdge>,
+    pub total_cost_ft: i32,
+    pub kind: MoveKind,
+    pub explain: Vec<Explain>,
+}
+
+/// One pose in a Dijkstra reachable set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReachEntry {
+    pub pose: SpatialPose,
+    pub cost_ft: i32,
+    pub diagonals_parity: u8,
+    /// Whether the mover may stop here. Transit-only poses (for example an
+    /// ally's space) are reachable but not legal end positions.
+    pub end_allowed: bool,
+    /// The pose itself needs a squeeze strip (the full footprint does not fit).
+    pub squeezed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReachNode {
+    cost_ft: i32,
+    parity: u8,
+    parent: Option<(CellPos, u8)>,
+    edge: Option<MovementEdge>,
+}
+
+/// Every pose reachable within a speed budget, plus the parent data needed to
+/// reconstruct a path to any entry. Entries are sorted by cost and coordinates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReachableSet {
+    pub start: SpatialPose,
+    pub budget_ft: i32,
+    pub entries: Vec<ReachEntry>,
+    pub start_blocked: Option<MoveBlock>,
+    pub blockers: Vec<String>,
+    pub explain: Vec<Explain>,
+    nodes: BTreeMap<(CellPos, u8), ReachNode>,
+}
+
+impl ReachableSet {
+    /// Cheapest reconstructed path to a pose in the set.
+    pub fn path_to(&self, goal: &SpatialPose) -> Option<MovementPath> {
+        if goal.footprint != self.start.footprint || goal.facing != self.start.facing {
+            return None;
+        }
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.pose.cell == goal.cell)?;
+        let key = (entry.pose.cell, entry.diagonals_parity);
+        Some(reconstruct_path(
+            &self.nodes,
+            key,
+            self.start,
+            *goal,
+            MoveKind::Voluntary,
+        ))
+    }
+
+    pub fn cost_to(&self, goal: &SpatialPose) -> Option<i32> {
+        self.entries
+            .iter()
+            .find(|entry| entry.pose.cell == goal.cell)
+            .map(|entry| entry.cost_ft)
+    }
+
+    pub fn contains(&self, goal: &SpatialPose) -> bool {
+        self.cost_to(goal).is_some()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathAlgorithm {
+    Auto,
+    Dijkstra,
+    AStar,
+}
+
+/// The three structured terminal outcomes of a path query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanOutcome {
+    /// Cheapest path fits the budget.
+    Reached(MovementPath),
+    /// Cheapest path exists but costs more than the budget.
+    OverBudget(MovementPath),
+    /// No route exists; `reason` and `blockers` explain the nearest frontier.
+    Unreachable {
+        reason: MoveBlock,
+        blockers: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathPlan {
+    pub start: SpatialPose,
+    pub goal: SpatialPose,
+    pub budget_ft: i32,
+    pub kind: MoveKind,
+    /// The algorithm actually used. `Auto` reports A* or the Dijkstra fallback.
+    pub algorithm: PathAlgorithm,
+    pub outcome: PlanOutcome,
+    pub nodes_expanded: usize,
+    pub explain: Vec<Explain>,
+}
+
+impl PathPlan {
+    pub fn is_reached(&self) -> bool {
+        matches!(self.outcome, PlanOutcome::Reached(_))
+    }
+
+    pub fn path(&self) -> Option<&MovementPath> {
+        match &self.outcome {
+            PlanOutcome::Reached(path) | PlanOutcome::OverBudget(path) => Some(path),
+            PlanOutcome::Unreachable { .. } => None,
+        }
+    }
+}
+
+/// Re-verification verdict for a previously planned path. Execution must run
+/// this against current state before each step or at the start of a move.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathVerdict {
+    Valid,
+    Blocked {
+        step_index: usize,
+        reason: MoveBlock,
+        blockers: Vec<String>,
+    },
+    CostChanged {
+        step_index: usize,
+        planned_cost_ft: i32,
+        actual_cost_ft: i32,
+    },
+    OverBudget {
+        total_cost_ft: i32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathCheck {
+    pub verdict: PathVerdict,
+    pub checked_steps: usize,
+    pub explain: Vec<Explain>,
+}
+
+/// End-position query result (contract O-05).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndCheck {
+    pub allowed: bool,
+    pub reason: Option<MoveBlock>,
+    pub blockers: Vec<String>,
+    pub squeezed: bool,
+    pub explain: Vec<Explain>,
+}
+
+/// A straight forced push/pull. `moved_ft` uses geometric distance, not the
+/// mover's Speed; difficult terrain does not shorten a push.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForcedMovePlan {
+    pub start: SpatialPose,
+    pub direction: (i32, i32),
+    pub distance_ft: i32,
+    pub steps: Vec<MovementEdge>,
+    pub moved_ft: i32,
+    pub stopped_by: Option<MoveBlock>,
+    pub rules: MoveRules,
+    pub explain: Vec<Explain>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    X,
+    Y,
+}
+
+#[derive(Debug, Clone)]
+struct Placement {
+    cells: Vec<(i32, i32)>,
+    squeezed: bool,
+    block: Option<(MoveBlock, Vec<String>)>,
+}
+
+impl Placement {
+    fn fits(&self) -> bool {
+        self.block.is_none()
+    }
+}
+
+struct SearchResult {
+    nodes: BTreeMap<(CellPos, u8), ReachNode>,
+    goal_key: Option<(CellPos, u8)>,
+    expanded: usize,
+    goal_blocks: BTreeMap<MoveBlock, BTreeSet<String>>,
+    frontier_blocks: BTreeMap<(u32, MoveBlock), BTreeSet<String>>,
+}
+
+const MOVE_DIRECTIONS: [(i32, i32); 8] = [
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (-1, 0),
+    (1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+];
+
+/// Ground-plane lower bound used by A*. Vertical is ignored because no edge is
+/// cheaper than its ground component. `FiveTenFive` uses the cheapest
+/// alternating diagonal pattern, which is a lower bound for any path.
+pub fn movement_heuristic(from: &SpatialPose, to: &SpatialPose, profile: &SpatialProfile) -> i32 {
+    let (ground, _, _) = ground_distance(from, to, profile);
+    ground
+}
+
+/// A* is only used when the heuristic above is provably admissible. Every
+/// profile combination the frozen contract can express is supported; a future
+/// distance policy that cannot be proved must return `false` here and fall back
+/// to Dijkstra.
+pub fn astar_heuristic_is_admissible(profile: &SpatialProfile) -> bool {
+    matches!(
+        profile.distance_3d,
+        Distance3d::Chebyshev | Distance3d::ManhattanPlusVertical
+    )
+}
+
+/// Occupancy-, terrain- and footprint-aware movement planning over a
+/// [`MovementMap`]. Constructing a planner is the explicit opt-in for the new
+/// path semantics; legacy `Space` callers never reach this code until P5.
+pub struct MovementPlanner<'a> {
+    map: &'a MovementMap,
+    profile: &'a SpatialProfile,
+    mover: &'a SpatialBody,
+    occupants: Vec<&'a TraversalCreature>,
+    observers: Vec<&'a OpportunityObserver>,
+    capabilities: MoveCapabilities,
+}
+
+impl<'a> MovementPlanner<'a> {
+    pub fn new(map: &'a MovementMap, profile: &'a SpatialProfile, mover: &'a SpatialBody) -> Self {
+        Self {
+            map,
+            profile,
+            mover,
+            occupants: Vec::new(),
+            observers: Vec::new(),
+            capabilities: MoveCapabilities::default(),
+        }
+    }
+
+    pub fn with_capabilities(mut self, capabilities: MoveCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    pub fn with_occupants(mut self, occupants: &'a [TraversalCreature]) -> Self {
+        self.occupants = occupants.iter().collect();
+        self.occupants
+            .sort_by(|left, right| left.body.id.cmp(&right.body.id));
+        self
+    }
+
+    pub fn with_observers(mut self, observers: &'a [OpportunityObserver]) -> Self {
+        self.observers = observers.iter().collect();
+        self.observers
+            .sort_by(|left, right| left.body.id.cmp(&right.body.id));
+        self
+    }
+
+    fn pose_at(&self, cell: CellPos) -> SpatialPose {
+        SpatialPose {
+            cell,
+            footprint: self.mover.pose.footprint,
+            facing: self.mover.pose.facing,
+        }
+    }
+
+    fn body_at(&self, pose: &SpatialPose) -> SpatialBody {
+        SpatialBody {
+            id: self.mover.id.clone(),
+            pose: *pose,
+            height_ft: self.mover.height_ft,
+            size: self.mover.size,
+        }
+    }
+
+    fn full_cells(&self, pose: &SpatialPose) -> Vec<(i32, i32)> {
+        let mut cells = Vec::with_capacity((pose.footprint.width * pose.footprint.depth) as usize);
+        for dy in 0..pose.footprint.depth {
+            for dx in 0..pose.footprint.width {
+                cells.push((
+                    pose.cell.x.saturating_add(dx as i32),
+                    pose.cell.y.saturating_add(dy as i32),
+                ));
+            }
+        }
+        cells
+    }
+
+    /// The one-size-smaller strip used by squeezing. Along X the strip keeps
+    /// `depth - 1` rows anchored at the top; along Y it keeps `width - 1`
+    /// columns anchored at the left. That is exactly one size smaller.
+    fn strip_cells(&self, pose: &SpatialPose, axis: Axis) -> Vec<(i32, i32)> {
+        let mut cells = Vec::new();
+        match axis {
+            Axis::X => {
+                let rows = pose.footprint.depth.saturating_sub(1).max(1);
+                for dy in 0..rows {
+                    for dx in 0..pose.footprint.width {
+                        cells.push((
+                            pose.cell.x.saturating_add(dx as i32),
+                            pose.cell.y.saturating_add(dy as i32),
+                        ));
+                    }
+                }
+            }
+            Axis::Y => {
+                let cols = pose.footprint.width.saturating_sub(1).max(1);
+                for dy in 0..pose.footprint.depth {
+                    for dx in 0..cols {
+                        cells.push((
+                            pose.cell.x.saturating_add(dx as i32),
+                            pose.cell.y.saturating_add(dy as i32),
+                        ));
+                    }
+                }
+            }
+        }
+        cells
+    }
+
+    fn perpendicular_gt_one(&self, pose: &SpatialPose, axis: Axis) -> bool {
+        match axis {
+            Axis::X => pose.footprint.depth > 1,
+            Axis::Y => pose.footprint.width > 1,
+        }
+    }
+
+    fn cells_block(&self, cells: &[(i32, i32)], z: i32) -> Option<(MoveBlock, Vec<String>)> {
+        let mut out_of_bounds = BTreeSet::new();
+        let mut walls = BTreeSet::new();
+        let mut doors = BTreeSet::new();
+        let mut locked = BTreeSet::new();
+        let mut heights = BTreeSet::new();
+        for &(x, y) in cells {
+            let Some(cell) = self.map.cell(x, y) else {
+                out_of_bounds.insert(format!("cell:{x},{y}"));
+                continue;
+            };
+            if cell.blocked {
+                walls.insert(format!("cell:{x},{y}"));
+                continue;
+            }
+            match cell.door {
+                DoorState::Closed => {
+                    doors.insert(format!("cell:{x},{y}"));
+                    continue;
+                }
+                DoorState::Locked => {
+                    locked.insert(format!("cell:{x},{y}"));
+                    continue;
+                }
+                DoorState::None | DoorState::Open => {}
+            }
+            if cell.elevation_ft != z {
+                heights.insert(format!("cell:{x},{y}"));
+            }
+        }
+        if !out_of_bounds.is_empty() {
+            return Some((MoveBlock::OutOfBounds, out_of_bounds.into_iter().collect()));
+        }
+        if !locked.is_empty() {
+            return Some((MoveBlock::LockedDoor, locked.into_iter().collect()));
+        }
+        if !doors.is_empty() {
+            return Some((MoveBlock::Door, doors.into_iter().collect()));
+        }
+        if !walls.is_empty() {
+            return Some((MoveBlock::Wall, walls.into_iter().collect()));
+        }
+        if !heights.is_empty() {
+            return Some((MoveBlock::Height, heights.into_iter().collect()));
+        }
+        None
+    }
+
+    /// Effective placement of a pose. The full footprint is preferred. If it
+    /// is blocked and the movement axis has a perpendicular edge greater than
+    /// one, the one-size-smaller strip is tried:
+    /// - 2014/2024 squeeze: a fitting strip is a legal squeezed placement.
+    /// - `Forbid`: a fitting strip is reported as `TooNarrow`.
+    ///
+    /// Out-of-bounds is never fixed by squeezing. A strip that avoids a wall,
+    /// door or height seam in the rest of the footprint is legal; if the strip
+    /// runs into the blocker too, that blocker is reported.
+    fn placement(&self, pose: &SpatialPose, axis: Option<Axis>) -> Placement {
+        let full = self.full_cells(pose);
+        let Some(block) = self.cells_block(&full, pose.cell.z) else {
+            return Placement {
+                cells: full,
+                squeezed: false,
+                block: None,
+            };
+        };
+        let Some(axis) = axis else {
+            return Placement {
+                cells: full,
+                squeezed: false,
+                block: Some(block),
+            };
+        };
+        if !self.perpendicular_gt_one(pose, axis) || block.0 == MoveBlock::OutOfBounds {
+            return Placement {
+                cells: full,
+                squeezed: false,
+                block: Some(block),
+            };
+        }
+        let strip = self.strip_cells(pose, axis);
+        if let Some(strip_block) = self.cells_block(&strip, pose.cell.z) {
+            return Placement {
+                cells: strip,
+                squeezed: false,
+                block: Some(strip_block),
+            };
+        }
+        if self.profile.squeeze == Squeeze::Forbid {
+            return Placement {
+                cells: strip,
+                squeezed: false,
+                block: Some((MoveBlock::TooNarrow, block.1)),
+            };
+        }
+        Placement {
+            cells: strip,
+            squeezed: true,
+            block: None,
+        }
+    }
+
+    fn full_fits(&self, pose: &SpatialPose) -> bool {
+        self.placement(pose, None).fits()
+    }
+
+    fn may_pass_through(&self, other: &TraversalCreature) -> bool {
+        if other.incapacitated || other.ally || other.body.size == Size::Tiny {
+            return true;
+        }
+        let mover = i32::from(size_rank(self.mover.size));
+        let other_rank = i32::from(size_rank(other.body.size));
+        (mover - other_rank).abs() >= 2
+    }
+
+    fn end_occupancy(&self, pose: &SpatialPose, cells: &[(i32, i32)]) -> (bool, Vec<String>) {
+        let mut blockers = BTreeSet::new();
+        for occupant in &self.occupants {
+            if occupant.body.id == self.mover.id {
+                continue;
+            }
+            let occupant_cells = occupant.body.cells();
+            let overlaps = occupant_cells.iter().any(|occupant_cell| {
+                cells.iter().any(|&(x, y)| {
+                    occupant_cell.x == x
+                        && occupant_cell.y == y
+                        && vertical_overlap(
+                            pose.cell.z,
+                            self.mover.height_ft,
+                            occupant_cell.z,
+                            occupant.body.height_ft,
+                        )
+                })
+            });
+            if overlaps && !can_share_cell(&self.body_at(pose), &occupant.body, self.profile) {
+                blockers.insert(occupant.body.id.clone());
+            }
+        }
+        (blockers.is_empty(), blockers.into_iter().collect())
+    }
+
+    fn end_check(
+        &self,
+        pose: &SpatialPose,
+        placement: &Placement,
+        squeezed: bool,
+        mut explain: Vec<Explain>,
+    ) -> EndCheck {
+        let (allowed, blockers) = self.end_occupancy(pose, &placement.cells);
+        if allowed {
+            explain.push(Explain::new(
+                "end-ok",
+                if squeezed {
+                    "squeezed pose is a legal end position"
+                } else {
+                    "footprint volume is free"
+                },
+            ));
+            EndCheck {
+                allowed: true,
+                reason: None,
+                blockers: Vec::new(),
+                squeezed,
+                explain,
+            }
+        } else {
+            explain.push(Explain::new(
+                "end-occupied",
+                "the body may not willingly end in another body's space",
+            ));
+            EndCheck {
+                allowed: false,
+                reason: Some(MoveBlock::EndOccupied),
+                blockers,
+                squeezed,
+                explain,
+            }
+        }
+    }
+
+    /// May the mover end its move at `pose`? Checks bounds, every effective
+    /// footprint cell, the floor level, doors/walls and O-05 occupancy.
+    pub fn can_end_at(&self, pose: &SpatialPose) -> EndCheck {
+        let explain = vec![Explain::new(
+            "end-check",
+            format!(
+                "{}x{} footprint at ({},{},{})",
+                pose.footprint.width, pose.footprint.depth, pose.cell.x, pose.cell.y, pose.cell.z
+            ),
+        )];
+        if pose.validate().is_err() {
+            return EndCheck {
+                allowed: false,
+                reason: Some(MoveBlock::InvalidPose),
+                blockers: Vec::new(),
+                squeezed: false,
+                explain,
+            };
+        }
+        let full = self.placement(pose, None);
+        if full.fits() {
+            return self.end_check(pose, &full, false, explain);
+        }
+        let (reason, blockers) = full
+            .block
+            .clone()
+            .expect("a non-fitting placement carries a block");
+        if reason != MoveBlock::OutOfBounds
+            && (pose.footprint.width > 1 || pose.footprint.depth > 1)
+        {
+            let mut first_block = None;
+            for axis in [Axis::X, Axis::Y] {
+                if !self.perpendicular_gt_one(pose, axis) {
+                    continue;
+                }
+                let candidate = self.placement(pose, Some(axis));
+                if candidate.fits() {
+                    return self.end_check(pose, &candidate, true, explain);
+                }
+                if first_block.is_none() {
+                    first_block = candidate.block;
+                }
+            }
+            if let Some((reason, blockers)) = first_block {
+                return EndCheck {
+                    allowed: false,
+                    reason: Some(reason),
+                    blockers,
+                    squeezed: false,
+                    explain,
+                };
+            }
+        }
+        EndCheck {
+            allowed: false,
+            reason: Some(reason),
+            blockers,
+            squeezed: false,
+            explain,
+        }
+    }
+
+    /// Evaluate one adjacent step. Parity 0 is the default (first diagonal);
+    /// multi-step callers use `verify_path` or the planner search.
+    pub fn step(&self, from: &SpatialPose, to: &SpatialPose) -> StepResult {
+        self.edge_at(from, to, 0, MoveKind::Voluntary)
+    }
+
+    fn edge_at(
+        &self,
+        from: &SpatialPose,
+        to: &SpatialPose,
+        parity: u8,
+        kind: MoveKind,
+    ) -> StepResult {
+        if from.validate().is_err() || to.validate().is_err() {
+            return blocked_step(
+                from,
+                to,
+                MoveBlock::InvalidPose,
+                Vec::new(),
+                "step-invalid-pose",
+                "pose coordinates or footprint are invalid",
+            );
+        }
+        if from.footprint != to.footprint || from.facing != to.facing {
+            return blocked_step(
+                from,
+                to,
+                MoveBlock::InvalidPose,
+                Vec::new(),
+                "step-pose-mismatch",
+                "both poses must describe the same footprint and facing",
+            );
+        }
+        let dx = to.cell.x.saturating_sub(from.cell.x);
+        let dy = to.cell.y.saturating_sub(from.cell.y);
+        if dx.abs() > 1 || dy.abs() > 1 || (dx == 0 && dy == 0) {
+            return blocked_step(
+                from,
+                to,
+                MoveBlock::NotAdjacent,
+                Vec::new(),
+                "step-not-adjacent",
+                "movement edges connect adjacent cells only",
+            );
+        }
+        let diagonal = dx != 0 && dy != 0;
+        if diagonal && from.cell.z != to.cell.z {
+            return blocked_step(
+                from,
+                to,
+                MoveBlock::Height,
+                Vec::new(),
+                "step-diagonal-height",
+                "diagonal edges cannot change the floor level; climb orthogonally",
+            );
+        }
+        let axis = if diagonal {
+            None
+        } else if dx != 0 {
+            Some(Axis::X)
+        } else {
+            Some(Axis::Y)
+        };
+        let refine = |placement: Placement| -> Placement {
+            if diagonal
+                && placement
+                    .block
+                    .as_ref()
+                    .is_some_and(|(reason, _)| *reason == MoveBlock::Wall)
+                && (from.footprint.width > 1 || from.footprint.depth > 1)
+            {
+                let (_, blockers) = placement.block.expect("wall block");
+                return Placement {
+                    cells: placement.cells,
+                    squeezed: placement.squeezed,
+                    block: Some((MoveBlock::TooNarrow, blockers)),
+                };
+            }
+            placement
+        };
+        let source = refine(self.placement(from, axis));
+        if let Some((reason, blockers)) = source.block {
+            return blocked_step(
+                from,
+                to,
+                reason,
+                blockers,
+                "step-source-footprint",
+                "the mover's source footprint does not fit",
+            );
+        }
+        let dest = refine(self.placement(to, axis));
+        if let Some((reason, blockers)) = dest.block {
+            return blocked_step(
+                from,
+                to,
+                reason,
+                blockers,
+                "step-dest-footprint",
+                "the destination footprint does not fit",
+            );
+        }
+        let elevation_change = to.cell.z.saturating_sub(from.cell.z);
+        if elevation_change > MAX_ELEVATION_STEP_FT {
+            return blocked_step(
+                from,
+                to,
+                MoveBlock::TooSteep,
+                Vec::new(),
+                "step-too-steep",
+                format!("a {elevation_change} ft rise exceeds one climb step"),
+            );
+        }
+        if elevation_change < -MAX_ELEVATION_STEP_FT {
+            return blocked_step(
+                from,
+                to,
+                MoveBlock::Drop,
+                Vec::new(),
+                "step-drop",
+                format!("a {elevation_change} ft drop belongs to P4 falling"),
+            );
+        }
+
+        let mut swept: BTreeMap<(i32, i32), BTreeSet<i32>> = BTreeMap::new();
+        for &(x, y) in &source.cells {
+            swept.entry((x, y)).or_default().insert(from.cell.z);
+        }
+        for &(x, y) in &dest.cells {
+            swept.entry((x, y)).or_default().insert(to.cell.z);
+        }
+        if diagonal {
+            let mids = [
+                SpatialPose {
+                    cell: CellPos {
+                        x: from.cell.x.saturating_add(dx),
+                        y: from.cell.y,
+                        z: from.cell.z,
+                    },
+                    ..*from
+                },
+                SpatialPose {
+                    cell: CellPos {
+                        x: from.cell.x,
+                        y: from.cell.y.saturating_add(dy),
+                        z: from.cell.z,
+                    },
+                    ..*from
+                },
+            ];
+            for mid in &mids {
+                let placement = self.placement(mid, None);
+                if let Some((reason, blockers)) = placement.block {
+                    return blocked_step(
+                        from,
+                        to,
+                        reason,
+                        blockers,
+                        "step-corner",
+                        "a diagonal may not cross a blocked corner",
+                    );
+                }
+                for (x, y) in self.full_cells(mid) {
+                    swept.entry((x, y)).or_default().insert(from.cell.z);
+                }
+            }
+        }
+
+        let mut creature_space = false;
+        let mut occupant_blockers = BTreeSet::new();
+        for occupant in &self.occupants {
+            if occupant.body.id == self.mover.id {
+                continue;
+            }
+            let occupant_cells = occupant.body.cells();
+            let swept_overlap = occupant_cells.iter().any(|occupant_cell| {
+                swept
+                    .get(&(occupant_cell.x, occupant_cell.y))
+                    .is_some_and(|bands| {
+                        bands.iter().any(|&base_z| {
+                            vertical_overlap(
+                                base_z,
+                                self.mover.height_ft,
+                                occupant_cell.z,
+                                occupant.body.height_ft,
+                            )
+                        })
+                    })
+            });
+            if !swept_overlap {
+                continue;
+            }
+            if !self.may_pass_through(occupant) {
+                occupant_blockers.insert(occupant.body.id.clone());
+            }
+            // Difficult Terrain applies when entering a creature's space, not
+            // when leaving one. The swept volume above is the passage check.
+            let enters = occupant_cells.iter().any(|occupant_cell| {
+                dest.cells.iter().any(|&(x, y)| {
+                    occupant_cell.x == x
+                        && occupant_cell.y == y
+                        && vertical_overlap(
+                            to.cell.z,
+                            self.mover.height_ft,
+                            occupant_cell.z,
+                            occupant.body.height_ft,
+                        )
+                })
+            });
+            if enters {
+                creature_space = true;
+            }
+        }
+        if !occupant_blockers.is_empty() {
+            return blocked_step(
+                from,
+                to,
+                MoveBlock::Occupied,
+                occupant_blockers.into_iter().collect(),
+                "step-occupied",
+                "another creature's space is not passable for this mover",
+            );
+        }
+
+        let mode = if elevation_change != 0 {
+            MoveMode::Climb
+        } else if self
+            .map
+            .cell(to.cell.x, to.cell.y)
+            .is_some_and(|cell| cell.medium == MovementMedium::Water)
+        {
+            MoveMode::Swim
+        } else {
+            MoveMode::Walk
+        };
+        let dest_difficult = dest
+            .cells
+            .iter()
+            .any(|&(x, y)| self.map.cell(x, y).is_some_and(|cell| cell.difficult));
+        let squeezed = source.squeezed || dest.squeezed;
+        let difficult = dest_difficult
+            || creature_space
+            || (squeezed && self.profile.squeeze == Squeeze::Edition2024);
+        let climb_without_speed = mode == MoveMode::Climb && !self.capabilities.has_climb();
+        let swim_without_speed = mode == MoveMode::Swim && !self.capabilities.has_swim();
+        let terrain = TravelTerrain {
+            difficult,
+            narrow_opening: squeezed,
+            climb_swim_crawl: climb_without_speed || swim_without_speed,
+        };
+        let (mut base, squares, ground_rule) = ground_distance(from, to, self.profile);
+        if diagonal
+            && parity == 1
+            && self.profile.diagonal == Diagonal::FiveTenFive
+            && self.profile.distance_3d == Distance3d::Chebyshev
+        {
+            base = base.saturating_add(FEET_PER_CELL);
+        }
+        let travel = travel_cost_from_base(base, squares, ground_rule, self.profile, terrain);
+        if travel.blocked.is_some() {
+            return blocked_step(
+                from,
+                to,
+                MoveBlock::TooNarrow,
+                Vec::new(),
+                "step-too-narrow",
+                "the profile forbids squeezing",
+            );
+        }
+        let mut explain = travel.distance.explain.clone();
+        if parity == 1
+            && diagonal
+            && self.profile.diagonal == Diagonal::FiveTenFive
+            && self.profile.distance_3d == Distance3d::Chebyshev
+        {
+            explain.push(Explain::new(
+                "travel-five-ten-five",
+                "second consecutive diagonal costs 10 ft",
+            ));
+        }
+        let edge = MovementEdge {
+            from: *from,
+            to: *to,
+            cost_ft: travel.distance.feet,
+            distance_ft: base,
+            mode,
+            diagonal,
+            elevation_change_ft: elevation_change,
+            difficult,
+            narrow_opening: squeezed,
+            creature_space,
+            squeezed,
+            triggers: self.triggers(from, to, kind, mode, elevation_change, squeezed),
+        };
+        StepResult {
+            from: *from,
+            to: *to,
+            edge: Some(edge),
+            blocked: None,
+            blockers: Vec::new(),
+            explain,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn triggers(
+        &self,
+        from: &SpatialPose,
+        to: &SpatialPose,
+        kind: MoveKind,
+        mode: MoveMode,
+        elevation_change: i32,
+        squeezed: bool,
+    ) -> Vec<MoveTrigger> {
+        let mut triggers = vec![MoveTrigger::AreaEntry { at: to.cell }];
+        if squeezed {
+            triggers.push(MoveTrigger::Squeeze {
+                at: to.cell,
+                disadvantage: self.profile.squeeze == Squeeze::Edition2014,
+            });
+        }
+        if mode == MoveMode::Climb {
+            triggers.push(MoveTrigger::Climb {
+                from: from.cell,
+                to: to.cell,
+                elevation_change_ft: elevation_change,
+            });
+        }
+        if kind == MoveKind::Voluntary && !self.observers.is_empty() {
+            let mover_from = self.body_at(from);
+            let mover_to = self.body_at(to);
+            for observer in &self.observers {
+                let was =
+                    can_reach_bodies(&observer.body, &mover_from, observer.reach_ft, self.profile)
+                        .reachable;
+                let now =
+                    can_reach_bodies(&observer.body, &mover_to, observer.reach_ft, self.profile)
+                        .reachable;
+                if was && !now {
+                    triggers.push(MoveTrigger::LeavesReach {
+                        observer: observer.body.id.clone(),
+                        from: from.cell,
+                        to: to.cell,
+                    });
+                }
+            }
+        }
+        triggers
+    }
+
+    fn search(
+        &self,
+        goal: Option<&SpatialPose>,
+        budget_ft: Option<i32>,
+        use_heuristic: bool,
+    ) -> SearchResult {
+        let start = self.mover.pose;
+        let start_key = (start.cell, 0u8);
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            start_key,
+            ReachNode {
+                cost_ft: 0,
+                parity: 0,
+                parent: None,
+                edge: None,
+            },
+        );
+        let mut best: BTreeMap<(CellPos, u8), i32> = BTreeMap::new();
+        best.insert(start_key, 0);
+        let mut open = BinaryHeap::new();
+        let start_h = if use_heuristic {
+            goal.map_or(0, |goal| movement_heuristic(&start, goal, self.profile))
+        } else {
+            0
+        };
+        open.push(Reverse((
+            start_h,
+            0i32,
+            start.cell.x,
+            start.cell.y,
+            start.cell.z,
+            0u8,
+        )));
+        let mut expanded = 0usize;
+        let mut goal_key = None;
+        let mut goal_blocks: BTreeMap<MoveBlock, BTreeSet<String>> = BTreeMap::new();
+        let mut frontier_blocks: BTreeMap<(u32, MoveBlock), BTreeSet<String>> = BTreeMap::new();
+
+        while let Some(Reverse((_f, cost, x, y, z, parity))) = open.pop() {
+            let key = (CellPos { x, y, z }, parity);
+            if best.get(&key).copied() != Some(cost) {
+                continue;
+            }
+            if goal.is_some_and(|goal| goal.cell == key.0) {
+                goal_key = Some(key);
+                break;
+            }
+            expanded = expanded.saturating_add(1);
+            let from = self.pose_at(key.0);
+            for (dx, dy) in MOVE_DIRECTIONS {
+                let nx = x.saturating_add(dx);
+                let ny = y.saturating_add(dy);
+                let nz = self.map.cell(nx, ny).map_or(z, |cell| cell.elevation_ft);
+                let to = self.pose_at(CellPos {
+                    x: nx,
+                    y: ny,
+                    z: nz,
+                });
+                let result = self.edge_at(&from, &to, parity, MoveKind::Voluntary);
+                if let Some(reason) = result.blocked {
+                    if let Some(goal) = goal {
+                        let distance = chebyshev(CellPos { x: nx, y: ny, z: 0 }, goal.cell);
+                        frontier_blocks
+                            .entry((distance, reason))
+                            .or_default()
+                            .extend(result.blockers.iter().cloned());
+                        if nx == goal.cell.x && ny == goal.cell.y && nz == goal.cell.z {
+                            goal_blocks
+                                .entry(reason)
+                                .or_default()
+                                .extend(result.blockers);
+                        }
+                    }
+                    continue;
+                }
+                let edge = result.edge.expect("an allowed step carries an edge");
+                let new_parity = if edge.diagonal { 1 - parity } else { parity };
+                let new_cost = cost.saturating_add(edge.cost_ft);
+                if let Some(limit) = budget_ft {
+                    if new_cost > limit {
+                        continue;
+                    }
+                }
+                let new_key = (to.cell, new_parity);
+                if new_cost < best.get(&new_key).copied().unwrap_or(i32::MAX) {
+                    best.insert(new_key, new_cost);
+                    nodes.insert(
+                        new_key,
+                        ReachNode {
+                            cost_ft: new_cost,
+                            parity: new_parity,
+                            parent: Some(key),
+                            edge: Some(edge),
+                        },
+                    );
+                    let heuristic = if use_heuristic {
+                        goal.map_or(0, |goal| movement_heuristic(&to, goal, self.profile))
+                    } else {
+                        0
+                    };
+                    open.push(Reverse((
+                        new_cost.saturating_add(heuristic),
+                        new_cost,
+                        nx,
+                        ny,
+                        nz,
+                        new_parity,
+                    )));
+                }
+            }
+        }
+
+        SearchResult {
+            nodes,
+            goal_key,
+            expanded,
+            goal_blocks,
+            frontier_blocks,
+        }
+    }
+
+    fn unreachable_reason(&self, search: &SearchResult) -> (MoveBlock, Vec<String>) {
+        if let Some((reason, blockers)) = search.goal_blocks.iter().next() {
+            return (*reason, blockers.iter().cloned().collect());
+        }
+        if let Some(((_, reason), blockers)) = search.frontier_blocks.iter().next() {
+            return (*reason, blockers.iter().cloned().collect());
+        }
+        (MoveBlock::NoPath, Vec::new())
+    }
+
+    /// Shortest movement cost to every pose within `budget_ft`, with parent
+    /// data for path reconstruction. This is the Dijkstra half of the seam.
+    pub fn reachable(&self, budget_ft: i32) -> Result<ReachableSet, SpatialError> {
+        if budget_ft < 0 {
+            return Err(SpatialError::InvalidBudget { budget_ft });
+        }
+        let start = self.can_end_at(&self.mover.pose);
+        if !start.allowed {
+            return Ok(ReachableSet {
+                start: self.mover.pose,
+                budget_ft,
+                entries: Vec::new(),
+                start_blocked: Some(start.reason.unwrap_or(MoveBlock::NoPath)),
+                blockers: start.blockers,
+                explain: vec![
+                    Explain::new("reachable-dijkstra", "start pose is blocked"),
+                    Explain::new(
+                        "reachable-start",
+                        format!("start reason {:?}", start.reason),
+                    ),
+                ],
+                nodes: BTreeMap::new(),
+            });
+        }
+        let search = self.search(None, Some(budget_ft), false);
+        let mut best_by_cell: BTreeMap<CellPos, (u8, i32)> = BTreeMap::new();
+        for (&(cell, parity), node) in &search.nodes {
+            let entry = best_by_cell.entry(cell).or_insert((parity, node.cost_ft));
+            if node.cost_ft < entry.1 || (node.cost_ft == entry.1 && parity < entry.0) {
+                *entry = (parity, node.cost_ft);
+            }
+        }
+        let mut entries = Vec::with_capacity(best_by_cell.len());
+        for (cell, (parity, cost_ft)) in best_by_cell {
+            let pose = self.pose_at(cell);
+            let end = self.can_end_at(&pose);
+            entries.push(ReachEntry {
+                pose,
+                cost_ft,
+                diagonals_parity: parity,
+                end_allowed: end.allowed,
+                squeezed: !self.full_fits(&pose),
+            });
+        }
+        entries.sort_by_key(|entry| {
+            (
+                entry.cost_ft,
+                entry.pose.cell.x,
+                entry.pose.cell.y,
+                entry.pose.cell.z,
+                entry.diagonals_parity,
+            )
+        });
+        let explain = vec![
+            Explain::new("reachable-dijkstra", "budget-limited reachable set"),
+            Explain::new("reachable-budget", format!("{budget_ft} ft speed budget")),
+            Explain::new("reachable-count", format!("{} poses", entries.len())),
+        ];
+        Ok(ReachableSet {
+            start: self.mover.pose,
+            budget_ft,
+            entries,
+            start_blocked: None,
+            blockers: Vec::new(),
+            explain,
+            nodes: search.nodes,
+        })
+    }
+
+    /// Targeted path query. `Auto` uses A* when `astar_heuristic_is_admissible`
+    /// proves the heuristic, otherwise it falls back to Dijkstra.
+    pub fn path(&self, goal: &SpatialPose, budget_ft: i32) -> Result<PathPlan, SpatialError> {
+        self.path_with_algorithm(goal, budget_ft, PathAlgorithm::Auto)
+    }
+
+    pub fn path_with_algorithm(
+        &self,
+        goal: &SpatialPose,
+        budget_ft: i32,
+        requested: PathAlgorithm,
+    ) -> Result<PathPlan, SpatialError> {
+        if budget_ft < 0 {
+            return Err(SpatialError::InvalidBudget { budget_ft });
+        }
+        goal.validate()?;
+        if goal.footprint != self.mover.pose.footprint || goal.facing != self.mover.pose.facing {
+            return Err(SpatialError::PoseMismatch {
+                expected: self.mover.pose.footprint,
+                actual: goal.footprint,
+            });
+        }
+        let (algorithm, use_heuristic) = match requested {
+            PathAlgorithm::Dijkstra => (PathAlgorithm::Dijkstra, false),
+            PathAlgorithm::Auto | PathAlgorithm::AStar => {
+                if astar_heuristic_is_admissible(self.profile) {
+                    (PathAlgorithm::AStar, true)
+                } else {
+                    (PathAlgorithm::Dijkstra, false)
+                }
+            }
+        };
+        let base_explain = vec![
+            Explain::new("path-request", format!("budget {budget_ft} ft")),
+            Explain::new("path-algorithm", format!("{algorithm:?}")),
+        ];
+        let start_check = self.can_end_at(&self.mover.pose);
+        if !start_check.allowed {
+            return Ok(PathPlan {
+                start: self.mover.pose,
+                goal: *goal,
+                budget_ft,
+                kind: MoveKind::Voluntary,
+                algorithm,
+                outcome: PlanOutcome::Unreachable {
+                    reason: start_check.reason.unwrap_or(MoveBlock::NoPath),
+                    blockers: start_check.blockers,
+                },
+                nodes_expanded: 0,
+                explain: base_explain,
+            });
+        }
+        if goal.cell == self.mover.pose.cell {
+            return Ok(PathPlan {
+                start: self.mover.pose,
+                goal: *goal,
+                budget_ft,
+                kind: MoveKind::Voluntary,
+                algorithm,
+                outcome: PlanOutcome::Reached(MovementPath {
+                    start: self.mover.pose,
+                    goal: *goal,
+                    steps: Vec::new(),
+                    total_cost_ft: 0,
+                    kind: MoveKind::Voluntary,
+                    explain: vec![Explain::new("path-empty", "already at the goal")],
+                }),
+                nodes_expanded: 0,
+                explain: base_explain,
+            });
+        }
+        let goal_check = self.can_end_at(goal);
+        if !goal_check.allowed {
+            return Ok(PathPlan {
+                start: self.mover.pose,
+                goal: *goal,
+                budget_ft,
+                kind: MoveKind::Voluntary,
+                algorithm,
+                outcome: PlanOutcome::Unreachable {
+                    reason: goal_check.reason.unwrap_or(MoveBlock::NoPath),
+                    blockers: goal_check.blockers,
+                },
+                nodes_expanded: 0,
+                explain: base_explain,
+            });
+        }
+        let search = self.search(Some(goal), None, use_heuristic);
+        let Some(goal_key) = search.goal_key else {
+            let (reason, blockers) = self.unreachable_reason(&search);
+            let mut explain = base_explain;
+            explain.push(Explain::new("path-unreachable", reason.as_str()));
+            return Ok(PathPlan {
+                start: self.mover.pose,
+                goal: *goal,
+                budget_ft,
+                kind: MoveKind::Voluntary,
+                algorithm,
+                outcome: PlanOutcome::Unreachable { reason, blockers },
+                nodes_expanded: search.expanded,
+                explain,
+            });
+        };
+        let path = reconstruct_path(
+            &search.nodes,
+            goal_key,
+            self.mover.pose,
+            *goal,
+            MoveKind::Voluntary,
+        );
+        let outcome = if path.total_cost_ft <= budget_ft {
+            PlanOutcome::Reached(path)
+        } else {
+            PlanOutcome::OverBudget(path)
+        };
+        let mut explain = base_explain;
+        explain.push(Explain::new(
+            "path-expanded",
+            format!("{} nodes", search.expanded),
+        ));
+        Ok(PathPlan {
+            start: self.mover.pose,
+            goal: *goal,
+            budget_ft,
+            kind: MoveKind::Voluntary,
+            algorithm,
+            outcome,
+            nodes_expanded: search.expanded,
+            explain,
+        })
+    }
+
+    /// Re-check a planned path against the planner's current map, occupants and
+    /// capabilities. This is the per-step gate P5 must run before execution.
+    pub fn verify_path(&self, path: &MovementPath, budget_ft: i32) -> PathCheck {
+        let mut explain = vec![Explain::new(
+            "verify-path",
+            format!("{} planned steps", path.steps.len()),
+        )];
+        if path.start != self.mover.pose {
+            explain.push(Explain::new(
+                "verify-start",
+                "the path does not start at the mover's current pose",
+            ));
+            return PathCheck {
+                verdict: PathVerdict::Blocked {
+                    step_index: 0,
+                    reason: MoveBlock::NotAdjacent,
+                    blockers: Vec::new(),
+                },
+                checked_steps: 0,
+                explain,
+            };
+        }
+        let mut previous = path.start;
+        let mut parity = 0u8;
+        let mut total = 0i32;
+        for (index, step) in path.steps.iter().enumerate() {
+            if step.from != previous {
+                explain.push(Explain::new(
+                    "verify-chain",
+                    "the path steps do not chain from the start pose",
+                ));
+                return PathCheck {
+                    verdict: PathVerdict::Blocked {
+                        step_index: index,
+                        reason: MoveBlock::NotAdjacent,
+                        blockers: Vec::new(),
+                    },
+                    checked_steps: index + 1,
+                    explain,
+                };
+            }
+            let result = self.edge_at(&step.from, &step.to, parity, MoveKind::Voluntary);
+            if let Some(reason) = result.blocked {
+                explain.push(Explain::new("verify-blocked", reason.as_str()));
+                return PathCheck {
+                    verdict: PathVerdict::Blocked {
+                        step_index: index,
+                        reason,
+                        blockers: result.blockers,
+                    },
+                    checked_steps: index + 1,
+                    explain,
+                };
+            }
+            let edge = result.edge.expect("an allowed verification step");
+            if edge.cost_ft != step.cost_ft {
+                explain.push(Explain::new(
+                    "verify-cost",
+                    format!(
+                        "step {index} cost changed from {} to {}",
+                        step.cost_ft, edge.cost_ft
+                    ),
+                ));
+                return PathCheck {
+                    verdict: PathVerdict::CostChanged {
+                        step_index: index,
+                        planned_cost_ft: step.cost_ft,
+                        actual_cost_ft: edge.cost_ft,
+                    },
+                    checked_steps: index + 1,
+                    explain,
+                };
+            }
+            parity = if edge.diagonal { 1 - parity } else { parity };
+            total = total.saturating_add(edge.cost_ft);
+            previous = step.to;
+        }
+        if previous != path.goal {
+            explain.push(Explain::new(
+                "verify-goal-chain",
+                "the last step does not end at the path goal",
+            ));
+            return PathCheck {
+                verdict: PathVerdict::Blocked {
+                    step_index: path.steps.len().saturating_sub(1),
+                    reason: MoveBlock::NotAdjacent,
+                    blockers: Vec::new(),
+                },
+                checked_steps: path.steps.len(),
+                explain,
+            };
+        }
+        let end = self.can_end_at(&path.goal);
+        if !end.allowed {
+            explain.push(Explain::new(
+                "verify-end",
+                "the goal is no longer a legal end position",
+            ));
+            return PathCheck {
+                verdict: PathVerdict::Blocked {
+                    step_index: path.steps.len().saturating_sub(1),
+                    reason: end.reason.unwrap_or(MoveBlock::EndOccupied),
+                    blockers: end.blockers,
+                },
+                checked_steps: path.steps.len(),
+                explain,
+            };
+        }
+        if total > budget_ft {
+            explain.push(Explain::new(
+                "verify-budget",
+                format!("{total} ft exceeds the {budget_ft} ft budget"),
+            ));
+            return PathCheck {
+                verdict: PathVerdict::OverBudget {
+                    total_cost_ft: total,
+                },
+                checked_steps: path.steps.len(),
+                explain,
+            };
+        }
+        explain.push(Explain::new("verify-ok", "every step still matches"));
+        PathCheck {
+            verdict: PathVerdict::Valid,
+            checked_steps: path.steps.len(),
+            explain,
+        }
+    }
+
+    /// Straight-line forced movement. It never spends Speed and never emits a
+    /// `LeavesReach` trigger; area-entry triggers stay for the engine.
+    pub fn forced_move(
+        &self,
+        direction: (i32, i32),
+        distance_ft: i32,
+    ) -> Result<ForcedMovePlan, SpatialError> {
+        let (dx, dy) = direction;
+        if dx.unsigned_abs() > 1 || dy.unsigned_abs() > 1 || (dx == 0 && dy == 0) {
+            return Err(SpatialError::InvalidDirection { dx, dy });
+        }
+        if distance_ft < 0 {
+            return Err(SpatialError::InvalidDistance { distance_ft });
+        }
+        let start = self.mover.pose;
+        let mut explain = vec![
+            Explain::new(
+                "forced-movement",
+                "forced movement: no Speed, no opportunity attack",
+            ),
+            Explain::new("forced-distance", format!("{distance_ft} ft")),
+        ];
+        let start_check = self.can_end_at(&start);
+        if !start_check.allowed {
+            return Ok(ForcedMovePlan {
+                start,
+                direction,
+                distance_ft,
+                steps: Vec::new(),
+                moved_ft: 0,
+                stopped_by: start_check.reason,
+                rules: MoveKind::Forced.rules(),
+                explain,
+            });
+        }
+        let mut steps = Vec::new();
+        let mut moved = 0;
+        let mut current = start;
+        let mut stopped_by = None;
+        let mut legal_steps = 0usize;
+        let mut legal_moved = 0i32;
+        while moved < distance_ft {
+            let nx = current.cell.x.saturating_add(dx);
+            let ny = current.cell.y.saturating_add(dy);
+            let nz = self
+                .map
+                .cell(nx, ny)
+                .map_or(current.cell.z, |cell| cell.elevation_ft);
+            let next = self.pose_at(CellPos {
+                x: nx,
+                y: ny,
+                z: nz,
+            });
+            let result = self.edge_at(&current, &next, 0, MoveKind::Forced);
+            let Some(edge) = result.edge else {
+                stopped_by = result.blocked;
+                explain.push(Explain::new(
+                    "forced-stop",
+                    format!(
+                        "blocked: {}",
+                        result.blocked.map_or("unknown", MoveBlock::as_str)
+                    ),
+                ));
+                break;
+            };
+            let remaining = distance_ft.saturating_sub(moved);
+            if edge.distance_ft > remaining {
+                explain.push(Explain::new(
+                    "forced-partial",
+                    "remaining distance is shorter than one grid step",
+                ));
+                break;
+            }
+            let end = self.can_end_at(&next);
+            if !end.allowed {
+                let after_cell = CellPos {
+                    x: nx.saturating_add(dx),
+                    y: ny.saturating_add(dy),
+                    z: self
+                        .map
+                        .cell(nx.saturating_add(dx), ny.saturating_add(dy))
+                        .map_or(nz, |cell| cell.elevation_ft),
+                };
+                let after = self.pose_at(after_cell);
+                let transit_possible = remaining > edge.distance_ft
+                    && self
+                        .edge_at(&next, &after, 0, MoveKind::Forced)
+                        .edge
+                        .is_some();
+                if !transit_possible {
+                    stopped_by = end.reason.or(Some(MoveBlock::EndOccupied));
+                    explain.push(Explain::new(
+                        "forced-end",
+                        "the pushed body cannot end in the next space",
+                    ));
+                    break;
+                }
+            } else {
+                legal_steps = steps.len() + 1;
+                legal_moved = moved.saturating_add(edge.distance_ft);
+            }
+            moved = moved.saturating_add(edge.distance_ft);
+            steps.push(edge);
+            current = next;
+        }
+        if !self.can_end_at(&current).allowed {
+            steps.truncate(legal_steps);
+            moved = legal_moved;
+            stopped_by = stopped_by.or(Some(MoveBlock::EndOccupied));
+            explain.push(Explain::new(
+                "forced-truncate",
+                "forced movement stops at the last legal end before an occupied space",
+            ));
+        }
+        Ok(ForcedMovePlan {
+            start,
+            direction,
+            distance_ft,
+            steps,
+            moved_ft: moved,
+            stopped_by,
+            rules: MoveKind::Forced.rules(),
+            explain,
+        })
+    }
+}
+
+fn blocked_step(
+    from: &SpatialPose,
+    to: &SpatialPose,
+    reason: MoveBlock,
+    blockers: Vec<String>,
+    code: &'static str,
+    detail: impl Into<String>,
+) -> StepResult {
+    StepResult {
+        from: *from,
+        to: *to,
+        edge: None,
+        blocked: Some(reason),
+        blockers,
+        explain: vec![Explain::new(code, detail)],
+    }
+}
+
+fn reconstruct_path(
+    nodes: &BTreeMap<(CellPos, u8), ReachNode>,
+    mut key: (CellPos, u8),
+    start: SpatialPose,
+    goal: SpatialPose,
+    kind: MoveKind,
+) -> MovementPath {
+    let mut steps = Vec::new();
+    while let Some(node) = nodes.get(&key) {
+        let Some(edge) = node.edge.clone() else {
+            break;
+        };
+        steps.push(edge);
+        let Some(parent) = node.parent else {
+            break;
+        };
+        key = parent;
+    }
+    steps.reverse();
+    let total_cost_ft = steps.iter().map(|step| step.cost_ft).sum();
+    MovementPath {
+        start,
+        goal,
+        explain: vec![Explain::new(
+            "path-reconstruct",
+            format!("{} steps from the parent map", steps.len()),
+        )],
+        steps,
+        total_cost_ft,
+        kind,
+    }
+}
+
+fn chebyshev(a: CellPos, b: CellPos) -> u32 {
+    a.x.saturating_sub(b.x)
+        .unsigned_abs()
+        .max(a.y.saturating_sub(b.y).unsigned_abs())
 }
