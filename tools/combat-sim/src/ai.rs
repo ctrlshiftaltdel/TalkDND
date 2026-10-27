@@ -41,12 +41,20 @@ pub enum AiStrategy {
     LegacyHeuristic,
     /// Structured candidate generation and utility scoring.
     Utility,
+    /// P7 bounded search over the same P6 candidates. Opt-in only; any search
+    /// failure falls back to [`AiStrategy::Utility`] and then the legacy
+    /// heuristic.
+    Search,
 }
 
 /// Prepared AI plans for every combatant of one encounter template.
 pub struct Ai {
     plans: Vec<CombatantPlan>,
     strategy: AiStrategy,
+    /// Present only when the caller explicitly opted into bounded search.
+    /// `prepare` and `prepare_with(Utility)` leave this `None`, so the default
+    /// behaviour is unchanged.
+    search: Option<tactics::SearchConfig>,
 }
 
 #[derive(Clone)]
@@ -218,12 +226,34 @@ impl Ai {
             .enumerate()
             .map(|(index, _)| build_plan(state, index))
             .collect();
-        Self { plans, strategy }
+        let search = (strategy == AiStrategy::Search).then(tactics::SearchConfig::default);
+        Self {
+            plans,
+            strategy,
+            search,
+        }
+    }
+
+    /// Explicitly opts into the P7 bounded search planner.
+    ///
+    /// This is the only way to enable search besides
+    /// `prepare_with(state, AiStrategy::Search)` (which uses the default
+    /// config). `Ai::prepare` keeps the legacy heuristic and
+    /// `Ai::prepare_with(state, AiStrategy::Utility)` keeps the P6 planner.
+    pub fn prepare_with_search(state: &EncounterState, config: tactics::SearchConfig) -> Self {
+        let mut ai = Self::prepare_with(state, AiStrategy::Search);
+        ai.search = Some(config);
+        ai
     }
 
     /// The strategy this prepared AI uses.
     pub fn strategy(&self) -> AiStrategy {
         self.strategy
+    }
+
+    /// The opt-in search configuration, if search is enabled.
+    pub fn search_config(&self) -> Option<&tactics::SearchConfig> {
+        self.search.as_ref()
     }
 
     /// Plays the current combatant's turn through the generic engine.
@@ -261,7 +291,28 @@ impl Ai {
             }
         }
         let plan = &self.plans[actor];
-        if self.strategy == AiStrategy::Utility {
+        if self.strategy == AiStrategy::Search {
+            let config = self.search.clone().unwrap_or_default();
+            match tactics::take_search_turn(self, state, actor, plan, &config, rng, log) {
+                Ok(true) => {
+                    state.combatants[actor].opening_used = true;
+                    return Ok(());
+                }
+                Ok(false) => {
+                    log.log(format_args!(
+                        "search planner found no executable candidate for {}; using utility fallback",
+                        state.combatants[actor].name
+                    ));
+                }
+                Err(error) => {
+                    log.log(format_args!(
+                        "search planner failed for {}: {error:#}; falling back to utility",
+                        state.combatants[actor].name
+                    ));
+                }
+            }
+        }
+        if matches!(self.strategy, AiStrategy::Utility | AiStrategy::Search) {
             match tactics::take_utility_turn(self, state, actor, plan, rng, log) {
                 Ok(true) => {
                     state.combatants[actor].opening_used = true;
@@ -2051,7 +2102,8 @@ fn best_option(
 
 pub use tactics::{
     BehaviourProfile, BehaviourRole, CandidateEvaluation, CandidateKind, MovePurpose,
-    RejectedCandidate, TacticalPlan, TargetProfile, UtilityTerms, UtilityWeights,
+    RejectedCandidate, SearchConfig, SearchDecision, SearchFailure, SearchFallbackReason,
+    SearchPlanner, SearchStats, TacticalPlan, TargetProfile, UtilityTerms, UtilityWeights,
     MAX_MOVEMENT_CANDIDATES,
 };
 
@@ -2060,8 +2112,12 @@ pub mod tactics {
         Activation, AiRole, AiTargeting, AttackKind, ConditionFlag, Cover, Effect, Interact,
         RangePreference, SceneMode, TargetSide, TargetType,
     };
-    use crate::dice::DiceRng;
-    use crate::engine::{self, LogSink};
+    use std::collections::BTreeMap;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::time::{Duration, Instant};
+
+    use crate::dice::{self, DiceRng};
+    use crate::engine::{self, LogSink, NullSink};
     use crate::space::{GridMap, Position, Space};
     use crate::state::EncounterState;
 
@@ -2401,6 +2457,767 @@ pub mod tactics {
 
         let preview = Planner::new(ai, state, actor, plan).build();
         execute_candidates(ai, state, actor, &preview.candidates, rng, log)
+    }
+
+    // -----------------------------------------------------------------------
+    // P7 bounded search planner
+    // -----------------------------------------------------------------------
+    //
+    // Search shape (scheme A from `docs/AI-SEARCH-PERF-SPIKE.md`):
+    //
+    // - one root action/objective-interaction decision, top-K by P6 utility;
+    // - `samples_per_candidate` independent dice samples per root candidate
+    //   (Monte Carlo expectation for hit/save branches);
+    // - with `max_depth >= 2`, the next observable hostile actor is advanced to
+    //   its turn on a clone and its best top-K immediate response is applied;
+    //   the root value is the worst response seen for that sample;
+    // - intervening allies are advanced without acting. This is a deliberate
+    //   approximation: P7 models the first hostile response, not a full round
+    //   or a joint party plan;
+    // - no MCTS and no `engine.rs` preview. Every search transition calls the
+    //   same public engine primitives as real execution.
+    //
+    // Determinism: the node budget and the fixed seed/config are the primary
+    // controls. `soft_time_limit_ms` only stops widening after at least one
+    // root has been evaluated; `hard_time_limit_ms` is a safety valve that
+    // returns a fallback. With the default node budget the time limits are not
+    // expected to fire, so fixed state/seed/config reproduces the ranking and
+    // statistics. A machine slow enough to hit the hard limit can truncate,
+    // which is why wall-clock is not the primary budget. Search itself is
+    // single-threaded; independent decisions may run in parallel because
+    // planning reads only the input state and each decision owns its seed and
+    // caches. Parallel callers must not share the real action RNG.
+    //
+    // Safety: every clone uses `NullSink` and clears its log immediately. The
+    // search RNG is derived from `SearchConfig::seed`; the caller's real action
+    // RNG is never passed into search. Final execution still goes through
+    // `execute_tactical_plan`, which re-validates every candidate against the
+    // live state before the engine call.
+
+    /// Weight of the P6 utility score in the search leaf value.
+    ///
+    /// P6 already encodes objective, healing, control and resource priorities.
+    /// Search reuses that score as the prior and adds the simulated side state
+    /// (HP/downed/dead and one hostile response). Without the prior, a purely
+    /// HP-based evaluator would ignore non-HP objectives such as a lever.
+    const SEARCH_UTILITY_WEIGHT: f64 = 20.0;
+
+    /// Configuration for the P7 shallow, bounded search.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct SearchConfig {
+        /// Search plies. 1 = root action only; 2 = root action + one hostile
+        /// response. Values are clamped to `1..=2`; P7 does not implement MCTS
+        /// or deeper game-tree search.
+        pub max_depth: u8,
+        /// Maximum root candidates evaluated, in P6 utility order.
+        pub top_k: usize,
+        /// Maximum immediate responses considered for the hostile actor.
+        pub opponent_top_k: usize,
+        /// Independent dice samples per root candidate.
+        pub samples_per_candidate: u32,
+        /// Primary deterministic budget: one node is one cloned engine action.
+        pub node_budget: u32,
+        /// Soft wall-clock limit: stop widening and keep the best evaluated
+        /// root once at least one root has completed.
+        pub soft_time_limit_ms: u64,
+        /// Hard wall-clock limit: fall back to UtilityPlanner when exceeded.
+        pub hard_time_limit_ms: u64,
+        /// Independent search seed. The real action RNG is never used.
+        pub seed: u64,
+    }
+
+    impl Default for SearchConfig {
+        fn default() -> Self {
+            // P7 defaults from AI-SEARCH-PERF-SPIKE.md section 7.
+            Self {
+                max_depth: 2,
+                top_k: 8,
+                opponent_top_k: 4,
+                samples_per_candidate: 2,
+                node_budget: 384,
+                soft_time_limit_ms: 100,
+                hard_time_limit_ms: 300,
+                seed: 0x5eed_0092,
+            }
+        }
+    }
+
+    impl SearchConfig {
+        fn normalized(&self) -> Self {
+            let mut config = self.clone();
+            config.max_depth = config.max_depth.clamp(1, 2);
+            config.top_k = config.top_k.max(1);
+            config.opponent_top_k = config.opponent_top_k.max(1);
+            config.samples_per_candidate = config.samples_per_candidate.max(1);
+            config.soft_time_limit_ms = config.soft_time_limit_ms.min(config.hard_time_limit_ms);
+            config
+        }
+    }
+
+    /// Why the search planner handed the decision back to UtilityPlanner.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SearchFallbackReason {
+        /// There is no current actor or the actor cannot act.
+        NoPlan,
+        /// The actor has no positive-valued root action candidate.
+        NoCandidates,
+        /// The root candidates are only unsupported effects.
+        UnsupportedEffect,
+        /// The node budget was exhausted before a complete ranking existed.
+        BudgetExhausted,
+        /// The hard (or soft-with-no-result) wall-clock limit was hit.
+        TimeLimit,
+        /// Every evaluated root candidate failed in the engine.
+        ExecutionFailed,
+        /// Fleeing/retreat, bonus support and other economy branches stay with
+        /// the P6 utility planner rather than being approximated by P7.
+        UtilityPreferred,
+    }
+
+    /// One candidate execution that failed during search.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct SearchFailure {
+        pub candidate: String,
+        pub reason: String,
+    }
+
+    /// Reproducible search telemetry. `elapsed_micros` is the only wall-clock
+    /// field; [`Self::reproducible_eq`] compares the deterministic fields.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct SearchStats {
+        pub depth: u8,
+        pub top_k: usize,
+        pub samples_per_candidate: u32,
+        pub node_budget: u32,
+        pub nodes: u32,
+        pub root_candidates_available: usize,
+        pub root_candidates_evaluated: usize,
+        pub opponent_candidates_considered: usize,
+        pub opponent_responses_evaluated: usize,
+        pub duplicate_states_pruned: usize,
+        pub soft_limit_hit: bool,
+        pub elapsed_micros: u64,
+    }
+
+    impl SearchStats {
+        fn for_config(config: &SearchConfig) -> Self {
+            Self {
+                depth: config.max_depth,
+                top_k: config.top_k,
+                samples_per_candidate: config.samples_per_candidate,
+                node_budget: config.node_budget,
+                nodes: 0,
+                root_candidates_available: 0,
+                root_candidates_evaluated: 0,
+                opponent_candidates_considered: 0,
+                opponent_responses_evaluated: 0,
+                duplicate_states_pruned: 0,
+                soft_limit_hit: false,
+                elapsed_micros: 0,
+            }
+        }
+
+        /// Compares everything except `elapsed_micros`, so a fixed
+        /// state/seed/config can assert reproducibility without machine timing.
+        pub fn reproducible_eq(&self, other: &Self) -> bool {
+            self.depth == other.depth
+                && self.top_k == other.top_k
+                && self.samples_per_candidate == other.samples_per_candidate
+                && self.node_budget == other.node_budget
+                && self.nodes == other.nodes
+                && self.root_candidates_available == other.root_candidates_available
+                && self.root_candidates_evaluated == other.root_candidates_evaluated
+                && self.opponent_candidates_considered == other.opponent_candidates_considered
+                && self.opponent_responses_evaluated == other.opponent_responses_evaluated
+                && self.duplicate_states_pruned == other.duplicate_states_pruned
+                && self.soft_limit_hit == other.soft_limit_hit
+        }
+    }
+
+    /// Result of one search decision. When `fallback` is `Some`, `plan` is
+    /// `None` and the caller must use UtilityPlanner/legacy.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct SearchDecision {
+        pub plan: Option<TacticalPlan>,
+        pub stats: SearchStats,
+        pub fallback: Option<SearchFallbackReason>,
+        pub failures: Vec<SearchFailure>,
+    }
+
+    /// Bounded search over P6 candidates. Default-off: only
+    /// [`Ai::prepare_with_search`] or `AiStrategy::Search` enables it.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct SearchPlanner {
+        config: SearchConfig,
+    }
+
+    impl SearchPlanner {
+        pub fn new(config: SearchConfig) -> Self {
+            Self { config }
+        }
+
+        pub fn config(&self) -> &SearchConfig {
+            &self.config
+        }
+
+        /// Plans one turn without mutating `state` or consuming the caller's
+        /// RNG. The returned plan is a reordered [`TacticalPlan`]; execution
+        /// still goes through [`Ai::execute_tactical_plan`].
+        pub fn plan(&self, ai: &Ai, state: &EncounterState) -> SearchDecision {
+            let started = Instant::now();
+            let config = self.config.normalized();
+            let mut stats = SearchStats::for_config(&config);
+            let Some(actor) = state.current_index() else {
+                return SearchDecision::fallback(SearchFallbackReason::NoPlan, stats);
+            };
+            if actor >= ai.plans.len() || !can_act(state, actor) {
+                return SearchDecision::fallback(SearchFallbackReason::NoPlan, stats);
+            }
+            let plan = &ai.plans[actor];
+            if build_profile(state, actor, plan).role == BehaviourRole::Retreat {
+                return SearchDecision::fallback(SearchFallbackReason::UtilityPreferred, stats);
+            }
+            let root_plan = Planner::new(ai, state, actor, plan).build();
+            let available: Vec<(usize, CandidateEvaluation)> = root_plan
+                .candidates
+                .iter()
+                .enumerate()
+                .filter(|(_, candidate)| searchable_candidate(ai, actor, candidate))
+                .map(|(index, candidate)| (index, candidate.clone()))
+                .collect();
+            stats.root_candidates_available = available.len();
+            if available.is_empty() {
+                let reason = if root_plan
+                    .rejected
+                    .iter()
+                    .any(|rejected| rejected.reason.contains("unsupported effect"))
+                {
+                    SearchFallbackReason::UnsupportedEffect
+                } else {
+                    SearchFallbackReason::NoCandidates
+                };
+                return SearchDecision::fallback(reason, stats);
+            }
+            let candidates: Vec<(usize, CandidateEvaluation)> =
+                available.into_iter().take(config.top_k).collect();
+            let hard_deadline = started + Duration::from_millis(config.hard_time_limit_ms);
+            let soft_deadline = started + Duration::from_millis(config.soft_time_limit_ms);
+            let run = SearchRun {
+                ai,
+                config,
+                actor,
+                root_side: state.combatants[actor].side.as_str().to_string(),
+                started,
+                soft_deadline,
+                hard_deadline,
+                stats,
+                root_cache: BTreeMap::new(),
+                leaf_cache: BTreeMap::new(),
+                failures: Vec::new(),
+            };
+            run.evaluate(state, root_plan, candidates)
+        }
+    }
+
+    impl SearchDecision {
+        fn fallback(reason: SearchFallbackReason, stats: SearchStats) -> Self {
+            Self {
+                plan: None,
+                stats,
+                fallback: Some(reason),
+                failures: Vec::new(),
+            }
+        }
+    }
+
+    struct SearchRun<'a> {
+        ai: &'a Ai,
+        config: SearchConfig,
+        actor: usize,
+        root_side: String,
+        started: Instant,
+        soft_deadline: Instant,
+        hard_deadline: Instant,
+        stats: SearchStats,
+        /// Keyed by (lightweight state hash, sample) so duplicate clones within
+        /// one stochastic sample reuse the full root value.
+        root_cache: BTreeMap<(u64, u32), f64>,
+        /// Same idea for states after a hostile response.
+        leaf_cache: BTreeMap<(u64, u32), f64>,
+        failures: Vec<SearchFailure>,
+    }
+
+    impl SearchRun<'_> {
+        fn budget_exhausted(&self) -> bool {
+            self.stats.nodes >= self.config.node_budget
+        }
+
+        fn hard_timed_out(&self) -> bool {
+            Instant::now() >= self.hard_deadline
+        }
+
+        fn soft_timed_out(&self) -> bool {
+            Instant::now() >= self.soft_deadline
+        }
+
+        fn fallback(mut self, reason: SearchFallbackReason) -> SearchDecision {
+            self.stats.elapsed_micros = self.started.elapsed().as_micros() as u64;
+            SearchDecision {
+                plan: None,
+                stats: self.stats,
+                fallback: Some(reason),
+                failures: self.failures,
+            }
+        }
+
+        fn evaluate(
+            mut self,
+            state: &EncounterState,
+            root_plan: TacticalPlan,
+            candidates: Vec<(usize, CandidateEvaluation)>,
+        ) -> SearchDecision {
+            let mut evaluated: Vec<(usize, usize, f64)> = Vec::new();
+            for (order, (original_index, candidate)) in candidates.iter().enumerate() {
+                if self.budget_exhausted() {
+                    return self.fallback(SearchFallbackReason::BudgetExhausted);
+                }
+                if self.hard_timed_out() {
+                    return self.fallback(SearchFallbackReason::TimeLimit);
+                }
+                if self.soft_timed_out() {
+                    if evaluated.is_empty() {
+                        return self.fallback(SearchFallbackReason::TimeLimit);
+                    }
+                    self.stats.soft_limit_hit = true;
+                    break;
+                }
+                let mut total = 0.0;
+                let mut completed = 0u32;
+                for sample in 0..self.config.samples_per_candidate {
+                    if self.budget_exhausted() {
+                        return self.fallback(SearchFallbackReason::BudgetExhausted);
+                    }
+                    if self.hard_timed_out() {
+                        return self.fallback(SearchFallbackReason::TimeLimit);
+                    }
+                    let mut clone = state.clone();
+                    clone.log.clear();
+                    let mut rng = dice::seeded_rng(search_seed(self.config.seed, sample, 0));
+                    let mut sink = NullSink;
+                    let result = execute_candidate(
+                        self.ai, &mut clone, self.actor, candidate, &mut rng, &mut sink,
+                    );
+                    self.stats.nodes += 1;
+                    if let Err(error) = result {
+                        self.failures.push(SearchFailure {
+                            candidate: candidate.kind_label(),
+                            reason: format!("{error:#}"),
+                        });
+                        continue;
+                    }
+                    let key = (hash_state(&clone), sample);
+                    if let Some(value) = self.root_cache.get(&key) {
+                        self.stats.duplicate_states_pruned += 1;
+                        total += *value + candidate.score * SEARCH_UTILITY_WEIGHT;
+                        completed += 1;
+                        continue;
+                    }
+                    let mut value = evaluate_state(&clone, &self.root_side);
+                    if self.config.max_depth >= 2 {
+                        match self.best_opponent_response(&clone, sample) {
+                            Ok(Some(response_value)) => value = response_value,
+                            Ok(None) => {}
+                            Err(reason) => return self.fallback(reason),
+                        }
+                    }
+                    self.root_cache.insert(key, value);
+                    total += value + candidate.score * SEARCH_UTILITY_WEIGHT;
+                    completed += 1;
+                }
+                if completed == 0 {
+                    continue;
+                }
+                evaluated.push((order, *original_index, total / f64::from(completed)));
+            }
+
+            if evaluated.is_empty() {
+                let reason = if !self.failures.is_empty() {
+                    SearchFallbackReason::ExecutionFailed
+                } else if root_plan
+                    .rejected
+                    .iter()
+                    .any(|rejected| rejected.reason.contains("unsupported effect"))
+                {
+                    SearchFallbackReason::UnsupportedEffect
+                } else {
+                    SearchFallbackReason::NoCandidates
+                };
+                return self.fallback(reason);
+            }
+
+            evaluated.sort_by(|left, right| {
+                right
+                    .2
+                    .total_cmp(&left.2)
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+            self.stats.root_candidates_evaluated = evaluated.len();
+            self.stats.depth = self.config.max_depth;
+            self.stats.elapsed_micros = self.started.elapsed().as_micros() as u64;
+
+            let mut ordered = Vec::with_capacity(root_plan.candidates.len());
+            let mut used = vec![false; root_plan.candidates.len()];
+            for (_, original_index, _) in &evaluated {
+                if let Some(candidate) = root_plan.candidates.get(*original_index) {
+                    ordered.push(candidate.clone());
+                    used[*original_index] = true;
+                }
+            }
+            for (index, candidate) in root_plan.candidates.iter().enumerate() {
+                if !used[index] {
+                    ordered.push(candidate.clone());
+                }
+            }
+            let mut plan = root_plan;
+            plan.candidates = ordered;
+            plan.selected_index = if plan.candidates.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+            SearchDecision {
+                plan: Some(plan),
+                stats: self.stats,
+                fallback: None,
+                failures: self.failures,
+            }
+        }
+
+        fn best_opponent_response(
+            &mut self,
+            post_root: &EncounterState,
+            sample: u32,
+        ) -> std::result::Result<Option<f64>, SearchFallbackReason> {
+            let mut probe = post_root.clone();
+            probe.log.clear();
+            let mut turn_rng = dice::seeded_rng(search_seed(self.config.seed, sample, 1));
+            let mut sink = NullSink;
+            let mut visits = 0usize;
+            loop {
+                if self.hard_timed_out() {
+                    return Err(SearchFallbackReason::TimeLimit);
+                }
+                let Some(current) = probe.current_index() else {
+                    return Ok(None);
+                };
+                if current >= self.ai.plans.len() {
+                    return Ok(None);
+                }
+                let hostile = probe.combatants[current].side.as_str() != self.root_side;
+                let hidden = is_unaware(&probe, current);
+                if hostile && !hidden {
+                    let response_plan =
+                        Planner::new(self.ai, &probe, current, &self.ai.plans[current]).build();
+                    let responses: Vec<CandidateEvaluation> = response_plan
+                        .candidates
+                        .iter()
+                        .filter(|candidate| searchable_candidate(self.ai, current, candidate))
+                        .take(self.config.opponent_top_k)
+                        .cloned()
+                        .collect();
+                    self.stats.opponent_candidates_considered += responses.len();
+                    if responses.is_empty() {
+                        return Ok(Some(evaluate_state(&probe, &self.root_side)));
+                    }
+                    let mut worst = f64::INFINITY;
+                    let mut evaluated = 0usize;
+                    for (response_index, response) in responses.iter().enumerate() {
+                        if self.budget_exhausted() {
+                            return Err(SearchFallbackReason::BudgetExhausted);
+                        }
+                        if self.hard_timed_out() {
+                            return Err(SearchFallbackReason::TimeLimit);
+                        }
+                        let mut leaf = probe.clone();
+                        leaf.log.clear();
+                        let stream = 2u32.saturating_add(response_index as u32);
+                        let mut rng =
+                            dice::seeded_rng(search_seed(self.config.seed, sample, stream));
+                        let mut sink = NullSink;
+                        let result = execute_candidate(
+                            self.ai, &mut leaf, current, response, &mut rng, &mut sink,
+                        );
+                        self.stats.nodes += 1;
+                        if let Err(error) = result {
+                            self.failures.push(SearchFailure {
+                                candidate: response.kind_label(),
+                                reason: format!("{error:#}"),
+                            });
+                            continue;
+                        }
+                        let key = (hash_state(&leaf), sample);
+                        let value = if let Some(value) = self.leaf_cache.get(&key) {
+                            self.stats.duplicate_states_pruned += 1;
+                            *value
+                        } else {
+                            let value = evaluate_state(&leaf, &self.root_side);
+                            self.leaf_cache.insert(key, value);
+                            value
+                        };
+                        worst = worst.min(value);
+                        evaluated += 1;
+                    }
+                    if evaluated == 0 {
+                        return Ok(Some(evaluate_state(&probe, &self.root_side)));
+                    }
+                    self.stats.opponent_responses_evaluated += 1;
+                    return Ok(Some(worst));
+                }
+                // Advancing an ally without acting is the P7 approximation:
+                // the first observable hostile actor supplies the response,
+                // and the full party round is left to normal execution.
+                if engine::next_turn(&mut probe, &mut turn_rng, &mut sink).is_err() {
+                    return Ok(None);
+                }
+                visits += 1;
+                if visits > probe.combatants.len().saturating_mul(2) {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    /// Search ranks action-slot decisions only. Bonus support, movement and
+    /// wait stay on the P6 utility path; an objective interaction consumes the
+    /// action slot and is therefore a legitimate root/response decision.
+    fn searchable_candidate(ai: &Ai, actor: usize, candidate: &CandidateEvaluation) -> bool {
+        if candidate.score <= 0.0 || candidate.kind == CandidateKind::Wait {
+            return false;
+        }
+        match &candidate.kind {
+            CandidateKind::Action { .. } => {
+                if candidate.multiattack {
+                    return true;
+                }
+                candidate.action_index.is_some_and(|index| {
+                    ai.plans[actor]
+                        .actions
+                        .get(index)
+                        .is_some_and(|action| action.activation == Activation::Action)
+                })
+            }
+            CandidateKind::Interact { .. } => true,
+            CandidateKind::Move { .. } | CandidateKind::Wait => false,
+        }
+    }
+
+    fn search_seed(base: u64, sample: u32, stream: u32) -> u64 {
+        // SplitMix64-style mixing. It keeps each sample/stream independent and
+        // is stable across processes and platforms.
+        let mut value = base
+            ^ (u64::from(sample) << 32)
+            ^ u64::from(stream).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+
+    fn evaluate_state(state: &EncounterState, root_side: &str) -> f64 {
+        if let Some(outcome) = engine::combat_outcome(state) {
+            return match outcome {
+                crate::state::CombatOutcome::Winner(side) if side.as_str() == root_side => 1.0e6,
+                crate::state::CombatOutcome::Winner(_) => -1.0e6,
+                crate::state::CombatOutcome::Draw => 0.0,
+            };
+        }
+        let mut score = 0.0;
+        for (index, combatant) in state.combatants.iter().enumerate() {
+            let friendly = combatant.side.as_str() == root_side;
+            // P6 observable filter: an unaware enemy is not a search input.
+            if !friendly && is_unaware(state, index) {
+                continue;
+            }
+            let max_hp = f64::from(combatant.max_hp.max(1));
+            let hp = f64::from((combatant.hp + combatant.temp_hp).max(0)) / max_hp;
+            score += if friendly { hp * 100.0 } else { -hp * 100.0 };
+            if combatant.dead {
+                score += if friendly { -60.0 } else { 60.0 };
+            } else if combatant.hp <= 0 {
+                score += if friendly { -25.0 } else { 25.0 };
+            }
+            if engine::has_condition_flag(state, index, ConditionFlag::Incapacitated) {
+                score += if friendly { -15.0 } else { 15.0 };
+            }
+        }
+        score
+    }
+
+    fn hash_state(state: &EncounterState) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        state.round.hash(&mut hasher);
+        state.turn.hash(&mut hasher);
+        state.initiative.hash(&mut hasher);
+        match &state.outcome {
+            None => 0u8.hash(&mut hasher),
+            Some(crate::state::CombatOutcome::Winner(side)) => {
+                1u8.hash(&mut hasher);
+                side.hash(&mut hasher);
+            }
+            Some(crate::state::CombatOutcome::Draw) => 2u8.hash(&mut hasher),
+        }
+        state.nonlethal_active.hash(&mut hasher);
+        state.nonlethal_request.hash(&mut hasher);
+        for combatant in &state.combatants {
+            combatant.name.hash(&mut hasher);
+            combatant.hp.hash(&mut hasher);
+            combatant.temp_hp.hash(&mut hasher);
+            combatant.zone.hash(&mut hasher);
+            match combatant.position() {
+                Position::Zone { zone } => {
+                    0u8.hash(&mut hasher);
+                    zone.hash(&mut hasher);
+                }
+                Position::Cell { x, y } => {
+                    1u8.hash(&mut hasher);
+                    x.hash(&mut hasher);
+                    y.hash(&mut hasher);
+                }
+            }
+            combatant.action_used.hash(&mut hasher);
+            combatant.bonus_action_used.hash(&mut hasher);
+            combatant.reaction_round.hash(&mut hasher);
+            combatant.speed_left.hash(&mut hasher);
+            combatant.dormant.hash(&mut hasher);
+            combatant.opening_used.hash(&mut hasher);
+            combatant.dead.hash(&mut hasher);
+            combatant.knocked_out.hash(&mut hasher);
+            combatant.death_saves.successes.hash(&mut hasher);
+            combatant.death_saves.failures.hash(&mut hasher);
+            combatant.death_saves.stable.hash(&mut hasher);
+            combatant.death_saves.dead.hash(&mut hasher);
+            for condition in &combatant.conditions {
+                condition.condition.hash(&mut hasher);
+                condition.source.hash(&mut hasher);
+                condition.linked.hash(&mut hasher);
+                condition.applied_round.hash(&mut hasher);
+                condition.concentration.hash(&mut hasher);
+                // Duration/pose details are lightweight advisory key material;
+                // a collision can only skip a duplicate evaluation, never
+                // bypass the final engine legality check. Only format `Some`
+                // values so the common case stays allocation-free.
+                match &condition.duration {
+                    None => 0u8.hash(&mut hasher),
+                    Some(duration) => {
+                        1u8.hash(&mut hasher);
+                        format!("{duration:?}").hash(&mut hasher);
+                    }
+                }
+            }
+            for (name, resource) in &combatant.resources {
+                name.hash(&mut hasher);
+                resource.current.hash(&mut hasher);
+            }
+            for (key, round) in &combatant.once_used {
+                key.hash(&mut hasher);
+                round.hash(&mut hasher);
+            }
+            for (flag, value) in [
+                (0u8, combatant.pose.as_ref().map(|pose| format!("{pose:?}"))),
+                (
+                    1u8,
+                    combatant
+                        .vertical
+                        .as_ref()
+                        .map(|vertical| format!("{vertical:?}")),
+                ),
+                (
+                    2u8,
+                    combatant
+                        .footprint
+                        .as_ref()
+                        .map(|footprint| format!("{footprint:?}")),
+                ),
+            ] {
+                match value {
+                    None => flag.hash(&mut hasher),
+                    Some(value) => {
+                        flag.hash(&mut hasher);
+                        value.hash(&mut hasher);
+                    }
+                }
+            }
+        }
+        for (name, concentration) in &state.concentration {
+            name.hash(&mut hasher);
+            concentration.ability.hash(&mut hasher);
+            concentration.round.hash(&mut hasher);
+        }
+        for (key, trigger) in &state.triggers {
+            key.hash(&mut hasher);
+            trigger.fired.hash(&mut hasher);
+            trigger.enabled.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Search-aware turn path. Bonus support and fleeing stay on the P6 utility
+    /// path; if search cannot produce a complete ranking, `Ok(false)` lets
+    /// `Ai::take_turn` run the full utility turn before the legacy fallback.
+    pub(super) fn take_search_turn(
+        ai: &Ai,
+        state: &mut EncounterState,
+        actor: usize,
+        plan: &CombatantPlan,
+        config: &SearchConfig,
+        rng: &mut dyn DiceRng,
+        log: &mut dyn LogSink,
+    ) -> Result<bool> {
+        let profile = build_profile(state, actor, plan);
+        let fleeing = profile.flee_below_pct.is_some_and(|threshold| {
+            threshold > 0 && hp_percent(&state.combatants[actor]) <= threshold
+        });
+        if fleeing {
+            return Ok(false);
+        }
+
+        // Preserve P6's bonus-action support phase. Search ranks action-slot
+        // decisions; bonus support is cheap, already validated by the utility
+        // path, and must not be mistaken for a complete turn.
+        if !state.combatants[actor].bonus_action_used {
+            let preview = Planner::new(ai, state, actor, plan).build();
+            let bonus: Vec<CandidateEvaluation> = preview
+                .candidates
+                .into_iter()
+                .filter(|candidate| is_bonus_support(ai, state, actor, candidate))
+                .collect();
+            if !bonus.is_empty() {
+                let _ = execute_candidates(ai, state, actor, &bonus, rng, log)?;
+            }
+        }
+
+        let decision = SearchPlanner::new(config.clone()).plan(ai, state);
+        if let Some(reason) = decision.fallback {
+            log.log(format_args!(
+                "search planner fallback ({reason:?}): nodes={} budget={} roots={} duplicates={}",
+                decision.stats.nodes,
+                decision.stats.node_budget,
+                decision.stats.root_candidates_evaluated,
+                decision.stats.duplicate_states_pruned
+            ));
+            return Ok(false);
+        }
+        let Some(search_plan) = decision.plan else {
+            return Ok(false);
+        };
+        log.log(format_args!(
+            "search planner: depth={} nodes={} roots={} responses={} duplicates={}",
+            decision.stats.depth,
+            decision.stats.nodes,
+            decision.stats.root_candidates_evaluated,
+            decision.stats.opponent_responses_evaluated,
+            decision.stats.duplicate_states_pruned
+        ));
+        ai.execute_tactical_plan(state, &search_plan, rng, log)
     }
 
     fn is_retreat_candidate(candidate: &CandidateEvaluation) -> bool {
