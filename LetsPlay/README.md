@@ -12,16 +12,16 @@ TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D
 
 ## 你需要准备什么
 
-本目录**只有程序说明和原创文档**，不包含任何规则书、冒险书或示例战役。要玩，你必须自己准备：
+本目录包含程序说明、原创文档和内置的 SRD 5.1 / 5.2.1 内容包（CC-BY-4.0）。SRD 内容已内置，**不需要自己下载 SRD PDF 也能玩**。冒险书仍需自备。
 
 ### 1. 选择规则版本
 
-| 版本 | 存档里写 | 规则书放在 | 最低要求 |
-|------|----------|------------|----------|
-| 5e（2014） | `ruleset: "2014"` | `Rules/2014/` | **SRD 5.1**（`SRD_CC_v5.1`，免费，CC-BY-4.0） |
-| 5.5e（2024） | `ruleset: "2024"` | `Rules/2024/` | **SRD 5.2.1**（`SRD_CC_v5.2.1`，免费，CC-BY-4.0） |
+| 版本 | 存档里写 | 内置内容 | 可选 PDF 放在 |
+|------|----------|----------|----------------|
+| 5e（2014） | `ruleset: "2014"` | SRD 5.1 全量内容包 | `Rules/2014/` |
+| 5.5e（2024） | `ruleset: "2024"` | SRD 5.2.1 全量内容包 + 2024 规则章节 | `Rules/2024/` |
 
-SRD 可在 Wizards of the Coast 官网免费下载：<https://dnd.wizards.com/resources/systems-reference-document>。如果你有正式的玩家手册 / 城主指南 / 怪物图鉴，也放进对应目录，AI DM 会优先使用。每个存档只用一个版本，DM 不会混用两版规则。
+放入 SRD PDF 是可选的：`bin/talkdnd start` 会为它建立 pdf2md 索引，DM 在缺图、地图或原文不清时回退查看。完整 PHB/DMG/MM 的解锁与 5.5e FULL / 5e FULL 规则集在 v1.2 提供；当前版本只使用 SRD 内容。每个存档只用一个版本，DM 不会混用两版规则。
 
 ### 2. 准备冒险书
 
@@ -34,7 +34,7 @@ SRD 可在 Wizards of the Coast 官网免费下载：<https://dnd.wizards.com/re
 ```
 Rules/
   2014/srd-cc-v5-1/
-    SRD_CC_v5.1.pdf                  # 你放的 PDF（权威来源）
+    SRD_CC_v5.1.pdf                  # 可选：你放的 PDF（用于书页图片/回退）
     index/                           # （自动生成）pdf2md 转换结果：SRD_CC_v5.1.pages.md、index.md、img/ …
   2024/players-handbook-2024/
     Players Handbook 2024.pdf        # 完整规则书（可选，自有）
