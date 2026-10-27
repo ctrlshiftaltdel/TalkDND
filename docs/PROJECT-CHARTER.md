@@ -51,7 +51,7 @@ Play and development are separate roots.
 | `LetsPlay/` | Play. The DM agent starts here. `LetsPlay/README.md` is the player guide. `LetsPlay/AGENTS.md` is the core DM guide (command table first, under 150 lines); details live in `LetsPlay/docs/*.md`, read on demand. Players put book PDFs in `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/`, and `LetsPlay/Adventures/`, one folder per book (`<slug>/` with the PDF, its converted `index/` and, for adventures, `combat/`; `talkdnd start` tidies loose files into place). Those directories are local except their README files. Combat data the engine loads lives in `LetsPlay/Rules/combat/`. Saves live in `LetsPlay/Saves/` and are not committed. The programs they run are the gitignored binaries `LetsPlay/bin/combat-sim` and `LetsPlay/bin/talkdnd` (Windows: `.exe`). |
 | Repository root | Development only. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine), `tools/talkdnd` (play helper) and `tools/talkdnd-dev` (dev tools). AgentOrch core is `AGENTS.md` plus `kit/`, `editions/`, `templates/`, `scripts/`, `tests/` and `MANIFEST.json`; project configuration is `docs/PROJECT.md`, design goals are `docs/PLAN.md`, and the living charter is `docs/PROJECT-CHARTER.md`. Nothing required to play lives here. |
 
-Release archives contain the whole git-tracked `LetsPlay/` tree plus the binary at `LetsPlay/bin/`; extracting one gives a ready play folder. `build-artifacts` artifacts contain only the binary at the archive root; extracting one into `LetsPlay/bin/` is the install. No launcher script points outside `LetsPlay/`.
+Release archives contain the whole git-tracked `LetsPlay/` tree plus the binary at `LetsPlay/bin/`; extracting one gives a ready play folder. `build-artifacts` artifacts contain only the binary at the archive root; extracting one into `LetsPlay/bin/` is the install. No launcher script points outside `LetsPlay/`. Full-book packs are a separate release asset, not part of that archive: they are built locally from the owner's pdf2md indexes and are never committed.
 
 ## Supported rulesets
 
@@ -115,7 +115,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 ## Constraints and assumptions
 
 - Platform: a local CLI. Linux, Windows, and macOS are the player platforms. The three prebuilt targets are listed above.
-- Data and privacy: player books and saves are local. Tracked combat data is SRD-only. The privacy rule above is mandatory.
+- Data and privacy: player books and saves are local. Tracked combat data is SRD-only. The privacy rule above is mandatory. Full-book packs are built locally from pdf2md indexes, are never in Git, and are published only as separate release assets; CI uses synthetic fixtures and never builds or downloads them.
 - Reliability: dice come from the operating system's entropy through `combat-sim`, not from the model inventing a roll.
 - Assumptions: the player can run an agent that reads `LetsPlay/` and executes `LetsPlay/bin/combat-sim`. The SRD packs ship with the program; adding the SRD PDFs is optional. GitHub is reachable for Issues, pull requests, and CI. One ruleset per save is enough.
 
@@ -125,6 +125,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - A save's `ruleset` selects 2014 or 2024 data, and the engine does not load the other version's directory.
 - `uv run --no-project python scripts/validate_kit.py --project-ready`, `uv run --no-project python -m unittest discover -s tests`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
 - Release automation builds the three prebuilt targets named in this charter.
+- Full-book packs build from the owner's local pdf2md indexes, validate as `distribution: full`, and are published as separate release assets without entering Git, the LetsPlay archive or CI logs.
 - A pull request that changes scope, goals, tech stack, rules support, or a user decision also updates this charter in that same pull request.
 - As of v1.0.0, a session interrupted mid-play can be resumed from the last good checkpoint, and the structured diff since the previous session is available without rereading the whole log.
 
@@ -161,6 +162,14 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-27 — Full-book pack builder and release packaging (TASK-0102)
+
+The owner's 2026-10-27 licence decision (below) is implemented as a local builder plus a separate release asset. `combat-sim content pack build --edition <2014|2024> --book <phb|dmg|mm> --index <pdf2md-index> --out <dir>` reads one book's local pdf2md output and writes a `ContentPack` with `distribution: full`, schema version 1, the normal content hash, the owner-licence string, the book label, the pdf2md tool and the source PDF SHA-256 prefix as provenance, and the pdf2md creation time. Content is one `rule_section` per Markdown heading with text, page, chapter, heading level and page anchor, section cross-references resolved from `#pN` links, and a pack index of sections plus relative figure/art/map paths. Absolute, `..` and drive-qualified image paths are skipped and reported; a pack never carries a local path.
+
+Chapter starts come from `index.json`, the manifest intake audit, or chapter-like headings. The command reports only counts and gaps (missing/empty pages, low-quality pages, stat-block pages, skipped headings and images) and never section text. `combat-sim content pack release` re-validates a directory of full packs, rejects non-full packs, duplicate ids and empty directories, and writes a deterministic `full-packs-manifest.json` plus copies of the packs; `--dry-run` writes nothing. The release workflow attaches a separate `talkdnd-full-packs-<tag>` archive only when the release runner already has locally built packs. Hosted CI has no books and never builds or downloads full packs; tests use synthetic pdf2md fixtures only.
+
+The source SHA-256 is provenance, not an unlock check: TASK-0103 identifies a book by its content and does not verify a hash. If the licence scope changes, the full packs are withdrawn or replaced. No pack schema, loader, save schema, dependency or crate version changes.
 
 ### 2026-10-27 — AgentOrch 1.6.3 update and HD-10 resolution (TASK-0109)
 

@@ -7,6 +7,7 @@
 
 pub mod check;
 pub mod expr;
+pub mod full_pack;
 pub mod loader;
 pub mod pack;
 pub mod schema;
