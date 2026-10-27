@@ -8,7 +8,7 @@ TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D
 - 每一步都写进存档日志，下次可以从存档点接着玩；
 - 战斗由 **combat-sim** 结算（命中、伤害、状态、专注、移动、借机攻击……）。
 
-当前发布：**v1.2.0**（2026-10-27）。本版新增四规则集、可选完整书内容包与空间规则 P1–P5；默认战斗 AI 仍是 legacy，详见 `CHANGELOG.md` 的 v1.2.0 小节。
+当前发布：**v1.3.0**（2026-10-27）。本版新增每存档自动化开关（`settings.automation`，schema 9）与场景/遭遇覆盖；旧存档会自动从 8 迁移到 9，迁移前整档备份。默认战斗 AI 仍是 legacy，四规则集与完整书 pack 可选资产与 v1.2.0 相同，详见 `CHANGELOG.md` 的 v1.3.0 小节。
 
 要玩：留在本目录。本目录的 `AGENTS.md` 是 DM 手册。开发与改代码在仓库根，不在这里。
 
@@ -166,6 +166,10 @@ bin\combat-sim.exe roll 1d20+5
 - DM 用 `talkdnd known` 看“玩家目前知道什么”，用 `talkdnd guard "<草稿>"` 检查叙述/选项里有没有还没揭示的秘密词；未识别的怪物在 `combat-sim --player` 视图里只显示外貌描述。规则见 `docs/option-writing.md`。
 - 默认每个检定都显示完整算式；如果你们更喜欢只看故事，`talkdnd settings dice off` 可以关掉数字显示。掷骰仍然全部由程序完成并记在 `Saves/<存档>/rolls.log`，`talkdnd log rolls` 随时可查。见 `docs/dice.md`。
 
+## 自动化开关
+
+自动化开关决定 DM 哪些事直接做、哪些先问你、哪些等你开口，按存档保存：`bin/talkdnd settings automation` 查看，`show` 看某个场景/遭遇的生效值，`set` / `reset` 修改（`--reason` 必填）。优先级是 **遭遇 > 场景 > 存档默认**；玩家选择和玩家反应永远不能设为 `auto`，每次改动都会写进会话日志。`bin/talkdnd start` 的摘要会显示当前生效值与覆盖数量。完整说明见 `docs/automation.md`。
+
 ## 战斗
 
 在本目录（清单路径相对于存档文件，模板见 `example/save/combat/campaign.yaml`）。Windows 把 `bin/combat-sim` 换成 `bin\combat-sim.exe`：
@@ -185,7 +189,7 @@ $CS roll 1d20+5 --adv --dc 15
 
 两个 edition 的差异由数据决定：`Rules/combat/common/` 是通用部分，`Rules/combat/2014/`、`Rules/combat/2024/` 是各 edition 特有的内容。`srd/` 与 `srd-*` 覆盖属于 SRD 层；FULL 先加载 SRD 层，再加载已解锁的完整书内容包，最后加载 `<edition>/` 下其余手写内容与冒险/战役覆盖。引擎读存档清单里的 `ruleset` 自动选择。
 
-战斗 AI 默认沿用原有 legacy heuristic。v1.2 的战术效用规划器与有界搜索只作为库 API 显式 opt-in；质量基准在合成团队战看到回退，所以没有改默认，玩家不需要设置。
+战斗 AI 默认沿用原有 legacy heuristic。v1.2 的战术效用规划器与有界搜索只作为库 API 显式 opt-in，v1.3 未改默认；质量基准在合成团队战看到回退，所以玩家不需要设置。自动化开关也不改变战斗 AI。
 
 ## 更新到新版本
 
@@ -195,16 +199,18 @@ $CS roll 1d20+5 --adv --dc 15
 2. 从 [Releases](https://github.com/ctrlshiftaltdel/TalkDND/releases) 下载对应平台的包，可用同名 `.sha256` 校验。
 3. 把包解压到任意临时位置，再把解压出来的 `TalkDND/` 文件夹**里面的全部内容**复制到你的游戏文件夹（不管它叫什么、放在哪），遇到同名文件选择「全部覆盖」。如果你的游戏文件夹本来就叫 `TalkDND` 且放在同一位置，直接在它的上一级解压覆盖也行。
 4. 照常「继续游戏」（`talkdnd start`）。第一次运行新版时程序会自动：
-   - 检查存档结构版本（`Saves/<存档>/save-meta.yaml`），旧了就先把整个存档备份到 `Saves/_backups/`，再迁移到新结构，写进会话日志并更新完整性清单；
+   - 检查存档结构版本（`Saves/<存档>/save-meta.yaml`），旧了就先把整个存档备份到 `Saves/_backups/`，再迁移到新结构，写进会话日志并更新完整性清单；schema 8 → 9 会补上章程默认的自动化设置，`settings.dice_display` 与叙事风格保持不变；
    - 书籍导入数据（`Rules/chargen/local/`）的导入器版本过旧时重新导入；
    - 缺少的默认规则裁定从 `Rules/defaults/` 复制到 `Rules/`，已有的不动（默认版有更新时摘要会提示合并）；
    - 把新版已删除、你没改过的旧程序文件移到 `.talkdnd/obsolete/`；
    - 把旧存档的 `ruleset: "2014"` / `"2024"` 分别迁移为 `5e-srd` / `5.5e-srd`（只改这一行，保留其他字段与注释）；
    - 原先使用完整书内容的存档需要把 `ruleset` 重选为 `5e-full` / `5.5e-full`，并解锁对应完整书 pack。
 
+自动化开关不需要预先设置：不配置时按章程默认，要改随时用 `bin/talkdnd settings automation ...`，说明见 `docs/automation.md`。四规则集和完整书 pack 的用法与 v1.2.0 相同。
+
 完整书 pack 不在普通发布包内。需要时，从项目所有者另行提供的 `talkdnd-full-packs-<标签>.tar.gz` 解压到 `Rules/packs/`，把匹配 PDF 放进 `Rules/<edition>/` 后用 `bin/talkdnd library scan` 解锁；没有它也能用 5e SRD / 5.5e SRD 完整游玩。
 
-发布包里**没有**任何用户数据：存档（只有 `Saves/README.md`）、规则书和冒险书（只有 README）、本地导入、`fixes/`、资料图登记表、你自己的规则裁定都不会被覆盖，打包时会自动检查。确认迁移没问题后，`Saves/_backups/` 里的备份可以自行删除。每个版本改了什么见仓库里的 `CHANGELOG.md`；v1.2.0 的已知限制（AI 默认策略、完整书识别、空间数据覆盖）也在那里。
+发布包里**没有**任何用户数据：存档（只有 `Saves/README.md`）、规则书和冒险书（只有 README）、本地导入、`fixes/`、资料图登记表、你自己的规则裁定都不会被覆盖，打包时会自动检查。确认迁移没问题后，`Saves/_backups/` 里的备份可以自行删除。每个版本改了什么见仓库里的 `CHANGELOG.md`；v1.3.0 的已知限制（自动化开关是桌规约定、覆盖需要已知 id、AI 默认策略、完整书 pack）也在那里。
 
 ## 版权与许可
 

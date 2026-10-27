@@ -4,6 +4,44 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v1.3.0 — 2026-10-27
+
+### 新功能
+
+- **每存档自动化开关**（TASK-0111，PR #219）：`save-meta.yaml` 的 `settings.automation`（schema 9）给每个存档一组 DM 自动化默认值，并可按场景、遭遇两级 id 覆盖，生效顺序是 **遭遇 > 场景 > 存档默认**。固定六类：`resolution`、`combat`、`npc`、`player_choice`、`reaction`、`near_limit`；级别只有 `manual` / `assisted` / `auto`。章程默认是无选择的结算与战斗流程 `auto`，NPC 台词、玩家选择、玩家反应与接近上限提醒 `assisted`；`player_choice` / `reaction` 永不接受 `auto`。
+- **`talkdnd settings automation` CLI**（PR #219）：`show` 显示存档默认与全部覆盖，并逐项标出每个值的来源（存档默认 / 场景 `<id>` / 遭遇 `<id>`）；`set` / `reset` 支持 `--scene` 或 `--encounter`，`reset all` 清空一层，`--reason` 必填；每次改动把旧值、新值、层级、时间和理由写进当前会话日志。`start` 摘要新增一行自动化生效值与覆盖数量。`settings` / `settings dice on|off` 保持不变。
+- **存档 schema 8 → 9 自动迁移**（PR #219）：旧存档第一次被 `start`、`migrate` 或任何 `settings` 写入使用时，先把整份存档备份到 `Saves/_backups/<slot>-<stamp>-schema8`，再按章程默认补齐缺失类别，写入迁移记录（8 → 9）和一条点名备份的会话日志，并刷新完整性清单。已有 `settings.dice_display`、`settings.style` 与部分自动化值原样保留；写入失败时旧文件不动，重试仍会迁移；比 9 新的 schema 继续拒绝。
+- **自动化文档**（PR #219）：新增玩家/DM 参考 `LetsPlay/docs/automation.md` 与开发者文档 `tools/talkdnd/docs/AUTOMATION.md`；`LetsPlay/AGENTS.md`、`LetsPlay/docs/layout.md`、`LetsPlay/docs/narration.md`、`docs/PLAN.md` 与本章程同步自动化开关的类别、层级、优先级、审计与迁移说明。
+
+### 变更
+
+- **存档结构升到 schema 9**：`save-meta.yaml` 增加 `settings.automation`（块版本 1）；这是 v1.3 唯一的存档结构变化，8 → 9 自动迁移。
+- **默认值即章程原则**：旧存档迁移后写入章程默认，迁移前后的解释一致；`dice_display` / `style` 与已有自动化值不变。自动化开关只决定 DM 何时自己结算、何时先问、何时等待玩家，不改变战斗规则、骰子或战斗 AI。
+- **四规则集与完整书 pack 不变**：5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD 的选择、解锁与分层与 v1.2.0 相同；完整书 pack 仍是可选发布资产，托管 CI 不构建、不上传。
+
+### 修复
+
+- **自动化 id 读取只保留场景/遭遇元数据**（PR #219，commit `0ce1024`）：`settings automation` 在读取 `progress.yaml`、战斗状态与冒险 `combat/` 文件时改为类型化解析，只保留场景 id/名称、遭遇 id 与所属场景；描述、备注、日志、成员块、战斗者等其他字段一律忽略且不保留。新增回归测试验证这些内容不会出现在命令输出、审计日志、`save-meta.yaml` 或 `start` 摘要中；章程与两份自动化文档的读取范围表述同步校正。
+- 本版没有其他玩家可见缺陷修复；自动化设置的非法类别、级别、id、重复键与空覆盖图仍按 fail-closed 拒绝，失败的 `set` / `reset` 不写 meta、不记日志。
+
+### 更新说明 / 迁移
+
+- **覆盖式更新**：下载 1.3.0 发布包，把包内 `TalkDND/LetsPlay/` 的内容覆盖到现有游戏文件夹，覆盖同名文件；存档目录原样保留。不要用旧包整个替换。
+- **schema 8 → 9**：第一次 `start` / `migrate` / `settings` 写入时自动迁移；先整档备份到 `Saves/_backups/`，再写章程默认、迁移记录与日志。想回退就恢复该备份。`dice_display`、`style` 与已有自动化值保留；比 9 新的存档拒绝加载。
+- **自动化开关可选**：不改也能玩，默认值见 `LetsPlay/docs/automation.md`；要改就在游戏文件夹运行 `bin/talkdnd settings automation ...`。玩家选择与反应永远不会被设为 `auto`。
+- **默认 AI 与规则不变**：战斗 AI 仍是 legacy；Utility/Search 仍是库级 opt-in；战斗规则、骰子与四规则集分层没有变化。
+- **完整书 pack 是可选资产**：与 v1.2.0 相同，普通发布包不含 PHB/DMG/MM 内容，托管 CI 不构建也不上传 full pack；只用 SRD 的玩家不需要额外步骤。
+- 行为基线是 main `a61b8d038e5e08d2b047b8706f62d2a608de6985`（PR #219 合并后）。该提交上 combat-sim 390、talkdnd 322、talkdnd-dev 45、AgentOrch 套件 676（19 skipped）个测试通过，`validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 退出码 0。发布提交只改三个 crate 的版本号与锁文件、本更新日志、章程和 `LetsPlay/README.md`，不含源码、测试或 CI 行为变更。
+- 本任务不创建或推送 tag；合并后由 Master 在 main 上打 `v1.3.0` 并触发 release workflow。
+
+### 已知限制
+
+- **自动化开关是桌规约定，不是引擎强制**：程序负责校验设置、解析优先级、拒绝非法值与记录审计；DM 是否按开关执行仍由 DM 手册约束，引擎不会替 DM 判断每一句叙述。
+- **场景/遭遇覆盖需要已知 id**：只能引用存档当前场景、`combat/*.state.json` 或冒险 `combat/` 数据里的 id；临时编的场景/遭遇要先有元数据，未知 id 会被拒绝。
+- **默认战斗 AI 仍是 legacy**：P8 的合成基准仍显示 Utility/Search 的团队战回退，v1.3 没有改变默认；改默认仍需真实或非木桩内容的质量门。
+- **完整书 pack 不在普通包内**：托管 CI 不构建、不上传；没有 pack 时 5e SRD / 5.5e SRD 仍可完整游玩，FULL 会 fail closed。
+- v1.2.0 记载的完整书识别、空间数据覆盖与合成基准限制未在本版改变，仍以 v1.2.0 小节为准。
+
 ## v1.2.0 — 2026-10-27
 
 ### 新功能
