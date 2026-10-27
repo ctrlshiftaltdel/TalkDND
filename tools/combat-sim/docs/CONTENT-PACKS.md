@@ -2,8 +2,9 @@
 
 Content packs are the versioned container that the AI DM engine uses for SRD,
 licensed full-book and local content. A pack wraps the existing content schema
-(conditions, masteries, abilities, creatures, AI templates, scenes, encounters
-and rules) with metadata, an optional search index and an integrity hash.
+(conditions, masteries, abilities, creatures, AI templates, scenes, encounters,
+domain entities and rules) with metadata, an optional search index and an
+integrity hash.
 
 This task defines the format and loader only. It does not import SRD or full-book
 content, and it does not implement PDF presence gating (that is the 1.2 full-book
@@ -52,6 +53,22 @@ index:
 
 A pack file is recognised by the presence of both top-level `pack` and
 `content` keys. Ordinary YAML/JSON/Markdown content keeps loading as before.
+
+## Domain entities
+
+Non-combat content uses the shared `DomainEntity` shape in these container
+arrays: `items`, `classes`, `subclasses`, `species`, `backgrounds`, `feats`,
+`rule_sections`, `tables`.
+
+Each entity has `id` (required), plus optional `name`, `source`, `page`,
+`section`, `tags`, `aliases`, `text`, `refs`, `data`, `manual`, `notes` and
+`todo`. `data` is an open JSON payload for future structured use; the current
+engine does not read these entities. A pack index may reference them with the
+kinds `item`, `class`, `subclass`, `species`, `background`, `feat`,
+`rule-section` and `table`.
+
+Domain entities are container-only: a single top-level object with `id` is not
+dispatched by guessing its kind. Put them under one of the arrays above.
 
 ## Metadata
 
