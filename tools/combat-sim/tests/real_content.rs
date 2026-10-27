@@ -313,7 +313,8 @@ fn handwritten_creature_ids_keep_their_semantics() {
     let source = y2014
         .source_of(ItemKind::Creature, "guard")
         .expect("2014 guard source")
-        .to_string();
+        .to_string()
+        .replace('\\', "/");
     assert!(
         source.ends_with("LetsPlay/Rules/combat/2014/monsters/guard.yaml"),
         "unexpected source: {source}"
@@ -326,7 +327,8 @@ fn handwritten_creature_ids_keep_their_semantics() {
     let source = y2024
         .source_of(ItemKind::Creature, "guard")
         .expect("2024 guard source")
-        .to_string();
+        .to_string()
+        .replace('\\', "/");
     assert!(
         source.ends_with("LetsPlay/Rules/combat/2024/monsters/guard.yaml"),
         "unexpected source: {source}"
