@@ -22,7 +22,11 @@ use crate::content::schema::{
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
-use crate::space::{Position, Space, OPEN_ZONE};
+use crate::space::{
+    CellPos, Explain, FallCause, FallMap, FallResolution, FallResolver, FallRuleKind,
+    FlightCapability, FlightCheck, FlightConditions, FlightRules, FlightState, FlightSubject,
+    HeightProfile, LandingCondition, LandingOutcome, Position, Space, SpatialPose, OPEN_ZONE,
+};
 use crate::state::{
     ability_from_text, active_duration, ActiveCondition, ActiveDuration, ActiveSaveEnds,
     CombatOutcome, CombatantState, DeathSaves, EncounterState,
@@ -262,11 +266,22 @@ fn hostile_to(state: &EncounterState, a: usize, b: usize) -> bool {
 }
 
 fn effective_speed(state: &EncounterState, index: usize) -> i32 {
+    let base = state.combatants[index].base_speed();
+    effective_speed_from(state, index, base)
+}
+
+/// Effective Fly Speed after `Speed` condition flags and modifiers. A Speed 0
+/// or halved Speed applies to special speeds as well.
+fn effective_fly_speed(state: &EncounterState, index: usize) -> i32 {
+    let base = state.combatants[index].creature.speed().fly.max(0);
+    effective_speed_from(state, index, base)
+}
+
+fn effective_speed_from(state: &EncounterState, index: usize, base: i32) -> i32 {
     if has_flag(state, index, ConditionFlag::SpeedZero) {
         return 0;
     }
     let halved = has_flag(state, index, ConditionFlag::SpeedHalved);
-    let base = state.combatants[index].base_speed();
     if !has_modifier_sources(state, index) {
         return if halved { base / 2 } else { base };
     }
@@ -6398,6 +6413,285 @@ fn fire_enter_triggers(
         state.set_trigger_fired(&key);
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// P4 flight and fall interface (TASK-0089)
+// ---------------------------------------------------------------------------
+//
+// This is a seam, not a turn-loop integration. P5 (#174) owns CLI/AI wiring
+// and trigger order. A legacy 2D save has no pose, vertical state, spatial
+// state or 3D scene data, so `spatial_flight_enabled` stays false and the
+// fall entry points return `None` without changing any existing behaviour.
+
+/// Whether this encounter has explicitly opted into the P1 spatial fields.
+pub fn spatial_flight_enabled(state: &EncounterState) -> bool {
+    state.spatial.is_some()
+        || state
+            .combatants
+            .iter()
+            .any(|combatant| combatant.pose.is_some() || combatant.vertical.is_some())
+        || state.scene.as_deref().is_some_and(|scene| {
+            scene.cell_height_ft.is_some() || !scene.terrain_volumes.is_empty()
+        })
+}
+
+/// Build the vertical map for a grid encounter. Zone scenes have no metric
+/// vertical map; a fall there stays an explicit error rather than an invented
+/// approximation.
+pub fn fall_map_for_state(state: &EncounterState) -> Result<Option<FallMap>> {
+    if !spatial_flight_enabled(state) {
+        return Ok(None);
+    }
+    let scene = state
+        .scene
+        .as_deref()
+        .ok_or_else(|| anyhow!("spatial flight is enabled without a scene"))?;
+    let mut map =
+        FallMap::from_scene(scene).ok_or_else(|| anyhow!("scene has no usable grid fall map"))?;
+    if let Some(spatial) = &state.spatial {
+        if spatial.cell_height_ft.is_some() {
+            map.set_default_ceiling(spatial.cell_height_ft)
+                .map_err(|error| anyhow!(error.to_string()))?;
+        }
+        if !spatial.terrain_volumes.is_empty() {
+            map.clear_terrain();
+            for terrain in &spatial.terrain_volumes {
+                map.add_terrain(terrain)
+                    .map_err(|error| anyhow!(error.to_string()))?;
+            }
+        }
+    }
+    Ok(Some(map))
+}
+
+/// Edition-specific "loses flight support" check for one combatant. A creature
+/// that is not Flying/Hovering never falls from a flight trigger.
+pub fn flight_check(state: &EncounterState, who: &str) -> Result<FlightCheck> {
+    let index = state
+        .find_index(who)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let rules = FlightRules::try_for_ruleset(Some(&state.content.ruleset))
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let combatant = &state.combatants[index];
+    let vertical = combatant.vertical_state();
+    if !matches!(vertical.flight, FlightState::Flying | FlightState::Hovering) {
+        return Ok(FlightCheck {
+            edition: rules.edition,
+            falls: false,
+            reason: None,
+            rule_kind: FallRuleKind::Raw,
+            explain: vec![Explain::new(
+                "flight-not-airborne",
+                format!("{:?} is not airborne", vertical.flight),
+            )],
+        });
+    }
+    let capability = FlightCapability::from_speed(&combatant.creature.speed());
+    let fly_speed_ft = effective_fly_speed(state, index);
+    let conditions = FlightConditions {
+        knocked_down: has_flag(state, index, ConditionFlag::StandUpHalfSpeed),
+        incapacitated: has_flag(state, index, ConditionFlag::Incapacitated),
+        speed_zero: has_flag(state, index, ConditionFlag::SpeedZero),
+        fly_speed_zero: fly_speed_ft <= 0,
+        // No engine flag expresses "otherwise deprived of movement"; a DM
+        // ruling or P5 trigger can set it through the lower-level seam.
+        deprived_of_movement: false,
+    };
+    let subject = FlightSubject {
+        fly_speed_ft,
+        hover: capability.can_hover(),
+        held_aloft_by_magic: false,
+        conditions,
+    };
+    Ok(crate::space::flight_fall_trigger(&subject, rules))
+}
+
+fn fall_start(state: &EncounterState, index: usize, map: &FallMap) -> Result<((i32, i32), i32)> {
+    let combatant = &state.combatants[index];
+    if let Some(pose) = combatant.pose {
+        return Ok(((pose.cell.x, pose.cell.y), pose.cell.z));
+    }
+    let (x, y) = combatant
+        .position_ref()
+        .cell_coords()
+        .ok_or_else(|| anyhow!("combatant `{}` has no grid position", combatant.name))?;
+    let floor = map
+        .floor_at(x, y)
+        .ok_or_else(|| anyhow!("combatant `{}` is not on a fall column", combatant.name))?;
+    let altitude = combatant.vertical_state().altitude_ft;
+    Ok(((x, y), floor.saturating_add(altitude)))
+}
+
+/// Resolve a fall from the combatant's current pose/elevation without applying
+/// damage. This is the read-only half of the P4 interface.
+pub fn resolve_fall(state: &EncounterState, who: &str) -> Result<Option<FallResolution>> {
+    let index = state
+        .find_index(who)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let Some(map) = fall_map_for_state(state)? else {
+        return Ok(None);
+    };
+    let rules = FlightRules::try_for_ruleset(Some(&state.content.ruleset))
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let combatant = &state.combatants[index];
+    let ((x, y), start_elevation_ft) = fall_start(state, index, &map)?;
+    let height = HeightProfile::default()
+        .resolve(combatant.creature.size(), None)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let start = SpatialPose {
+        cell: CellPos {
+            x,
+            y,
+            z: start_elevation_ft,
+        },
+        footprint: combatant.spatial_footprint(),
+        facing: combatant.pose.and_then(|pose| pose.facing),
+    };
+    let resolution = FallResolver::new(&map, rules)
+        .resolve_from(&start, height, FallCause::Unspecified)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    Ok(Some(resolution))
+}
+
+fn landing_condition_id(state: &EncounterState) -> Option<String> {
+    state
+        .content
+        .conditions
+        .iter()
+        .find(|(_, definition)| definition.flags.contains(&ConditionFlag::StandUpHalfSpeed))
+        .map(|(id, _)| id.to_string())
+}
+
+/// Check totals supplied by the caller/CLI. P5 rolls the actual checks; P4
+/// only applies them so the RAW/house-rule split stays explicit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FallOptions {
+    pub landing_check_total: Option<i32>,
+    pub liquid_landing_total: Option<i32>,
+}
+
+/// What the engine did with one fall.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallReport {
+    pub resolution: FallResolution,
+    pub damage_rolled: i32,
+    pub damage_taken: i32,
+    pub landing: LandingOutcome,
+    pub damage_halved_by_liquid: bool,
+    pub landing_applied: bool,
+}
+
+/// Resolve and apply a fall: damage, landing condition, and vertical state.
+/// The horizontal cell is unchanged for a vertical drop; forced movement that
+/// changes cells must be wired by P5.
+pub fn apply_fall(
+    state: &mut EncounterState,
+    who: &str,
+    options: &FallOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<Option<FallReport>> {
+    let Some(resolution) = resolve_fall(state, who)? else {
+        return Ok(None);
+    };
+    let index = state
+        .find_index(who)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let name = state.combatants[index].name.clone();
+    log.log(format_args!(
+        "{name} falls {} ft ({})",
+        resolution.fall_distance_ft,
+        resolution.damage.expression()
+    ));
+    // Resolve the content id before touching HP so a missing landing condition
+    // is an early error, never a partially applied fall.
+    let flat_condition_id = if resolution.raw_flat_on_damage {
+        Some(
+            landing_condition_id(state)
+                .ok_or_else(|| anyhow!("content has no condition carrying the stand-up flag"))?,
+        )
+    } else {
+        None
+    };
+    let mut damage_rolled = 0;
+    let mut damage_taken = 0;
+    let mut damage_halved_by_liquid = false;
+    if !resolution.damage.is_zero() {
+        let expression = resolution.damage.expression();
+        let parsed = expression
+            .parse::<DiceExpr>()
+            .with_context(|| format!("invalid fall damage expression `{expression}`"))?;
+        let mut record = parsed.roll(rng);
+        if resolution.liquid_halves_damage(options.liquid_landing_total) {
+            record.total /= 2;
+            record.text = format!("{} halved by liquid landing", record.text);
+            damage_halved_by_liquid = true;
+        }
+        damage_rolled = record.total;
+        damage_taken = apply_damage_rolls(
+            state,
+            index,
+            index,
+            vec![(record, resolution.damage.damage_type.to_string())],
+            &[],
+            false,
+            rng,
+            log,
+        )?;
+    }
+    let landing = resolution.landing_outcome(damage_taken, options.landing_check_total);
+    let landing_applied = if landing.condition == LandingCondition::LandedFlat {
+        let condition_id = flat_condition_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("content has no condition carrying the stand-up flag"))?;
+        add_condition(
+            state,
+            who,
+            condition_id,
+            &AddConditionOptions::default(),
+            rng,
+            log,
+        )?;
+        state.combatants[index]
+            .conditions
+            .iter()
+            .any(|active| active.condition.eq_ignore_ascii_case(condition_id))
+    } else {
+        false
+    };
+    let mut vertical = state.combatants[index].vertical_state();
+    vertical.flight = FlightState::Grounded;
+    vertical.altitude_ft = 0;
+    vertical.fall_distance_ft = resolution.fall_distance_ft;
+    vertical
+        .validate()
+        .map_err(|error| anyhow!(error.to_string()))?;
+    state.combatants[index].vertical = Some(vertical);
+    let footprint = state.combatants[index].spatial_footprint();
+    let facing = state.combatants[index].pose.and_then(|pose| pose.facing);
+    match state.combatants[index].pose.as_mut() {
+        Some(pose) => pose.cell = resolution.landing.cell,
+        None => {
+            state.combatants[index].pose = Some(SpatialPose {
+                cell: resolution.landing.cell,
+                footprint,
+                facing,
+            });
+        }
+    }
+    if let Some(Position::Cell { x, y }) = state.combatants[index].pos.as_mut() {
+        *x = resolution.landing.cell.x;
+        *y = resolution.landing.cell.y;
+    }
+    Ok(Some(FallReport {
+        resolution,
+        damage_rolled,
+        damage_taken,
+        landing,
+        damage_halved_by_liquid,
+        landing_applied,
+    }))
 }
 
 /// `interact <who> <object> [--option N]`.

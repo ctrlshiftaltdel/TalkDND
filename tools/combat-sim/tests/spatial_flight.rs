@@ -66,8 +66,10 @@ fn condition(id: &str, flags: Vec<ConditionFlag>) -> ConditionDef {
 /// Minimal registry with the generic condition flags the engine consults.
 /// The ids are synthetic test data; production code never names them.
 fn registry(ruleset: &str) -> ContentRegistry {
-    let mut registry = ContentRegistry::default();
-    registry.ruleset = ruleset.to_string();
+    let mut registry = ContentRegistry {
+        ruleset: ruleset.to_string(),
+        ..ContentRegistry::default()
+    };
     for (id, flags) in [
         ("prone", vec![ConditionFlag::StandUpHalfSpeed]),
         ("incapacitated", vec![ConditionFlag::Incapacitated]),
@@ -162,20 +164,8 @@ fn flat_scene() -> serde_json::Value {
     grid_scene(&["."], json!({".": {"elevation": 0}}), None)
 }
 
-fn spatial_with_terrain(
-    terrain: Vec<serde_json::Value>,
-    ceiling: Option<i32>,
-) -> SpatialState {
-    serde_json::from_value(json!({
-        "cell_height_ft": ceiling,
-        "terrain_volumes": terrain
-    }))
-    .expect("synthetic spatial state")
-}
-
 fn pose(x: i32, y: i32, z: i32) -> SpatialPose {
-    SpatialPose::new(CellPos::new(x, y, z).expect("cell"), Footprint::ONE, None)
-        .expect("pose")
+    SpatialPose::new(CellPos::new(x, y, z).expect("cell"), Footprint::ONE, None).expect("pose")
 }
 
 fn medium_height() -> combat_sim::space::ResolvedHeight {
@@ -272,8 +262,13 @@ fn flight_state_and_hover_branch_are_explicit() {
         FlightState::Hovering
     );
     assert_eq!(
-        transition_flight(FlightState::Hovering, FlightAction::StopHovering, &capability, 10)
-            .unwrap(),
+        transition_flight(
+            FlightState::Hovering,
+            FlightAction::StopHovering,
+            &capability,
+            10
+        )
+        .unwrap(),
         FlightState::Flying
     );
     assert_eq!(
@@ -357,10 +352,7 @@ fn fall_triggers_are_edition_specific() {
         c.deprived_of_movement = true
     });
     assert!(deprived_2014.falls);
-    assert_eq!(
-        deprived_2014.reason,
-        Some(FallReason::DeprivedOfMovement)
-    );
+    assert_eq!(deprived_2014.reason, Some(FallReason::DeprivedOfMovement));
 
     // 2024 names Incapacitated, knocked-down, and Fly Speed 0. It does not use
     // 2014's "deprived of movement" catch-all, and a general Speed 0 alone is
@@ -407,7 +399,7 @@ fn fall_triggers_are_edition_specific() {
             hover: false,
             held_aloft_by_magic: true,
             conditions: FlightConditions {
-                incapacitated: true,
+                knocked_down: true,
                 ..FlightConditions::default()
             },
         };
@@ -768,12 +760,7 @@ fn fall_resolver_handles_cliffs_and_structured_errors() {
     let resolver = FallResolver::new(&map, rules_2024());
 
     let cliff = resolver
-        .resolve_into(
-            &pose(0, 0, 30),
-            (1, 0),
-            medium_height(),
-            FallCause::Forced,
-        )
+        .resolve_into(&pose(0, 0, 30), (1, 0), medium_height(), FallCause::Forced)
         .expect("cliff fall");
     assert_eq!(cliff.fall_distance_ft, 30);
     assert_eq!(cliff.start_elevation_ft, 30);
@@ -783,35 +770,20 @@ fn fall_resolver_handles_cliffs_and_structured_errors() {
     assert_eq!(cliff.cause, FallCause::Forced);
 
     let high = resolver
-        .resolve_into(
-            &pose(0, 0, 40),
-            (1, 0),
-            medium_height(),
-            FallCause::Jump,
-        )
+        .resolve_into(&pose(0, 0, 40), (1, 0), medium_height(), FallCause::Jump)
         .expect("high cliff fall");
     assert_eq!(high.fall_distance_ft, 40);
     assert_eq!(high.damage.expression(), "4d6");
 
     assert_eq!(
-        resolver.resolve_into(
-            &pose(0, 0, 30),
-            (2, 0),
-            medium_height(),
-            FallCause::Forced
-        ),
+        resolver.resolve_into(&pose(0, 0, 30), (2, 0), medium_height(), FallCause::Forced),
         Err(FlightError::LandingAboveStart {
             start_ft: 30,
             surface_ft: 40
         })
     );
     assert_eq!(
-        resolver.resolve_into(
-            &pose(0, 0, 30),
-            (9, 9),
-            medium_height(),
-            FallCause::Forced
-        ),
+        resolver.resolve_into(&pose(0, 0, 30), (9, 9), medium_height(), FallCause::Forced),
         Err(FlightError::UnknownColumn { x: 9, y: 9 })
     );
     assert_eq!(
@@ -947,12 +919,7 @@ fn forced_movement_drop_is_resolved_from_elevation_not_path_cost() {
         .with_column(0, 0, FallColumn::new(30))
         .with_column(1, 0, FallColumn::new(0));
     let fall = FallResolver::new(&fall_map, rules_2024())
-        .resolve_into(
-            &pose(0, 0, 30),
-            (1, 0),
-            medium_height(),
-            FallCause::Forced,
-        )
+        .resolve_into(&pose(0, 0, 30), (1, 0), medium_height(), FallCause::Forced)
         .expect("forced fall");
     assert_eq!(fall.fall_distance_ft, 30);
     assert_eq!(fall.cause, FallCause::Forced);
@@ -965,12 +932,7 @@ fn forced_movement_drop_is_resolved_from_elevation_not_path_cost() {
         .expect("flat forced move");
     assert_eq!(flat_plan.moved_ft, 15);
     let flat_fall = FallResolver::new(&FallMap::flat(4, 1, 0), rules_2024())
-        .resolve_into(
-            &pose(0, 0, 0),
-            (3, 0),
-            medium_height(),
-            FallCause::Forced,
-        )
+        .resolve_into(&pose(0, 0, 0), (3, 0), medium_height(), FallCause::Forced)
         .expect("flat fall");
     assert_eq!(flat_fall.fall_distance_ft, 0);
 }
@@ -1000,27 +962,17 @@ fn fall_map_reads_scene_floors_terrain_and_ceilings() {
     let resolver = FallResolver::new(&map, rules_2024());
 
     let cliff = resolver
-        .resolve_into(
-            &pose(0, 0, 30),
-            (1, 0),
-            medium_height(),
-            FallCause::Forced,
-        )
+        .resolve_into(&pose(0, 0, 30), (1, 0), medium_height(), FallCause::Forced)
         .expect("scene cliff fall");
     assert_eq!(cliff.fall_distance_ft, 30);
 
     let platform = resolver
-        .resolve_into(
-            &pose(0, 0, 30),
-            (2, 0),
-            medium_height(),
-            FallCause::Forced,
-        )
+        .resolve_into(&pose(0, 0, 30), (2, 0), medium_height(), FallCause::Forced)
         .expect("scene platform fall");
     assert_eq!(platform.fall_distance_ft, 19);
     assert_eq!(platform.landing.elevation_ft, 11);
     assert_eq!(platform.landing.surface_id, "platform");
-    assert_eq!(platform.landing.surface_kind, FallSurfaceKind::Platform);
+    assert_eq!(platform.landing.surface_kind, FallSurfaceKind::Terrain);
 
     let ceiling = resolver
         .resolve_from(&pose(1, 0, 110), medium_height(), FallCause::Jump)
@@ -1030,12 +982,7 @@ fn fall_map_reads_scene_floors_terrain_and_ceilings() {
     assert_eq!(ceiling.landing.surface_kind, FallSurfaceKind::Ceiling);
 
     assert_eq!(
-        resolver.resolve_into(
-            &pose(0, 0, 30),
-            (3, 0),
-            medium_height(),
-            FallCause::Forced
-        ),
+        resolver.resolve_into(&pose(0, 0, 30), (3, 0), medium_height(), FallCause::Forced),
         Err(FlightError::UnknownColumn { x: 3, y: 0 })
     );
 }
@@ -1080,7 +1027,10 @@ fn engine_apply_fall_applies_damage_and_landing_condition() {
     assert_eq!(vertical.fall_distance_ft, 30);
     let pose = state.combatants[0].pose.expect("pose");
     assert_eq!(pose.cell.z, 0);
-    assert!(log.iter().any(|line| line.contains("falls 30 ft")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("falls 30 ft")),
+        "{log:?}"
+    );
 }
 
 #[test]
@@ -1122,10 +1072,7 @@ fn engine_apply_fall_separates_r09_house_rule_from_raw() {
     .expect("fall");
     assert_eq!(failed.landing.condition, LandingCondition::LandedFlat);
     assert_eq!(failed.landing.rule, LandingRule::RawFall);
-    assert_eq!(
-        failed_state.combatants[0].conditions[0].condition,
-        "prone"
-    );
+    assert_eq!(failed_state.combatants[0].conditions[0].condition, "prone");
 
     let mut no_damage = fall_state("2024", 5, FlightState::Falling, false, false);
     let mut rng = ScriptedRng::new(&[]);
@@ -1163,18 +1110,113 @@ fn engine_apply_fall_separates_r09_house_rule_from_raw() {
     assert_eq!(deep.landing.condition, LandingCondition::LandedFlat);
 }
 
+#[test]
+fn engine_fall_uses_state_spatial_overrides() {
+    let ceiling_override: SpatialState =
+        serde_json::from_value(json!({"cell_height_ft": 20})).expect("ceiling override");
+    let state = state_with(
+        registry("2024"),
+        combatant(
+            "Faller",
+            creature("synthetic-faller", Size::Medium, 30, false, 0),
+            40,
+            FlightState::Falling,
+            &[],
+        ),
+        Some(flat_scene()),
+        Some(ceiling_override),
+    );
+    let ceiling = engine::resolve_fall(&state, "Faller")
+        .unwrap()
+        .expect("ceiling override is enabled");
+    assert_eq!(ceiling.fall_distance_ft, 19);
+    assert_eq!(ceiling.landing.elevation_ft, 21);
+    assert_eq!(ceiling.landing.surface_kind, FallSurfaceKind::Ceiling);
+
+    let terrain_override: SpatialState = serde_json::from_value(json!({
+        "terrain_volumes": [{
+            "id": "state-platform",
+            "cell": {"x": 0, "y": 0, "z": 10},
+            "footprint": {"width": 1, "depth": 1},
+            "height_ft": 1
+        }]
+    }))
+    .expect("terrain override");
+    let mut state = state_with(
+        registry("2024"),
+        combatant(
+            "Faller",
+            creature("synthetic-faller", Size::Medium, 30, false, 0),
+            40,
+            FlightState::Falling,
+            &[],
+        ),
+        Some(flat_scene()),
+        Some(terrain_override),
+    );
+    let terrain = engine::resolve_fall(&state, "Faller")
+        .unwrap()
+        .expect("terrain override is enabled");
+    assert_eq!(terrain.fall_distance_ft, 29);
+    assert_eq!(terrain.landing.elevation_ft, 11);
+    assert_eq!(terrain.landing.surface_kind, FallSurfaceKind::Terrain);
+    assert_eq!(terrain.landing.surface_id, "state-platform");
+
+    let mut rng = ScriptedRng::new(&[6, 6]);
+    let mut log = Vec::new();
+    let report = engine::apply_fall(
+        &mut state,
+        "Faller",
+        &FallOptions::default(),
+        &mut rng,
+        &mut log,
+    )
+    .unwrap()
+    .expect("fall");
+    assert_eq!(report.damage_rolled, 12);
+    let pose = state.combatants[0].pose.expect("pose");
+    assert_eq!(pose.cell.z, 11);
+    let vertical = state.combatants[0].vertical.expect("vertical");
+    assert_eq!(vertical.altitude_ft, 0);
+    assert_eq!(vertical.flight, FlightState::Grounded);
+}
+
+#[test]
+fn engine_fall_start_uses_floor_plus_vertical_without_a_pose() {
+    let airborne: CombatantState = serde_json::from_value(json!({
+        "creature": creature("synthetic-airborne", Size::Medium, 30, false, 0),
+        "name": "Airborne",
+        "side": "party",
+        "max_hp": 30,
+        "hp": 30,
+        "zone": "open",
+        "pos": {"kind": "cell", "x": 0, "y": 0},
+        "vertical": {"altitude_ft": 10, "flight": "falling", "fall_distance_ft": 0}
+    }))
+    .expect("airborne combatant without a pose");
+    let state = state_with(
+        registry("2024"),
+        airborne,
+        Some(grid_scene(&["^"], json!({"^": {"elevation": 30}}), None)),
+        Some(SpatialState::default()),
+    );
+    let fall = engine::resolve_fall(&state, "Airborne")
+        .unwrap()
+        .expect("fall");
+    assert_eq!(fall.start_elevation_ft, 40);
+    assert_eq!(fall.start_floor_ft, 30);
+    assert_eq!(fall.fall_distance_ft, 10);
+    assert_eq!(fall.landing.elevation_ft, 30);
+    assert_eq!(fall.damage.expression(), "1d6");
+}
+
 // ---------------------------------------------------------------------------
 // AC-6: legacy 2D behaviour is unchanged unless explicitly enabled
 // ---------------------------------------------------------------------------
 
 #[test]
 fn legacy_state_never_reaches_the_fall_resolver() {
-    let mut state = state_with(
-        registry("2014"),
-        legacy_combatant("Legacy"),
-        None,
-        None,
-    );
+    let mut state = state_with(registry("2014"), legacy_combatant("Legacy"), None, None);
     assert!(!engine::spatial_flight_enabled(&state));
     assert!(engine::resolve_fall(&state, "Legacy").unwrap().is_none());
     let mut rng = ScriptedRng::new(&[]);
@@ -1196,7 +1238,7 @@ fn legacy_state_never_reaches_the_fall_resolver() {
 
 #[test]
 fn legacy_grid_scene_stays_legacy_until_spatial_state_is_present() {
-    let mut legacy = state_with(
+    let legacy = state_with(
         registry("2014"),
         legacy_combatant("Legacy"),
         Some(flat_scene()),
@@ -1287,10 +1329,8 @@ fn real_hover_and_burrow_fields_reach_flight_capability() {
     // The 2014 SRD currently has no structured hover/burrow fields; only the
     // 2024 overlay does (V-07 / TASK-0094 data gap).
     let pack_2014: MonsterPack = serde_json::from_str(
-        &fs::read_to_string(root.join(
-            "LetsPlay/Rules/combat/2014/srd/srd-5.1-monsters.pack.json",
-        ))
-        .expect("tracked 2014 SRD monster pack"),
+        &fs::read_to_string(root.join("LetsPlay/Rules/combat/2014/srd/srd-5.1-monsters.pack.json"))
+            .expect("tracked 2014 SRD monster pack"),
     )
     .expect("parse 2014 SRD monster pack");
     assert!(pack_2014
