@@ -4,10 +4,12 @@
 //! absent, so the repository remains self-contained.
 
 use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
 use combat_sim::ai::Ai;
+use combat_sim::content::schema::{Ability, AreaSpec, Creature};
 use combat_sim::content::{self, ContentSources, ItemKind};
 use combat_sim::dice;
 use combat_sim::engine::NullSink;
@@ -27,7 +29,24 @@ const RULES_2024: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/rulesets/real-2024.yaml"
 );
+const PACK_2024_MONSTERS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../LetsPlay/Rules/combat/2024/srd/srd-5.2.1-monsters.pack.json"
+);
+const PACK_2024_SPELLS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../LetsPlay/Rules/combat/2024/srd/srd-5.2.1-spells.pack.json"
+);
 const PARTY: &[&str] = &["will", "rina", "milo", "sera"];
+
+fn pack_burrow(notes: &str) -> i32 {
+    notes
+        .split("burrow speed ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|feet| feet.parse().ok())
+        .unwrap_or(0)
+}
 
 fn load_ruleset(manifest: &str) -> content::ContentRegistry {
     let sources = ContentSources {
@@ -37,10 +56,7 @@ fn load_ruleset(manifest: &str) -> content::ContentRegistry {
     sources.load().expect("SRD content should load")
 }
 
-fn area<'a>(
-    registry: &'a content::ContentRegistry,
-    id: &str,
-) -> &'a content::schema::AreaSpec {
+fn area<'a>(registry: &'a content::ContentRegistry, id: &str) -> &'a content::schema::AreaSpec {
     registry
         .abilities
         .get(id)
@@ -70,7 +86,12 @@ fn srd_2014_structures_hover_and_burrow() {
     assert!(registry.creatures.get("specter").unwrap().speed().hover);
     assert_eq!(registry.creatures.get("xorn").unwrap().speed().burrow, 20);
     assert_eq!(
-        registry.creatures.get("purple-worm").unwrap().speed().burrow,
+        registry
+            .creatures
+            .get("purple-worm")
+            .unwrap()
+            .speed()
+            .burrow,
         30
     );
 }
@@ -95,7 +116,12 @@ fn srd_2024_spatial_overlay_structures_hover_and_burrow() {
             .hover
     );
     assert_eq!(
-        registry.creatures.get("purple-worm").unwrap().speed().burrow,
+        registry
+            .creatures
+            .get("purple-worm")
+            .unwrap()
+            .speed()
+            .burrow,
         50
     );
     assert_eq!(registry.creatures.get("xorn").unwrap().speed().burrow, 20);
@@ -155,6 +181,114 @@ fn srd_area_shapes_cover_the_frozen_shape_set() {
     let emanation = area(&y2024, "spirit-guardians");
     assert_eq!(emanation.shape, Some(AreaShape::Emanation));
     assert_eq!(emanation.radius, 15);
+}
+
+#[test]
+fn srd_2024_spatial_monster_overlay_matches_the_pack() {
+    let registry = load_ruleset(RULES_2024);
+    let pack: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(PACK_2024_MONSTERS).expect("pack readable"))
+            .expect("pack json");
+    let mut checked = 0;
+    for entry in pack["content"]["creatures"]
+        .as_array()
+        .expect("creatures array")
+    {
+        let notes = entry["notes"].as_str().unwrap_or("");
+        let hover = notes.contains("hover");
+        let burrow = pack_burrow(notes);
+        if !hover && burrow == 0 {
+            continue;
+        }
+        let id = entry["id"].as_str().expect("creature id");
+        let actual = registry
+            .creatures
+            .get(id)
+            .unwrap_or_else(|| panic!("missing overlay creature `{id}`"));
+        let mut expected: Creature =
+            serde_json::from_value(entry.clone()).expect("pack creature parses");
+        let mut speed = expected.speed.clone().unwrap_or_default();
+        speed.hover = hover;
+        speed.burrow = burrow;
+        expected.speed = Some(speed);
+        assert_eq!(actual, &expected, "overlay mismatch for `{id}`");
+        checked += 1;
+    }
+    assert_eq!(checked, 38);
+}
+
+#[test]
+fn srd_2024_area_overlays_match_the_pack() {
+    let registry = load_ruleset(RULES_2024);
+    let pack: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(PACK_2024_SPELLS).expect("pack readable"))
+            .expect("pack json");
+    let expected_areas = [
+        (
+            "burning-hands",
+            AreaSpec {
+                radius: 15,
+                shape: Some(AreaShape::Cone),
+                width_ft: None,
+            },
+        ),
+        (
+            "fireball",
+            AreaSpec {
+                radius: 20,
+                shape: Some(AreaShape::Sphere),
+                width_ft: None,
+            },
+        ),
+        (
+            "lightning-bolt",
+            AreaSpec {
+                radius: 100,
+                shape: Some(AreaShape::Line),
+                width_ft: Some(5),
+            },
+        ),
+        (
+            "moonbeam",
+            AreaSpec {
+                radius: 5,
+                shape: Some(AreaShape::Cylinder),
+                width_ft: None,
+            },
+        ),
+        (
+            "spirit-guardians",
+            AreaSpec {
+                radius: 15,
+                shape: Some(AreaShape::Emanation),
+                width_ft: None,
+            },
+        ),
+        (
+            "thunderwave",
+            AreaSpec {
+                radius: 15,
+                shape: Some(AreaShape::Cube),
+                width_ft: None,
+            },
+        ),
+    ];
+    for (id, area) in expected_areas {
+        let entry = pack["content"]["abilities"]
+            .as_array()
+            .expect("abilities array")
+            .iter()
+            .find(|entry| entry["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("missing pack spell `{id}`"));
+        let mut expected: Ability =
+            serde_json::from_value(entry.clone()).expect("pack spell parses");
+        expected.area = Some(area);
+        let actual = registry
+            .abilities
+            .get(id)
+            .unwrap_or_else(|| panic!("missing overlay spell `{id}`"));
+        assert_eq!(actual, &expected, "overlay mismatch for `{id}`");
+    }
 }
 
 #[test]
