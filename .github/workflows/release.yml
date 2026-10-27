@@ -220,6 +220,29 @@ jobs:
           pattern: talkdnd-letsplay-*
           merge-multiple: true
 
+      # Full packs are built locally from the owner's books and are never
+      # committed or downloaded. A hosted runner has no books, so this step
+      # skips. A release runner that already has target/full-packs (for
+      # example the owner's self-hosted runner) attaches one extra asset.
+      - name: Stage local full packs (optional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! compgen -G "target/full-packs/*.pack.json" > /dev/null; then
+            echo "no local full packs in this workspace; skipping (CI never builds or downloads full packs)"
+            exit 0
+          fi
+          cargo run --quiet --manifest-path tools/combat-sim/Cargo.toml -- \
+            content pack release --packs target/full-packs --out dist/full-packs
+          name="talkdnd-full-packs-${GITHUB_REF_NAME}"
+          tar -czf "release-assets/${name}.tar.gz" -C dist/full-packs .
+          if command -v sha256sum >/dev/null 2>&1; then
+            hash=$(sha256sum "release-assets/${name}.tar.gz" | awk '{print $1}')
+          else
+            hash=$(shasum -a 256 "release-assets/${name}.tar.gz" | awk '{print $1}')
+          fi
+          printf '%s  %s\n' "$hash" "${name}.tar.gz" > "release-assets/${name}.tar.gz.sha256"
+
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:

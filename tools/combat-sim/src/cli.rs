@@ -436,6 +436,36 @@ pub enum PackCommand {
     Show { id: String },
     /// Verify loaded packs and run the content check.
     Verify,
+    /// Build a full-book pack from a local pdf2md index.
+    Build {
+        /// `2014` or `2024`.
+        #[arg(long, value_name = "EDITION")]
+        edition: String,
+        /// `phb`, `dmg` or `mm`.
+        #[arg(long, value_name = "BOOK")]
+        book: String,
+        /// A pdf2md `index/` directory containing `manifest.json` and pages.
+        #[arg(long, value_name = "DIR")]
+        index: PathBuf,
+        /// Output directory for `<pack-id>.pack.json` (outside Git).
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// Validate and report without writing any pack file.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Validate full packs and stage a release bundle with a manifest.
+    Release {
+        /// Directory holding locally built `*.pack.json` full packs.
+        #[arg(long, value_name = "DIR")]
+        packs: PathBuf,
+        /// Output directory for the packs and `full-packs-manifest.json`.
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+        /// Validate and print the manifest without writing files.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -527,6 +557,21 @@ impl From<RestKindArg> for RestKind {
 }
 
 pub fn run() -> Result<()> {
+    // The clap command tree is large in debug builds and the Windows main
+    // thread has a 1 MiB stack. Parse and dispatch on a thread with headroom so
+    // small subcommands also start reliably on every platform.
+    let handle = std::thread::Builder::new()
+        .name("combat-sim-cli".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(run_cli)
+        .context("start combat-sim CLI thread")?;
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+fn run_cli() -> Result<()> {
     let Cli {
         state,
         seed,
@@ -1238,6 +1283,78 @@ fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> 
             Ok(())
         }
         ContentCommand::Pack { command } => {
+            match &command {
+                PackCommand::Build {
+                    edition,
+                    book,
+                    index,
+                    out,
+                    dry_run,
+                } => {
+                    let report =
+                        crate::content::full_pack::build(edition, book, index, out, *dry_run)?;
+                    for gap in &report.gaps {
+                        println!("gap: {gap}");
+                    }
+                    println!(
+                        "{}: {} sections, {} chapters, {} images, {} pages, {} skipped heading(s)",
+                        report.pack_id,
+                        report.sections,
+                        report.chapters,
+                        report.images,
+                        report.pages,
+                        report.skipped_headings
+                    );
+                    if *dry_run {
+                        println!("dry run: would write {}", out.join(&report.file).display());
+                    } else {
+                        println!("wrote {}", out.join(&report.file).display());
+                    }
+                    return Ok(());
+                }
+                PackCommand::Release {
+                    packs,
+                    out,
+                    dry_run,
+                } => {
+                    if !dry_run && out.is_none() {
+                        bail!(
+                            "--out is required for `content pack release` unless --dry-run is used"
+                        );
+                    }
+                    let report = crate::content::full_pack::release(
+                        packs,
+                        if *dry_run { None } else { out.as_deref() },
+                    )?;
+                    if *dry_run {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&report.to_value())
+                                .context("serialize full-pack release manifest")?
+                        );
+                        println!(
+                            "dry run: {} full pack(s), {} bytes; nothing written",
+                            report.packs.len(),
+                            report.total_bytes
+                        );
+                    } else {
+                        for pack in &report.packs {
+                            println!(
+                                "{}\t{}\t{} bytes\t{}",
+                                pack.id, pack.file, pack.bytes, pack.content_hash
+                            );
+                        }
+                        println!(
+                            "{} full pack(s), {} bytes written to {}",
+                            report.packs.len(),
+                            report.total_bytes,
+                            out.as_deref().unwrap_or_else(|| Path::new(".")).display()
+                        );
+                    }
+                    return Ok(());
+                }
+                _ => {}
+            }
             let registry = load_content(sources)?;
             match command {
                 PackCommand::List => {
@@ -1295,6 +1412,9 @@ fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> 
                             report.error_count()
                         );
                     }
+                }
+                PackCommand::Build { .. } | PackCommand::Release { .. } => {
+                    unreachable!("build and release are handled before loading a library")
                 }
             }
             Ok(())
