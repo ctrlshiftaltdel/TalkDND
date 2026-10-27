@@ -13,11 +13,13 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use combat_sim::content::schema::{AreaSpec, Cover, GridCell, Rules, Scene, SceneMode, Size, Speed};
+use combat_sim::content::schema::{
+    AreaSpec, Cover, GridCell, Rules, Scene, SceneMode, Size, Speed,
+};
 use combat_sim::space::{
-    AoeShapes, AreaShape, AreaSpecV1, CellPos, Diagonal, Distance3d, Facing, FlightState, Footprint,
-    Position, SpatialError, SpatialPose, SpatialProfile, Squeeze, TerrainVolume, VerticalState,
-    Volume, MAX_GRID_COORD,
+    AoeShapes, AreaShape, AreaSpecV1, CellPos, Diagonal, Distance3d, Facing, FlightState,
+    Footprint, Position, SpatialError, SpatialPose, SpatialProfile, Squeeze, TerrainVolume,
+    VerticalState, Volume, MAX_GRID_COORD,
 };
 use combat_sim::state::{EncounterState, SpatialState, STATE_SCHEMA_VERSION};
 
@@ -160,7 +162,10 @@ fn ac1_types_have_units_validation_and_stable_serialization() {
     // Grid coordinates are 5-ft cells; z is altitude in feet above the floor.
     let cell = CellPos::new(2, 3, 10).expect("valid cell");
     assert_eq!((cell.x, cell.y, cell.z), (2, 3, 10));
-    assert_eq!(CellPos::new(0, 0, -1), Err(SpatialError::AltitudeOutOfRange { z: -1 }));
+    assert_eq!(
+        CellPos::new(0, 0, -1),
+        Err(SpatialError::AltitudeOutOfRange { z: -1 })
+    );
     assert_eq!(
         CellPos::new(MAX_GRID_COORD + 1, 0, 0),
         Err(SpatialError::CoordinateOutOfRange {
@@ -170,11 +175,26 @@ fn ac1_types_have_units_validation_and_stable_serialization() {
     );
 
     // Footprints are in cells; size defaults follow the frozen contract.
-    assert_eq!(Footprint::for_size(Size::Tiny), Footprint { width: 1, depth: 1 });
-    assert_eq!(Footprint::for_size(Size::Small), Footprint { width: 1, depth: 1 });
-    assert_eq!(Footprint::for_size(Size::Medium), Footprint { width: 1, depth: 1 });
-    assert_eq!(Footprint::for_size(Size::Large), Footprint { width: 2, depth: 2 });
-    assert_eq!(Footprint::for_size(Size::Huge), Footprint { width: 3, depth: 3 });
+    assert_eq!(
+        Footprint::for_size(Size::Tiny),
+        Footprint { width: 1, depth: 1 }
+    );
+    assert_eq!(
+        Footprint::for_size(Size::Small),
+        Footprint { width: 1, depth: 1 }
+    );
+    assert_eq!(
+        Footprint::for_size(Size::Medium),
+        Footprint { width: 1, depth: 1 }
+    );
+    assert_eq!(
+        Footprint::for_size(Size::Large),
+        Footprint { width: 2, depth: 2 }
+    );
+    assert_eq!(
+        Footprint::for_size(Size::Huge),
+        Footprint { width: 3, depth: 3 }
+    );
     assert_eq!(
         Footprint::for_size(Size::Gargantuan),
         Footprint { width: 4, depth: 4 }
@@ -225,6 +245,10 @@ fn ac1_types_have_units_validation_and_stable_serialization() {
         VerticalState::new(-1, FlightState::Flying, 0),
         Err(SpatialError::AltitudeOutOfRange { z: -1 })
     );
+    assert_eq!(
+        VerticalState::new(10, FlightState::Flying, -1),
+        Err(SpatialError::FallDistanceOutOfRange { distance_ft: -1 })
+    );
 
     // Areas are sized in feet; Emanation is 2024-only.
     let emanation = AreaSpecV1::new(AreaShape::Emanation, 10, None).expect("area");
@@ -248,7 +272,7 @@ fn ac1_types_have_units_validation_and_stable_serialization() {
 
     // Stable JSON: field names, enum spellings and round-trip.
     assert_eq!(
-        serde_json::to_value(&pose).expect("pose json"),
+        serde_json::to_value(pose).expect("pose json"),
         json!({
             "cell": {"x": 2, "y": 3, "z": 10},
             "footprint": {"width": 2, "depth": 2},
@@ -256,7 +280,7 @@ fn ac1_types_have_units_validation_and_stable_serialization() {
         })
     );
     assert_eq!(
-        serde_json::from_value::<SpatialPose>(serde_json::to_value(&pose).expect("json"))
+        serde_json::from_value::<SpatialPose>(serde_json::to_value(pose).expect("json"))
             .expect("pose back"),
         pose
     );
@@ -283,21 +307,11 @@ fn ac1_types_have_units_validation_and_stable_serialization() {
     .expect("terrain");
     assert_eq!(terrain.height_ft, 4);
     assert_eq!(
-        TerrainVolume::new(
-            "",
-            CellPos::default(),
-            Footprint::ONE,
-            4
-        ),
+        TerrainVolume::new("", CellPos::default(), Footprint::ONE, 4),
         Err(SpatialError::EmptyTerrainId)
     );
     assert_eq!(
-        TerrainVolume::new(
-            "ledge",
-            CellPos::default(),
-            Footprint::ONE,
-            0
-        ),
+        TerrainVolume::new("ledge", CellPos::default(), Footprint::ONE, 0),
         Err(SpatialError::InvalidHeight { height_ft: 0 })
     );
 }
@@ -321,7 +335,10 @@ fn ac2_legacy_cell_and_zone_positions_load_without_reinterpretation() {
     let zone = &state.combatants[1];
     assert_eq!(zone.position(), Position::zone("hall"));
     assert_eq!(zone.pos, None);
-    assert!(zone.spatial_pose().is_none(), "legacy Zone is not a 3D pose");
+    assert!(
+        zone.spatial_pose().is_none(),
+        "legacy Zone is not a 3D pose"
+    );
     assert_eq!(zone.vertical_state(), VerticalState::default());
 
     // Re-saving and re-loading keeps the legacy representation as-is.
@@ -355,7 +372,10 @@ fn ac3_golden_fixtures_cover_deserialize_serialize_and_round_trip() {
 
     let loaded = round_trip(&scratch, &legacy);
     assert_eq!(loaded, legacy);
-    assert_eq!(loaded.encounter_name.as_deref(), Some("Legacy Cell And Zone"));
+    assert_eq!(
+        loaded.encounter_name.as_deref(),
+        Some("Legacy Cell And Zone")
+    );
     assert_eq!(loaded.round, 2);
     assert_eq!(loaded.combatants[0].hp, 9);
 
@@ -372,22 +392,31 @@ fn ac3_golden_fixtures_cover_deserialize_serialize_and_round_trip() {
     );
     let scene = mixed.scene.as_deref().expect("scene");
     assert_eq!(scene.cell_height_ft, Some(10));
-    assert_eq!(scene.grid.as_ref().expect("grid").legend["."].height_ft, Some(4));
+    assert_eq!(
+        scene.grid.as_ref().expect("grid").legend["."].height_ft,
+        Some(4)
+    );
     let spatial = mixed.spatial.as_ref().expect("state spatial");
     assert_eq!(spatial.cell_height_ft, Some(12));
-    assert_eq!(spatial.terrain_volumes, vec![
-        TerrainVolume::new(
+    assert_eq!(
+        spatial.terrain_volumes,
+        vec![TerrainVolume::new(
             "ledge",
             CellPos::new(5, 5, 0).expect("cell"),
             Footprint::new(1, 2).expect("footprint"),
             4,
         )
-        .expect("terrain")
-    ]);
-    assert_eq!(
-        spatial.spatial_profile,
-        Some(SpatialProfile::for_ruleset(Some("2014")))
+        .expect("terrain")]
     );
+    let profile = spatial.spatial_profile.expect("explicit profile");
+    assert_eq!(profile.diagonal, Diagonal::FiveTenFive);
+    assert_eq!(profile.squeeze, Squeeze::Edition2014);
+    assert_eq!(profile.creature_cover, Cover::Half);
+    assert!(!profile.tiny_sharing);
+    assert!(profile.facing);
+    assert!(!profile.flanking);
+    assert_eq!(profile.distance_3d, Distance3d::ManhattanPlusVertical);
+    assert_eq!(profile.aoe_shapes, AoeShapes::Five);
 
     let mixed_round_trip = round_trip(&mixed_scratch, &mixed);
     assert_eq!(mixed_round_trip, mixed);
@@ -400,7 +429,10 @@ fn ac3_golden_fixtures_cover_deserialize_serialize_and_round_trip() {
       "future_extension": {"value": 7}
     }"#;
     let (_, unknown) = load_state(&unknown_scratch, unknown_json);
-    assert_eq!(unknown.extra.get("future_extension"), Some(&json!({"value": 7})));
+    assert_eq!(
+        unknown.extra.get("future_extension"),
+        Some(&json!({"value": 7}))
+    );
     let unknown_loaded = round_trip(&unknown_scratch, &unknown);
     assert_eq!(
         unknown_loaded.extra.get("future_extension"),
@@ -470,13 +502,12 @@ fn ac5_legacy_profile_is_preserved_until_explicitly_enabled() {
 
     // Rules profile < scene profile < state profile.
     let rules_profile = SpatialProfile::for_ruleset(Some("2024"));
-    Arc::make_mut(&mut state.content).rules.spatial_profile = Some(rules_profile.clone());
+    Arc::make_mut(&mut state.content).rules.spatial_profile = Some(rules_profile);
     assert_eq!(state.effective_spatial_profile(), rules_profile);
 
     let scene_profile = SpatialProfile::for_ruleset(Some("2014"));
-    let mut scene: Scene = serde_json::from_value(json!({"id": "synthetic-scene"}))
-        .expect("scene");
-    scene.spatial_profile = Some(scene_profile.clone());
+    let mut scene: Scene = serde_json::from_value(json!({"id": "synthetic-scene"})).expect("scene");
+    scene.spatial_profile = Some(scene_profile);
     state.scene = Some(Arc::new(scene));
     assert_eq!(state.effective_spatial_profile(), scene_profile);
 
@@ -484,7 +515,7 @@ fn ac5_legacy_profile_is_preserved_until_explicitly_enabled() {
     state.spatial = Some(SpatialState {
         cell_height_ft: Some(15),
         terrain_volumes: Vec::new(),
-        spatial_profile: Some(state_profile.clone()),
+        spatial_profile: Some(state_profile),
     });
     assert_eq!(state.effective_spatial_profile(), state_profile);
 
@@ -624,8 +655,8 @@ fn ac9_p4_p5_state_and_schema_fields_are_complete_with_defaults() {
     assert!(legacy.combatants[0].footprint.is_none());
 
     // Scene: per-cell height, terrain volumes, spatial profile.
-    let scene: Scene = serde_json::from_value(json!({"id": "synthetic-scene"}))
-        .expect("minimal scene");
+    let scene: Scene =
+        serde_json::from_value(json!({"id": "synthetic-scene"})).expect("minimal scene");
     assert!(scene.cell_height_ft.is_none());
     assert!(scene.terrain_volumes.is_empty());
     assert!(scene.spatial_profile.is_none());
@@ -642,7 +673,10 @@ fn ac9_p4_p5_state_and_schema_fields_are_complete_with_defaults() {
     let area: AreaSpec = serde_json::from_value(json!({"radius": 5})).expect("legacy area");
     assert!(area.shape.is_none());
     assert!(area.width_ft.is_none());
-    assert_eq!(serde_json::to_value(&area).expect("area json"), json!({"radius": 5}));
+    assert_eq!(
+        serde_json::to_value(&area).expect("area json"),
+        json!({"radius": 5})
+    );
 
     // Speed: hover and burrow are additive with safe defaults.
     let speed = Speed::default();

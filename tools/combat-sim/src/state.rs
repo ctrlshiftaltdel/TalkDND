@@ -22,10 +22,21 @@ use crate::content::schema::{
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{D20Roll, DiceRng, RollMode};
-use crate::space::{GridMap, GridSpace, Position, SpaceCache, SpaceView, ZoneGraph};
+use crate::space::{
+    Footprint, GridMap, GridSpace, Position, SpaceCache, SpaceView, SpatialPose, SpatialProfile,
+    TerrainVolume, VerticalState, ZoneGraph, MAX_VOLUME_HEIGHT_FT,
+};
 
 /// State file used when no `--state` is supplied.
 pub const DEFAULT_STATE_FILE: &str = "combat-state.json";
+
+/// Current persisted state schema. P1 is additive, so files written before the
+/// spatial fields existed (no `schema_version`) also load as version 1.
+pub const STATE_SCHEMA_VERSION: u32 = 1;
+
+fn default_state_schema_version() -> u32 {
+    STATE_SCHEMA_VERSION
+}
 
 /// Suffix appended to bare state names.
 pub const STATE_SUFFIX: &str = ".state.json";
@@ -33,6 +44,9 @@ pub const STATE_SUFFIX: &str = ".state.json";
 /// A persisted encounter.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EncounterState {
+    /// Persisted state schema version. Missing in pre-P1 files.
+    #[serde(default = "default_state_schema_version")]
+    pub schema_version: u32,
     /// Self-contained content snapshot used by every later command.
     #[serde(default)]
     pub content: Arc<ContentRegistry>,
@@ -68,6 +82,13 @@ pub struct EncounterState {
     /// Save's `party-state.yaml`; party values are written back after each command.
     #[serde(default)]
     pub party_state: Option<std::path::PathBuf>,
+    /// State-level spatial overrides and terrain. Absent in legacy saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<SpatialState>,
+    /// Unknown top-level fields from compatible extensions, preserved on save
+    /// so a round-trip never silently drops data.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, serde_json::Value>,
     /// Spatial indices derived from `scene`. Shared by every clone of the
     /// state; rebuilt after loading a state file.
     #[serde(skip)]
@@ -103,6 +124,9 @@ impl PartialEq for EncounterState {
             && self.triggers == other.triggers
             && self.outcome == other.outcome
             && self.party_state == other.party_state
+            && self.schema_version == other.schema_version
+            && self.spatial == other.spatial
+            && self.extra == other.extra
     }
 }
 
@@ -127,6 +151,113 @@ impl NameIndex {
                 .map(|combatant| combatant.name.to_lowercase())
                 .collect(),
         }
+    }
+}
+
+/// State-level spatial overrides. All fields are optional so old saves keep
+/// their current behaviour; scene-level values provide the fallback.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SpatialState {
+    /// Default ceiling/terrain height for grid cells, in feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_height_ft: Option<i32>,
+    /// Solid terrain blocks used by the grid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terrain_volumes: Vec<TerrainVolume>,
+    /// Encounter-level spatial rules override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_profile: Option<SpatialProfile>,
+}
+
+impl SpatialState {
+    pub fn validate(&self) -> Result<()> {
+        if let Some(height) = self.cell_height_ft {
+            validate_height("encounter spatial cell", height)?;
+        }
+        for terrain in &self.terrain_volumes {
+            terrain
+                .validate()
+                .with_context(|| format!("terrain volume `{}`", terrain.id))?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_height(label: &str, height_ft: i32) -> Result<()> {
+    if height_ft <= 0 || height_ft > MAX_VOLUME_HEIGHT_FT {
+        bail!("{label} height {height_ft} ft is outside 1..={MAX_VOLUME_HEIGHT_FT} ft");
+    }
+    Ok(())
+}
+
+impl EncounterState {
+    /// Effective spatial profile: encounter override, then scene override, then
+    /// rules data, then the ruleset default. A missing/unknown ruleset uses the
+    /// project default (2024).
+    pub fn effective_spatial_profile(&self) -> SpatialProfile {
+        if let Some(profile) = self
+            .spatial
+            .as_ref()
+            .and_then(|spatial| spatial.spatial_profile.as_ref())
+        {
+            return *profile;
+        }
+        if let Some(profile) = self
+            .scene
+            .as_deref()
+            .and_then(|scene| scene.spatial_profile.as_ref())
+        {
+            return *profile;
+        }
+        if let Some(profile) = self.rules().spatial_profile.as_ref() {
+            return *profile;
+        }
+        SpatialProfile::for_ruleset(Some(&self.content.ruleset))
+    }
+
+    /// Validates every P1 spatial field in the state file.
+    pub fn validate_spatial(&self) -> Result<()> {
+        if let Some(scene) = self.scene.as_deref() {
+            if let Some(height) = scene.cell_height_ft {
+                validate_height(&format!("scene `{}` cell", scene.id), height)?;
+            }
+            for terrain in &scene.terrain_volumes {
+                terrain.validate().with_context(|| {
+                    format!("scene `{}` terrain volume `{}`", scene.id, terrain.id)
+                })?;
+            }
+            if let Some(grid) = scene.grid.as_ref() {
+                for (symbol, cell) in &grid.legend {
+                    if let Some(height) = cell.height_ft {
+                        validate_height(
+                            &format!("scene `{}` grid cell `{symbol}`", scene.id),
+                            height,
+                        )?;
+                    }
+                }
+            }
+        }
+        if let Some(spatial) = self.spatial.as_ref() {
+            spatial.validate().context("encounter spatial state")?;
+        }
+        for combatant in &self.combatants {
+            if let Some(pose) = combatant.pose.as_ref() {
+                pose.validate()
+                    .with_context(|| format!("combatant `{}` pose", combatant.name))?;
+            }
+            if let Some(vertical) = combatant.vertical.as_ref() {
+                vertical
+                    .validate()
+                    .with_context(|| format!("combatant `{}` vertical state", combatant.name))?;
+            }
+            if let Some(footprint) = combatant.footprint.as_ref() {
+                footprint
+                    .validate()
+                    .with_context(|| format!("combatant `{}` footprint", combatant.name))?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -181,6 +312,15 @@ pub struct CombatantState {
     /// Exact position. `None` in older state files means the display zone alone.
     #[serde(default)]
     pub pos: Option<Position>,
+    /// Explicit 3D pose. `None` means the legacy `pos` representation applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pose: Option<SpatialPose>,
+    /// Flight/altitude state. `None` means grounded at 0 ft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical: Option<VerticalState>,
+    /// Footprint override for legacy positions. `None` derives from size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footprint: Option<Footprint>,
     #[serde(default)]
     pub conditions: Vec<ActiveCondition>,
     #[serde(default)]
@@ -245,6 +385,35 @@ impl CombatantState {
             Some(Position::Cell { x, y }) => Some([*x, *y]),
             _ => None,
         }
+    }
+
+    /// Explicit pose when present; otherwise derives a ground pose from a
+    /// legacy 2D cell. Old zones return `None` and keep using zone queries.
+    pub fn spatial_pose(&self) -> Option<SpatialPose> {
+        if let Some(pose) = self.pose {
+            return Some(pose);
+        }
+        let mut pose = SpatialPose::from_position(&self.position(), self.creature.size())?;
+        if let Some(vertical) = self.vertical {
+            pose.cell.z = vertical.altitude_ft;
+        }
+        if let Some(footprint) = self.footprint {
+            pose.footprint = footprint;
+        }
+        Some(pose)
+    }
+
+    /// Stored vertical state, defaulting to grounded at 0 ft.
+    pub fn vertical_state(&self) -> VerticalState {
+        self.vertical.unwrap_or_default()
+    }
+
+    /// Explicit or size-derived footprint.
+    pub fn spatial_footprint(&self) -> Footprint {
+        self.pose
+            .map(|pose| pose.footprint)
+            .or(self.footprint)
+            .unwrap_or_else(|| Footprint::for_size(self.creature.size()))
     }
 
     pub fn set_cell(&mut self, x: i32, y: i32, zone: impl Into<String>) {
@@ -912,6 +1081,7 @@ impl EncounterState {
         let static_modifier_sources = Arc::new(static_modifier_sources(&content, &combatants));
         let scene = Arc::new(scene);
         let mut state = Self {
+            schema_version: STATE_SCHEMA_VERSION,
             content,
             scene: Some(scene.clone()),
             encounter_name: Some(
@@ -930,6 +1100,8 @@ impl EncounterState {
             triggers: scene_trigger_runtime(&scene),
             outcome: None,
             party_state: None,
+            spatial: None,
+            extra: BTreeMap::new(),
             space_cache,
             name_index,
             static_modifier_sources,
@@ -1372,6 +1544,17 @@ impl EncounterState {
             .with_context(|| format!("failed to read state file {}", path.display()))?;
         let mut state: Self = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse state file {}", path.display()))?;
+        if state.schema_version != STATE_SCHEMA_VERSION {
+            bail!(
+                "state file {} uses schema version {}; this combat-sim supports {}",
+                path.display(),
+                state.schema_version,
+                STATE_SCHEMA_VERSION
+            );
+        }
+        state
+            .validate_spatial()
+            .with_context(|| format!("invalid spatial data in state file {}", path.display()))?;
         state.rebuild_caches();
         Ok(state)
     }
@@ -1706,6 +1889,9 @@ fn combatant_from_creature(
         temp_hp: 0,
         zone: zone.to_string(),
         pos: Some(pos),
+        pose: None,
+        vertical: None,
+        footprint: None,
         conditions: Vec::new(),
         resources,
         death_saves: DeathSaves::default(),
