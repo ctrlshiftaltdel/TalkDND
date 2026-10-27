@@ -108,6 +108,8 @@ Scene and encounter ids come from the save, not from the CLI:
   files).
 
 An override for an id that is not known is refused before anything is written.
+Only those metadata fields are deserialized; descriptions, notes, logs,
+member blocks, combatants and other content are ignored and never retained.
 Ids are 1–80 letters, digits, `-`, `_` or `.`; whitespace, control
 characters, path separators, `.` and `..` are refused.
 
@@ -146,10 +148,13 @@ refused, not downgraded.
 
 ## Privacy
 
-The commands read only `save-meta.yaml`, `progress.yaml`, campaign/state
-metadata and adventure combat ids. Audit lines contain only category, level,
-scope id and the DM-supplied reason; save contents, character sheets, secrets
-and book text are never read or logged.
+The commands read `save-meta.yaml` and parse only scene/encounter metadata
+(scene id/name, encounter id and its linked scene) from `progress.yaml`, live
+`combat/*.state.json` and adventure `combat/` files. Typed metadata structs
+ignore every other field; it is never retained as a generic value tree. Audit
+lines contain only category, level, scope id and the DM-supplied reason. The
+commands never output, log or persist save contents, character sheets, secrets
+or book text.
 
 ## Code map and tests
 

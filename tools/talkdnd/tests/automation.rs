@@ -355,6 +355,90 @@ fn the_current_scene_label_is_a_known_scene_id() {
 }
 
 #[test]
+fn metadata_scanning_never_leaks_state_or_adventure_content() {
+    let (r, save) = new_save("metadata-only");
+    add_adventure(&r, &save);
+    let combat = r.join("Adventures/test-adventure/combat");
+    // Adventure files carry ignored content-bearing fields next to metadata.
+    fs::write(
+        combat.join("scenes/crypt.yaml"),
+        "scenes:\n  - id: crypt-entry\n    name: Crypt Entry\n    mode: theater\n    description: TOP-SECRET-SCENE-DESCRIPTION\n",
+    )
+    .unwrap();
+    fs::write(
+        combat.join("encounters.yaml"),
+        "encounters:\n  - id: goblin-ambush\n    scene: crypt-entry\n    members:\n      - creature: goblin\n    log: TOP-SECRET-ADVENTURE-LOG\n    notes: TOP-SECRET-ADVENTURE-NOTE\n",
+    )
+    .unwrap();
+    // A synthetic live state: only scene.id and encounter_name are metadata;
+    // every other field is content that must never reach output or the log.
+    fs::write(
+        save.join("combat/skirmish.state.json"),
+        r#"{
+  "scene": {"id": "state-scene", "name": "Hidden Room", "notes": "TOP-SECRET-STATE-SCENE"},
+  "encounter_name": "state-skirmish",
+  "log": ["TOP-SECRET-STATE-LOG"],
+  "dm_notes": "TOP-SECRET-STATE-NOTE",
+  "combatants": [{"name": "Hero", "hp": 7, "notes": "TOP-SECRET-COMBATANT"}]
+}"#,
+    )
+    .unwrap();
+
+    // Adventure metadata still resolves: both the scene and encounter are
+    // accepted as known ids and their content-bearing fields stay invisible.
+    let out = ok(
+        &r,
+        &["settings", "automation", "show", "--scene", "crypt-entry"],
+    );
+    assert!(!out.contains("TOP-SECRET"), "adventure leak: {out}");
+    let out = ok(
+        &r,
+        &[
+            "settings",
+            "automation",
+            "show",
+            "--encounter",
+            "goblin-ambush",
+        ],
+    );
+    assert!(!out.contains("TOP-SECRET"), "adventure leak: {out}");
+
+    // State metadata is parsed: its scene is a known id and its encounter can
+    // be targeted. Neither command may expose the state log or notes.
+    let out = ok(
+        &r,
+        &["settings", "automation", "show", "--scene", "state-scene"],
+    );
+    assert!(!out.contains("TOP-SECRET"), "state show leak: {out}");
+    let out = ok(
+        &r,
+        &[
+            "settings",
+            "automation",
+            "set",
+            "reaction",
+            "assisted",
+            "--encounter",
+            "state-skirmish",
+            "--reason",
+            "keep this table quiet",
+        ],
+    );
+    assert!(out.contains("遭遇 state-skirmish"), "{out}");
+    assert!(!out.contains("TOP-SECRET"), "set leaked: {out}");
+
+    let log = latest_log(&save);
+    assert!(!log.contains("TOP-SECRET"), "audit leaked: {log}");
+    let saved = meta(&save);
+    assert!(!saved.contains("TOP-SECRET"), "persisted leak: {saved}");
+
+    // The digest path reads the same metadata and must stay silent too.
+    let out = ok(&r, &["settings"]);
+    assert!(!out.contains("TOP-SECRET"), "digest leaked: {out}");
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
 fn illegal_values_and_unknown_ids_are_rejected_without_writing() {
     let (r, save) = new_save("reject");
     add_adventure(&r, &save);

@@ -15,8 +15,11 @@ use crate::migrate::{self, automation_category, check_id, Level, Settings, AUTOM
 use crate::{progress, save, save::append};
 use anyhow::{bail, Result};
 use clap::Subcommand;
+use serde::de::IgnoredAny;
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 pub fn get(save_dir: &Path) -> Settings {
@@ -724,6 +727,63 @@ impl KnownIds {
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct CombatStateMeta {
+    /// Only `scene.id` is kept; every other state field is ignored.
+    #[serde(default)]
+    scene: Option<StateSceneMeta>,
+    #[serde(default)]
+    encounter_name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StateSceneMeta {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+/// The only fields read from adventure `combat/` files. Unknown fields
+/// (descriptions, member blocks, notes, logs, ...) are consumed but never
+/// retained. The `IgnoredAny` markers keep only the presence of the fields
+/// needed to tell a single-item scene from a single-item encounter.
+#[derive(Debug, Default, Deserialize)]
+struct AdventureCombatMeta {
+    #[serde(default)]
+    scenes: Vec<SceneMeta>,
+    #[serde(default)]
+    encounters: Vec<EncounterMeta>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    scene: Option<String>,
+    #[serde(default)]
+    members: Option<IgnoredAny>,
+    #[serde(default)]
+    zones: Option<IgnoredAny>,
+    #[serde(default)]
+    mode: Option<IgnoredAny>,
+    #[serde(default)]
+    light: Option<IgnoredAny>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SceneMeta {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct EncounterMeta {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    scene: Option<String>,
+}
+
 fn known_ids(save_dir: &Path) -> KnownIds {
     let mut known = KnownIds::default();
     if let Some(scene) = progress::scene(save_dir) {
@@ -733,7 +793,9 @@ fn known_ids(save_dir: &Path) -> KnownIds {
             known.scenes.insert(scene);
         }
     }
-    // Live encounter state files carry the scene id and encounter name.
+    // Live encounter state files carry the scene id and encounter name. The
+    // typed metadata structs read only those two values; the rest of the
+    // state file is never materialized as a generic value tree.
     if let Ok(rd) = fs::read_dir(save_dir.join("combat")) {
         let mut files: Vec<PathBuf> = rd
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -741,26 +803,19 @@ fn known_ids(save_dir: &Path) -> KnownIds {
             .collect();
         files.sort();
         for file in files {
-            let Ok(text) = fs::read_to_string(&file) else {
+            let Ok(handle) = fs::File::open(&file) else {
                 continue;
             };
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            let Ok(meta) = serde_json::from_reader::<_, CombatStateMeta>(BufReader::new(handle))
+            else {
                 continue;
             };
-            if let Some(id) = value
-                .get("scene")
-                .and_then(|s| s.get("id"))
-                .and_then(|v| v.as_str())
-            {
-                known.scenes.insert(id.to_string());
+            let scene_id = meta.scene.as_ref().and_then(|scene| scene.id.clone());
+            if let Some(id) = &scene_id {
+                known.scenes.insert(id.clone());
             }
-            if let Some(name) = value.get("encounter_name").and_then(|v| v.as_str()) {
-                let scene = value
-                    .get("scene")
-                    .and_then(|s| s.get("id"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-                known.encounters.insert(name.to_string(), scene);
+            if let Some(name) = &meta.encounter_name {
+                known.encounters.insert(name.clone(), scene_id);
             }
         }
     }
@@ -816,88 +871,45 @@ fn scan_dir(dir: &Path, known: &mut KnownIds) {
             .extension()
             .is_some_and(|x| matches!(x.to_str(), Some("yaml" | "yml" | "json")))
         {
-            let Ok(text) = fs::read_to_string(&path) else {
+            let Ok(handle) = fs::File::open(&path) else {
                 continue;
             };
-            let Ok(value) = serde_norway::from_str::<serde_norway::Value>(&text) else {
+            let Ok(meta) =
+                serde_norway::from_reader::<_, AdventureCombatMeta>(BufReader::new(handle))
+            else {
                 continue;
             };
-            scan_value(&value, known);
+            apply_adventure_meta(&meta, known);
         }
     }
 }
 
-fn scan_value(value: &serde_norway::Value, known: &mut KnownIds) {
-    let Some(map) = value.as_mapping() else {
-        return;
-    };
-    if let Some(scenes) = map
-        .get(serde_norway::Value::String("scenes".into()))
-        .and_then(|v| v.as_sequence())
-    {
-        for scene in scenes {
-            let Some(map) = scene.as_mapping() else {
-                continue;
-            };
-            let Some(id) = map
-                .get(serde_norway::Value::String("id".into()))
-                .and_then(|v| v.as_str())
-            else {
-                continue;
-            };
-            known.scenes.insert(id.to_string());
-            if let Some(name) = map
-                .get(serde_norway::Value::String("name".into()))
-                .and_then(|v| v.as_str())
-            {
-                known.scene_names.insert(name.to_string(), id.to_string());
-            }
+fn apply_adventure_meta(meta: &AdventureCombatMeta, known: &mut KnownIds) {
+    for scene in &meta.scenes {
+        let Some(id) = &scene.id else {
+            continue;
+        };
+        known.scenes.insert(id.clone());
+        if let Some(name) = &scene.name {
+            known.scene_names.insert(name.clone(), id.clone());
         }
     }
-    if let Some(encounters) = map
-        .get(serde_norway::Value::String("encounters".into()))
-        .and_then(|v| v.as_sequence())
-    {
-        for encounter in encounters {
-            let Some(map) = encounter.as_mapping() else {
-                continue;
-            };
-            let Some(id) = map
-                .get(serde_norway::Value::String("id".into()))
-                .and_then(|v| v.as_str())
-            else {
-                continue;
-            };
-            let scene = map
-                .get(serde_norway::Value::String("scene".into()))
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-            known.encounters.insert(id.to_string(), scene);
-        }
+    for encounter in &meta.encounters {
+        let Some(id) = &encounter.id else {
+            continue;
+        };
+        known.encounters.insert(id.clone(), encounter.scene.clone());
     }
     // Single-item files are accepted too (the loader reads them as one item).
-    let Some(id) = map
-        .get(serde_norway::Value::String("id".into()))
-        .and_then(|v| v.as_str())
-    else {
+    let Some(id) = &meta.id else {
         return;
     };
-    if map.contains_key(serde_norway::Value::String("members".into())) {
-        let scene = map
-            .get(serde_norway::Value::String("scene".into()))
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        known.encounters.insert(id.to_string(), scene);
-    } else if map.contains_key(serde_norway::Value::String("zones".into()))
-        || map.contains_key(serde_norway::Value::String("mode".into()))
-        || map.contains_key(serde_norway::Value::String("light".into()))
-    {
-        known.scenes.insert(id.to_string());
-        if let Some(name) = map
-            .get(serde_norway::Value::String("name".into()))
-            .and_then(|v| v.as_str())
-        {
-            known.scene_names.insert(name.to_string(), id.to_string());
+    if meta.members.is_some() {
+        known.encounters.insert(id.clone(), meta.scene.clone());
+    } else if meta.zones.is_some() || meta.mode.is_some() || meta.light.is_some() {
+        known.scenes.insert(id.clone());
+        if let Some(name) = &meta.name {
+            known.scene_names.insert(name.clone(), id.clone());
         }
     }
 }
