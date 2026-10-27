@@ -11,12 +11,13 @@ use serde_json::json;
 
 use combat_sim::content::schema::{Cover, Scene, Size};
 use combat_sim::space::{
-    area_cells, area_intersection, can_occupy, can_reach, can_reach_with_sight, cover_between,
-    line_of_sight, range_distance, travel_step_cost, vertical_distance, AoeShapes, AreaShape,
-    AreaSpecV1, BlockerKind, CellPos, Diagonal, Distance3d, DistancePolicy, Facing, Footprint,
-    GridBounds, GridSpace, LineOfSight, OccupancyReason, Position, SpatialBlocker, SpatialBody,
-    Space, SpatialError, SpatialPose, SpatialProfile, Squeeze, TerrainVolume, TravelBlock,
-    TravelTerrain, ZoneGraph, ZoneQuery, MAX_AREA_FEET,
+    area_cells, area_intersection, body_distance, can_occupy, can_reach, can_reach_bodies,
+    can_reach_with_sight, cover_between, line_of_sight, range_distance, travel_step_cost,
+    vertical_distance, AoeShapes, AreaShape, AreaSpecV1, BlockerKind, CellPos, Diagonal,
+    Distance3d, DistancePolicy, Facing, Footprint, GridBounds, GridSpace, LineOfSight,
+    OccupancyReason, Position, Space, SpatialBlocker, SpatialBody, SpatialError, SpatialPose,
+    SpatialProfile, Squeeze, TerrainVolume, TravelBlock, TravelTerrain, ZoneGraph, ZoneQuery,
+    MAX_AREA_FEET,
 };
 
 fn cell(x: i32, y: i32, z: i32) -> CellPos {
@@ -50,8 +51,7 @@ fn p2024() -> SpatialProfile {
 }
 
 fn wall(id: &str, x: i32, y: i32, width: u32, depth: u32, height_ft: i32) -> SpatialBlocker {
-    SpatialBlocker::wall(id, cell(x, y, 0), footprint(width, depth), height_ft)
-        .expect("valid wall")
+    SpatialBlocker::wall(id, cell(x, y, 0), footprint(width, depth), height_ft).expect("valid wall")
 }
 
 fn low_wall(
@@ -137,10 +137,7 @@ fn ac1_distance_policies_are_explicit_and_do_not_mix() {
 
     // A diagonal is one square by default, or 5-10-5 when the profile asks.
     let diagonal = body("diagonal", 3, 3, 0, Size::Medium);
-    assert_eq!(
-        range_distance(&a.pose, &diagonal.pose, &profile).feet,
-        15
-    );
+    assert_eq!(range_distance(&a.pose, &diagonal.pose, &profile).feet, 15);
     let five_ten_five = SpatialProfile {
         diagonal: Diagonal::FiveTenFive,
         ..profile
@@ -278,6 +275,18 @@ fn ac2_occupancy_uses_the_whole_footprint_and_volume() {
 }
 
 #[test]
+fn ac2_reach_uses_the_nearest_footprint_cell_for_a_large_body() {
+    let source = body("source", 10, 10, 0, Size::Medium);
+    let large = body("large", 3, 3, 0, Size::Large);
+    // Anchor-to-anchor distance is 7 cells (35 ft); the nearest 2x2 cell is
+    // 6 cells away (30 ft).
+    assert_eq!(range_distance(&source.pose, &large.pose, &p2024()).feet, 35);
+    assert_eq!(body_distance(&source, &large, &p2024()).feet, 30);
+    assert!(!can_reach(&source.pose, &large.pose, 30, &p2024()).reachable);
+    assert!(can_reach_bodies(&source, &large, 30, &p2024()).reachable);
+}
+
+#[test]
 fn ac2_cover_uses_the_target_footprint_not_only_its_centre() {
     // A medium target directly behind the low wall has half cover.
     let source = body("source", 0, 4, 0, Size::Medium);
@@ -308,7 +317,10 @@ fn ac3_line_of_sight_handles_walls_low_obstacles_and_height() {
     let blocked = line_of_sight(&source, &target, std::slice::from_ref(&high), &p2024());
     assert!(!blocked.clear);
     assert_eq!(blocked.blocked_by, vec!["wall".to_string()]);
-    assert!(blocked.explain.iter().any(|note| note.code == "los-blocked"));
+    assert!(blocked
+        .explain
+        .iter()
+        .any(|note| note.code == "los-blocked"));
 
     // A low wall gives cover without blocking sight: the line passes above it.
     let low = low_wall("low", 2, 4, 1, 1, 3, Cover::Half);
@@ -338,11 +350,22 @@ fn ac3_line_of_sight_evaluates_multiple_paths_deterministically() {
         clear.clear,
         "one 2x2 footprint cell sees around the wall: {clear:?}"
     );
-    assert!(clear.explain.iter().any(|note| note.code == "los-candidate"));
+    assert!(clear
+        .explain
+        .iter()
+        .any(|note| note.code == "los-candidate"));
 
     // A medium target in the same place is wholly behind the wall.
     let medium = body("medium", 4, 2, 0, Size::Medium);
-    assert!(!line_of_sight(&source, &medium, std::slice::from_ref(&wall_block), &p2024()).clear);
+    assert!(
+        !line_of_sight(
+            &source,
+            &medium,
+            std::slice::from_ref(&wall_block),
+            &p2024()
+        )
+        .clear
+    );
 
     // Blocker order never changes the answer or the reported id order.
     let a = wall("zeta", 2, 3, 1, 1, 10);
@@ -415,6 +438,17 @@ fn ac4_area_shapes_are_cells_in_the_shape_and_are_sorted() {
     assert!(!cylinder.cells.contains(&cell(5, 8, 0)));
     assert!(!cylinder.cells.contains(&cell(5, 5, 10)));
 
+    // Missing width falls back to documented defaults: height = size for a
+    // cylinder, one cell for a line.
+    let default_cylinder = area_cells(
+        &AreaSpecV1::new(AreaShape::Cylinder, 10, None).expect("cylinder"),
+        &origin,
+        &p2024(),
+    )
+    .expect("cylinder");
+    assert!(default_cylinder.cells.contains(&cell(5, 5, 5)));
+    assert!(!default_cylinder.cells.contains(&cell(5, 5, 10)));
+
     let line_origin = body_facing("line", 5, 5, 0, Size::Medium, Facing::East);
     let line = area_cells(
         &AreaSpecV1::new(AreaShape::Line, 15, Some(5)).expect("line"),
@@ -426,6 +460,18 @@ fn ac4_area_shapes_are_cells_in_the_shape_and_are_sorted() {
     assert!(line.cells.contains(&cell(6, 5, 0)));
     assert!(line.cells.contains(&cell(8, 5, 0)));
     assert!(!line.cells.contains(&cell(9, 5, 0)));
+
+    let thin_line = area_cells(
+        &AreaSpecV1::new(AreaShape::Line, 15, None).expect("line"),
+        &line_origin.pose,
+        &p2024(),
+    )
+    .expect("line");
+    assert!(thin_line.cells.contains(&cell(6, 5, 0)));
+    assert!(
+        !thin_line.cells.contains(&cell(6, 6, 0)),
+        "missing line width defaults to one cell"
+    );
 
     let emanation = area_cells(
         &AreaSpecV1::new(AreaShape::Emanation, 10, None).expect("emanation"),
@@ -546,8 +592,8 @@ fn ac5_occupancy_handles_large_footprints_sharing_and_altitude_layers() {
     let medium = body("medium", 2, 2, 0, Size::Medium);
     let other = body("other", 2, 2, 0, Size::Medium);
 
-    let blocked = can_occupy(&medium, None, &[], std::slice::from_ref(&other), &p2024())
-        .expect("query");
+    let blocked =
+        can_occupy(&medium, None, &[], std::slice::from_ref(&other), &p2024()).expect("query");
     assert!(!blocked.allowed);
     assert_eq!(blocked.reason, Some(OccupancyReason::Occupied));
     assert_eq!(blocked.blockers, vec!["other".to_string()]);
@@ -700,10 +746,7 @@ fn ac7_legacy_zone_and_grid_queries_keep_their_contract() {
         grid_space.cover(&Position::cell(0, 1), &Position::cell(3, 1)),
         Cover::Total
     );
-    assert_eq!(
-        grid_space.can_reach(&Position::cell(0, 1), &Position::cell(3, 1), 15),
-        true
-    );
+    assert!(grid_space.can_reach(&Position::cell(0, 1), &Position::cell(3, 1), 15));
     let area = grid_space.area_positions(&Position::cell(1, 1), 5);
     assert!(area.contains(&Position::cell(2, 1)));
 
@@ -721,11 +764,7 @@ fn ac7_legacy_zone_and_grid_queries_keep_their_contract() {
         zone_graph.cover(&Position::zone("a"), &Position::zone("c")),
         Cover::Half
     );
-    assert!(zone_graph.can_reach(
-        &Position::zone("a"),
-        &Position::zone("b"),
-        10
-    ));
+    assert!(zone_graph.can_reach(&Position::zone("a"), &Position::zone("b"), 10));
 }
 
 // ---------------------------------------------------------------------------
@@ -742,7 +781,14 @@ fn ac8_creature_cover_and_reach_semantics_are_explicit() {
     let cover = cover_between(&source, &target, std::slice::from_ref(&creature), &p2024());
     assert_eq!(cover.degree, Cover::Half);
     assert_eq!(cover.sources, vec!["ally".to_string()]);
-    assert_eq!(cover.explain.iter().filter(|n| n.code == "cover-source").count(), 1);
+    assert_eq!(
+        cover
+            .explain
+            .iter()
+            .filter(|n| n.code == "cover-source")
+            .count(),
+        1
+    );
 
     let raised = SpatialProfile {
         creature_cover: Cover::ThreeQuarters,
@@ -751,6 +797,29 @@ fn ac8_creature_cover_and_reach_semantics_are_explicit() {
     assert_eq!(
         cover_between(&source, &target, std::slice::from_ref(&creature), &raised).degree,
         Cover::ThreeQuarters
+    );
+
+    // A sight-blocking creature still provides its cover degree when it is
+    // the reason LOS fails (no total-cover source exists).
+    let blocking_creature = SpatialBlocker::creature(&ally, true).expect("creature blocker");
+    assert!(
+        !line_of_sight(
+            &source,
+            &target,
+            std::slice::from_ref(&blocking_creature),
+            &p2024()
+        )
+        .clear
+    );
+    assert_eq!(
+        cover_between(
+            &source,
+            &target,
+            std::slice::from_ref(&blocking_creature),
+            &p2024()
+        )
+        .degree,
+        Cover::Half
     );
 
     // A creature behind the target is not between them and grants no cover.
@@ -795,9 +864,7 @@ fn ac8_zone_graph_queries_are_explicit_and_approximate() {
     assert_eq!(distance.squares, 0);
     assert_eq!(query.distance(&a, &a).expect("same zone").feet, 0);
     assert!(
-        query
-            .distance(&a, &Position::zone("missing"))
-            .is_none(),
+        query.distance(&a, &Position::zone("missing")).is_none(),
         "unknown zones have no distance"
     );
 
@@ -827,12 +894,19 @@ fn ac8_zone_graph_queries_are_explicit_and_approximate() {
     assert_eq!(unknown.reason, Some(OccupancyReason::OutOfBounds));
 
     // Sphere/emanation are the only zone-wide approximations.
-    let ball = query
-        .area(&a, &sphere(10), &p2024())
-        .expect("zone sphere");
+    let ball = query.area(&a, &sphere(10), &p2024()).expect("zone sphere");
     assert_eq!(ball.zones, vec!["a".to_string(), "b".to_string()]);
     assert!(ball.approximation.contains("zone"));
     assert!(ball.explain.iter().any(|note| note.code == "zone-area"));
+
+    // Graph distance, not just one hop: A -> C is 20 ft through B.
+    let wide_ball = query
+        .area(&a, &sphere(20), &p2024())
+        .expect("wide zone sphere");
+    assert_eq!(
+        wide_ball.zones,
+        vec!["a".to_string(), "b".to_string(), "c".to_string()]
+    );
 
     let emanation = AreaSpecV1::new(AreaShape::Emanation, 10, None).expect("emanation");
     assert_eq!(
@@ -854,6 +928,15 @@ fn ac8_zone_graph_queries_are_explicit_and_approximate() {
             .expect_err("zone mode does not fake a cone"),
         SpatialError::UnsupportedInZone {
             shape: AreaShape::Cone
+        }
+    );
+
+    assert_eq!(
+        query
+            .area(&Position::zone("missing"), &sphere(10), &p2024())
+            .expect_err("missing origin zone"),
+        SpatialError::UnknownPosition {
+            position: "zone `missing`".to_string()
         }
     );
 }
