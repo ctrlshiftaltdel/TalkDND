@@ -350,6 +350,40 @@ impl From<String> for ExprValue {
 // Content file / manifest
 // ---------------------------------------------------------------------------
 
+/// A general domain entity (item, class, species, background, feat, rule
+/// section or table). Combat-specific entities keep their typed structs; this
+/// one is for non-combat content that feeds the Agent/search layer.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DomainEntity {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub page: Option<i32>,
+    #[serde(default)]
+    pub section: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub refs: Vec<String>,
+    /// Open structured payload for future rule/engine use.
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
+    #[serde(default)]
+    pub manual: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub todo: Vec<String>,
+}
+
 /// A content document: a container map or (handled by the loader) a single
 /// item. Every list is optional so a file may contain only one kind.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -369,6 +403,22 @@ pub struct ContentFile {
     pub scenes: Option<Vec<Scene>>,
     #[serde(default)]
     pub encounters: Option<Vec<Encounter>>,
+    #[serde(default)]
+    pub items: Option<Vec<DomainEntity>>,
+    #[serde(default)]
+    pub classes: Option<Vec<DomainEntity>>,
+    #[serde(default)]
+    pub subclasses: Option<Vec<DomainEntity>>,
+    #[serde(default)]
+    pub species: Option<Vec<DomainEntity>>,
+    #[serde(default)]
+    pub backgrounds: Option<Vec<DomainEntity>>,
+    #[serde(default)]
+    pub feats: Option<Vec<DomainEntity>>,
+    #[serde(default)]
+    pub rule_sections: Option<Vec<DomainEntity>>,
+    #[serde(default)]
+    pub tables: Option<Vec<DomainEntity>>,
     #[serde(default)]
     pub rules: Option<Rules>,
 }

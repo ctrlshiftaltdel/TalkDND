@@ -213,6 +213,14 @@ fn entity_count(content: &ContentFile) -> usize {
         + content.ai_templates.as_ref().map_or(0, Vec::len)
         + content.scenes.as_ref().map_or(0, Vec::len)
         + content.encounters.as_ref().map_or(0, Vec::len)
+        + content.items.as_ref().map_or(0, Vec::len)
+        + content.classes.as_ref().map_or(0, Vec::len)
+        + content.subclasses.as_ref().map_or(0, Vec::len)
+        + content.species.as_ref().map_or(0, Vec::len)
+        + content.backgrounds.as_ref().map_or(0, Vec::len)
+        + content.feats.as_ref().map_or(0, Vec::len)
+        + content.rule_sections.as_ref().map_or(0, Vec::len)
+        + content.tables.as_ref().map_or(0, Vec::len)
 }
 
 fn entities(content: &ContentFile) -> Result<BTreeMap<(String, &'static str), String>> {
@@ -259,6 +267,22 @@ fn entities(content: &ContentFile) -> Result<BTreeMap<(String, &'static str), St
             add(&item.id, "encounter", item.name.as_deref())?;
         }
     }
+    for (items, kind) in [
+        (&content.items, "item"),
+        (&content.classes, "class"),
+        (&content.subclasses, "subclass"),
+        (&content.species, "species"),
+        (&content.backgrounds, "background"),
+        (&content.feats, "feat"),
+        (&content.rule_sections, "rule-section"),
+        (&content.tables, "table"),
+    ] {
+        if let Some(items) = items {
+            for item in items {
+                add(&item.id, kind, item.name.as_deref())?;
+            }
+        }
+    }
     Ok(out)
 }
 
@@ -271,6 +295,14 @@ fn canonical_kind(text: &str) -> Option<&'static str> {
         "ai-template" | "ai-templates" | "template" | "templates" => Some("ai-template"),
         "scene" | "scenes" => Some("scene"),
         "encounter" | "encounters" => Some("encounter"),
+        "item" | "items" => Some("item"),
+        "class" | "classes" => Some("class"),
+        "subclass" | "subclasses" => Some("subclass"),
+        "species" | "race" | "races" => Some("species"),
+        "background" | "backgrounds" => Some("background"),
+        "feat" | "feats" => Some("feat"),
+        "rule-section" | "rule-sections" | "rule" | "rules-section" => Some("rule-section"),
+        "table" | "tables" => Some("table"),
         _ => None,
     }
 }
