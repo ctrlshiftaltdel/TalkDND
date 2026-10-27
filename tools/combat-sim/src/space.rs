@@ -112,7 +112,21 @@ pub enum SpatialError {
         shape: AreaShape,
         shapes: AoeShapes,
     },
+    MissingAreaDirection {
+        shape: AreaShape,
+    },
+    UnsupportedInZone {
+        shape: AreaShape,
+    },
+    AreaTooLarge {
+        size_ft: i32,
+        limit_ft: i32,
+    },
+    UnknownPosition {
+        position: String,
+    },
     EmptyTerrainId,
+    EmptyBlockerId,
 }
 
 impl fmt::Display for SpatialError {
@@ -163,7 +177,23 @@ impl fmt::Display for SpatialError {
             Self::UnsupportedShape { shape, shapes } => {
                 write!(f, "area shape {shape:?} is not supported by {shapes:?}")
             }
+            Self::MissingAreaDirection { shape } => write!(
+                f,
+                "area shape {shape:?} needs a facing direction but the pose has none"
+            ),
+            Self::UnsupportedInZone { shape } => write!(
+                f,
+                "area shape {shape:?} has no exact zone-graph representation"
+            ),
+            Self::AreaTooLarge { size_ft, limit_ft } => write!(
+                f,
+                "area size {size_ft} ft is outside the supported 1..={limit_ft} ft range"
+            ),
+            Self::UnknownPosition { position } => {
+                write!(f, "position {position} is not in the zone graph")
+            }
             Self::EmptyTerrainId => f.write_str("terrain volume id must not be empty"),
+            Self::EmptyBlockerId => f.write_str("spatial blocker id must not be empty"),
         }
     }
 }
@@ -1942,5 +1972,1673 @@ impl SpaceCache {
                 .as_ref()
                 .map(|map| SpaceView::Grid(GridSpace::cached(scene, map))),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P2 query kernel (TASK-0087)
+// ---------------------------------------------------------------------------
+//
+// These queries are pure: they read a profile and explicit geometry inputs and
+// never mutate an encounter. They coexist with the legacy `Space` trait above;
+// P5 is the only task that wires them into engine/AI/CLI. Units follow the
+// frozen contract: x/y are 5-ft cells, z/height/reach are feet.
+
+/// Inclusive bound for one area dimension in feet. It keeps shape iteration
+/// from allocating without bound and matches the validation style in P1.
+pub const MAX_AREA_FEET: i32 = 1_000;
+
+/// The metric a [`Distance`] answer used. Callers must choose one; the kernel
+/// never silently substitutes range distance for travel or zone distance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistancePolicy {
+    Range,
+    TravelStep,
+    Vertical,
+    ZoneGraph,
+}
+
+/// A structured explanation entry for a query result. Codes are stable and
+/// `detail` is for DM logs / diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Explain {
+    pub code: &'static str,
+    pub detail: String,
+}
+
+impl Explain {
+    pub fn new(code: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// A distance in feet, tagged with the policy that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Distance {
+    pub policy: DistancePolicy,
+    pub feet: i32,
+    pub squares: i32,
+    pub explain: Vec<Explain>,
+}
+
+/// A geometric reach answer. It never checks walls, cover or occupancy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reach {
+    pub reachable: bool,
+    pub distance: Distance,
+}
+
+/// Reach combined with line of sight. Use this when a caller wants the
+/// contract's "reach plus sight" behaviour in one call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttackReach {
+    pub reachable: bool,
+    pub distance_ft: i32,
+    pub sight: LineOfSight,
+}
+
+/// Why an occupancy query was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OccupancyReason {
+    OutOfBounds,
+    Terrain,
+    Occupied,
+    TooNarrow,
+}
+
+/// Result of `can_occupy`. `blockers` holds stable ids (bounds/terrain/creature)
+/// so a DM log can explain the refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Occupancy {
+    pub allowed: bool,
+    pub reason: Option<OccupancyReason>,
+    pub blockers: Vec<String>,
+    pub explain: Vec<Explain>,
+}
+
+/// Why a travel step is unavailable. P3 (#172) owns multi-step pathfinding;
+/// P2 only classifies a single step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TravelBlock {
+    Wall,
+    Occupied,
+    TooNarrow,
+    NoPath,
+    OutOfBounds,
+}
+
+/// Terrain modifiers for one travel step. `difficult` is the caller's
+/// Difficult Terrain flag; 2024 narrow openings use it instead of a separate
+/// squeeze multiplier.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TravelTerrain {
+    pub difficult: bool,
+    pub narrow_opening: bool,
+    pub climb_swim_crawl: bool,
+}
+
+/// One travel step: a tagged distance plus an optional block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TravelStep {
+    pub distance: Distance,
+    pub blocked: Option<TravelBlock>,
+}
+
+/// Line-of-sight result with stable blocker ids.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineOfSight {
+    pub clear: bool,
+    pub blocked_by: Vec<String>,
+    pub explain: Vec<Explain>,
+}
+
+/// Cover result: only the most protective degree, with every source at that
+/// degree. Multiple sources never add degrees together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoverResult {
+    pub degree: Cover,
+    pub sources: Vec<String>,
+    pub explain: Vec<Explain>,
+}
+
+/// A body used by footprint/volume queries. `height_ft` is the vertical extent
+/// above `pose.cell.z`; `size` drives sharing rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpatialBody {
+    pub id: String,
+    pub pose: SpatialPose,
+    pub height_ft: i32,
+    pub size: Size,
+}
+
+impl SpatialBody {
+    pub fn new(id: impl Into<String>, pose: SpatialPose, size: Size) -> Self {
+        Self {
+            id: id.into(),
+            pose,
+            height_ft: Volume::for_size(size).height_ft,
+            size,
+        }
+    }
+
+    pub fn with_height(mut self, height_ft: i32) -> Self {
+        self.height_ft = height_ft;
+        self
+    }
+
+    /// Every footprint cell at the pose's altitude.
+    pub fn cells(&self) -> Vec<CellPos> {
+        footprint_cells(self.pose.cell, self.pose.footprint)
+    }
+
+    /// Altitude of the top of the volume in feet.
+    pub fn top_ft(&self) -> i32 {
+        self.pose.cell.z.saturating_add(self.height_ft)
+    }
+}
+
+/// Optional grid extent for occupancy queries. `None` means an unbounded
+/// synthetic field (useful for pure geometry tests and zone fallbacks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridBounds {
+    pub width: i32,
+    pub height: i32,
+}
+
+impl GridBounds {
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= 0 && y >= 0 && x < self.width && y < self.height
+    }
+}
+
+/// A solid obstacle used by LOS and cover. `height_ft` extends upward from
+/// `cell.z`; a low wall (3 ft) gives cover without blocking a Medium eye line
+/// (5 ft). `blocks_sight` is the explicit "opaque" flag; height decides whether
+/// a particular line passes over it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpatialBlocker {
+    pub id: String,
+    pub cell: CellPos,
+    pub footprint: Footprint,
+    pub height_ft: i32,
+    pub kind: BlockerKind,
+    pub blocks_sight: bool,
+    pub cover: Cover,
+}
+
+/// Why a blocker exists. Creature blockers use the profile's
+/// `creature_cover` degree rather than their stored `cover` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockerKind {
+    Wall,
+    LowObstacle,
+    Creature,
+    Terrain,
+    Illusion,
+    ClosedDoor,
+}
+
+impl SpatialBlocker {
+    pub fn new(
+        id: impl Into<String>,
+        cell: CellPos,
+        footprint: Footprint,
+        height_ft: i32,
+        kind: BlockerKind,
+    ) -> Result<Self, SpatialError> {
+        let id = id.into();
+        if id.trim().is_empty() {
+            return Err(SpatialError::EmptyBlockerId);
+        }
+        cell.validate()?;
+        footprint.validate()?;
+        if height_ft <= 0 || height_ft > MAX_VOLUME_HEIGHT_FT {
+            return Err(SpatialError::InvalidHeight { height_ft });
+        }
+        let (blocks_sight, cover) = match kind {
+            BlockerKind::Wall | BlockerKind::ClosedDoor => (true, Cover::Total),
+            BlockerKind::LowObstacle | BlockerKind::Creature | BlockerKind::Terrain => {
+                (true, Cover::Half)
+            }
+            BlockerKind::Illusion => (true, Cover::None),
+        };
+        Ok(Self {
+            id,
+            cell,
+            footprint,
+            height_ft,
+            kind,
+            blocks_sight,
+            cover,
+        })
+    }
+
+    pub fn wall(
+        id: impl Into<String>,
+        cell: CellPos,
+        footprint: Footprint,
+        height_ft: i32,
+    ) -> Result<Self, SpatialError> {
+        Self::new(id, cell, footprint, height_ft, BlockerKind::Wall)
+    }
+
+    pub fn low_wall(
+        id: impl Into<String>,
+        cell: CellPos,
+        footprint: Footprint,
+        height_ft: i32,
+    ) -> Result<Self, SpatialError> {
+        Self::new(id, cell, footprint, height_ft, BlockerKind::LowObstacle)
+    }
+
+    pub fn creature(body: &SpatialBody, blocks_sight: bool) -> Result<Self, SpatialError> {
+        let mut blocker = Self::new(
+            &body.id,
+            body.pose.cell,
+            body.pose.footprint,
+            body.height_ft,
+            BlockerKind::Creature,
+        )?;
+        blocker.blocks_sight = blocks_sight;
+        blocker.cover = Cover::Half;
+        Ok(blocker)
+    }
+
+    pub fn terrain(volume: &TerrainVolume, cover: Cover) -> Result<Self, SpatialError> {
+        Self::new(
+            &volume.id,
+            volume.cell,
+            volume.footprint,
+            volume.height_ft,
+            BlockerKind::Terrain,
+        )
+        .map(|blocker| blocker.with_cover(cover))
+    }
+
+    pub fn with_cover(mut self, cover: Cover) -> Self {
+        self.cover = cover;
+        self
+    }
+
+    pub fn with_sight(mut self, blocks_sight: bool) -> Self {
+        self.blocks_sight = blocks_sight;
+        self
+    }
+
+    pub fn cells(&self) -> Vec<CellPos> {
+        footprint_cells(self.cell, self.footprint)
+    }
+
+    pub fn top_ft(&self) -> i32 {
+        self.cell.z.saturating_add(self.height_ft)
+    }
+}
+
+/// Result of a shape query; cells are sorted by (x, y, z) and deduplicated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AreaResult {
+    pub shape: AreaShape,
+    pub origin: CellPos,
+    pub cells: Vec<CellPos>,
+    pub explain: Vec<Explain>,
+}
+
+/// How a target volume intersects an area.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AreaIntersection {
+    pub intersects: bool,
+    /// Target footprint cells covered by at least one area cell that is not
+    /// behind total cover.
+    pub covered_cells: Vec<CellPos>,
+    /// Number of footprint cells in the target body.
+    pub target_cells: usize,
+    pub fully_covered: bool,
+    /// Some overlap existed, but every overlapping cell had total cover.
+    pub total_cover_blocked: bool,
+    pub explain: Vec<Explain>,
+}
+
+/// Zone-mode area answer. It deliberately carries zones, not grid cells, so a
+/// caller cannot mistake a graph approximation for a metric shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneArea {
+    pub zones: Vec<String>,
+    pub approximation: String,
+    pub explain: Vec<Explain>,
+}
+
+// -- geometry helpers -------------------------------------------------------
+
+fn size_rank(size: Size) -> u8 {
+    match size {
+        Size::Tiny => 0,
+        Size::Small => 1,
+        Size::Medium | Size::Unknown => 2,
+        Size::Large => 3,
+        Size::Huge => 4,
+        Size::Gargantuan => 5,
+    }
+}
+
+fn footprint_cells(cell: CellPos, footprint: Footprint) -> Vec<CellPos> {
+    let mut cells = Vec::with_capacity((footprint.width * footprint.depth) as usize);
+    for dy in 0..footprint.depth {
+        for dx in 0..footprint.width {
+            cells.push(CellPos {
+                x: cell.x.saturating_add(dx as i32),
+                y: cell.y.saturating_add(dy as i32),
+                z: cell.z,
+            });
+        }
+    }
+    cells
+}
+
+fn footprints_overlap(
+    a: CellPos,
+    a_footprint: Footprint,
+    b: CellPos,
+    b_footprint: Footprint,
+) -> bool {
+    let ax0 = i64::from(a.x);
+    let ay0 = i64::from(a.y);
+    let bx0 = i64::from(b.x);
+    let by0 = i64::from(b.y);
+    ax0 < bx0 + i64::from(b_footprint.width)
+        && bx0 < ax0 + i64::from(a_footprint.width)
+        && ay0 < by0 + i64::from(b_footprint.depth)
+        && by0 < ay0 + i64::from(a_footprint.depth)
+}
+
+fn vertical_overlap(a_base: i32, a_height: i32, b_base: i32, b_height: i32) -> bool {
+    i64::from(a_base) < i64::from(b_base) + i64::from(b_height)
+        && i64::from(b_base) < i64::from(a_base) + i64::from(a_height)
+}
+
+fn cell_label(cell: CellPos) -> String {
+    format!("({},{},{})", cell.x, cell.y, cell.z)
+}
+
+fn position_label(position: &Position) -> String {
+    match position {
+        Position::Zone { zone } => format!("zone `{zone}`"),
+        Position::Cell { x, y } => format!("cell ({x},{y})"),
+    }
+}
+
+fn line_cells(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
+    let (x0, y0) = from;
+    let (x1, y1) = to;
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut error = dx + dy;
+    let (mut x, mut y) = (x0, y0);
+    let mut cells = vec![(x, y)];
+    while x != x1 || y != y1 {
+        let doubled = 2 * error;
+        if doubled >= dy {
+            error += dy;
+            x += sx;
+        }
+        if doubled <= dx {
+            error += dx;
+            y += sy;
+        }
+        cells.push((x, y));
+    }
+    cells
+}
+
+fn line_z_at(from_z: i32, to_z: i32, index: usize, len: usize) -> i32 {
+    if len <= 1 {
+        return from_z;
+    }
+    let steps = (len - 1) as i64;
+    let offset = (i64::from(to_z) - i64::from(from_z)) * index as i64 / steps;
+    (i64::from(from_z) + offset) as i32
+}
+
+fn interior_line_cells(from: CellPos, to: CellPos) -> Vec<(i32, i32)> {
+    let line = line_cells((from.x, from.y), (to.x, to.y));
+    let len = line.len();
+    if len <= 2 {
+        Vec::new()
+    } else {
+        line[1..len - 1].to_vec()
+    }
+}
+
+fn blocker_covers(blocker: &SpatialBlocker, x: i32, y: i32) -> bool {
+    i64::from(x) >= i64::from(blocker.cell.x)
+        && i64::from(y) >= i64::from(blocker.cell.y)
+        && i64::from(x) < i64::from(blocker.cell.x) + i64::from(blocker.footprint.width)
+        && i64::from(y) < i64::from(blocker.cell.y) + i64::from(blocker.footprint.depth)
+}
+
+fn blocker_degree(blocker: &SpatialBlocker, profile: &SpatialProfile) -> Cover {
+    match blocker.kind {
+        BlockerKind::Creature => profile.creature_cover,
+        _ => blocker.cover,
+    }
+}
+
+fn cover_rank(cover: Cover) -> u8 {
+    match cover {
+        Cover::None => 0,
+        Cover::Half => 1,
+        Cover::ThreeQuarters => 2,
+        Cover::Total => 3,
+    }
+}
+
+fn most_protective(pairs: Vec<(String, Cover)>) -> (Cover, Vec<String>) {
+    let mut best = Cover::None;
+    for (_, degree) in &pairs {
+        best = max_cover(best, *degree);
+    }
+    let mut sources: Vec<String> = pairs
+        .into_iter()
+        .filter(|(_, degree)| *degree == best)
+        .map(|(id, _)| id)
+        .collect();
+    sources.sort();
+    sources.dedup();
+    (best, sources)
+}
+
+fn sight_candidates(from: &SpatialBody, to: &SpatialBody) -> Vec<(CellPos, CellPos)> {
+    let mut from_cells = from.cells();
+    let mut to_cells = to.cells();
+    from_cells.sort();
+    from_cells.dedup();
+    to_cells.sort();
+    to_cells.dedup();
+    let mut candidates = Vec::with_capacity(from_cells.len() * to_cells.len());
+    for from_cell in from_cells {
+        for &to_cell in &to_cells {
+            candidates.push((from_cell, to_cell));
+        }
+    }
+    candidates
+}
+
+struct SightSegment<'a> {
+    from: CellPos,
+    from_eye_ft: i32,
+    to: CellPos,
+    to_eye_ft: i32,
+    blockers: &'a [SpatialBlocker],
+    from_id: &'a str,
+    to_id: &'a str,
+}
+
+fn segment_blockers_filtered(
+    segment: &SightSegment<'_>,
+    predicate: impl Fn(&SpatialBlocker) -> bool,
+) -> BTreeSet<String> {
+    let line = line_cells(
+        (segment.from.x, segment.from.y),
+        (segment.to.x, segment.to.y),
+    );
+    let len = line.len();
+    let mut blocked = BTreeSet::new();
+    if len <= 2 {
+        return blocked;
+    }
+    for (index, (x, y)) in line.iter().enumerate().skip(1).take(len - 2) {
+        let z = line_z_at(segment.from_eye_ft, segment.to_eye_ft, index, len);
+        for blocker in segment.blockers {
+            if !predicate(blocker)
+                || !blocker.blocks_sight
+                || blocker.id == segment.from_id
+                || blocker.id == segment.to_id
+                || !blocker_covers(blocker, *x, *y)
+            {
+                continue;
+            }
+            if z >= blocker.cell.z && z <= blocker.top_ft() {
+                blocked.insert(blocker.id.clone());
+            }
+        }
+    }
+    blocked
+}
+
+fn bodies_adjacent(a: &SpatialBody, b: &SpatialBody) -> bool {
+    a.cells().iter().any(|a_cell| {
+        b.cells()
+            .iter()
+            .any(|b_cell| (a_cell.x - b_cell.x).abs() <= 1 && (a_cell.y - b_cell.y).abs() <= 1)
+    })
+}
+
+fn line_cover_pairs(
+    from: CellPos,
+    to: CellPos,
+    source: &SpatialBody,
+    target: &SpatialBody,
+    blockers: &[SpatialBlocker],
+    profile: &SpatialProfile,
+) -> Vec<(String, Cover)> {
+    let interior = interior_line_cells(from, to);
+    // Cover applies when the blocker's vertical span reaches the lower body
+    // and starts at or below the higher body's top.
+    let lower = source.pose.cell.z.max(target.pose.cell.z);
+    let upper = source.top_ft().min(target.top_ft());
+    let mut pairs = Vec::new();
+    for blocker in blockers {
+        if blocker.id == source.id || blocker.id == target.id {
+            continue;
+        }
+        if blocker.top_ft() < lower || blocker.cell.z > upper {
+            continue;
+        }
+        if !interior
+            .iter()
+            .any(|(x, y)| blocker_covers(blocker, *x, *y))
+        {
+            continue;
+        }
+        let degree = blocker_degree(blocker, profile);
+        if degree != Cover::None {
+            pairs.push((blocker.id.clone(), degree));
+        }
+    }
+    pairs
+}
+
+fn target_cell_cover_pairs(
+    source: &SpatialBody,
+    target: &SpatialBody,
+    blockers: &[SpatialBlocker],
+    profile: &SpatialProfile,
+) -> Vec<(String, Cover)> {
+    let target_cells = target.cells();
+    let mut pairs = Vec::new();
+    for blocker in blockers {
+        if blocker.id == source.id || blocker.id == target.id {
+            continue;
+        }
+        if blocker.top_ft() < target.pose.cell.z {
+            continue;
+        }
+        if !target_cells
+            .iter()
+            .any(|cell| blocker_covers(blocker, cell.x, cell.y))
+        {
+            continue;
+        }
+        let degree = blocker_degree(blocker, profile);
+        if degree != Cover::None {
+            pairs.push((blocker.id.clone(), degree));
+        }
+    }
+    pairs
+}
+
+// -- distance and reach -----------------------------------------------------
+
+fn ground_distance(
+    from: &SpatialPose,
+    to: &SpatialPose,
+    profile: &SpatialProfile,
+) -> (i32, i32, &'static str) {
+    let dx = (i64::from(to.cell.x) - i64::from(from.cell.x))
+        .abs()
+        .min(i64::from(i32::MAX)) as i32;
+    let dy = (i64::from(to.cell.y) - i64::from(from.cell.y))
+        .abs()
+        .min(i64::from(i32::MAX)) as i32;
+    let squares = dx.max(dy);
+    match profile.distance_3d {
+        Distance3d::Chebyshev => match profile.diagonal {
+            Diagonal::Five => (
+                squares.saturating_mul(FEET_PER_CELL),
+                squares,
+                "chebyshev-five",
+            ),
+            Diagonal::FiveTenFive => {
+                let diagonal = dx.min(dy);
+                let pairs = diagonal / 2;
+                let extra = diagonal % 2;
+                let straight = (dx - dy).abs();
+                let feet = pairs
+                    .saturating_mul(15)
+                    .saturating_add(extra.saturating_mul(FEET_PER_CELL))
+                    .saturating_add(straight.saturating_mul(FEET_PER_CELL));
+                (feet, squares, "five-ten-five")
+            }
+        },
+        Distance3d::ManhattanPlusVertical => (
+            dx.saturating_add(dy).saturating_mul(FEET_PER_CELL),
+            squares,
+            "manhattan-plus-vertical",
+        ),
+    }
+}
+
+/// Range distance in feet. Pure geometry: it ignores walls, cover and
+/// occupancy. Vertical difference is always added; `FiveTenFive` affects the
+/// ground component only, with a deterministic x-then-y path rule.
+pub fn range_distance(from: &SpatialPose, to: &SpatialPose, profile: &SpatialProfile) -> Distance {
+    let (ground, squares, ground_rule) = ground_distance(from, to, profile);
+    let vertical = (i64::from(to.cell.z) - i64::from(from.cell.z)).abs() as i32;
+    let feet = ground.saturating_add(vertical);
+    let mut explain = vec![Explain::new("range-ground", ground_rule)];
+    if vertical != 0 {
+        explain.push(Explain::new(
+            "range-vertical",
+            format!("altitude difference {vertical} ft"),
+        ));
+    }
+    Distance {
+        policy: DistancePolicy::Range,
+        feet,
+        squares,
+        explain,
+    }
+}
+
+/// Vertical distance only, in feet.
+pub fn vertical_distance(from: &SpatialPose, to: &SpatialPose) -> Distance {
+    let feet = (i64::from(to.cell.z) - i64::from(from.cell.z)).abs() as i32;
+    Distance {
+        policy: DistancePolicy::Vertical,
+        feet,
+        squares: 0,
+        explain: vec![Explain::new(
+            "vertical",
+            format!("altitude difference {feet} ft"),
+        )],
+    }
+}
+
+/// One travel step's cost. This is not a pathfinder: P3 (#172) owns routes,
+/// Dijkstra/A* and creature traversal. The caller supplies the terrain flags.
+pub fn travel_step_cost(
+    from: &SpatialPose,
+    to: &SpatialPose,
+    profile: &SpatialProfile,
+    terrain: TravelTerrain,
+) -> TravelStep {
+    let (base, squares, ground_rule) = ground_distance(from, to, profile);
+    let mut feet = base;
+    let mut explain = vec![
+        Explain::new("travel-base", ground_rule),
+        Explain::new(
+            "travel-step",
+            "single step only; multi-step pathfinding belongs to TASK-0088",
+        ),
+    ];
+    if terrain.difficult {
+        feet = feet.saturating_mul(2);
+        explain.push(Explain::new("travel-difficult", "Difficult Terrain x2"));
+    }
+    if terrain.climb_swim_crawl {
+        feet = feet.saturating_mul(2);
+        explain.push(Explain::new(
+            "travel-climb",
+            "climb/swim/crawl costs 1 extra ft per ft",
+        ));
+    }
+    if terrain.narrow_opening {
+        match profile.squeeze {
+            Squeeze::Edition2014 => {
+                feet = feet.saturating_mul(2);
+                explain.push(Explain::new("travel-squeeze-2014", "2014 squeeze x2"));
+            }
+            Squeeze::Edition2024 => {
+                explain.push(Explain::new(
+                    "travel-squeeze-2024",
+                    "2024 narrow opening is Difficult Terrain; caller sets `difficult`",
+                ));
+            }
+            Squeeze::Forbid => {
+                explain.push(Explain::new("travel-too-narrow", "squeeze is forbidden"));
+                return TravelStep {
+                    distance: Distance {
+                        policy: DistancePolicy::TravelStep,
+                        feet: 0,
+                        squares,
+                        explain,
+                    },
+                    blocked: Some(TravelBlock::TooNarrow),
+                };
+            }
+        }
+    }
+    TravelStep {
+        distance: Distance {
+            policy: DistancePolicy::TravelStep,
+            feet,
+            squares,
+            explain,
+        },
+        blocked: None,
+    }
+}
+
+/// Geometric reach only: `distance <= reach_ft`. It never checks walls, cover
+/// or occupancy; combine it with [`line_of_sight`] (or use
+/// [`can_reach_with_sight`]) when visibility matters.
+///
+/// This function measures the contract's pose-to-pose distance. Use
+/// [`body_distance`] / [`can_reach_bodies`] when a footprint's nearest cell
+/// matters.
+pub fn can_reach(
+    from: &SpatialPose,
+    to: &SpatialPose,
+    reach_ft: i32,
+    profile: &SpatialProfile,
+) -> Reach {
+    let mut distance = range_distance(from, to, profile);
+    let reachable = distance.feet <= reach_ft.max(0);
+    distance.explain.push(Explain::new(
+        "reach-geometric",
+        "reach ignores walls, cover and occupancy; combine with line_of_sight",
+    ));
+    Reach {
+        reachable,
+        distance,
+    }
+}
+
+/// Minimum cell-to-cell range distance between two bodies. This is the
+/// footprint-aware primitive: a Large target's near edge can be in reach even
+/// when its anchor cell is not.
+pub fn body_distance(from: &SpatialBody, to: &SpatialBody, profile: &SpatialProfile) -> Distance {
+    let mut best: Option<(i32, i32, CellPos, CellPos)> = None;
+    for from_cell in from.cells() {
+        for to_cell in to.cells() {
+            let from_pose = SpatialPose {
+                cell: from_cell,
+                footprint: Footprint::ONE,
+                facing: None,
+            };
+            let to_pose = SpatialPose {
+                cell: to_cell,
+                footprint: Footprint::ONE,
+                facing: None,
+            };
+            let distance = range_distance(&from_pose, &to_pose, profile);
+            if best.is_none_or(|(known, _, _, _)| distance.feet < known) {
+                best = Some((distance.feet, distance.squares, from_cell, to_cell));
+            }
+        }
+    }
+    let (feet, squares, from_cell, to_cell) = best.unwrap_or((0, 0, from.pose.cell, to.pose.cell));
+    Distance {
+        policy: DistancePolicy::Range,
+        feet,
+        squares,
+        explain: vec![Explain::new(
+            "body-distance",
+            format!(
+                "nearest footprint cells {} -> {}",
+                cell_label(from_cell),
+                cell_label(to_cell)
+            ),
+        )],
+    }
+}
+
+/// Footprint-aware reach. Same geometric-only contract as [`can_reach`].
+pub fn can_reach_bodies(
+    from: &SpatialBody,
+    to: &SpatialBody,
+    reach_ft: i32,
+    profile: &SpatialProfile,
+) -> Reach {
+    let mut distance = body_distance(from, to, profile);
+    let reachable = distance.feet <= reach_ft.max(0);
+    distance.explain.push(Explain::new(
+        "reach-geometric",
+        "reach ignores walls, cover and occupancy; combine with line_of_sight",
+    ));
+    Reach {
+        reachable,
+        distance,
+    }
+}
+
+/// Reach plus sight. The pure reach query stays separate so callers can see
+/// the two decisions in their logs.
+pub fn can_reach_with_sight(
+    from: &SpatialBody,
+    to: &SpatialBody,
+    reach_ft: i32,
+    blockers: &[SpatialBlocker],
+    profile: &SpatialProfile,
+) -> AttackReach {
+    let reach = can_reach_bodies(from, to, reach_ft, profile);
+    let sight = line_of_sight(from, to, blockers, profile);
+    AttackReach {
+        reachable: reach.reachable && sight.clear,
+        distance_ft: reach.distance.feet,
+        sight,
+    }
+}
+
+// -- occupancy --------------------------------------------------------------
+
+fn can_share_cell(mover: &SpatialBody, other: &SpatialBody, profile: &SpatialProfile) -> bool {
+    if profile.tiny_sharing && mover.size == Size::Tiny && other.size == Size::Tiny {
+        return true;
+    }
+    size_rank(mover.size) > size_rank(other.size)
+}
+
+/// May a body end its move here? Checks every footprint cell, the vertical
+/// volume, terrain volumes and other bodies. Moving *through* a hostile's
+/// space is P3's traversal rule; this query answers the end-of-move question
+/// from the contract (O-05).
+pub fn can_occupy(
+    body: &SpatialBody,
+    bounds: Option<GridBounds>,
+    terrain: &[TerrainVolume],
+    occupants: &[SpatialBody],
+    profile: &SpatialProfile,
+) -> Result<Occupancy, SpatialError> {
+    body.pose.validate()?;
+    if body.height_ft <= 0 || body.height_ft > MAX_VOLUME_HEIGHT_FT {
+        return Err(SpatialError::InvalidHeight {
+            height_ft: body.height_ft,
+        });
+    }
+    let cells = body.cells();
+    let mut explain = vec![Explain::new(
+        "occupancy-footprint",
+        format!("{} footprint cells at {} ft", cells.len(), body.pose.cell.z),
+    )];
+
+    if let Some(bounds) = bounds {
+        if cells.iter().any(|cell| !bounds.contains(cell.x, cell.y)) {
+            explain.push(Explain::new(
+                "occupancy-out-of-bounds",
+                "footprint leaves the grid",
+            ));
+            return Ok(Occupancy {
+                allowed: false,
+                reason: Some(OccupancyReason::OutOfBounds),
+                blockers: vec!["bounds".to_string()],
+                explain,
+            });
+        }
+    }
+
+    let mut terrain_blockers = BTreeSet::new();
+    for volume in terrain {
+        volume.validate()?;
+        if footprints_overlap(
+            body.pose.cell,
+            body.pose.footprint,
+            volume.cell,
+            volume.footprint,
+        ) && vertical_overlap(
+            body.pose.cell.z,
+            body.height_ft,
+            volume.cell.z,
+            volume.height_ft,
+        ) {
+            terrain_blockers.insert(volume.id.clone());
+        }
+    }
+    if !terrain_blockers.is_empty() {
+        explain.push(Explain::new(
+            "occupancy-terrain",
+            "solid terrain overlaps the footprint volume",
+        ));
+        return Ok(Occupancy {
+            allowed: false,
+            reason: Some(OccupancyReason::Terrain),
+            blockers: terrain_blockers.into_iter().collect(),
+            explain,
+        });
+    }
+
+    let mut occupant_blockers = BTreeSet::new();
+    for occupant in occupants {
+        if occupant.id == body.id {
+            continue;
+        }
+        occupant.pose.validate()?;
+        if occupant.height_ft <= 0 || occupant.height_ft > MAX_VOLUME_HEIGHT_FT {
+            return Err(SpatialError::InvalidHeight {
+                height_ft: occupant.height_ft,
+            });
+        }
+        if !footprints_overlap(
+            body.pose.cell,
+            body.pose.footprint,
+            occupant.pose.cell,
+            occupant.pose.footprint,
+        ) || !vertical_overlap(
+            body.pose.cell.z,
+            body.height_ft,
+            occupant.pose.cell.z,
+            occupant.height_ft,
+        ) {
+            continue;
+        }
+        if !can_share_cell(body, occupant, profile) {
+            occupant_blockers.insert(occupant.id.clone());
+        }
+    }
+    if !occupant_blockers.is_empty() {
+        explain.push(Explain::new(
+            "occupancy-occupied",
+            "the body may not end in another body's space",
+        ));
+        return Ok(Occupancy {
+            allowed: false,
+            reason: Some(OccupancyReason::Occupied),
+            blockers: occupant_blockers.into_iter().collect(),
+            explain,
+        });
+    }
+
+    explain.push(Explain::new("occupancy-ok", "footprint volume is free"));
+    Ok(Occupancy {
+        allowed: true,
+        reason: None,
+        blockers: Vec::new(),
+        explain,
+    })
+}
+
+// -- line of sight and cover ------------------------------------------------
+
+/// Line of sight from one volume to another.
+///
+/// Large footprints produce several candidate paths (one per source cell x
+/// target cell). Sight is clear when at least one path is clear; the first
+/// clear path in (source cell, target cell) order is reported. When every path
+/// is blocked, `blocked_by` is the sorted union of blockers so a DM log can
+/// explain the result. LOS is edition-neutral; `_profile` is reserved for
+/// future size-based blockers.
+pub fn line_of_sight(
+    from: &SpatialBody,
+    to: &SpatialBody,
+    blockers: &[SpatialBlocker],
+    _profile: &SpatialProfile,
+) -> LineOfSight {
+    let candidates = sight_candidates(from, to);
+    let mut blocked_union = BTreeSet::new();
+    let mut first_clear = None;
+    for (from_cell, to_cell) in &candidates {
+        let segment = SightSegment {
+            from: *from_cell,
+            from_eye_ft: from.top_ft(),
+            to: *to_cell,
+            to_eye_ft: to.top_ft(),
+            blockers,
+            from_id: &from.id,
+            to_id: &to.id,
+        };
+        let blocked = segment_blockers_filtered(&segment, |_| true);
+        if blocked.is_empty() {
+            first_clear = Some((*from_cell, *to_cell));
+            break;
+        }
+        blocked_union.extend(blocked);
+    }
+
+    let mut explain = vec![Explain::new(
+        "los-candidates",
+        format!("{} candidate paths", candidates.len()),
+    )];
+    if let Some((from_cell, to_cell)) = first_clear {
+        explain.push(Explain::new(
+            "los-candidate",
+            format!(
+                "first clear path {} -> {}",
+                cell_label(from_cell),
+                cell_label(to_cell)
+            ),
+        ));
+        LineOfSight {
+            clear: true,
+            blocked_by: Vec::new(),
+            explain,
+        }
+    } else {
+        explain.push(Explain::new(
+            "los-blocked",
+            format!("all {} candidate paths are blocked", candidates.len()),
+        ));
+        LineOfSight {
+            clear: false,
+            blocked_by: blocked_union.into_iter().collect(),
+            explain,
+        }
+    }
+}
+
+/// Cover against attacks from `source` to `target`.
+///
+/// Multiple sources keep only the most protective degree. A blocker grants
+/// cover when it is between the bodies and its vertical span overlaps the
+/// combatants' shared band; a low wall can therefore give cover without
+/// blocking sight. Creature blockers use `profile.creature_cover`.
+///
+/// The 2014 profile keeps the legacy "target cell cover when not adjacent"
+/// rule; the 2024 profile applies the SRD opposite-side rule and only counts
+/// blockers on the line between the combatants.
+pub fn cover_between(
+    source: &SpatialBody,
+    to: &SpatialBody,
+    blockers: &[SpatialBlocker],
+    profile: &SpatialProfile,
+) -> CoverResult {
+    let candidates = sight_candidates(source, to);
+    let mut explain = vec![Explain::new(
+        "cover-candidates",
+        format!("{} candidate paths", candidates.len()),
+    )];
+    if candidates.is_empty() {
+        explain.push(Explain::new("cover-none", "no valid footprint cells"));
+        return CoverResult {
+            degree: Cover::None,
+            sources: Vec::new(),
+            explain,
+        };
+    }
+
+    let mut clear = Vec::new();
+    let mut blocked_union = BTreeSet::new();
+    for (from_cell, to_cell) in &candidates {
+        let segment = SightSegment {
+            from: *from_cell,
+            from_eye_ft: source.top_ft(),
+            to: *to_cell,
+            to_eye_ft: to.top_ft(),
+            blockers,
+            from_id: &source.id,
+            to_id: &to.id,
+        };
+        let blocked = segment_blockers_filtered(&segment, |_| true);
+        if blocked.is_empty() {
+            clear.push((*from_cell, *to_cell));
+        } else {
+            blocked_union.extend(blocked);
+        }
+    }
+
+    let mut best_degree = Cover::None;
+    let mut best_sources: BTreeSet<String> = BTreeSet::new();
+    let mut chosen = None;
+    for (from_cell, to_cell) in &clear {
+        let pairs = line_cover_pairs(*from_cell, *to_cell, source, to, blockers, profile);
+        let (degree, sources) = most_protective(pairs);
+        if chosen.is_none() || cover_rank(degree) < cover_rank(best_degree) {
+            best_degree = degree;
+            best_sources = sources.into_iter().collect();
+            chosen = Some((*from_cell, *to_cell));
+        } else if cover_rank(degree) == cover_rank(best_degree) {
+            best_sources.extend(sources);
+        }
+    }
+
+    if let Some((from_cell, to_cell)) = chosen {
+        explain.push(Explain::new(
+            "cover-path",
+            format!(
+                "least-cover clear path {} -> {}",
+                cell_label(from_cell),
+                cell_label(to_cell)
+            ),
+        ));
+    }
+
+    // 2014 legacy: a target-cell obstacle gives cover when the bodies are not
+    // adjacent. 2024 uses the opposite-side rule only. P1 has no separate
+    // edition tag on `SpatialProfile`, so the squeeze policy (whose defaults
+    // are edition-specific) is the edition marker.
+    if profile.squeeze == Squeeze::Edition2014 && !bodies_adjacent(source, to) {
+        for (id, degree) in target_cell_cover_pairs(source, to, blockers, profile) {
+            if cover_rank(degree) > cover_rank(best_degree) {
+                best_degree = degree;
+                best_sources = BTreeSet::from([id]);
+            } else if degree == best_degree && degree != Cover::None {
+                best_sources.insert(id);
+            }
+        }
+        explain.push(Explain::new(
+            "cover-2014-target-cell",
+            "2014 target-cell cover applies (non-adjacent)",
+        ));
+    }
+
+    if chosen.is_none() {
+        let total_sources: BTreeSet<String> = blockers
+            .iter()
+            .filter(|blocker| blocked_union.contains(&blocker.id) && blocker.cover == Cover::Total)
+            .map(|blocker| blocker.id.clone())
+            .collect();
+        if !total_sources.is_empty() {
+            best_degree = Cover::Total;
+            best_sources = total_sources;
+            explain.push(Explain::new(
+                "cover-los-total",
+                "sight is fully blocked by total cover",
+            ));
+        } else {
+            // Sight is blocked by something that is not total cover (for
+            // example a sight-blocking creature). It can still provide its
+            // cover degree; use the first deterministic candidate unless the
+            // 2014 target-cell rule already found a source.
+            if best_sources.is_empty() {
+                let (from_cell, to_cell) = candidates[0];
+                let pairs = line_cover_pairs(from_cell, to_cell, source, to, blockers, profile);
+                let (degree, sources) = most_protective(pairs);
+                if degree != Cover::None {
+                    best_degree = degree;
+                    best_sources = sources.into_iter().collect();
+                }
+            }
+            explain.push(Explain::new(
+                "cover-los-blocked",
+                "sight is blocked, but no blocking source grants total cover",
+            ));
+        }
+    }
+
+    if best_sources.is_empty() {
+        explain.push(Explain::new("cover-none", "no source grants cover"));
+    } else {
+        for source_id in &best_sources {
+            explain.push(Explain::new("cover-source", source_id.clone()));
+        }
+    }
+    CoverResult {
+        degree: best_degree,
+        sources: best_sources.into_iter().collect(),
+        explain,
+    }
+}
+
+// -- areas ------------------------------------------------------------------
+
+fn forward_cell(origin: CellPos, facing: Facing, forward: i32, side: i32) -> CellPos {
+    match facing {
+        Facing::North => CellPos {
+            x: origin.x.saturating_add(side),
+            y: origin.y.saturating_sub(forward),
+            z: origin.z,
+        },
+        Facing::East => CellPos {
+            x: origin.x.saturating_add(forward),
+            y: origin.y.saturating_add(side),
+            z: origin.z,
+        },
+        Facing::South => CellPos {
+            x: origin.x.saturating_add(side),
+            y: origin.y.saturating_add(forward),
+            z: origin.z,
+        },
+        Facing::West => CellPos {
+            x: origin.x.saturating_sub(forward),
+            y: origin.y.saturating_add(side),
+            z: origin.z,
+        },
+    }
+}
+
+fn ceil_cells(feet: i32) -> i32 {
+    (feet + FEET_PER_CELL - 1) / FEET_PER_CELL
+}
+
+fn insert_area_cell(cells: &mut BTreeSet<CellPos>, cell: CellPos) -> Result<(), SpatialError> {
+    cell.validate()?;
+    cells.insert(cell);
+    Ok(())
+}
+
+/// Cells covered by an area, in deterministic (x, y, z) order.
+///
+/// Shapes are grid approximations: a 10-ft sphere is a 3D block of 5-ft cells,
+/// a cone's far edge is as wide as its length, and a cube's origin sits on a
+/// face. Cone/line/cube use `pose.facing` as the template direction; this is
+/// not the optional combat-facing rule from the profile. The six P1 shapes are
+/// supported; zone mode is handled by [`ZoneQuery::area`], which refuses shapes
+/// a graph cannot represent.
+pub fn area_cells(
+    area: &AreaSpecV1,
+    origin: &SpatialPose,
+    profile: &SpatialProfile,
+) -> Result<AreaResult, SpatialError> {
+    profile.validate_area(area)?;
+    if area.size_ft > MAX_AREA_FEET || area.width_ft.is_some_and(|width| width > MAX_AREA_FEET) {
+        return Err(SpatialError::AreaTooLarge {
+            size_ft: area.size_ft,
+            limit_ft: MAX_AREA_FEET,
+        });
+    }
+    origin.validate()?;
+
+    let mut cells = BTreeSet::new();
+    let mut explain = vec![
+        Explain::new("area-shape", format!("{:?}", area.shape)),
+        Explain::new("area-grid", "5-ft cells; not a continuous volume"),
+    ];
+
+    match area.shape {
+        AreaShape::Sphere | AreaShape::Emanation => {
+            let radius = i64::from(area.size_ft);
+            let radius_cells = ceil_cells(area.size_ft);
+            for dz_cells in -radius_cells..=radius_cells {
+                let dz = i64::from(dz_cells) * i64::from(FEET_PER_CELL);
+                let z = i64::from(origin.cell.z) + dz;
+                if z < 0 {
+                    continue;
+                }
+                for dx_cells in -radius_cells..=radius_cells {
+                    let dx = i64::from(dx_cells) * i64::from(FEET_PER_CELL);
+                    for dy_cells in -radius_cells..=radius_cells {
+                        let dy = i64::from(dy_cells) * i64::from(FEET_PER_CELL);
+                        if dx * dx + dy * dy + dz * dz > radius * radius {
+                            continue;
+                        }
+                        insert_area_cell(
+                            &mut cells,
+                            CellPos {
+                                x: origin.cell.x.saturating_add(dx_cells),
+                                y: origin.cell.y.saturating_add(dy_cells),
+                                z: z as i32,
+                            },
+                        )?;
+                    }
+                }
+            }
+            if area.shape == AreaShape::Emanation {
+                cells.remove(&origin.cell);
+                explain.push(Explain::new("area-origin", "emanation excludes its origin"));
+            } else {
+                explain.push(Explain::new("area-origin", "sphere includes its origin"));
+            }
+        }
+        AreaShape::Cylinder => {
+            let radius = i64::from(area.size_ft);
+            let radius_cells = ceil_cells(area.size_ft);
+            let height = area.width_ft.unwrap_or(area.size_ft);
+            let height_cells = ceil_cells(height.max(FEET_PER_CELL));
+            for dz_cells in 0..height_cells {
+                let z = origin
+                    .cell
+                    .z
+                    .saturating_add(dz_cells.saturating_mul(FEET_PER_CELL));
+                for dx_cells in -radius_cells..=radius_cells {
+                    let dx = i64::from(dx_cells) * i64::from(FEET_PER_CELL);
+                    for dy_cells in -radius_cells..=radius_cells {
+                        let dy = i64::from(dy_cells) * i64::from(FEET_PER_CELL);
+                        if dx * dx + dy * dy > radius * radius {
+                            continue;
+                        }
+                        insert_area_cell(
+                            &mut cells,
+                            CellPos {
+                                x: origin.cell.x.saturating_add(dx_cells),
+                                y: origin.cell.y.saturating_add(dy_cells),
+                                z,
+                            },
+                        )?;
+                    }
+                }
+            }
+            explain.push(Explain::new(
+                "area-cylinder",
+                format!("radius {} ft, height {} ft", area.size_ft, height),
+            ));
+        }
+        AreaShape::Cone => {
+            let facing = origin.facing.ok_or(SpatialError::MissingAreaDirection {
+                shape: AreaShape::Cone,
+            })?;
+            let length_cells = ceil_cells(area.size_ft);
+            for forward in 1..=length_cells {
+                let half_width = forward / 2;
+                for side in -half_width..=half_width {
+                    let cell = forward_cell(origin.cell, facing, forward, side);
+                    insert_area_cell(&mut cells, cell)?;
+                }
+            }
+            explain.push(Explain::new(
+                "area-cone",
+                "origin excluded; far edge width equals length",
+            ));
+        }
+        AreaShape::Line => {
+            let facing = origin.facing.ok_or(SpatialError::MissingAreaDirection {
+                shape: AreaShape::Line,
+            })?;
+            let length_cells = ceil_cells(area.size_ft);
+            let width = area.width_ft.unwrap_or(FEET_PER_CELL);
+            let width_cells = ceil_cells(width.max(FEET_PER_CELL));
+            let left = (width_cells - 1) / 2;
+            let right = width_cells / 2;
+            for forward in 1..=length_cells {
+                for side in -left..=right {
+                    let cell = forward_cell(origin.cell, facing, forward, side);
+                    insert_area_cell(&mut cells, cell)?;
+                }
+            }
+            explain.push(Explain::new(
+                "area-line",
+                format!("origin excluded; width {width} ft"),
+            ));
+        }
+        AreaShape::Cube => {
+            let facing = origin.facing.ok_or(SpatialError::MissingAreaDirection {
+                shape: AreaShape::Cube,
+            })?;
+            let side_cells = ceil_cells(area.size_ft);
+            let left = (side_cells - 1) / 2;
+            let right = side_cells / 2;
+            for forward in 0..side_cells {
+                for side in -left..=right {
+                    for dz_cells in 0..side_cells {
+                        let mut cell = forward_cell(origin.cell, facing, forward, side);
+                        cell.z = origin
+                            .cell
+                            .z
+                            .saturating_add(dz_cells.saturating_mul(FEET_PER_CELL));
+                        insert_area_cell(&mut cells, cell)?;
+                    }
+                }
+            }
+            explain.push(Explain::new(
+                "area-cube",
+                "origin on a face; side length applies on all axes",
+            ));
+        }
+    }
+
+    Ok(AreaResult {
+        shape: area.shape,
+        origin: origin.cell,
+        cells: cells.into_iter().collect(),
+        explain,
+    })
+}
+
+/// Intersect an area result with a target volume.
+///
+/// A cell counts when its x/y matches a target footprint cell and its z lies
+/// inside the target's vertical band. Only total cover removes a cell from the
+/// area; half and three-quarters cover do not reduce area damage (contract
+/// A-08). The ray starts at the area origin and uses the origin body's eye
+/// height.
+pub fn area_intersection(
+    area: &AreaResult,
+    origin: &SpatialBody,
+    target: &SpatialBody,
+    blockers: &[SpatialBlocker],
+) -> AreaIntersection {
+    let target_cells = target.cells();
+    let origin_cell = CellPos {
+        x: area.origin.x,
+        y: area.origin.y,
+        z: origin.pose.cell.z,
+    };
+    let origin_eye = origin.top_ft();
+
+    let mut overlapping = BTreeSet::new();
+    let mut covered = BTreeSet::new();
+    let mut total_blockers = BTreeSet::new();
+    for target_cell in &target_cells {
+        let target_band_top = target_cell.z.saturating_add(target.height_ft);
+        let mut saw_overlap = false;
+        let mut saw_clear = false;
+        for area_cell in &area.cells {
+            if area_cell.x != target_cell.x
+                || area_cell.y != target_cell.y
+                || area_cell.z < target_cell.z
+                || area_cell.z >= target_band_top
+            {
+                continue;
+            }
+            saw_overlap = true;
+            let segment = SightSegment {
+                from: origin_cell,
+                from_eye_ft: origin_eye,
+                to: *area_cell,
+                to_eye_ft: area_cell.z,
+                blockers,
+                from_id: &origin.id,
+                to_id: &target.id,
+            };
+            let blocked = segment_blockers_filtered(&segment, |blocker| {
+                blocker.cover == Cover::Total && blocker.blocks_sight
+            });
+            if blocked.is_empty() {
+                saw_clear = true;
+            } else {
+                total_blockers.extend(blocked);
+            }
+        }
+        if saw_overlap {
+            overlapping.insert(*target_cell);
+        }
+        if saw_clear {
+            covered.insert(*target_cell);
+        }
+    }
+
+    let fully_covered = !target_cells.is_empty()
+        && target_cells
+            .iter()
+            .all(|target_cell| covered.contains(target_cell));
+    let total_cover_blocked = !overlapping.is_empty() && covered.is_empty();
+
+    let mut explain = vec![
+        Explain::new(
+            "area-target-cells",
+            format!("{} target footprint cells", target_cells.len()),
+        ),
+        Explain::new(
+            "area-covered-cells",
+            format!("{} target cells overlap", overlapping.len()),
+        ),
+    ];
+    if total_cover_blocked {
+        explain.push(Explain::new(
+            "area-total-cover",
+            format!("total cover blocks every cell: {:?}", total_blockers),
+        ));
+    } else if fully_covered {
+        explain.push(Explain::new("area-full", "target volume is fully covered"));
+    } else if !covered.is_empty() {
+        explain.push(Explain::new(
+            "area-partial",
+            "target volume is partly covered",
+        ));
+    }
+
+    AreaIntersection {
+        intersects: !covered.is_empty(),
+        covered_cells: covered.into_iter().collect(),
+        target_cells: target_cells.len(),
+        fully_covered,
+        total_cover_blocked,
+        explain,
+    }
+}
+
+/// Zone-graph queries. A zone graph is not a metric grid: same zone is 0 ft
+/// for reach/travel, LOS is a scene-level approximation, and only sphere and
+/// emanation have zone-wide area answers.
+pub struct ZoneQuery<'a> {
+    space: &'a dyn Space,
+}
+
+impl<'a> ZoneQuery<'a> {
+    pub fn new(space: &'a dyn Space) -> Self {
+        Self { space }
+    }
+
+    pub fn distance(&self, from: &Position, to: &Position) -> Option<Distance> {
+        let feet = self.space.distance(from, to)?;
+        let mut explain = vec![Explain::new(
+            "zone-distance",
+            "zone-graph distance; same zone is 0 ft (display may say ~5 ft)",
+        )];
+        if feet == SAME_ZONE_DISTANCE {
+            explain.push(Explain::new(
+                "zone-same-zone",
+                "both positions are in one zone",
+            ));
+        }
+        Some(Distance {
+            policy: DistancePolicy::ZoneGraph,
+            feet,
+            squares: 0,
+            explain,
+        })
+    }
+
+    pub fn can_reach(&self, from: &Position, to: &Position, reach_ft: i32) -> Reach {
+        // Zone contract: same zone or any graph path within reach. The legacy
+        // `Space::can_reach` only checks a direct edge, so the query kernel
+        // uses the cached all-pairs distance instead.
+        let distance = self.distance(from, to);
+        let reachable = distance
+            .as_ref()
+            .is_some_and(|distance| distance.feet <= reach_ft.max(0));
+        Reach {
+            reachable,
+            distance: distance.unwrap_or_else(|| Distance {
+                policy: DistancePolicy::ZoneGraph,
+                feet: 0,
+                squares: 0,
+                explain: vec![Explain::new(
+                    "zone-missing",
+                    "one or both positions are not in the zone graph",
+                )],
+            }),
+        }
+    }
+
+    pub fn line_of_sight(&self, from: &Position, to: &Position) -> LineOfSight {
+        if !self.space.contains(from) || !self.space.contains(to) {
+            return LineOfSight {
+                clear: false,
+                blocked_by: Vec::new(),
+                explain: vec![Explain::new(
+                    "zone-los-missing",
+                    "one or both positions are not in the zone graph",
+                )],
+            };
+        }
+        LineOfSight {
+            clear: true,
+            blocked_by: Vec::new(),
+            explain: vec![Explain::new(
+                "zone-los",
+                "zone mode has no geometric sight blockers; scene LOS flags are the fallback",
+            )],
+        }
+    }
+
+    pub fn cover_between(&self, from: &Position, to: &Position) -> CoverResult {
+        let degree = self.space.cover(from, to);
+        let sources = if degree == Cover::None {
+            Vec::new()
+        } else {
+            to.zone_id()
+                .map(|zone| vec![zone.to_string()])
+                .unwrap_or_default()
+        };
+        CoverResult {
+            degree,
+            sources,
+            explain: vec![Explain::new(
+                "zone-cover",
+                "zone/edge cover flag; no geometric cover sources",
+            )],
+        }
+    }
+
+    pub fn can_occupy(&self, at: &Position, occupants: &[Position]) -> Occupancy {
+        let mut explain = vec![Explain::new("zone-occupancy", "zone-level occupancy")];
+        if !self.space.contains(at) {
+            explain.push(Explain::new("zone-unknown", "position is not in the graph"));
+            return Occupancy {
+                allowed: false,
+                reason: Some(OccupancyReason::OutOfBounds),
+                blockers: Vec::new(),
+                explain,
+            };
+        }
+        if occupants.iter().any(|occupant| occupant == at) {
+            explain.push(Explain::new(
+                "zone-occupied",
+                "another body is in this zone",
+            ));
+            return Occupancy {
+                allowed: false,
+                reason: Some(OccupancyReason::Occupied),
+                blockers: Vec::new(),
+                explain,
+            };
+        }
+        explain.push(Explain::new("zone-ok", "zone is free"));
+        Occupancy {
+            allowed: true,
+            reason: None,
+            blockers: Vec::new(),
+            explain,
+        }
+    }
+
+    pub fn area(
+        &self,
+        origin: &Position,
+        area: &AreaSpecV1,
+        profile: &SpatialProfile,
+    ) -> Result<ZoneArea, SpatialError> {
+        profile.validate_area(area)?;
+        if self.space.mode() != SceneMode::Zones
+            || !matches!(area.shape, AreaShape::Sphere | AreaShape::Emanation)
+        {
+            return Err(SpatialError::UnsupportedInZone { shape: area.shape });
+        }
+        if !self.space.contains(origin) {
+            return Err(SpatialError::UnknownPosition {
+                position: position_label(origin),
+            });
+        }
+        let mut zones = BTreeSet::new();
+        for position in self.space.all_positions() {
+            let Position::Zone { zone } = position else {
+                return Err(SpatialError::UnsupportedInZone { shape: area.shape });
+            };
+            if area.shape == AreaShape::Emanation && origin.zone_id() == Some(zone.as_str()) {
+                continue;
+            }
+            let Some(distance) = self
+                .space
+                .distance(origin, &Position::Zone { zone: zone.clone() })
+            else {
+                continue;
+            };
+            if distance <= area.size_ft {
+                zones.insert(zone);
+            }
+        }
+        Ok(ZoneArea {
+            zones: zones.into_iter().collect(),
+            approximation:
+                "zone graph: same zone = 0 ft; radius uses graph edge distance; not a metric 3D area"
+                    .to_string(),
+            explain: vec![Explain::new(
+                "zone-area",
+                "zones whose graph distance from the origin is within the radius",
+            )],
+        })
     }
 }
