@@ -1,0 +1,3782 @@
+# Spatial overlay for SRD 5.2.1 monsters (CC-BY-4.0, see NOTICE).
+# Generated from srd-5.2.1-monsters.pack.json; only creatures whose SRD speed
+# has hover or burrow are copied here, with structured `hover` / `burrow`
+# fields added to `speed`. The pack itself is owned by #182; ordinary YAML
+# overrides it by id. Do not add non-SRD creatures or book text here.
+creatures:
+  - id: "adult-blue-dragon"
+    abilities:
+      cha: 20
+      con: 23
+      dex: 10
+      int: 16
+      str: 25
+      wis: 15
+    ac: 19
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d8+7"
+            type: "slashing"
+          -
+            dice: "1d10"
+            type: "lightning"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 5 (1d10) Lightning damage."
+        name: "Rend"
+        reach: 10
+        to_hit: 12
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "adult-blue-dragon-multiattack"
+        manual: "The dragon makes three Rend attacks. It can replace one attack with a use of Spellcasting to cast Shatter."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "adult-blue-dragon-lightning-breath"
+        manual: "Dexterity Saving Throw: DC 19, each creature in a 90-foot-long, 5-footwide Line. Failure: 60 (11d10) Lightning damage. Success: Half damage."
+        name: "Lightning Breath"
+      -
+        activation: "action"
+        concentration: false
+        id: "adult-blue-dragon-spellcasting"
+        manual: "The dragon casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 18):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "adult-blue-dragon-legendary-resistance"
+        manual: "If the dragon fails a saving throw, it can choose to succeed instead."
+        name: "Legendary Resistance"
+      -
+        activation: "free"
+        concentration: false
+        id: "adult-blue-dragon-legendary-cloaked-flight"
+        manual: "The dragon uses Spellcasting to cast Invisibility on itself, and it can fly up to half its Fly Speed. The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Cloaked Flight"
+      -
+        activation: "free"
+        concentration: false
+        id: "adult-blue-dragon-legendary-sonic-boom"
+        manual: "The dragon uses Spellcasting to cast Shatter. The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Sonic Boom"
+      -
+        activation: "free"
+        concentration: false
+        id: "adult-blue-dragon-legendary-tail-swipe"
+        manual: "The dragon makes one Rend attack."
+        name: "Legendary: Tail Swipe"
+    hp: 212
+    immunities:
+      - "lightning"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Adult Blue Dragon
+      Huge dragon, lawful evil
+      AC 19
+      HP 212 (17d12 + 102)
+      Speed burrow 30 ft., fly 80 ft., walk 40 ft.
+      STR 25 (+7), DEX 10 (+0), CON 23 (+6), INT 16 (+3), WIS 15 (+2), CHA 20 (+5)
+      Senses blindsight 60 ft., darkvision 120 ft., passive perception 22
+      Languages Common, Draconic
+      CR 16 (XP 15000)
+
+      Traits
+      Legendary Resistance. If the dragon fails a saving throw, it can choose to succeed instead.
+
+      Actions
+      Multiattack. The dragon makes three Rend attacks. It can replace one attack with a use of Spellcasting to cast Shatter.
+      Rend. Melee Attack Roll: +12, reach 10 ft. Hit: 16 (2d8 + 7) Slashing damage plus 5 (1d10) Lightning damage.
+      Lightning Breath. Dexterity Saving Throw: DC 19, each creature in a 90-foot-long, 5-footwide Line. Failure: 60 (11d10) Lightning damage. Success: Half damage.
+      Spellcasting. The dragon casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 18):
+
+      Legendary Actions
+      Cloaked Flight. The dragon uses Spellcasting to cast Invisibility on itself, and it can fly up to half its Fly Speed. The dragon can’t take this action again until the start of its next turn.
+      Sonic Boom. The dragon uses Spellcasting to cast Shatter. The dragon can’t take this action again until the start of its next turn.
+      Tail Swipe. The dragon makes one Rend attack.
+    multiattack:
+      - "rend"
+      - "rend"
+    name: "Adult Blue Dragon"
+    notes: "SRD 5.2.1 Adult Blue Dragon, CR 16 (XP 15000), HP 212 (17d12 + 102). burrow speed 30 ft.; legendary actions are manual (3 per round, at the end of other creatures' turns)."
+    prof: 5
+    saves:
+      dex: 5
+      wis: 7
+    senses: "Blindsight 60 ft.; Darkvision 120 ft.; Passive perception 22"
+    size: "huge"
+    skills:
+      perception: 12
+      stealth: 5
+    tags:
+      - "srd"
+      - "cr-16"
+    speed:
+      burrow: 30
+      fly: 80
+      walk: 40
+  - id: "adult-brass-dragon"
+    abilities:
+      cha: 17
+      con: 21
+      dex: 10
+      int: 14
+      str: 23
+      wis: 13
+    ac: 18
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d10+6"
+            type: "slashing"
+          -
+            dice: "1d8"
+            type: "fire"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 4 (1d8) Fire damage."
+        name: "Rend"
+        reach: 10
+        to_hit: 11
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "adult-brass-dragon-multiattack"
+        manual: "The dragon makes three Rend attacks. It can replace one attack with a use of (A) Sleep Breath or (B) Spellcasting to cast Scorching Ray."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "adult-brass-dragon-fire-breath"
+        manual: "Dexterity Saving Throw: DC 18, each creature in a 60-foot-long, 5-footwide Line. Failure: 45 (10d8) Fire damage. Success: Half damage."
+        name: "Fire Breath"
+      -
+        activation: "action"
+        concentration: false
+        id: "adult-brass-dragon-sleep-breath"
+        manual: "Constitution Saving Throw: DC 18, each creature in a 60-foot Cone. Failure: The target has the Incapacitated condition until the end of its next turn, at which point it repeats the save. Second Failure: The target has the Unconscious condition for 10 minutes. This effect ends for the target if it takes damage or a creature within 5 feet of it takes an action to wake it."
+        name: "Sleep Breath"
+      -
+        activation: "action"
+        concentration: false
+        id: "adult-brass-dragon-spellcasting"
+        manual: "The dragon casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 16):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "adult-brass-dragon-legendary-resistance"
+        manual: "If the dragon fails a saving throw, it can choose to succeed instead."
+        name: "Legendary Resistance"
+      -
+        activation: "free"
+        concentration: false
+        id: "adult-brass-dragon-legendary-blazing-light"
+        manual: "The dragon uses Spellcasting to cast Scorching Ray."
+        name: "Legendary: Blazing Light"
+      -
+        activation: "free"
+        concentration: false
+        id: "adult-brass-dragon-legendary-pounce"
+        manual: "The dragon moves up to half its Speed, and it makes one Rend attack."
+        name: "Legendary: Pounce"
+      -
+        activation: "free"
+        concentration: false
+        id: "adult-brass-dragon-legendary-scorching-sands"
+        manual: "Dexterity Saving Throw: DC 16, one creature the dragon can see within 120 feet. Failure: 27 (6d8) Fire damage, and the target’s Speed is halved until the end of its next turn. Failure or Success: The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Scorching Sands"
+    hp: 172
+    immunities:
+      - "fire"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Adult Brass Dragon
+      Huge dragon, chaotic good
+      AC 18
+      HP 172 (15d12 + 75)
+      Speed burrow 30 ft., fly 80 ft., walk 40 ft.
+      STR 23 (+6), DEX 10 (+0), CON 21 (+5), INT 14 (+2), WIS 13 (+1), CHA 17 (+3)
+      Senses blindsight 60 ft., darkvision 120 ft., passive perception 21
+      Languages Common, Draconic
+      CR 13 (XP 10000)
+
+      Traits
+      Legendary Resistance. If the dragon fails a saving throw, it can choose to succeed instead.
+
+      Actions
+      Multiattack. The dragon makes three Rend attacks. It can replace one attack with a use of (A) Sleep Breath or (B) Spellcasting to cast Scorching Ray.
+      Rend. Melee Attack Roll: +11, reach 10 ft. Hit: 17 (2d10 + 6) Slashing damage plus 4 (1d8) Fire damage.
+      Fire Breath. Dexterity Saving Throw: DC 18, each creature in a 60-foot-long, 5-footwide Line. Failure: 45 (10d8) Fire damage. Success: Half damage.
+      Sleep Breath. Constitution Saving Throw: DC 18, each creature in a 60-foot Cone. Failure: The target has the Incapacitated condition until the end of its next turn, at which point it repeats the save. Second Failure: The target has the Unconscious condition for 10 minutes. This effect ends for the target if it takes damage or a creature within 5 feet of it takes an action to wake it.
+      Spellcasting. The dragon casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 16):
+
+      Legendary Actions
+      Blazing Light. The dragon uses Spellcasting to cast Scorching Ray.
+      Pounce. The dragon moves up to half its Speed, and it makes one Rend attack.
+      Scorching Sands. Dexterity Saving Throw: DC 16, one creature the dragon can see within 120 feet. Failure: 27 (6d8) Fire damage, and the target’s Speed is halved until the end of its next turn. Failure or Success: The dragon can’t take this action again until the start of its next turn.
+    multiattack:
+      - "rend"
+      - "rend"
+    name: "Adult Brass Dragon"
+    notes: "SRD 5.2.1 Adult Brass Dragon, CR 13 (XP 10000), HP 172 (15d12 + 75). burrow speed 30 ft.; legendary actions are manual (3 per round, at the end of other creatures' turns)."
+    prof: 5
+    saves:
+      dex: 5
+      wis: 6
+    senses: "Blindsight 60 ft.; Darkvision 120 ft.; Passive perception 21"
+    size: "huge"
+    skills:
+      history: 7
+      perception: 11
+      persuasion: 8
+      stealth: 5
+    tags:
+      - "srd"
+      - "cr-13"
+    speed:
+      burrow: 30
+      fly: 80
+      walk: 40
+  - id: "adult-white-dragon"
+    abilities:
+      cha: 12
+      con: 22
+      dex: 10
+      int: 8
+      str: 22
+      wis: 12
+    ac: 18
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d6+6"
+            type: "slashing"
+          -
+            dice: "1d8"
+            type: "cold"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 4 (1d8) Cold damage."
+        name: "Rend"
+        reach: 10
+        to_hit: 11
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "adult-white-dragon-multiattack"
+        manual: "The dragon makes three Rend attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "adult-white-dragon-cold-breath"
+        manual: "Constitution Saving Throw: DC 19, each creature in a 60-foot Cone. Failure: 54 (12d8) Cold damage. Success: Half damage."
+        name: "Cold Breath"
+      -
+        activation: "passive"
+        concentration: false
+        id: "adult-white-dragon-ice-walk"
+        manual: "The dragon can move across and climb icy surfaces without needing to make an ability check. Additionally, Difficult Terrain composed of ice or snow doesn’t cost it extra movement."
+        name: "Ice Walk"
+      -
+        activation: "passive"
+        concentration: false
+        id: "adult-white-dragon-legendary-resistance"
+        manual: "If the dragon fails a saving throw, it can choose to succeed instead."
+        name: "Legendary Resistance"
+      -
+        activation: "free"
+        concentration: false
+        id: "adult-white-dragon-legendary-freezing-burst"
+        manual: "Constitution Saving Throw: DC 14, each creature in a 30-foot-radius Sphere centered on a point the dragon can see within 120 feet. Failure: 7 (2d6) Cold damage, and the target’s Speed is 0 until the end of the target’s next turn. Failure or Success: The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Freezing Burst"
+      -
+        activation: "free"
+        concentration: false
+        id: "adult-white-dragon-legendary-frightful-presence"
+        manual: "The dragon casts Fear, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 14). The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Frightful Presence"
+      -
+        activation: "free"
+        concentration: false
+        id: "adult-white-dragon-legendary-pounce"
+        manual: "The dragon moves up to half its Speed, and it makes one Rend attack."
+        name: "Legendary: Pounce"
+    hp: 200
+    immunities:
+      - "cold"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Adult White Dragon
+      Huge dragon, chaotic evil
+      AC 18
+      HP 200 (16d12 + 96)
+      Speed burrow 30 ft., fly 80 ft., swim 40 ft., walk 40 ft.
+      STR 22 (+6), DEX 10 (+0), CON 22 (+6), INT 8 (-1), WIS 12 (+1), CHA 12 (+1)
+      Senses blindsight 60 ft., darkvision 120 ft., passive perception 21
+      Languages Common, Draconic
+      CR 13 (XP 10000)
+
+      Traits
+      Ice Walk. The dragon can move across and climb icy surfaces without needing to make an ability check. Additionally, Difficult Terrain composed of ice or snow doesn’t cost it extra movement.
+      Legendary Resistance. If the dragon fails a saving throw, it can choose to succeed instead.
+
+      Actions
+      Multiattack. The dragon makes three Rend attacks.
+      Rend. Melee Attack Roll: +11, reach 10 ft. Hit: 13 (2d6 + 6) Slashing damage plus 4 (1d8) Cold damage.
+      Cold Breath. Constitution Saving Throw: DC 19, each creature in a 60-foot Cone. Failure: 54 (12d8) Cold damage. Success: Half damage.
+
+      Legendary Actions
+      Freezing Burst. Constitution Saving Throw: DC 14, each creature in a 30-foot-radius Sphere centered on a point the dragon can see within 120 feet. Failure: 7 (2d6) Cold damage, and the target’s Speed is 0 until the end of the target’s next turn. Failure or Success: The dragon can’t take this action again until the start of its next turn.
+      Frightful Presence. The dragon casts Fear, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 14). The dragon can’t take this action again until the start of its next turn.
+      Pounce. The dragon moves up to half its Speed, and it makes one Rend attack.
+    multiattack:
+      - "rend"
+      - "rend"
+      - "rend"
+    name: "Adult White Dragon"
+    notes: "SRD 5.2.1 Adult White Dragon, CR 13 (XP 10000), HP 200 (16d12 + 96). burrow speed 30 ft.; legendary actions are manual (3 per round, at the end of other creatures' turns)."
+    prof: 5
+    saves:
+      dex: 5
+      wis: 6
+    senses: "Blindsight 60 ft.; Darkvision 120 ft.; Passive perception 21"
+    size: "huge"
+    skills:
+      perception: 11
+      stealth: 5
+    tags:
+      - "srd"
+      - "cr-13"
+    speed:
+      burrow: 30
+      fly: 80
+      swim: 40
+      walk: 40
+  - id: "air-elemental"
+    abilities:
+      cha: 6
+      con: 14
+      dex: 20
+      int: 6
+      str: 14
+      wis: 10
+    ac: 15
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d8+5"
+            type: "thunder"
+        id: "thunderous-slam"
+        kind: "melee"
+        name: "Thunderous Slam"
+        reach: 10
+        to_hit: 8
+    condition_immunities:
+      - "exhaustion"
+      - "grappled"
+      - "paralyzed"
+      - "petrified"
+      - "poisoned"
+      - "prone"
+      - "restrained"
+      - "unconscious"
+    creature_type: "elemental"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "air-elemental-multiattack"
+        manual: "The elemental makes two Thunderous Slam attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "air-elemental-whirlwind"
+        manual: "Strength Saving Throw: DC 13, one Medium or smaller creature in the elemental’s space. Failure: 24 (4d10 + 2) Thunder damage, and the target is pushed up to 20 feet straight away from the elemental and has the Prone condition. Success: Half damage only."
+        name: "Whirlwind"
+      -
+        activation: "passive"
+        concentration: false
+        id: "air-elemental-air-form"
+        manual: "The elemental can enter a creature’s space and stop there. It can move through a space as narrow as 1 inch without expending extra movement to do so."
+        name: "Air Form"
+    hp: 90
+    immunities:
+      - "poison"
+      - "thunder"
+    init_bonus: 5
+    kind: "monster"
+    manual: |-
+      Air Elemental
+      Large elemental, neutral
+      AC 15
+      HP 90 (12d10 + 24)
+      Speed fly 90 ft., hover true, walk 10 ft.
+      STR 14 (+2), DEX 20 (+5), CON 14 (+2), INT 6 (-2), WIS 10 (+0), CHA 6 (-2)
+      Senses darkvision 60 ft., passive perception 10
+      Languages Primordial (Auran)
+      CR 5 (XP 1800)
+
+      Traits
+      Air Form. The elemental can enter a creature’s space and stop there. It can move through a space as narrow as 1 inch without expending extra movement to do so.
+
+      Actions
+      Multiattack. The elemental makes two Thunderous Slam attacks.
+      Thunderous Slam. Melee Attack Roll: +8, reach 10 ft. Hit: 14 (2d8 + 5) Thunder damage.
+      Whirlwind. Strength Saving Throw: DC 13, one Medium or smaller creature in the elemental’s space. Failure: 24 (4d10 + 2) Thunder damage, and the target is pushed up to 20 feet straight away from the elemental and has the Prone condition. Success: Half damage only.
+    multiattack:
+      - "thunderous-slam"
+      - "thunderous-slam"
+    name: "Air Elemental"
+    notes: "SRD 5.2.1 Air Elemental, CR 5 (XP 1800), HP 90 (12d10 + 24). can hover."
+    prof: 3
+    resistances:
+      - "bludgeoning"
+      - "lightning"
+      - "piercing"
+      - "slashing"
+    senses: "Darkvision 60 ft.; Passive perception 10"
+    size: "large"
+    tags:
+      - "srd"
+      - "cr-5"
+    speed:
+      fly: 90
+      hover: true
+      walk: 10
+  - id: "ancient-blue-dragon"
+    abilities:
+      cha: 25
+      con: 27
+      dex: 10
+      int: 18
+      str: 29
+      wis: 17
+    ac: 22
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d8+9"
+            type: "slashing"
+          -
+            dice: "2d10"
+            type: "lightning"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 11 (2d10) Lightning damage."
+        name: "Rend"
+        reach: 15
+        to_hit: 16
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "ancient-blue-dragon-multiattack"
+        manual: "The dragon makes three Rend attacks. It can replace one attack with a use of Spellcasting to cast Shatter (level 3 version)."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "ancient-blue-dragon-lightning-breath"
+        manual: "Dexterity Saving Throw: DC 23, each creature in a 120-foot-long, 10-foot-wide Line. Failure: 88 (16d10) Lightning damage. Success: Half damage."
+        name: "Lightning Breath"
+      -
+        activation: "action"
+        concentration: false
+        id: "ancient-blue-dragon-spellcasting"
+        manual: "The dragon casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 22):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "ancient-blue-dragon-legendary-resistance"
+        manual: "If the dragon fails a saving throw, it can choose to succeed instead."
+        name: "Legendary Resistance"
+      -
+        activation: "free"
+        concentration: false
+        id: "ancient-blue-dragon-legendary-cloaked-flight"
+        manual: "The dragon uses Spellcasting to cast Invisibility on itself, and it can fly up to half its Fly Speed. The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Cloaked Flight"
+      -
+        activation: "free"
+        concentration: false
+        id: "ancient-blue-dragon-legendary-sonic-boom"
+        manual: "The dragon uses Spellcasting to cast Shatter (level 3 version). The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Sonic Boom"
+      -
+        activation: "free"
+        concentration: false
+        id: "ancient-blue-dragon-legendary-tail-swipe"
+        manual: "The dragon makes one Rend attack."
+        name: "Legendary: Tail Swipe"
+    hp: 481
+    immunities:
+      - "lightning"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Ancient Blue Dragon
+      Gargantuan dragon, lawful evil
+      AC 22
+      HP 481 (26d20 + 208)
+      Speed burrow 40 ft., fly 80 ft., walk 40 ft.
+      STR 29 (+9), DEX 10 (+0), CON 27 (+8), INT 18 (+4), WIS 17 (+3), CHA 25 (+7)
+      Senses blindsight 60 ft., darkvision 120 ft., passive perception 27
+      Languages Common, Draconic
+      CR 23 (XP 50000)
+
+      Traits
+      Legendary Resistance. If the dragon fails a saving throw, it can choose to succeed instead.
+
+      Actions
+      Multiattack. The dragon makes three Rend attacks. It can replace one attack with a use of Spellcasting to cast Shatter (level 3 version).
+      Rend. Melee Attack Roll: +16, reach 15 ft. Hit: 18 (2d8 + 9) Slashing damage plus 11 (2d10) Lightning damage.
+      Lightning Breath. Dexterity Saving Throw: DC 23, each creature in a 120-foot-long, 10-foot-wide Line. Failure: 88 (16d10) Lightning damage. Success: Half damage.
+      Spellcasting. The dragon casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 22):
+
+      Legendary Actions
+      Cloaked Flight. The dragon uses Spellcasting to cast Invisibility on itself, and it can fly up to half its Fly Speed. The dragon can’t take this action again until the start of its next turn.
+      Sonic Boom. The dragon uses Spellcasting to cast Shatter (level 3 version). The dragon can’t take this action again until the start of its next turn.
+      Tail Swipe. The dragon makes one Rend attack.
+    multiattack:
+      - "rend"
+      - "rend"
+    name: "Ancient Blue Dragon"
+    notes: "SRD 5.2.1 Ancient Blue Dragon, CR 23 (XP 50000), HP 481 (26d20 + 208). burrow speed 40 ft.; legendary actions are manual (3 per round, at the end of other creatures' turns)."
+    prof: 7
+    saves:
+      dex: 7
+      wis: 10
+    senses: "Blindsight 60 ft.; Darkvision 120 ft.; Passive perception 27"
+    size: "gargantuan"
+    skills:
+      perception: 17
+      stealth: 7
+    tags:
+      - "srd"
+      - "cr-23"
+    speed:
+      burrow: 40
+      fly: 80
+      walk: 40
+  - id: "ancient-brass-dragon"
+    abilities:
+      cha: 22
+      con: 25
+      dex: 10
+      int: 16
+      str: 27
+      wis: 15
+    ac: 20
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d10+8"
+            type: "slashing"
+          -
+            dice: "2d6"
+            type: "fire"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 7 (2d6) Fire damage."
+        name: "Rend"
+        reach: 15
+        to_hit: 14
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "ancient-brass-dragon-multiattack"
+        manual: "The dragon makes three Rend attacks. It can replace one attack with a use of (A) Sleep Breath or (B) Spellcasting to cast Scorching Ray (level 3 version)."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "ancient-brass-dragon-fire-breath"
+        manual: "Dexterity Saving Throw: DC 21, each creature in a 90-foot-long, 5-footwide Line. Failure: 58 (13d8) Fire damage. Success: Half damage."
+        name: "Fire Breath"
+      -
+        activation: "action"
+        concentration: false
+        id: "ancient-brass-dragon-sleep-breath"
+        manual: "Constitution Saving Throw: DC 21, each creature in a 90-foot Cone. Failure: The target has the Incapacitated condition until the end of its next turn, at which point it repeats the save. Second Failure: The target has the Unconscious condition for 10 minutes. This effect ends for the target if it takes damage or a creature within 5 feet of it takes an action to wake it."
+        name: "Sleep Breath"
+      -
+        activation: "action"
+        concentration: false
+        id: "ancient-brass-dragon-spellcasting"
+        manual: "The dragon casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 20):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "ancient-brass-dragon-legendary-resistance"
+        manual: "If the dragon fails a saving throw, it can choose to succeed instead."
+        name: "Legendary Resistance"
+      -
+        activation: "free"
+        concentration: false
+        id: "ancient-brass-dragon-legendary-blazing-light"
+        manual: "The dragon uses Spellcasting to cast Scorching Ray (level 3 version)."
+        name: "Legendary: Blazing Light"
+      -
+        activation: "free"
+        concentration: false
+        id: "ancient-brass-dragon-legendary-pounce"
+        manual: "The dragon moves up to half its Speed, and it makes one Rend attack."
+        name: "Legendary: Pounce"
+      -
+        activation: "free"
+        concentration: false
+        id: "ancient-brass-dragon-legendary-scorching-sands"
+        manual: "Dexterity Saving Throw: DC 20, one creature the dragon can see within 120 feet. Failure: 36 (8d8) Fire damage, and the target’s Speed is halved until the end of its next turn. Failure or Success: The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Scorching Sands"
+    hp: 332
+    immunities:
+      - "fire"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Ancient Brass Dragon
+      Gargantuan dragon, chaotic good
+      AC 20
+      HP 332 (19d20 + 133)
+      Speed burrow 40 ft., fly 80 ft., walk 40 ft.
+      STR 27 (+8), DEX 10 (+0), CON 25 (+7), INT 16 (+3), WIS 15 (+2), CHA 22 (+6)
+      Senses blindsight 60 ft., darkvision 120 ft., passive perception 24
+      Languages Common, Draconic
+      CR 20 (XP 25000)
+
+      Traits
+      Legendary Resistance. If the dragon fails a saving throw, it can choose to succeed instead.
+
+      Actions
+      Multiattack. The dragon makes three Rend attacks. It can replace one attack with a use of (A) Sleep Breath or (B) Spellcasting to cast Scorching Ray (level 3 version).
+      Rend. Melee Attack Roll: +14, reach 15 ft. Hit: 19 (2d10 + 8) Slashing damage plus 7 (2d6) Fire damage.
+      Fire Breath. Dexterity Saving Throw: DC 21, each creature in a 90-foot-long, 5-footwide Line. Failure: 58 (13d8) Fire damage. Success: Half damage.
+      Sleep Breath. Constitution Saving Throw: DC 21, each creature in a 90-foot Cone. Failure: The target has the Incapacitated condition until the end of its next turn, at which point it repeats the save. Second Failure: The target has the Unconscious condition for 10 minutes. This effect ends for the target if it takes damage or a creature within 5 feet of it takes an action to wake it.
+      Spellcasting. The dragon casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 20):
+
+      Legendary Actions
+      Blazing Light. The dragon uses Spellcasting to cast Scorching Ray (level 3 version).
+      Pounce. The dragon moves up to half its Speed, and it makes one Rend attack.
+      Scorching Sands. Dexterity Saving Throw: DC 20, one creature the dragon can see within 120 feet. Failure: 36 (8d8) Fire damage, and the target’s Speed is halved until the end of its next turn. Failure or Success: The dragon can’t take this action again until the start of its next turn.
+    multiattack:
+      - "rend"
+      - "rend"
+    name: "Ancient Brass Dragon"
+    notes: "SRD 5.2.1 Ancient Brass Dragon, CR 20 (XP 25000), HP 332 (19d20 + 133). burrow speed 40 ft.; legendary actions are manual (3 per round, at the end of other creatures' turns)."
+    prof: 6
+    saves:
+      dex: 6
+      wis: 8
+    senses: "Blindsight 60 ft.; Darkvision 120 ft.; Passive perception 24"
+    size: "gargantuan"
+    skills:
+      history: 9
+      perception: 14
+      persuasion: 12
+      stealth: 6
+    tags:
+      - "srd"
+      - "cr-20"
+    speed:
+      burrow: 40
+      fly: 80
+      walk: 40
+  - id: "ancient-white-dragon"
+    abilities:
+      cha: 18
+      con: 26
+      dex: 10
+      int: 10
+      str: 26
+      wis: 13
+    ac: 20
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d8+8"
+            type: "slashing"
+          -
+            dice: "2d6"
+            type: "cold"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 7 (2d6) Cold damage."
+        name: "Rend"
+        reach: 15
+        to_hit: 14
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "ancient-white-dragon-multiattack"
+        manual: "The dragon makes three Rend attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "ancient-white-dragon-cold-breath"
+        manual: "Constitution Saving Throw: DC 22, each creature in a 90-foot Cone. Failure: 63 (14d8) Cold damage. Success: Half damage."
+        name: "Cold Breath"
+      -
+        activation: "passive"
+        concentration: false
+        id: "ancient-white-dragon-ice-walk"
+        manual: "The dragon can move across and climb icy surfaces without needing to make an ability check. Additionally, Difficult Terrain composed of ice or snow doesn’t cost it extra movement."
+        name: "Ice Walk"
+      -
+        activation: "passive"
+        concentration: false
+        id: "ancient-white-dragon-legendary-resistance"
+        manual: "If the dragon fails a saving throw, it can choose to succeed instead."
+        name: "Legendary Resistance"
+      -
+        activation: "free"
+        concentration: false
+        id: "ancient-white-dragon-legendary-freezing-burst"
+        manual: "Constitution Saving Throw: DC 20, each creature in a 30-foot-radius Sphere centered on a point the dragon can see within 120 feet. Failure: 14 (4d6) Cold damage, and the target’s Speed is 0 until the end of the target’s next turn. Failure or Success: The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Freezing Burst"
+      -
+        activation: "free"
+        concentration: false
+        id: "ancient-white-dragon-legendary-frightful-presence"
+        manual: "The dragon casts Fear, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 18). The dragon can’t take this action again until the start of its next turn."
+        name: "Legendary: Frightful Presence"
+      -
+        activation: "free"
+        concentration: false
+        id: "ancient-white-dragon-legendary-pounce"
+        manual: "The dragon moves up to half its Speed, and it makes one Rend attack."
+        name: "Legendary: Pounce"
+    hp: 333
+    immunities:
+      - "cold"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Ancient White Dragon
+      Gargantuan dragon, chaotic evil
+      AC 20
+      HP 333 (18d20 + 144)
+      Speed burrow 40 ft., fly 80 ft., swim 40 ft., walk 40 ft.
+      STR 26 (+8), DEX 10 (+0), CON 26 (+8), INT 10 (+0), WIS 13 (+1), CHA 18 (+4)
+      Senses blindsight 60 ft., darkvision 120 ft., passive perception 23
+      Languages Common, Draconic
+      CR 20 (XP 25000)
+
+      Traits
+      Ice Walk. The dragon can move across and climb icy surfaces without needing to make an ability check. Additionally, Difficult Terrain composed of ice or snow doesn’t cost it extra movement.
+      Legendary Resistance. If the dragon fails a saving throw, it can choose to succeed instead.
+
+      Actions
+      Multiattack. The dragon makes three Rend attacks.
+      Rend. Melee Attack Roll: +14, reach 15 ft. Hit: 17 (2d8 + 8) Slashing damage plus 7 (2d6) Cold damage.
+      Cold Breath. Constitution Saving Throw: DC 22, each creature in a 90-foot Cone. Failure: 63 (14d8) Cold damage. Success: Half damage.
+
+      Legendary Actions
+      Freezing Burst. Constitution Saving Throw: DC 20, each creature in a 30-foot-radius Sphere centered on a point the dragon can see within 120 feet. Failure: 14 (4d6) Cold damage, and the target’s Speed is 0 until the end of the target’s next turn. Failure or Success: The dragon can’t take this action again until the start of its next turn.
+      Frightful Presence. The dragon casts Fear, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 18). The dragon can’t take this action again until the start of its next turn.
+      Pounce. The dragon moves up to half its Speed, and it makes one Rend attack.
+    multiattack:
+      - "rend"
+      - "rend"
+      - "rend"
+    name: "Ancient White Dragon"
+    notes: "SRD 5.2.1 Ancient White Dragon, CR 20 (XP 25000), HP 333 (18d20 + 144). burrow speed 40 ft.; legendary actions are manual (3 per round, at the end of other creatures' turns)."
+    prof: 6
+    saves:
+      dex: 6
+      wis: 7
+    senses: "Blindsight 60 ft.; Darkvision 120 ft.; Passive perception 23"
+    size: "gargantuan"
+    skills:
+      perception: 13
+      stealth: 6
+    tags:
+      - "srd"
+      - "cr-20"
+    speed:
+      burrow: 40
+      fly: 80
+      swim: 40
+      walk: 40
+  - id: "animated-flying-sword"
+    abilities:
+      cha: 1
+      con: 11
+      dex: 15
+      int: 1
+      str: 12
+      wis: 5
+    ac: 17
+    ai:
+      template: "mindless"
+    attacks:
+      -
+        damage:
+          -
+            dice: "1d8+2"
+            type: "slashing"
+        id: "slash"
+        kind: "melee"
+        name: "Slash"
+        reach: 5
+        to_hit: 4
+    condition_immunities:
+      - "charmed"
+      - "deafened"
+      - "exhaustion"
+      - "frightened"
+      - "paralyzed"
+      - "petrified"
+      - "poisoned"
+    creature_type: "construct"
+    hp: 14
+    immunities:
+      - "poison"
+      - "psychic"
+    init_bonus: 2
+    kind: "monster"
+    manual: |-
+      Animated Flying Sword
+      Small construct, unaligned
+      AC 17
+      HP 14 (4d6)
+      Speed fly 50 ft., hover true, walk 5 ft.
+      STR 12 (+1), DEX 15 (+2), CON 11 (+0), INT 1 (-5), WIS 5 (-3), CHA 1 (-5)
+      Senses blindsight 60 ft., passive perception 7
+      Languages None
+      CR 0.25 (XP 50)
+
+      Actions
+      Slash. Melee Attack Roll: +4, reach 5 ft. Hit: 6 (1d8 + 2) Slashing damage.
+    name: "Animated Flying Sword"
+    notes: "SRD 5.2.1 Animated Flying Sword, CR 1/4 (XP 50), HP 14 (4d6). can hover."
+    prof: 2
+    saves:
+      dex: 4
+    senses: "Blindsight 60 ft.; Passive perception 7"
+    size: "small"
+    tags:
+      - "srd"
+      - "cr-1-4"
+    speed:
+      fly: 50
+      hover: true
+      walk: 5
+  - id: "ankheg"
+    abilities:
+      cha: 6
+      con: 14
+      dex: 11
+      int: 1
+      str: 17
+      wis: 13
+    ac: 14
+    ai:
+      template: "mindless"
+    creature_type: "monstrosity"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "ankheg-bite"
+        manual: "Melee Attack Roll: +5 (with Advantage if the target is Grappled by the ankheg), reach 5 ft. Hit: 10 (2d6 + 3) Slashing damage plus 3 (1d6) Acid damage. If the target is a Large or smaller creature, it has the Grappled condition (escape DC 13)."
+        name: "Bite"
+      -
+        activation: "action"
+        concentration: false
+        id: "ankheg-acid-spray"
+        manual: "Dexterity Saving Throw: DC 12, each creature in a 30-foot-long, 5-foot-wide Line. Failure: 14 (4d6) Acid damage. Success: Half damage."
+        name: "Acid Spray"
+      -
+        activation: "passive"
+        concentration: false
+        id: "ankheg-tunneler"
+        manual: "The ankheg can burrow through solid rock at half its Burrow Speed and leaves a 10-foot-diameter tunnel in its wake."
+        name: "Tunneler"
+    hp: 45
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Ankheg
+      Large monstrosity, unaligned
+      AC 14
+      HP 45 (6d10 + 12)
+      Speed burrow 10 ft., walk 30 ft.
+      STR 17 (+3), DEX 11 (+0), CON 14 (+2), INT 1 (-5), WIS 13 (+1), CHA 6 (-2)
+      Senses darkvision 60 ft., passive perception 11, tremorsense 60 ft.
+      Languages None
+      CR 2 (XP 450)
+
+      Traits
+      Tunneler. The ankheg can burrow through solid rock at half its Burrow Speed and leaves a 10-foot-diameter tunnel in its wake.
+
+      Actions
+      Bite. Melee Attack Roll: +5 (with Advantage if the target is Grappled by the ankheg), reach 5 ft. Hit: 10 (2d6 + 3) Slashing damage plus 3 (1d6) Acid damage. If the target is a Large or smaller creature, it has the Grappled condition (escape DC 13).
+      Acid Spray. Dexterity Saving Throw: DC 12, each creature in a 30-foot-long, 5-foot-wide Line. Failure: 14 (4d6) Acid damage. Success: Half damage.
+    name: "Ankheg"
+    notes: "SRD 5.2.1 Ankheg, CR 2 (XP 450), HP 45 (6d10 + 12). burrow speed 10 ft.."
+    prof: 2
+    senses: "Darkvision 60 ft.; Passive perception 11; Tremorsense 60 ft."
+    size: "large"
+    tags:
+      - "srd"
+      - "cr-2"
+    speed:
+      burrow: 10
+      walk: 30
+  - id: "badger"
+    abilities:
+      cha: 5
+      con: 16
+      dex: 11
+      int: 2
+      str: 10
+      wis: 12
+    ac: 11
+    ai:
+      template: "mindless"
+    creature_type: "beast"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "badger-bite"
+        manual: "Melee Attack Roll: +2, reach 5 ft. Hit: 1 Piercing damage."
+        name: "Bite"
+    hp: 5
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Badger
+      Tiny beast, unaligned
+      AC 11
+      HP 5 (1d4 + 3)
+      Speed burrow 5 ft., walk 20 ft.
+      STR 10 (+0), DEX 11 (+0), CON 16 (+3), INT 2 (-4), WIS 12 (+1), CHA 5 (-3)
+      Senses darkvision 30 ft., passive perception 13
+      Languages None
+      CR 0 (XP 10)
+
+      Actions
+      Bite. Melee Attack Roll: +2, reach 5 ft. Hit: 1 Piercing damage.
+    name: "Badger"
+    notes: "SRD 5.2.1 Badger, CR 0 (XP 10), HP 5 (1d4 + 3). burrow speed 5 ft.."
+    prof: 2
+    resistances:
+      - "poison"
+    senses: "Darkvision 30 ft.; Passive perception 13"
+    size: "tiny"
+    skills:
+      perception: 3
+    tags:
+      - "srd"
+      - "cr-0"
+    speed:
+      burrow: 5
+      walk: 20
+  - id: "blue-dragon-wyrmling"
+    abilities:
+      cha: 15
+      con: 15
+      dex: 10
+      int: 12
+      str: 17
+      wis: 11
+    ac: 17
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "1d10+3"
+            type: "slashing"
+          -
+            dice: "1d6"
+            type: "lightning"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 3 (1d6) Lightning damage."
+        name: "Rend"
+        reach: 5
+        to_hit: 5
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "blue-dragon-wyrmling-multiattack"
+        manual: "The dragon makes two Rend attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "blue-dragon-wyrmling-lightning-breath"
+        manual: "Dexterity Saving Throw: DC 12, each creature in a 30-foot-long, 5-footwide Line. Failure: 21 (6d6) Lightning damage. Success: Half damage."
+        name: "Lightning Breath"
+    hp: 65
+    immunities:
+      - "lightning"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Blue Dragon Wyrmling
+      Medium dragon, lawful evil
+      AC 17
+      HP 65 (10d8 + 20)
+      Speed burrow 15 ft., fly 60 ft., walk 30 ft.
+      STR 17 (+3), DEX 10 (+0), CON 15 (+2), INT 12 (+1), WIS 11 (+0), CHA 15 (+2)
+      Senses blindsight 10 ft., darkvision 60 ft., passive perception 14
+      Languages Draconic
+      CR 3 (XP 700)
+
+      Actions
+      Multiattack. The dragon makes two Rend attacks.
+      Rend. Melee Attack Roll: +5, reach 5 ft. Hit: 8 (1d10 + 3) Slashing damage plus 3 (1d6) Lightning damage.
+      Lightning Breath. Dexterity Saving Throw: DC 12, each creature in a 30-foot-long, 5-footwide Line. Failure: 21 (6d6) Lightning damage. Success: Half damage.
+    multiattack:
+      - "rend"
+      - "rend"
+    name: "Blue Dragon Wyrmling"
+    notes: "SRD 5.2.1 Blue Dragon Wyrmling, CR 3 (XP 700), HP 65 (10d8 + 20). burrow speed 15 ft.."
+    prof: 2
+    saves:
+      dex: 2
+      wis: 2
+    senses: "Blindsight 10 ft.; Darkvision 60 ft.; Passive perception 14"
+    size: "medium"
+    skills:
+      perception: 4
+      stealth: 2
+    tags:
+      - "srd"
+      - "cr-3"
+    speed:
+      burrow: 15
+      fly: 60
+      walk: 30
+  - id: "brass-dragon-wyrmling"
+    abilities:
+      cha: 13
+      con: 13
+      dex: 10
+      int: 10
+      str: 15
+      wis: 11
+    ac: 15
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "1d10+2"
+            type: "slashing"
+        id: "rend"
+        kind: "melee"
+        name: "Rend"
+        reach: 5
+        to_hit: 4
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "brass-dragon-wyrmling-fire-breath"
+        manual: "Dexterity Saving Throw: DC 11, each creature in a 20-foot-long, 5-footwide Line. Failure: 14 (4d6) Fire damage. Success: Half damage."
+        name: "Fire Breath"
+      -
+        activation: "action"
+        concentration: false
+        id: "brass-dragon-wyrmling-sleep-breath"
+        manual: "Constitution Saving Throw: DC 11, each creature in a 15-foot Cone. Failure: The target has the Incapacitated condition until the end of its next turn, at which point it repeats the save. Second Failure: The target has the Unconscious condition for 1 minute. This effect ends for the target if it takes damage or a creature within 5 feet of it takes an action to wake it."
+        name: "Sleep Breath"
+    hp: 22
+    immunities:
+      - "fire"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Brass Dragon Wyrmling
+      Medium dragon, chaotic good
+      AC 15
+      HP 22 (4d8 + 4)
+      Speed burrow 15 ft., fly 60 ft., walk 30 ft.
+      STR 15 (+2), DEX 10 (+0), CON 13 (+1), INT 10 (+0), WIS 11 (+0), CHA 13 (+1)
+      Senses blindsight 10 ft., darkvision 60 ft., passive perception 14
+      Languages Draconic
+      CR 1 (XP 200)
+
+      Actions
+      Rend. Melee Attack Roll: +4, reach 5 ft. Hit: 7 (1d10 + 2) Slashing damage.
+      Fire Breath. Dexterity Saving Throw: DC 11, each creature in a 20-foot-long, 5-footwide Line. Failure: 14 (4d6) Fire damage. Success: Half damage.
+      Sleep Breath. Constitution Saving Throw: DC 11, each creature in a 15-foot Cone. Failure: The target has the Incapacitated condition until the end of its next turn, at which point it repeats the save. Second Failure: The target has the Unconscious condition for 1 minute. This effect ends for the target if it takes damage or a creature within 5 feet of it takes an action to wake it.
+    name: "Brass Dragon Wyrmling"
+    notes: "SRD 5.2.1 Brass Dragon Wyrmling, CR 1 (XP 200), HP 22 (4d8 + 4). burrow speed 15 ft.."
+    prof: 2
+    saves:
+      dex: 2
+      wis: 2
+    senses: "Blindsight 10 ft.; Darkvision 60 ft.; Passive perception 14"
+    size: "medium"
+    skills:
+      perception: 4
+      stealth: 2
+    tags:
+      - "srd"
+      - "cr-1"
+    speed:
+      burrow: 15
+      fly: 60
+      walk: 30
+  - id: "bulette"
+    abilities:
+      cha: 5
+      con: 21
+      dex: 11
+      int: 2
+      str: 19
+      wis: 10
+    ac: 17
+    ai:
+      template: "mindless"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d12+4"
+            type: "piercing"
+        id: "bite"
+        kind: "melee"
+        name: "Bite"
+        reach: 5
+        to_hit: 7
+    creature_type: "monstrosity"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "bulette-multiattack"
+        manual: "The bulette makes two Bite attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "bulette-deadly-leap"
+        manual: "The bulette spends 5 feet of movement to jump to a space within 15 feet that contains one or more Large or smaller creatures. Dexterity Saving Throw: DC 15, each creature in the bulette’s destination space. Failure: 19 (3d12) Bludgeoning damage, and the target has the Prone condition. Success: Half damage, and the target is pushed 5 feet straight away from the bulette."
+        name: "Deadly Leap"
+    hp: 94
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Bulette
+      Large monstrosity, unaligned
+      AC 17
+      HP 94 (9d10 + 45)
+      Speed burrow 40 ft., walk 40 ft.
+      STR 19 (+4), DEX 11 (+0), CON 21 (+5), INT 2 (-4), WIS 10 (+0), CHA 5 (-3)
+      Senses darkvision 60 ft., passive perception 16, tremorsense 120 ft.
+      Languages None
+      CR 5 (XP 1800)
+
+      Actions
+      Multiattack. The bulette makes two Bite attacks.
+      Bite. Melee Attack Roll: +7, reach 5 ft. Hit: 17 (2d12 + 4) Piercing damage.
+      Deadly Leap. The bulette spends 5 feet of movement to jump to a space within 15 feet that contains one or more Large or smaller creatures. Dexterity Saving Throw: DC 15, each creature in the bulette’s destination space. Failure: 19 (3d12) Bludgeoning damage, and the target has the Prone condition. Success: Half damage, and the target is pushed 5 feet straight away from the bulette.
+
+      Bonus Actions
+      Leap. The bulette jumps up to 30 feet by spending 10 feet of movement.
+    multiattack:
+      - "bite"
+      - "bite"
+    name: "Bulette"
+    notes: "SRD 5.2.1 Bulette, CR 5 (XP 1800), HP 94 (9d10 + 45). burrow speed 40 ft.."
+    prof: 3
+    senses: "Darkvision 60 ft.; Passive perception 16; Tremorsense 120 ft."
+    size: "large"
+    skills:
+      perception: 6
+    tags:
+      - "srd"
+      - "cr-5"
+    speed:
+      burrow: 40
+      walk: 40
+  - id: "cloud-giant"
+    abilities:
+      cha: 16
+      con: 22
+      dex: 10
+      int: 12
+      str: 27
+      wis: 16
+    ac: 14
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "3d8+8"
+            type: "bludgeoning"
+          -
+            dice: "2d6"
+            type: "thunder"
+        id: "thunderous-mace"
+        kind: "melee"
+        manual: "plus 7 (2d6) Thunder damage."
+        name: "Thunderous Mace"
+        reach: 10
+        to_hit: 12
+      -
+        damage:
+          -
+            dice: "3d6+8"
+            type: "thunder"
+        id: "thundercloud"
+        kind: "ranged"
+        manual: "and the target has the Incapacitated condition until the end of its next turn."
+        name: "Thundercloud"
+        range:
+          - 240
+          - 240
+        to_hit: 12
+    creature_type: "giant"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "cloud-giant-multiattack"
+        manual: "The giant makes two attacks, using Thunderous Mace or Thundercloud in any combination. It can replace one attack with a use of Spellcasting to cast Fog Cloud."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "cloud-giant-spellcasting"
+        manual: "The giant casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 15):"
+        name: "Spellcasting"
+    hp: 200
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Cloud Giant
+      Huge giant, neutral
+      AC 14
+      HP 200 (16d12 + 96)
+      Speed fly 20 ft., hover true, walk 40 ft.
+      STR 27 (+8), DEX 10 (+0), CON 22 (+6), INT 12 (+1), WIS 16 (+3), CHA 16 (+3)
+      Senses passive perception 21
+      Languages Common, Giant
+      CR 9 (XP 5000)
+
+      Actions
+      Multiattack. The giant makes two attacks, using Thunderous Mace or Thundercloud in any combination. It can replace one attack with a use of Spellcasting to cast Fog Cloud.
+      Thunderous Mace. Melee Attack Roll: +12, reach 10 ft. Hit: 21 (3d8 + 8) Bludgeoning damage plus 7 (2d6) Thunder damage.
+      Thundercloud. Ranged Attack Roll: +12, range 240 ft. Hit: 18 (3d6 + 8) Thunder damage, and the target has the Incapacitated condition until the end of its next turn.
+      Spellcasting. The giant casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 15):
+
+      Bonus Actions
+      Misty Step. The giant casts the Misty Step spell, using the same spellcasting ability as Spellcasting.
+    name: "Cloud Giant"
+    notes: "SRD 5.2.1 Cloud Giant, CR 9 (XP 5000), HP 200 (16d12 + 96). can hover."
+    prof: 4
+    saves:
+      con: 10
+      wis: 7
+    senses: "Passive perception 21"
+    size: "huge"
+    skills:
+      insight: 7
+      perception: 11
+    tags:
+      - "srd"
+      - "cr-9"
+    speed:
+      fly: 20
+      hover: true
+      walk: 40
+  - id: "deva"
+    abilities:
+      cha: 20
+      con: 18
+      dex: 18
+      int: 17
+      str: 18
+      wis: 20
+    ac: 17
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "1d6+4"
+            type: "bludgeoning"
+          -
+            dice: "4d8"
+            type: "radiant"
+        id: "holy-mace"
+        kind: "melee"
+        manual: "plus 18 (4d8) Radiant damage."
+        name: "Holy Mace"
+        reach: 5
+        to_hit: 8
+    condition_immunities:
+      - "charmed"
+      - "exhaustion"
+      - "frightened"
+    creature_type: "celestial"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "deva-multiattack"
+        manual: "The deva makes two Holy Mace attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "deva-spellcasting"
+        manual: "The deva casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 17):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "deva-exalted-restoration"
+        manual: "If the deva dies outside Mount Celestia, its body disappears, and it gains a new body instantly, reviving with all its Hit Points somewhere in Mount Celestia."
+        name: "Exalted Restoration"
+      -
+        activation: "passive"
+        concentration: false
+        id: "deva-magic-resistance"
+        manual: "The deva has Advantage on saving throws against spells and other magical effects."
+        name: "Magic Resistance"
+    hp: 229
+    init_bonus: 4
+    kind: "monster"
+    manual: |-
+      Deva
+      Medium celestial, lawful good
+      AC 17
+      HP 229 (27d8 + 108)
+      Speed fly 90 ft., hover true, walk 30 ft.
+      STR 18 (+4), DEX 18 (+4), CON 18 (+4), INT 17 (+3), WIS 20 (+5), CHA 20 (+5)
+      Senses darkvision 120 ft., passive perception 19
+      Languages All; telepathy 120 ft.
+      CR 10 (XP 5900)
+
+      Traits
+      Exalted Restoration. If the deva dies outside Mount Celestia, its body disappears, and it gains a new body instantly, reviving with all its Hit Points somewhere in Mount Celestia.
+      Magic Resistance. The deva has Advantage on saving throws against spells and other magical effects.
+
+      Actions
+      Multiattack. The deva makes two Holy Mace attacks.
+      Holy Mace. Melee Attack Roll: +8, reach 5 ft. Hit: 7 (1d6 + 4) Bludgeoning damage plus 18 (4d8) Radiant damage.
+      Spellcasting. The deva casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 17):
+
+      Bonus Actions
+      Divine Aid. The deva casts Cure Wounds, Lesser Restoration, or Remove Curse, using the same spellcasting ability as Spellcasting.
+    multiattack:
+      - "holy-mace"
+      - "holy-mace"
+    name: "Deva"
+    notes: "SRD 5.2.1 Deva, CR 10 (XP 5900), HP 229 (27d8 + 108). can hover."
+    prof: 4
+    resistances:
+      - "radiant"
+    saves:
+      cha: 9
+      wis: 9
+    senses: "Darkvision 120 ft.; Passive perception 19"
+    size: "medium"
+    skills:
+      insight: 9
+      perception: 9
+    tags:
+      - "srd"
+      - "cr-10"
+    speed:
+      fly: 90
+      hover: true
+      walk: 30
+  - id: "djinni"
+    abilities:
+      cha: 20
+      con: 22
+      dex: 15
+      int: 15
+      str: 21
+      wis: 16
+    ac: 17
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d6+5"
+            type: "slashing"
+          -
+            dice: "2d6"
+            type: "lightning"
+        id: "storm-blade"
+        kind: "melee"
+        manual: "plus 7 (2d6) Lightning damage."
+        name: "Storm Blade"
+        reach: 5
+        to_hit: 9
+      -
+        damage:
+          -
+            dice: "3d8"
+            type: "thunder"
+        id: "storm-bolt"
+        kind: "ranged"
+        manual: "If the target is a Large or smaller creature, it has the Prone condition."
+        name: "Storm Bolt"
+        range:
+          - 120
+          - 120
+        to_hit: 9
+    creature_type: "elemental"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "djinni-multiattack"
+        manual: "The djinni makes three attacks, using Storm Blade or Storm Bolt in any combination."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "djinni-create-whirlwind"
+        manual: "The djinni conjures a whirlwind at a point it can see within 120 feet. The whirlwind fills a 20-foot-radius, 60-foot-high Cylinder centered on that point. The whirlwind lasts until the djinni’s Concentration on it ends. The djinni can move the whirlwind up to 20 feet at the start of each of its turns. Whenever the whirlwind enters a creature’s space or a creature enters the whirlwind, that creature is subjected to the following effect. Strength Saving Throw: DC 17 (a creature makes this save only once per turn, and the djinni is unaffected). Failure: While in the whirlwind, the target has the Restrained condition and moves with the whirlwind. At the start of each of its turns, the Restrained target takes 21 (6d6) Thunder damage. At the end of each of its turns, the target repeats the save, ending the effect on itself on a success."
+        name: "Create Whirlwind"
+      -
+        activation: "action"
+        concentration: false
+        id: "djinni-spellcasting"
+        manual: "The djinni casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 17):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "djinni-elemental-restoration"
+        manual: "If the djinni dies outside the Elemental Plane of Air, its body dissolves into mist, and it gains a new body in 1d4 days, reviving with all its Hit Points somewhere on the Plane of Air."
+        name: "Elemental Restoration"
+      -
+        activation: "passive"
+        concentration: false
+        id: "djinni-magic-resistance"
+        manual: "The djinni has Advantage on saving throws against spells and other magical effects."
+        name: "Magic Resistance"
+      -
+        activation: "passive"
+        concentration: false
+        id: "djinni-wishes"
+        manual: "The djinni has a 30 percent chance of knowing the Wish spell. If the djinni knows it, the djinni can cast it only on behalf of a non-genie creature who communicates a wish in a way the djinni can understand. If the djinni casts the spell for the creature, the djinni suffers none of the spell’s stress. Once the djinni has cast it three times, the djinni can’t do so again for 365 days."
+        name: "Wishes"
+    hp: 218
+    immunities:
+      - "lightning"
+      - "thunder"
+    init_bonus: 2
+    kind: "monster"
+    manual: |-
+      Djinni
+      Large elemental, neutral
+      AC 17
+      HP 218 (19d10 + 114)
+      Speed fly 90 ft., hover true, walk 30 ft.
+      STR 21 (+5), DEX 15 (+2), CON 22 (+6), INT 15 (+2), WIS 16 (+3), CHA 20 (+5)
+      Senses darkvision 120 ft., passive perception 13
+      Languages Primordial (Auran)
+      CR 11 (XP 7200)
+
+      Traits
+      Elemental Restoration. If the djinni dies outside the Elemental Plane of Air, its body dissolves into mist, and it gains a new body in 1d4 days, reviving with all its Hit Points somewhere on the Plane of Air.
+      Magic Resistance. The djinni has Advantage on saving throws against spells and other magical effects.
+      Wishes. The djinni has a 30 percent chance of knowing the Wish spell. If the djinni knows it, the djinni can cast it only on behalf of a non-genie creature who communicates a wish in a way the djinni can understand. If the djinni casts the spell for the creature, the djinni suffers none of the spell’s stress. Once the djinni has cast it three times, the djinni can’t do so again for 365 days.
+
+      Actions
+      Multiattack. The djinni makes three attacks, using Storm Blade or Storm Bolt in any combination.
+      Storm Blade. Melee Attack Roll: +9, reach 5 feet. Hit: 12 (2d6 + 5) Slashing damage plus 7 (2d6) Lightning damage.
+      Storm Bolt. Ranged Attack Roll: +9, range 120 feet. Hit: 13 (3d8) Thunder damage. If the target is a Large or smaller creature, it has the Prone condition.
+      Create Whirlwind. The djinni conjures a whirlwind at a point it can see within 120 feet. The whirlwind fills a 20-foot-radius, 60-foot-high Cylinder centered on that point. The whirlwind lasts until the djinni’s Concentration on it ends. The djinni can move the whirlwind up to 20 feet at the start of each of its turns. Whenever the whirlwind enters a creature’s space or a creature enters the whirlwind, that creature is subjected to the following effect. Strength Saving Throw: DC 17 (a creature makes this save only once per turn, and the djinni is unaffected). Failure: While in the whirlwind, the target has the Restrained condition and moves with the whirlwind. At the start of each of its turns, the Restrained target takes 21 (6d6) Thunder damage. At the end of each of its turns, the target repeats the save, ending the effect on itself on a success.
+      Spellcasting. The djinni casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 17):
+    name: "Djinni"
+    notes: "SRD 5.2.1 Djinni, CR 11 (XP 7200), HP 218 (19d10 + 114). can hover."
+    prof: 4
+    saves:
+      dex: 6
+      wis: 7
+    senses: "Darkvision 120 ft.; Passive perception 13"
+    size: "large"
+    tags:
+      - "srd"
+      - "cr-11"
+    speed:
+      fly: 90
+      hover: true
+      walk: 30
+  - id: "earth-elemental"
+    abilities:
+      cha: 5
+      con: 20
+      dex: 8
+      int: 5
+      str: 20
+      wis: 10
+    ac: 17
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d8+5"
+            type: "bludgeoning"
+        id: "slam"
+        kind: "melee"
+        name: "Slam"
+        reach: 10
+        to_hit: 8
+      -
+        damage:
+          -
+            dice: "1d6+5"
+            type: "bludgeoning"
+        id: "rock-launch"
+        kind: "ranged"
+        manual: "If the target is a Large or smaller creature, it has the Prone condition."
+        name: "Rock Launch"
+        range:
+          - 60
+          - 60
+        to_hit: 8
+    condition_immunities:
+      - "exhaustion"
+      - "paralyzed"
+      - "petrified"
+      - "poisoned"
+      - "unconscious"
+    creature_type: "elemental"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "earth-elemental-multiattack"
+        manual: "The elemental makes two attacks, using Slam or Rock Launch in any combination."
+        name: "Multiattack"
+      -
+        activation: "passive"
+        concentration: false
+        id: "earth-elemental-earth-glide"
+        manual: "The elemental can burrow through nonmagical, unworked earth and stone. While doing so, the elemental doesn’t disturb the material it moves through."
+        name: "Earth Glide"
+      -
+        activation: "passive"
+        concentration: false
+        id: "earth-elemental-siege-monster"
+        manual: "The elemental deals double damage to objects and structures."
+        name: "Siege Monster"
+    hp: 147
+    immunities:
+      - "poison"
+    init_bonus: -1
+    kind: "monster"
+    manual: |-
+      Earth Elemental
+      Large elemental, neutral
+      AC 17
+      HP 147 (14d10 + 70)
+      Speed burrow 30 ft., walk 30 ft.
+      STR 20 (+5), DEX 8 (-1), CON 20 (+5), INT 5 (-3), WIS 10 (+0), CHA 5 (-3)
+      Senses darkvision 60 ft., passive perception 10, tremorsense 60 ft.
+      Languages Primordial (Terran)
+      CR 5 (XP 1800)
+
+      Traits
+      Earth Glide. The elemental can burrow through nonmagical, unworked earth and stone. While doing so, the elemental doesn’t disturb the material it moves through.
+      Siege Monster. The elemental deals double damage to objects and structures.
+
+      Actions
+      Multiattack. The elemental makes two attacks, using Slam or Rock Launch in any combination.
+      Slam. Melee Attack Roll: +8, reach 10 ft. Hit: 14 (2d8 + 5) Bludgeoning damage.
+      Rock Launch. Ranged Attack Roll: +8, range 60 ft. Hit: 8 (1d6 + 5) Bludgeoning damage. If the target is a Large or smaller creature, it has the Prone condition.
+    name: "Earth Elemental"
+    notes: "SRD 5.2.1 Earth Elemental, CR 5 (XP 1800), HP 147 (14d10 + 70). burrow speed 30 ft.."
+    prof: 3
+    senses: "Darkvision 60 ft.; Passive perception 10; Tremorsense 60 ft."
+    size: "large"
+    tags:
+      - "srd"
+      - "cr-5"
+    vulnerabilities:
+      - "thunder"
+    speed:
+      burrow: 30
+      walk: 30
+  - id: "efreeti"
+    abilities:
+      cha: 19
+      con: 24
+      dex: 12
+      int: 16
+      str: 22
+      wis: 15
+    ac: 17
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d6+6"
+            type: "slashing"
+          -
+            dice: "2d12"
+            type: "fire"
+        id: "heated-blade"
+        kind: "melee"
+        manual: "plus 13 (2d12) Fire damage."
+        name: "Heated Blade"
+        reach: 5
+        to_hit: 10
+      -
+        damage:
+          -
+            dice: "7d6"
+            type: "fire"
+        id: "hurl-flame"
+        kind: "ranged"
+        name: "Hurl Flame"
+        range:
+          - 120
+          - 120
+        to_hit: 8
+    creature_type: "elemental"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "efreeti-multiattack"
+        manual: "The efreeti makes three attacks, using Heated Blade or Hurl Flame in any combination."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "efreeti-spellcasting"
+        manual: "The efreeti casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 16):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "efreeti-elemental-restoration"
+        manual: "If the efreeti dies outside the Elemental Plane of Fire, its body dissolves into ash, and it gains a new body in 1d4 days, reviving with all its Hit Points somewhere on the Plane of Fire."
+        name: "Elemental Restoration"
+      -
+        activation: "passive"
+        concentration: false
+        id: "efreeti-magic-resistance"
+        manual: "The efreeti has Advantage on saving throws against spells and other magical effects."
+        name: "Magic Resistance"
+      -
+        activation: "passive"
+        concentration: false
+        id: "efreeti-wishes"
+        manual: "The efreeti has a 30 percent chance of knowing the Wish spell. If the efreeti knows it, the efreeti can cast it only on behalf of a non-genie creature who communicates a wish in a way the efreeti can understand. If the efreeti casts the spell for the creature, the efreeti suffers none of the spell’s stress. Once the efreeti has cast it three times, the efreeti can’t do so again for 365 days."
+        name: "Wishes"
+    hp: 212
+    immunities:
+      - "fire"
+    init_bonus: 1
+    kind: "monster"
+    manual: |-
+      Efreeti
+      Large elemental, neutral
+      AC 17
+      HP 212 (17d10 + 119)
+      Speed fly 60 ft., hover true, walk 40 ft.
+      STR 22 (+6), DEX 12 (+1), CON 24 (+7), INT 16 (+3), WIS 15 (+2), CHA 19 (+4)
+      Senses darkvision 120 ft., passive perception 12
+      Languages Primordial (Ignan)
+      CR 11 (XP 7200)
+
+      Traits
+      Elemental Restoration. If the efreeti dies outside the Elemental Plane of Fire, its body dissolves into ash, and it gains a new body in 1d4 days, reviving with all its Hit Points somewhere on the Plane of Fire.
+      Magic Resistance. The efreeti has Advantage on saving throws against spells and other magical effects.
+      Wishes. The efreeti has a 30 percent chance of knowing the Wish spell. If the efreeti knows it, the efreeti can cast it only on behalf of a non-genie creature who communicates a wish in a way the efreeti can understand. If the efreeti casts the spell for the creature, the efreeti suffers none of the spell’s stress. Once the efreeti has cast it three times, the efreeti can’t do so again for 365 days.
+
+      Actions
+      Multiattack. The efreeti makes three attacks, using Heated Blade or Hurl Flame in any combination.
+      Heated Blade. Melee Attack Roll: +10, reach 5 ft. Hit: 13 (2d6 + 6) Slashing damage plus 13 (2d12) Fire damage.
+      Hurl Flame. Ranged Attack Roll: +8, range 120 ft. Hit: 24 (7d6) Fire damage.
+      Spellcasting. The efreeti casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 16):
+    name: "Efreeti"
+    notes: "SRD 5.2.1 Efreeti, CR 11 (XP 7200), HP 212 (17d10 + 119). can hover."
+    prof: 4
+    saves:
+      cha: 8
+      wis: 6
+    senses: "Darkvision 120 ft.; Passive perception 12"
+    size: "large"
+    tags:
+      - "srd"
+      - "cr-11"
+    speed:
+      fly: 60
+      hover: true
+      walk: 40
+  - id: "ghost"
+    abilities:
+      cha: 17
+      con: 10
+      dex: 13
+      int: 10
+      str: 7
+      wis: 12
+    ac: 11
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "3d10+3"
+            type: "necrotic"
+        id: "withering-touch"
+        kind: "melee"
+        name: "Withering Touch"
+        reach: 5
+        to_hit: 5
+    condition_immunities:
+      - "charmed"
+      - "exhaustion"
+      - "frightened"
+      - "grappled"
+      - "paralyzed"
+      - "petrified"
+      - "poisoned"
+      - "prone"
+      - "restrained"
+    creature_type: "undead"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "ghost-multiattack"
+        manual: "The ghost makes two Withering Touch attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "ghost-etherealness"
+        manual: "The ghost casts the Etherealness spell, requiring no spell components and using Charisma as the spellcasting ability. The ghost is visible on the Material Plane while on the Border Ethereal and vice versa, but it can’t affect or be affected by anything on the other plane."
+        name: "Etherealness"
+      -
+        activation: "action"
+        concentration: false
+        id: "ghost-horrific-visage"
+        manual: "Wisdom Saving Throw: DC 13, each creature in a 60-foot Cone that can see the ghost and isn’t an Undead. Failure: 10 (2d6 + 3) Psychic damage, and the target has the Frightened condition until the start of the ghost’s next turn. Success: The target is immune to this ghost’s Horrific Visage for 24 hours."
+        name: "Horrific Visage"
+      -
+        activation: "action"
+        concentration: false
+        id: "ghost-possession"
+        manual: "Charisma Saving Throw: DC 13, one Humanoid the ghost can see within 5 feet. Failure: The target is possessed by the ghost; the ghost disappears, and the target has the Incapacitated condition and loses control of its body. The ghost now controls the body, but the target retains awareness. The ghost can’t be targeted by any attack, spell, or other effect, except ones that specifically target Undead. The ghost’s game statistics are the same, except it uses the possessed target’s Speed, as well as the target’s Strength, Dexterity, and Constitution modifiers. The possession lasts until the body drops to 0 Hit Points or the ghost leaves as a Bonus Action. When the possession ends, the ghost appears in an unoccupied space within 5 feet of the target, and the target is immune to this ghost’s Possession for 24 hours. Success: The target is immune to this ghost’s Possession for 24 hours."
+        name: "Possession"
+      -
+        activation: "passive"
+        concentration: false
+        id: "ghost-ethereal-sight"
+        manual: "The ghost can see 60 feet into the Ethereal Plane when it is on the Material Plane."
+        name: "Ethereal Sight"
+      -
+        activation: "passive"
+        concentration: false
+        id: "ghost-incorporeal-movement"
+        manual: "The ghost can move through other creatures and objects as if they were Difficult Terrain. It takes 5 (1d10) Force damage if it ends its turn inside an object."
+        name: "Incorporeal Movement"
+    hp: 45
+    immunities:
+      - "necrotic"
+      - "poison"
+    init_bonus: 1
+    kind: "monster"
+    manual: |-
+      Ghost
+      Medium undead, neutral
+      AC 11
+      HP 45 (10d8)
+      Speed fly 40 ft., hover true, walk 5 ft.
+      STR 7 (-2), DEX 13 (+1), CON 10 (+0), INT 10 (+0), WIS 12 (+1), CHA 17 (+3)
+      Senses darkvision 60 ft., passive perception 11
+      Languages Common plus one other language
+      CR 4 (XP 1100)
+
+      Traits
+      Ethereal Sight. The ghost can see 60 feet into the Ethereal Plane when it is on the Material Plane.
+      Incorporeal Movement. The ghost can move through other creatures and objects as if they were Difficult Terrain. It takes 5 (1d10) Force damage if it ends its turn inside an object.
+
+      Actions
+      Multiattack. The ghost makes two Withering Touch attacks.
+      Withering Touch. Melee Attack Roll: +5, reach 5 ft. Hit: 19 (3d10 + 3) Necrotic damage.
+      Etherealness. The ghost casts the Etherealness spell, requiring no spell components and using Charisma as the spellcasting ability. The ghost is visible on the Material Plane while on the Border Ethereal and vice versa, but it can’t affect or be affected by anything on the other plane.
+      Horrific Visage. Wisdom Saving Throw: DC 13, each creature in a 60-foot Cone that can see the ghost and isn’t an Undead. Failure: 10 (2d6 + 3) Psychic damage, and the target has the Frightened condition until the start of the ghost’s next turn. Success: The target is immune to this ghost’s Horrific Visage for 24 hours.
+      Possession. Charisma Saving Throw: DC 13, one Humanoid the ghost can see within 5 feet. Failure: The target is possessed by the ghost; the ghost disappears, and the target has the Incapacitated condition and loses control of its body. The ghost now controls the body, but the target retains awareness. The ghost can’t be targeted by any attack, spell, or other effect, except ones that specifically target Undead. The ghost’s game statistics are the same, except it uses the possessed target’s Speed, as well as the target’s Strength, Dexterity, and Constitution modifiers. The possession lasts until the body drops to 0 Hit Points or the ghost leaves as a Bonus Action. When the possession ends, the ghost appears in an unoccupied space within 5 feet of the target, and the target is immune to this ghost’s Possession for 24 hours. Success: The target is immune to this ghost’s Possession for 24 hours.
+    multiattack:
+      - "withering-touch"
+      - "withering-touch"
+    name: "Ghost"
+    notes: "SRD 5.2.1 Ghost, CR 4 (XP 1100), HP 45 (10d8). can hover."
+    prof: 2
+    resistances:
+      - "acid"
+      - "bludgeoning"
+      - "cold"
+      - "fire"
+      - "lightning"
+      - "piercing"
+      - "slashing"
+      - "thunder"
+    senses: "Darkvision 60 ft.; Passive perception 11"
+    size: "medium"
+    tags:
+      - "srd"
+      - "cr-4"
+    speed:
+      fly: 40
+      hover: true
+      walk: 5
+  - id: "giant-badger"
+    abilities:
+      cha: 5
+      con: 17
+      dex: 10
+      int: 2
+      str: 13
+      wis: 12
+    ac: 13
+    ai:
+      template: "mindless"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d4+1"
+            type: "piercing"
+        id: "bite"
+        kind: "melee"
+        name: "Bite"
+        reach: 5
+        to_hit: 3
+    creature_type: "beast"
+    hp: 15
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Giant Badger
+      Medium beast, unaligned
+      AC 13
+      HP 15 (2d8 + 6)
+      Speed burrow 10 ft., walk 30 ft.
+      STR 13 (+1), DEX 10 (+0), CON 17 (+3), INT 2 (-4), WIS 12 (+1), CHA 5 (-3)
+      Senses darkvision 60 ft., passive perception 13
+      Languages None
+      CR 0.25 (XP 50)
+
+      Actions
+      Bite. Melee Attack Roll: +3, reach 5 ft. Hit: 6 (2d4 + 1) Piercing damage.
+    name: "Giant Badger"
+    notes: "SRD 5.2.1 Giant Badger, CR 1/4 (XP 50), HP 15 (2d8 + 6). burrow speed 10 ft.."
+    prof: 2
+    resistances:
+      - "poison"
+    senses: "Darkvision 60 ft.; Passive perception 13"
+    size: "medium"
+    skills:
+      perception: 3
+    tags:
+      - "srd"
+      - "cr-1-4"
+    speed:
+      burrow: 10
+      walk: 30
+  - id: "invisible-stalker"
+    abilities:
+      cha: 11
+      con: 14
+      dex: 19
+      int: 10
+      str: 16
+      wis: 15
+    ac: 14
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d6+4"
+            type: "force"
+        id: "wind-swipe"
+        kind: "melee"
+        name: "Wind Swipe"
+        reach: 5
+        to_hit: 7
+    condition_immunities:
+      - "exhaustion"
+      - "grappled"
+      - "paralyzed"
+      - "petrified"
+      - "poisoned"
+      - "prone"
+      - "restrained"
+      - "unconscious"
+    creature_type: "elemental"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "invisible-stalker-multiattack"
+        manual: "The stalker makes three Wind Swipe attacks. It can replace one attack with a use of Vortex."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "invisible-stalker-vortex"
+        manual: "Constitution Saving Throw: DC 14, one Large or smaller creature in the stalker’s space. Failure: 7 (1d8 + 3) Thunder damage, and the target has the Grappled condition (escape DC 13). Until the grapple ends, the target can’t cast spells with a Verbal component and takes 7 (2d6) Thunder damage at the start of each of the stalker’s turns."
+        name: "Vortex"
+      -
+        activation: "passive"
+        concentration: false
+        id: "invisible-stalker-air-form"
+        manual: "The stalker can enter an enemy’s space and stop there. It can move through a space as narrow as 1 inch without expending extra movement to do so."
+        name: "Air Form"
+      -
+        activation: "passive"
+        concentration: false
+        id: "invisible-stalker-invisibility"
+        manual: "The stalker has the Invisible condition."
+        name: "Invisibility"
+    hp: 97
+    immunities:
+      - "poison"
+    init_bonus: 4
+    kind: "monster"
+    manual: |-
+      Invisible Stalker
+      Large elemental, neutral
+      AC 14
+      HP 97 (13d10 + 26)
+      Speed fly 50 ft., hover true, walk 50 ft.
+      STR 16 (+3), DEX 19 (+4), CON 14 (+2), INT 10 (+0), WIS 15 (+2), CHA 11 (+0)
+      Senses darkvision 60 ft., passive perception 18
+      Languages Common, Primordial (Auran)
+      CR 6 (XP 2300)
+
+      Traits
+      Air Form. The stalker can enter an enemy’s space and stop there. It can move through a space as narrow as 1 inch without expending extra movement to do so.
+      Invisibility. The stalker has the Invisible condition.
+
+      Actions
+      Multiattack. The stalker makes three Wind Swipe attacks. It can replace one attack with a use of Vortex.
+      Wind Swipe. Melee Attack Roll: +7, reach 5 ft. Hit: 11 (2d6 + 4) Force damage.
+      Vortex. Constitution Saving Throw: DC 14, one Large or smaller creature in the stalker’s space. Failure: 7 (1d8 + 3) Thunder damage, and the target has the Grappled condition (escape DC 13). Until the grapple ends, the target can’t cast spells with a Verbal component and takes 7 (2d6) Thunder damage at the start of each of the stalker’s turns.
+    multiattack:
+      - "wind-swipe"
+      - "wind-swipe"
+    name: "Invisible Stalker"
+    notes: "SRD 5.2.1 Invisible Stalker, CR 6 (XP 2300), HP 97 (13d10 + 26). can hover."
+    prof: 3
+    resistances:
+      - "bludgeoning"
+      - "piercing"
+      - "slashing"
+    senses: "Darkvision 60 ft.; Passive perception 18"
+    size: "large"
+    skills:
+      perception: 8
+      stealth: 10
+    tags:
+      - "srd"
+      - "cr-6"
+    speed:
+      fly: 50
+      hover: true
+      walk: 50
+  - id: "nightmare"
+    abilities:
+      cha: 15
+      con: 16
+      dex: 15
+      int: 10
+      str: 18
+      wis: 13
+    ac: 13
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d8+4"
+            type: "bludgeoning"
+          -
+            dice: "3d6"
+            type: "fire"
+        id: "hooves"
+        kind: "melee"
+        manual: "plus 10 (3d6) Fire damage."
+        name: "Hooves"
+        reach: 5
+        to_hit: 6
+    creature_type: "fiend"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "nightmare-ethereal-stride"
+        manual: "The nightmare and up to three willing creatures within 5 feet of it teleport to the Ethereal Plane from the Material Plane or vice versa."
+        name: "Ethereal Stride"
+      -
+        activation: "passive"
+        concentration: false
+        id: "nightmare-confer-fire-resistance"
+        manual: "The nightmare can grant Resistance to Fire damage to a rider while it is on the nightmare."
+        name: "Confer Fire Resistance"
+      -
+        activation: "passive"
+        concentration: false
+        id: "nightmare-illumination"
+        manual: "The nightmare sheds Bright Light in a 10foot radius and Dim Light for an additional 10 feet."
+        name: "Illumination"
+    hp: 68
+    immunities:
+      - "fire"
+    init_bonus: 2
+    kind: "monster"
+    manual: |-
+      Nightmare
+      Large fiend, neutral evil
+      AC 13
+      HP 68 (8d10 + 24)
+      Speed fly 90 ft., hover true, walk 60 ft.
+      STR 18 (+4), DEX 15 (+2), CON 16 (+3), INT 10 (+0), WIS 13 (+1), CHA 15 (+2)
+      Senses passive perception 11
+      Languages Understands Abyssal, Common, and Infernal but can’t speak
+      CR 3 (XP 700)
+
+      Traits
+      Confer Fire Resistance. The nightmare can grant Resistance to Fire damage to a rider while it is on the nightmare.
+      Illumination. The nightmare sheds Bright Light in a 10foot radius and Dim Light for an additional 10 feet.
+
+      Actions
+      Hooves. Melee Attack Roll: +6, reach 5 ft. Hit: 13 (2d8 + 4) Bludgeoning damage plus 10 (3d6) Fire damage.
+      Ethereal Stride. The nightmare and up to three willing creatures within 5 feet of it teleport to the Ethereal Plane from the Material Plane or vice versa.
+    name: "Nightmare"
+    notes: "SRD 5.2.1 Nightmare, CR 3 (XP 700), HP 68 (8d10 + 24). can hover."
+    prof: 2
+    senses: "Passive perception 11"
+    size: "large"
+    tags:
+      - "srd"
+      - "cr-3"
+    speed:
+      fly: 90
+      hover: true
+      walk: 60
+  - id: "oni"
+    abilities:
+      cha: 15
+      con: 16
+      dex: 11
+      int: 14
+      str: 19
+      wis: 12
+    ac: 17
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "1d12+4"
+            type: "slashing"
+          -
+            dice: "2d8"
+            type: "necrotic"
+        id: "claw"
+        kind: "melee"
+        manual: "plus 9 (2d8) Necrotic damage."
+        name: "Claw"
+        reach: 10
+        to_hit: 7
+      -
+        damage:
+          -
+            dice: "2d6+2"
+            type: "psychic"
+        id: "nightmare-ray"
+        kind: "ranged"
+        manual: "and the target has the Frightened condition until the start of the oni’s next turn."
+        name: "Nightmare Ray"
+        range:
+          - 60
+          - 60
+        to_hit: 5
+    creature_type: "fiend"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "oni-multiattack"
+        manual: "The oni makes two Claw or Nightmare Ray attacks. It can replace one attack with a use of Spellcasting."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "oni-shape-shift"
+        manual: "The oni shape-shifts into a Small or Medium Humanoid or a Large Giant, or it returns to its true form. Other than its size, its game statistics are the same in each form. Any equipment it is wearing or carrying isn’t transformed."
+        name: "Shape-Shift"
+      -
+        activation: "action"
+        concentration: false
+        id: "oni-spellcasting"
+        manual: "The oni casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 13):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "oni-regeneration"
+        manual: "The oni regains 10 Hit Points at the start of each of its turns if it has at least 1 Hit Point."
+        name: "Regeneration"
+    hp: 119
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Oni
+      Large fiend, lawful evil
+      AC 17
+      HP 119 (14d10 + 42)
+      Speed fly 30 ft., hover true, walk 30 ft.
+      STR 19 (+4), DEX 11 (+0), CON 16 (+3), INT 14 (+2), WIS 12 (+1), CHA 15 (+2)
+      Senses darkvision 60 ft., passive perception 14
+      Languages Common, Giant
+      CR 7 (XP 2900)
+
+      Traits
+      Regeneration. The oni regains 10 Hit Points at the start of each of its turns if it has at least 1 Hit Point.
+
+      Actions
+      Multiattack. The oni makes two Claw or Nightmare Ray attacks. It can replace one attack with a use of Spellcasting.
+      Claw. Melee Attack Roll: +7, reach 10 ft. Hit: 10 (1d12 + 4) Slashing damage plus 9 (2d8) Necrotic damage.
+      Nightmare Ray. Ranged Attack Roll: +5, range 60 ft. Hit: 9 (2d6 + 2) Psychic damage, and the target has the Frightened condition until the start of the oni’s next turn.
+      Shape-Shift. The oni shape-shifts into a Small or Medium Humanoid or a Large Giant, or it returns to its true form. Other than its size, its game statistics are the same in each form. Any equipment it is wearing or carrying isn’t transformed.
+      Spellcasting. The oni casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 13):
+
+      Bonus Actions
+      Invisibility. The oni casts Invisibility on itself, requiring no spell components and using the same spellcasting ability as Spellcasting.
+    name: "Oni"
+    notes: "SRD 5.2.1 Oni, CR 7 (XP 2900), HP 119 (14d10 + 42). can hover."
+    prof: 3
+    resistances:
+      - "cold"
+    saves:
+      cha: 5
+      con: 6
+      dex: 3
+      wis: 4
+    senses: "Darkvision 60 ft.; Passive perception 14"
+    size: "large"
+    skills:
+      arcana: 5
+      deception: 8
+      perception: 4
+    tags:
+      - "srd"
+      - "cr-7"
+    speed:
+      fly: 30
+      hover: true
+      walk: 30
+  - id: "planetar"
+    abilities:
+      cha: 25
+      con: 24
+      dex: 20
+      int: 19
+      str: 24
+      wis: 22
+    ac: 19
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d6+7"
+            type: "slashing"
+          -
+            dice: "4d8"
+            type: "radiant"
+        id: "radiant-sword"
+        kind: "melee"
+        manual: "plus 18 (4d8) Radiant damage."
+        name: "Radiant Sword"
+        reach: 10
+        to_hit: 12
+    condition_immunities:
+      - "charmed"
+      - "exhaustion"
+      - "frightened"
+    creature_type: "celestial"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "planetar-multiattack"
+        manual: "The planetar makes three Radiant Sword attacks or uses Holy Burst twice."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "planetar-holy-burst"
+        manual: "Dexterity Saving Throw: DC 20, each enemy in a 20-foot-radius Sphere centered on a point the planetar can see within 120 feet. Failure: 24 (7d6) Radiant damage. Success: Half damage."
+        name: "Holy Burst"
+      -
+        activation: "action"
+        concentration: false
+        id: "planetar-spellcasting"
+        manual: "The planetar casts one of the following spells, requiring no Material components and using Charisma as spellcasting ability (spell save DC 20):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "planetar-divine-awareness"
+        manual: "The planetar knows if it hears a lie."
+        name: "Divine Awareness"
+      -
+        activation: "passive"
+        concentration: false
+        id: "planetar-exalted-restoration"
+        manual: "If the planetar dies outside Mount Celestia, its body disappears, and it gains a new body instantly, reviving with all its Hit Points somewhere in Mount Celestia."
+        name: "Exalted Restoration"
+      -
+        activation: "passive"
+        concentration: false
+        id: "planetar-magic-resistance"
+        manual: "The planetar has Advantage on saving throws against spells and other magical effects."
+        name: "Magic Resistance"
+    hp: 262
+    init_bonus: 5
+    kind: "monster"
+    manual: |-
+      Planetar
+      Large celestial, lawful good
+      AC 19
+      HP 262 (21d10 + 147)
+      Speed fly 120 ft., hover true, walk 40 ft.
+      STR 24 (+7), DEX 20 (+5), CON 24 (+7), INT 19 (+4), WIS 22 (+6), CHA 25 (+7)
+      Senses passive perception 21, truesight 120 ft.
+      Languages All; telepathy 120 ft.
+      CR 16 (XP 15000)
+
+      Traits
+      Divine Awareness. The planetar knows if it hears a lie.
+      Exalted Restoration. If the planetar dies outside Mount Celestia, its body disappears, and it gains a new body instantly, reviving with all its Hit Points somewhere in Mount Celestia.
+      Magic Resistance. The planetar has Advantage on saving throws against spells and other magical effects.
+
+      Actions
+      Multiattack. The planetar makes three Radiant Sword attacks or uses Holy Burst twice.
+      Radiant Sword. Melee Attack Roll: +12, reach 10 ft. Hit: 14 (2d6 + 7) Slashing damage plus 18 (4d8) Radiant damage.
+      Holy Burst. Dexterity Saving Throw: DC 20, each enemy in a 20-foot-radius Sphere centered on a point the planetar can see within 120 feet. Failure: 24 (7d6) Radiant damage. Success: Half damage.
+      Spellcasting. The planetar casts one of the following spells, requiring no Material components and using Charisma as spellcasting ability (spell save DC 20):
+
+      Bonus Actions
+      Divine Aid. The planetar casts Cure Wounds, Invisibility, Lesser Restoration, or Remove Curse, using the same spellcasting ability as Spellcasting.
+    name: "Planetar"
+    notes: "SRD 5.2.1 Planetar, CR 16 (XP 15000), HP 262 (21d10 + 147). can hover."
+    prof: 5
+    resistances:
+      - "radiant"
+    saves:
+      cha: 12
+      con: 12
+      str: 12
+      wis: 11
+    senses: "Passive perception 21; Truesight 120 ft."
+    size: "large"
+    skills:
+      perception: 11
+    tags:
+      - "srd"
+      - "cr-16"
+    speed:
+      fly: 120
+      hover: true
+      walk: 40
+  - id: "purple-worm"
+    abilities:
+      cha: 4
+      con: 22
+      dex: 7
+      int: 1
+      str: 28
+      wis: 8
+    ac: 18
+    ai:
+      template: "mindless"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d6+9"
+            type: "piercing"
+          -
+            dice: "10d6"
+            type: "poison"
+        id: "tail-stinger"
+        kind: "melee"
+        manual: "plus 35 (10d6) Poison damage."
+        name: "Tail Stinger"
+        reach: 10
+        to_hit: 14
+    creature_type: "monstrosity"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "purple-worm-multiattack"
+        manual: "The worm makes one Bite attack and one Tail Stinger attack."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "purple-worm-bite"
+        manual: "Melee Attack Roll: +14, reach 10 ft. Hit: 22 (3d8 + 9) Piercing damage. If the target is a Large or smaller creature, it has the Grappled condition (escape DC 19), and it has the Restrained condition until the grapple ends."
+        name: "Bite"
+      -
+        activation: "passive"
+        concentration: false
+        id: "purple-worm-tunneler"
+        manual: "The worm can burrow through solid rock at half its Burrow Speed and leaves a 10-foot-diameter tunnel in its wake."
+        name: "Tunneler"
+    hp: 247
+    init_bonus: -2
+    kind: "monster"
+    manual: |-
+      Purple Worm
+      Gargantuan monstrosity, unaligned
+      AC 18
+      HP 247 (15d20 + 90)
+      Speed burrow 50 ft., walk 50 ft.
+      STR 28 (+9), DEX 7 (-2), CON 22 (+6), INT 1 (-5), WIS 8 (-1), CHA 4 (-3)
+      Senses blindsight 30 ft., passive perception 9, tremorsense 60 ft.
+      Languages None
+      CR 15 (XP 13000)
+
+      Traits
+      Tunneler. The worm can burrow through solid rock at half its Burrow Speed and leaves a 10-foot-diameter tunnel in its wake.
+
+      Actions
+      Multiattack. The worm makes one Bite attack and one Tail Stinger attack.
+      Bite. Melee Attack Roll: +14, reach 10 ft. Hit: 22 (3d8 + 9) Piercing damage. If the target is a Large or smaller creature, it has the Grappled condition (escape DC 19), and it has the Restrained condition until the grapple ends.
+      Tail Stinger. Melee Attack Roll: +14, reach 10 ft. Hit: 16 (2d6 + 9) Piercing damage plus 35 (10d6) Poison damage.
+
+      Bonus Actions
+      Swallow. Strength Saving Throw: DC 19, one Large or smaller creature Grappled by the worm (it can have up to three creatures swallowed at a time). Failure: The target is swallowed by the worm, and the Grappled condition ends. A swallowed creature has the Blinded and Restrained conditions, has Total Cover against attacks and other effects outside the worm, and takes 17 (5d6) Acid damage at the start of each of the worm’s turns. If the worm takes 30 damage or more on a single turn from a creature inside it, the worm must succeed on a DC 21 Constitution saving throw at the end of that turn or regurgitate all swallowed creatures, each of which falls in a space within 5 feet of the worm and has the Prone condition. If the worm dies, any swallowed creature no longer has the Restrained condition and can escape from the corpse using 20 feet of movement, exiting Prone.
+    name: "Purple Worm"
+    notes: "SRD 5.2.1 Purple Worm, CR 15 (XP 13000), HP 247 (15d20 + 90). burrow speed 50 ft.."
+    prof: 5
+    saves:
+      con: 11
+      wis: 4
+    senses: "Blindsight 30 ft.; Passive perception 9; Tremorsense 60 ft."
+    size: "gargantuan"
+    tags:
+      - "srd"
+      - "cr-15"
+    speed:
+      burrow: 50
+      walk: 50
+  - id: "remorhaz"
+    abilities:
+      cha: 5
+      con: 21
+      dex: 13
+      int: 4
+      str: 24
+      wis: 10
+    ac: 17
+    ai:
+      template: "brute"
+    creature_type: "monstrosity"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "remorhaz-bite"
+        manual: "Melee Attack Roll: +11, reach 10 ft. Hit: 18 (2d10 + 7) Piercing damage plus 14 (4d6) Fire damage. If the target is a Large or smaller creature, it has the Grappled condition (escape DC 17), and it has the Restrained condition until the grapple ends."
+        name: "Bite"
+      -
+        activation: "passive"
+        concentration: false
+        id: "remorhaz-heat-aura"
+        manual: "At the end of each of the remorhaz’s turns, each creature in a 5-foot Emanation originating from the remorhaz takes 16 (3d10) Fire damage."
+        name: "Heat Aura"
+    hp: 195
+    immunities:
+      - "cold"
+      - "fire"
+    init_bonus: 1
+    kind: "monster"
+    manual: |-
+      Remorhaz
+      Huge monstrosity, unaligned
+      AC 17
+      HP 195 (17d12 + 85)
+      Speed burrow 30 ft., walk 40 ft.
+      STR 24 (+7), DEX 13 (+1), CON 21 (+5), INT 4 (-3), WIS 10 (+0), CHA 5 (-3)
+      Senses darkvision 60 ft., passive perception 10, tremorsense 60 ft.
+      Languages None
+      CR 11 (XP 7200)
+
+      Traits
+      Heat Aura. At the end of each of the remorhaz’s turns, each creature in a 5-foot Emanation originating from the remorhaz takes 16 (3d10) Fire damage.
+
+      Actions
+      Bite. Melee Attack Roll: +11, reach 10 ft. Hit: 18 (2d10 + 7) Piercing damage plus 14 (4d6) Fire damage. If the target is a Large or smaller creature, it has the Grappled condition (escape DC 17), and it has the Restrained condition until the grapple ends.
+
+      Bonus Actions
+      Swallow. Strength Saving Throw: DC 19, one Large or smaller creature Grappled by the remorhaz (it can have up to two creatures swallowed at a time). Failure: The target is swallowed by the remorhaz, and the Grappled condition ends. A swallowed creature has the Blinded and Restrained conditions, it has Total Cover against attacks and other effects outside the remorhaz, and it takes 10 (3d6) Acid damage plus 10 (3d6) Fire damage at the start of each of the remorhaz’s turns. If the remorhaz takes 30 damage or more on a single turn from a creature inside it, the remorhaz must succeed on a DC 15 Constitution saving throw at the end of that turn or regurgitate all swallowed creatures, each of which falls in a space within 5 feet of the remorhaz and has the Prone condition. If the remorhaz dies, any swallowed creature no longer has the Restrained condition and can escape from the corpse by using 15 feet of movement, exiting Prone.
+    name: "Remorhaz"
+    notes: "SRD 5.2.1 Remorhaz, CR 11 (XP 7200), HP 195 (17d12 + 85). burrow speed 30 ft.."
+    prof: 4
+    senses: "Darkvision 60 ft.; Passive perception 10; Tremorsense 60 ft."
+    size: "huge"
+    tags:
+      - "srd"
+      - "cr-11"
+    speed:
+      burrow: 30
+      walk: 40
+  - id: "solar"
+    abilities:
+      cha: 30
+      con: 26
+      dex: 22
+      int: 25
+      str: 26
+      wis: 25
+    ac: 21
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "4d6+8"
+            type: "slashing"
+          -
+            dice: "8d8"
+            type: "radiant"
+        id: "flying-sword"
+        kind: "melee_or_ranged"
+        manual: "plus 36 (8d8) Radiant damage. Hit or Miss: The sword magically returns to the solar’s hand or hovers within 5 feet of the solar immediately after a ranged attack."
+        name: "Flying Sword"
+        range:
+          - 120
+          - 120
+        reach: 10
+        to_hit: 15
+    condition_immunities:
+      - "charmed"
+      - "exhaustion"
+      - "frightened"
+      - "poisoned"
+    creature_type: "celestial"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "solar-multiattack"
+        manual: "The solar makes two Flying Sword attacks. It can replace one attack with a use of Slaying Bow."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "solar-slaying-bow"
+        manual: "Dexterity Saving Throw: DC 21, one creature the solar can see within 600 feet. Failure: If the creature has 100 Hit Points or fewer, it dies. It otherwise takes 24 (4d8 + 6) Piercing damage plus 36 (8d8) Radiant damage."
+        name: "Slaying Bow"
+      -
+        activation: "action"
+        concentration: false
+        id: "solar-spellcasting"
+        manual: "The solar casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 25):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "solar-divine-awareness"
+        manual: "The solar knows if it hears a lie."
+        name: "Divine Awareness"
+      -
+        activation: "passive"
+        concentration: false
+        id: "solar-exalted-restoration"
+        manual: "If the solar dies outside Mount Celestia, its body disappears, and it gains a new body instantly, reviving with all its Hit Points somewhere in Mount Celestia."
+        name: "Exalted Restoration"
+      -
+        activation: "passive"
+        concentration: false
+        id: "solar-legendary-resistance"
+        manual: "If the solar fails a saving throw, it can choose to succeed instead."
+        name: "Legendary Resistance"
+      -
+        activation: "passive"
+        concentration: false
+        id: "solar-magic-resistance"
+        manual: "The solar has Advantage on saving throws against spells and other magical effects."
+        name: "Magic Resistance"
+      -
+        activation: "free"
+        concentration: false
+        id: "solar-legendary-blinding-gaze"
+        manual: "Constitution Saving Throw: DC 25, one creature the solar can see within 120 feet. Failure: The target has the Blinded condition for 1 minute. Failure or Success: The solar can’t take this action again until the start of its next turn."
+        name: "Legendary: Blinding Gaze"
+      -
+        activation: "free"
+        concentration: false
+        id: "solar-legendary-radiant-teleport"
+        manual: "The solar teleports up to 60 feet to an unoccupied space it can see. Dexterity Saving Throw: DC 25, each creature in a 10-foot Emanation originating from the solar at its destination space. Failure: 11 (2d10) Radiant damage. Success: Half damage."
+        name: "Legendary: Radiant Teleport"
+    hp: 297
+    immunities:
+      - "poison"
+      - "radiant"
+    init_bonus: 6
+    kind: "monster"
+    manual: |-
+      Solar
+      Large celestial, lawful good
+      AC 21
+      HP 297 (22d10 + 176)
+      Speed fly 150 ft., hover true, walk 50 ft.
+      STR 26 (+8), DEX 22 (+6), CON 26 (+8), INT 25 (+7), WIS 25 (+7), CHA 30 (+10)
+      Senses passive perception 24, truesight 120 ft.
+      Languages All; telepathy 120 ft.
+      CR 21 (XP 33000)
+
+      Traits
+      Divine Awareness. The solar knows if it hears a lie.
+      Exalted Restoration. If the solar dies outside Mount Celestia, its body disappears, and it gains a new body instantly, reviving with all its Hit Points somewhere in Mount Celestia.
+      Legendary Resistance. If the solar fails a saving throw, it can choose to succeed instead.
+      Magic Resistance. The solar has Advantage on saving throws against spells and other magical effects.
+
+      Actions
+      Multiattack. The solar makes two Flying Sword attacks. It can replace one attack with a use of Slaying Bow.
+      Flying Sword. Melee or Ranged Attack Roll: +15, reach 10 ft. or range 120 ft. Hit: 22 (4d6 + 8) Slashing damage plus 36 (8d8) Radiant damage. Hit or Miss: The sword magically returns to the solar’s hand or hovers within 5 feet of the solar immediately after a ranged attack.
+      Slaying Bow. Dexterity Saving Throw: DC 21, one creature the solar can see within 600 feet. Failure: If the creature has 100 Hit Points or fewer, it dies. It otherwise takes 24 (4d8 + 6) Piercing damage plus 36 (8d8) Radiant damage.
+      Spellcasting. The solar casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 25):
+
+      Bonus Actions
+      Divine Aid. The solar casts Cure Wounds (level 2 version), Lesser Restoration, or Remove Curse, using the same spellcasting ability as Spellcasting.
+
+      Legendary Actions
+      Blinding Gaze. Constitution Saving Throw: DC 25, one creature the solar can see within 120 feet. Failure: The target has the Blinded condition for 1 minute. Failure or Success: The solar can’t take this action again until the start of its next turn.
+      Radiant Teleport. The solar teleports up to 60 feet to an unoccupied space it can see. Dexterity Saving Throw: DC 25, each creature in a 10-foot Emanation originating from the solar at its destination space. Failure: 11 (2d10) Radiant damage. Success: Half damage.
+    multiattack:
+      - "flying-sword"
+    name: "Solar"
+    notes: "SRD 5.2.1 Solar, CR 21 (XP 33000), HP 297 (22d10 + 176). can hover; legendary actions are manual (3 per round, at the end of other creatures' turns)."
+    prof: 7
+    senses: "Passive perception 24; Truesight 120 ft."
+    size: "large"
+    skills:
+      perception: 14
+    tags:
+      - "srd"
+      - "cr-21"
+    speed:
+      fly: 150
+      hover: true
+      walk: 50
+  - id: "specter"
+    abilities:
+      cha: 11
+      con: 11
+      dex: 14
+      int: 10
+      str: 1
+      wis: 10
+    ac: 12
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d6"
+            type: "necrotic"
+        id: "life-drain"
+        kind: "melee"
+        manual: "If the target is a creature, its Hit Point maximum decreases by an amount equal to the damage taken."
+        name: "Life Drain"
+        reach: 5
+        to_hit: 4
+    condition_immunities:
+      - "charmed"
+      - "exhaustion"
+      - "grappled"
+      - "paralyzed"
+      - "petrified"
+      - "poisoned"
+      - "prone"
+      - "restrained"
+      - "unconscious"
+    creature_type: "undead"
+    features:
+      -
+        activation: "passive"
+        concentration: false
+        id: "specter-incorporeal-movement"
+        manual: "The specter can move through other creatures and objects as if they were Difficult Terrain. It takes 5 (1d10) Force damage if it ends its turn inside an object."
+        name: "Incorporeal Movement"
+      -
+        activation: "passive"
+        concentration: false
+        id: "specter-sunlight-sensitivity"
+        manual: "While in sunlight, the specter has Disadvantage on ability checks and attack rolls."
+        name: "Sunlight Sensitivity"
+    hp: 22
+    immunities:
+      - "necrotic"
+      - "poison"
+    init_bonus: 2
+    kind: "monster"
+    manual: |-
+      Specter
+      Medium undead, chaotic evil
+      AC 12
+      HP 22 (5d8)
+      Speed fly 50 ft., hover true, walk 30 ft.
+      STR 1 (-5), DEX 14 (+2), CON 11 (+0), INT 10 (+0), WIS 10 (+0), CHA 11 (+0)
+      Senses darkvision 60 ft., passive perception 10
+      Languages Understands Common plus one other language but can’t speak
+      CR 1 (XP 200)
+
+      Traits
+      Incorporeal Movement. The specter can move through other creatures and objects as if they were Difficult Terrain. It takes 5 (1d10) Force damage if it ends its turn inside an object.
+      Sunlight Sensitivity. While in sunlight, the specter has Disadvantage on ability checks and attack rolls.
+
+      Actions
+      Life Drain. Melee Attack Roll: +4, reach 5 ft. Hit: 7 (2d6) Necrotic damage. If the target is a creature, its Hit Point maximum decreases by an amount equal to the damage taken.
+    name: "Specter"
+    notes: "SRD 5.2.1 Specter, CR 1 (XP 200), HP 22 (5d8). can hover."
+    prof: 2
+    resistances:
+      - "acid"
+      - "bludgeoning"
+      - "cold"
+      - "fire"
+      - "lightning"
+      - "piercing"
+      - "slashing"
+      - "thunder"
+    senses: "Darkvision 60 ft.; Passive perception 10"
+    size: "medium"
+    tags:
+      - "srd"
+      - "cr-1"
+    speed:
+      fly: 50
+      hover: true
+      walk: 30
+  - id: "storm-giant"
+    abilities:
+      cha: 18
+      con: 20
+      dex: 14
+      int: 16
+      str: 29
+      wis: 20
+    ac: 16
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "4d6+9"
+            type: "slashing"
+          -
+            dice: "3d8"
+            type: "lightning"
+        id: "storm-sword"
+        kind: "melee"
+        manual: "plus 13 (3d8) Lightning damage."
+        name: "Storm Sword"
+        reach: 10
+        to_hit: 14
+      -
+        damage:
+          -
+            dice: "2d12+9"
+            type: "lightning"
+        id: "thunderbolt"
+        kind: "ranged"
+        manual: "and the target has the Blinded and Deafened conditions until the start of the giant’s next turn."
+        name: "Thunderbolt"
+        range:
+          - 500
+          - 500
+        to_hit: 14
+    creature_type: "giant"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "storm-giant-multiattack"
+        manual: "The giant makes two attacks, using Storm Sword or Thunderbolt in any combination."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "storm-giant-lightning-storm"
+        manual: "Dexterity Saving Throw: DC 18, each creature in a 10-foot-radius, 40-foot-high Cylinder originating from a point the giant can see within 500 feet. Failure: 55 (10d10) Lightning damage. Success: Half damage."
+        name: "Lightning Storm"
+      -
+        activation: "action"
+        concentration: false
+        id: "storm-giant-spellcasting"
+        manual: "The giant casts one of the following spells, requiring no Material components and using Wisdom as the spellcasting ability (spell save DC 18):"
+        name: "Spellcasting"
+      -
+        activation: "passive"
+        concentration: false
+        id: "storm-giant-amphibious"
+        manual: "The giant can breathe air and water."
+        name: "Amphibious"
+    hp: 230
+    immunities:
+      - "lightning"
+      - "thunder"
+    init_bonus: 2
+    kind: "monster"
+    manual: |-
+      Storm Giant
+      Huge giant, chaotic good
+      AC 16
+      HP 230 (20d12 + 100)
+      Speed fly 25 ft., hover true, swim 50 ft., walk 50 ft.
+      STR 29 (+9), DEX 14 (+2), CON 20 (+5), INT 16 (+3), WIS 20 (+5), CHA 18 (+4)
+      Senses darkvision 120 ft., passive perception 20, truesight 30 ft.
+      Languages Common, Giant
+      CR 13 (XP 10000)
+
+      Traits
+      Amphibious. The giant can breathe air and water.
+
+      Actions
+      Multiattack. The giant makes two attacks, using Storm Sword or Thunderbolt in any combination.
+      Storm Sword. Melee Attack Roll: +14, reach 10 ft. Hit: 23 (4d6 + 9) Slashing damage plus 13 (3d8) Lightning damage.
+      Thunderbolt. Ranged Attack Roll: +14, range 500 ft. Hit: 22 (2d12 + 9) Lightning damage, and the target has the Blinded and Deafened conditions until the start of the giant’s next turn.
+      Lightning Storm. Dexterity Saving Throw: DC 18, each creature in a 10-foot-radius, 40-foot-high Cylinder originating from a point the giant can see within 500 feet. Failure: 55 (10d10) Lightning damage. Success: Half damage.
+      Spellcasting. The giant casts one of the following spells, requiring no Material components and using Wisdom as the spellcasting ability (spell save DC 18):
+    name: "Storm Giant"
+    notes: "SRD 5.2.1 Storm Giant, CR 13 (XP 10000), HP 230 (20d12 + 100). can hover."
+    prof: 5
+    resistances:
+      - "cold"
+    saves:
+      cha: 9
+      con: 10
+      str: 14
+      wis: 10
+    senses: "Darkvision 120 ft.; Passive perception 20; Truesight 30 ft."
+    size: "huge"
+    skills:
+      arcana: 8
+      athletics: 14
+      history: 8
+      perception: 10
+    tags:
+      - "srd"
+      - "cr-13"
+    speed:
+      fly: 25
+      hover: true
+      swim: 50
+      walk: 50
+  - id: "tarrasque"
+    abilities:
+      cha: 11
+      con: 30
+      dex: 11
+      int: 3
+      str: 30
+      wis: 11
+    ac: 25
+    ai:
+      template: "mindless"
+    attacks:
+      -
+        damage:
+          -
+            dice: "4d8+10"
+            type: "slashing"
+        id: "claw"
+        kind: "melee"
+        name: "Claw"
+        reach: 15
+        to_hit: 19
+      -
+        damage:
+          -
+            dice: "3d8+10"
+            type: "bludgeoning"
+        id: "tail"
+        kind: "melee"
+        manual: "If the target is a Huge or smaller creature, it has the Prone condition."
+        name: "Tail"
+        reach: 30
+        to_hit: 19
+    condition_immunities:
+      - "charmed"
+      - "deafened"
+      - "frightened"
+      - "paralyzed"
+      - "poisoned"
+    creature_type: "monstrosity"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "tarrasque-multiattack"
+        manual: "The tarrasque makes one Bite attack and three other attacks, using Claw or Tail in any combination."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "tarrasque-bite"
+        manual: "Melee Attack Roll: +19, reach 15 ft. Hit: 36 (4d12 + 10) Piercing damage, and the target has the Grappled condition (escape DC 20). Until the grapple ends, the target has the Restrained condition and can’t teleport."
+        name: "Bite"
+      -
+        activation: "action"
+        concentration: false
+        id: "tarrasque-thunderous-bellow"
+        manual: "Constitution Saving Throw: DC 27, each creature and each object that isn’t being worn or carried in a 150-foot Cone. Failure: 78 (12d12) Thunder damage, and the target has the Deafened and Frightened conditions until the end of its next turn. Success: Half damage only."
+        name: "Thunderous Bellow"
+      -
+        activation: "passive"
+        concentration: false
+        id: "tarrasque-legendary-resistance"
+        manual: "If the tarrasque fails a saving throw, it can choose to succeed instead."
+        name: "Legendary Resistance"
+      -
+        activation: "passive"
+        concentration: false
+        id: "tarrasque-magic-resistance"
+        manual: "The tarrasque has Advantage on saving throws against spells and other magical effects."
+        name: "Magic Resistance"
+      -
+        activation: "passive"
+        concentration: false
+        id: "tarrasque-reflective-carapace"
+        manual: "If the tarrasque is targeted by a Magic Missile spell or a spell that requires a ranged attack roll, roll 1d6. On a 1–5, the tarrasque is unaffected. On a 6, the tarrasque is unaffected and reflects the spell, turning the caster into the target."
+        name: "Reflective Carapace"
+      -
+        activation: "passive"
+        concentration: false
+        id: "tarrasque-siege-monster"
+        manual: "The tarrasque deals double damage to objects and structures."
+        name: "Siege Monster"
+      -
+        activation: "free"
+        concentration: false
+        id: "tarrasque-legendary-onslaught"
+        manual: "The tarrasque moves up to half its Speed, and it makes one Claw or Tail attack."
+        name: "Legendary: Onslaught"
+      -
+        activation: "free"
+        concentration: false
+        id: "tarrasque-legendary-world-shaking-movement"
+        manual: "The tarrasque moves up to its Speed. At the end of this movement, the tarrasque creates an instantaneous shock wave in a 60-foot Emanation originating from itself. Creatures in that area lose Concentration and, if Medium or smaller, have the Prone condition. The tarrasque can’t take this action again until the start of its next turn."
+        name: "Legendary: World-Shaking Movement"
+    hp: 697
+    immunities:
+      - "fire"
+      - "poison"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Tarrasque
+      Gargantuan monstrosity, unaligned
+      AC 25
+      HP 697 (34d20 + 340)
+      Speed burrow 40 ft., climb 60 ft., walk 60 ft.
+      STR 30 (+10), DEX 11 (+0), CON 30 (+10), INT 3 (-4), WIS 11 (+0), CHA 11 (+0)
+      Senses blindsight 120 ft., passive perception 19
+      Languages None
+      CR 30 (XP 155000)
+
+      Traits
+      Legendary Resistance. If the tarrasque fails a saving throw, it can choose to succeed instead.
+      Magic Resistance. The tarrasque has Advantage on saving throws against spells and other magical effects.
+      Reflective Carapace. If the tarrasque is targeted by a Magic Missile spell or a spell that requires a ranged attack roll, roll 1d6. On a 1–5, the tarrasque is unaffected. On a 6, the tarrasque is unaffected and reflects the spell, turning the caster into the target.
+      Siege Monster. The tarrasque deals double damage to objects and structures.
+
+      Actions
+      Multiattack. The tarrasque makes one Bite attack and three other attacks, using Claw or Tail in any combination.
+      Bite. Melee Attack Roll: +19, reach 15 ft. Hit: 36 (4d12 + 10) Piercing damage, and the target has the Grappled condition (escape DC 20). Until the grapple ends, the target has the Restrained condition and can’t teleport.
+      Claw. Melee Attack Roll: +19, reach 15 ft. Hit: 28 (4d8 + 10) Slashing damage.
+      Tail. Melee Attack Roll: +19, reach 30 ft. Hit: 23 (3d8 + 10) Bludgeoning damage. If the target is a Huge or smaller creature, it has the Prone condition.
+      Thunderous Bellow. Constitution Saving Throw: DC 27, each creature and each object that isn’t being worn or carried in a 150-foot Cone. Failure: 78 (12d12) Thunder damage, and the target has the Deafened and Frightened conditions until the end of its next turn. Success: Half damage only.
+
+      Bonus Actions
+      Swallow. Strength Saving Throw: DC 27, one Large or smaller creature Grappled by the tarrasque (it can have up to six creatures swallowed at a time). Failure: The target is swallowed, and the Grappled condition ends. A swallowed creature has the Blinded and Restrained conditions and can’t teleport, it has Total Cover against attacks and other effects outside the tarrasque, and it takes 56 (16d6) Acid damage at the start of each of the tarrasque’s turns. If the tarrasque takes 60 damage or more on a single turn from a creature inside it, the tarrasque must succeed on a DC 20 Constitution saving throw at the end of that turn or regurgitate all swallowed creatures, each of which falls in a space within 10 feet of the tarrasque and has the Prone condition. If the tarrasque dies, any swallowed creature no longer has the Restrained condition and can escape from the corpse using 20 feet of movement, exiting Prone.
+
+      Legendary Actions
+      Onslaught. The tarrasque moves up to half its Speed, and it makes one Claw or Tail attack.
+      World-Shaking Movement. The tarrasque moves up to its Speed. At the end of this movement, the tarrasque creates an instantaneous shock wave in a 60-foot Emanation originating from itself. Creatures in that area lose Concentration and, if Medium or smaller, have the Prone condition. The tarrasque can’t take this action again until the start of its next turn.
+    name: "Tarrasque"
+    notes: "SRD 5.2.1 Tarrasque, CR 30 (XP 155000), HP 697 (34d20 + 340). burrow speed 40 ft.; legendary actions are manual (3 per round, at the end of other creatures' turns)."
+    prof: 9
+    resistances:
+      - "bludgeoning"
+      - "piercing"
+      - "slashing"
+    saves:
+      cha: 9
+      dex: 9
+      int: 5
+      wis: 9
+    senses: "Blindsight 120 ft.; Passive perception 19"
+    size: "gargantuan"
+    skills:
+      perception: 9
+    tags:
+      - "srd"
+      - "cr-30"
+    speed:
+      burrow: 40
+      climb: 60
+      walk: 60
+  - id: "vampire-mist"
+    abilities:
+      cha: 18
+      con: 18
+      dex: 18
+      int: 17
+      str: 18
+      wis: 15
+    ac: 16
+    ai:
+      template: "brute"
+    creature_type: "undead"
+    features:
+      -
+        activation: "passive"
+        concentration: false
+        id: "vampire-mist-legendary-resistance"
+        manual: "If the vampire fails a saving throw, it can choose to succeed instead."
+        name: "Legendary Resistance"
+      -
+        activation: "passive"
+        concentration: false
+        id: "vampire-mist-misty-escape"
+        manual: "If the vampire drops to 0 Hit Points outside its resting place, the vampire uses Shape-Shift to become mist (no action required). If it can’t use ShapeShift, it is destroyed. While it has 0 Hit Points in mist form, it can’t return to its vampire form, and it must reach its resting place within 2 hours or be destroyed. Once in its resting place, it returns to its vampire form and has the Paralyzed condition until it regains any Hit Points, and it regains 1 Hit Point after spending 1 hour there."
+        name: "Misty Escape"
+      -
+        activation: "passive"
+        concentration: false
+        id: "vampire-mist-spider-climb"
+        manual: "The vampire can climb difficult surfaces, including along ceilings, without needing to make an ability check."
+        name: "Spider Climb"
+      -
+        activation: "passive"
+        concentration: false
+        id: "vampire-mist-vampire-weakness"
+        manual: "The vampire has these weaknesses:"
+        name: "Vampire Weakness"
+      -
+        activation: "passive"
+        concentration: false
+        id: "vampire-mist-forbiddance"
+        manual: "The vampire can’t enter a residence without an invitation from an occupant."
+        name: "Forbiddance"
+      -
+        activation: "passive"
+        concentration: false
+        id: "vampire-mist-running-water"
+        manual: "The vampire takes 20 Acid damage if it ends its turn in running water."
+        name: "Running Water"
+      -
+        activation: "passive"
+        concentration: false
+        id: "vampire-mist-stake-to-the-heart"
+        manual: "If a weapon that deals Piercing damage is driven into the vampire’s heart while the vampire has the Incapacitated condition in its resting place, the vampire has the Paralyzed condition until the weapon is removed."
+        name: "Stake to the Heart"
+      -
+        activation: "passive"
+        concentration: false
+        id: "vampire-mist-sunlight"
+        manual: "The vampire takes 20 Radiant damage if it starts its turn in sunlight. While in sunlight, it has Disadvantage on attack rolls and ability checks."
+        name: "Sunlight"
+      -
+        activation: "free"
+        concentration: false
+        id: "vampire-mist-legendary-beguile"
+        manual: "The vampire casts Command, requiring no spell components and using Charisma as the spellcasting ability (spell save DC 17). The vampire can’t take this action again until the start of its next turn."
+        name: "Legendary: Beguile"
+      -
+        activation: "free"
+        concentration: false
+        id: "vampire-mist-legendary-deathless-strike"
+        manual: "The vampire moves up to half its Speed, and it makes one Grave Strike attack."
+        name: "Legendary: Deathless Strike"
+    hp: 195
+    init_bonus: 4
+    kind: "monster"
+    manual: |-
+      Vampire, Mist Form
+      Medium undead, lawful evil
+      AC 16
+      HP 195 (23d8 + 92)
+      Speed fly 20 ft., hover true, walk 5 ft.
+      STR 18 (+4), DEX 18 (+4), CON 18 (+4), INT 17 (+3), WIS 15 (+2), CHA 18 (+4)
+      Senses darkvision 120 ft., passive perception 17
+      Languages Common plus two other languages
+      CR 13 (XP 10000)
+
+      Traits
+      Legendary Resistance. If the vampire fails a saving throw, it can choose to succeed instead.
+      Misty Escape. If the vampire drops to 0 Hit Points outside its resting place, the vampire uses Shape-Shift to become mist (no action required). If it can’t use ShapeShift, it is destroyed. While it has 0 Hit Points in mist form, it can’t return to its vampire form, and it must reach its resting place within 2 hours or be destroyed. Once in its resting place, it returns to its vampire form and has the Paralyzed condition until it regains any Hit Points, and it regains 1 Hit Point after spending 1 hour there.
+      Spider Climb. The vampire can climb difficult surfaces, including along ceilings, without needing to make an ability check.
+      Vampire Weakness. The vampire has these weaknesses:
+      Forbiddance. The vampire can’t enter a residence without an invitation from an occupant.
+      Running Water. The vampire takes 20 Acid damage if it ends its turn in running water.
+      Stake to the Heart. If a weapon that deals Piercing damage is driven into the vampire’s heart while the vampire has the Incapacitated condition in its resting place, the vampire has the Paralyzed condition until the weapon is removed.
+      Sunlight. The vampire takes 20 Radiant damage if it starts its turn in sunlight. While in sunlight, it has Disadvantage on attack rolls and ability checks.
+
+      Bonus Actions
+      Charm. The vampire casts Charm Person, requiring no spell components and using Charisma as the spellcasting ability (spell save DC 17), and the duration is 24 hours. The Charmed target is a willing recipient of the vampire’s Bite, the damage of which doesn’t end the spell. When the spell ends, the target is unaware it was Charmed by the vampire.
+      Shape-Shift. If the vampire isn’t in sunlight or running water, it shape-shifts into a Tiny bat (Speed 5 ft., Fly Speed 30 ft.) or a Medium cloud of mist (Speed 5 ft., Fly Speed 20 ft. [hover]), or it returns to its vampire form. Anything it is wearing transforms with it. While in bat form, the vampire can’t speak. Its game statistics, other than its size and Speed, are unchanged. While in mist form, the vampire can’t take any actions, speak, or manipulate objects. It is weightless and can enter an enemy’s space and stop there. If air can pass through a space, the mist can do so, but it can’t pass through liquid. It has Resistance to all damage, except the damage it takes from sunlight.
+
+      Legendary Actions
+      Beguile. The vampire casts Command, requiring no spell components and using Charisma as the spellcasting ability (spell save DC 17). The vampire can’t take this action again until the start of its next turn.
+      Deathless Strike. The vampire moves up to half its Speed, and it makes one Grave Strike attack.
+    name: "Vampire, Mist Form"
+    notes: "SRD 5.2.1 Vampire, Mist Form, CR 13 (XP 10000), HP 195 (23d8 + 92). can hover; legendary actions are manual (3 per round, at the end of other creatures' turns)."
+    prof: 5
+    resistances:
+      - "necrotic"
+    saves:
+      cha: 9
+      con: 9
+      dex: 9
+      wis: 7
+    senses: "Darkvision 120 ft.; Passive perception 17"
+    size: "medium"
+    skills:
+      perception: 7
+      stealth: 9
+    tags:
+      - "srd"
+      - "cr-13"
+    speed:
+      fly: 20
+      hover: true
+      walk: 5
+  - id: "white-dragon-wyrmling"
+    abilities:
+      cha: 11
+      con: 14
+      dex: 10
+      int: 5
+      str: 14
+      wis: 10
+    ac: 16
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "1d8+2"
+            type: "slashing"
+          -
+            dice: "1d4"
+            type: "cold"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 2 (1d4) Cold damage."
+        name: "Rend"
+        reach: 5
+        to_hit: 4
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "white-dragon-wyrmling-multiattack"
+        manual: "The dragon makes two Rend attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "white-dragon-wyrmling-cold-breath"
+        manual: "Constitution Saving Throw: DC 12, each creature in a 15-foot Cone. Failure: 22 (5d8) Cold damage. Success: Half damage."
+        name: "Cold Breath"
+      -
+        activation: "passive"
+        concentration: false
+        id: "white-dragon-wyrmling-ice-walk"
+        manual: "The dragon can move across and climb icy surfaces without needing to make an ability check. Additionally, Difficult Terrain composed of ice or snow doesn’t cost it extra movement."
+        name: "Ice Walk"
+    hp: 32
+    immunities:
+      - "cold"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      White Dragon Wyrmling
+      Medium dragon, chaotic evil
+      AC 16
+      HP 32 (5d8 + 10)
+      Speed burrow 15 ft., fly 60 ft., swim 30 ft., walk 30 ft.
+      STR 14 (+2), DEX 10 (+0), CON 14 (+2), INT 5 (-3), WIS 10 (+0), CHA 11 (+0)
+      Senses blindsight 10 ft., darkvision 60 ft., passive perception 14
+      Languages Draconic
+      CR 2 (XP 450)
+
+      Traits
+      Ice Walk. The dragon can move across and climb icy surfaces without needing to make an ability check. Additionally, Difficult Terrain composed of ice or snow doesn’t cost it extra movement.
+
+      Actions
+      Multiattack. The dragon makes two Rend attacks.
+      Rend. Melee Attack Roll: +4, reach 5 ft. Hit: 6 (1d8 + 2) Slashing damage plus 2 (1d4) Cold damage.
+      Cold Breath. Constitution Saving Throw: DC 12, each creature in a 15-foot Cone. Failure: 22 (5d8) Cold damage. Success: Half damage.
+    multiattack:
+      - "rend"
+      - "rend"
+    name: "White Dragon Wyrmling"
+    notes: "SRD 5.2.1 White Dragon Wyrmling, CR 2 (XP 450), HP 32 (5d8 + 10). burrow speed 15 ft.."
+    prof: 2
+    saves:
+      dex: 2
+      wis: 2
+    senses: "Blindsight 10 ft.; Darkvision 60 ft.; Passive perception 14"
+    size: "medium"
+    skills:
+      perception: 4
+      stealth: 2
+    tags:
+      - "srd"
+      - "cr-2"
+    speed:
+      burrow: 15
+      fly: 60
+      swim: 30
+      walk: 30
+  - id: "will-o-wisp"
+    abilities:
+      cha: 11
+      con: 10
+      dex: 28
+      int: 13
+      str: 1
+      wis: 14
+    ac: 19
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d8+2"
+            type: "lightning"
+        id: "shock"
+        kind: "melee"
+        name: "Shock"
+        reach: 5
+        to_hit: 4
+    condition_immunities:
+      - "exhaustion"
+      - "grappled"
+      - "paralyzed"
+      - "petrified"
+      - "poisoned"
+      - "prone"
+      - "restrained"
+      - "unconscious"
+    creature_type: "undead"
+    features:
+      -
+        activation: "passive"
+        concentration: false
+        id: "will-o-wisp-ephemeral"
+        manual: "The wisp can’t wear or carry anything."
+        name: "Ephemeral"
+      -
+        activation: "passive"
+        concentration: false
+        id: "will-o-wisp-illumination"
+        manual: "The wisp sheds Bright Light in a 20-foot radius and Dim Light for an additional 20 feet."
+        name: "Illumination"
+      -
+        activation: "passive"
+        concentration: false
+        id: "will-o-wisp-incorporeal-movement"
+        manual: "The wisp can move through other creatures and objects as if they were Difficult Terrain. It takes 5 (1d10) Force damage if it ends its turn inside an object."
+        name: "Incorporeal Movement"
+    hp: 27
+    immunities:
+      - "lightning"
+      - "poison"
+    init_bonus: 9
+    kind: "monster"
+    manual: |-
+      Will-o’-Wisp
+      Tiny undead, chaotic evil
+      AC 19
+      HP 27 (11d4)
+      Speed fly 50 ft., hover true, walk 5 ft.
+      STR 1 (-5), DEX 28 (+9), CON 10 (+0), INT 13 (+1), WIS 14 (+2), CHA 11 (+0)
+      Senses darkvision 120 ft., passive perception 12
+      Languages Common plus one other language
+      CR 2 (XP 450)
+
+      Traits
+      Ephemeral. The wisp can’t wear or carry anything.
+      Illumination. The wisp sheds Bright Light in a 20-foot radius and Dim Light for an additional 20 feet.
+      Incorporeal Movement. The wisp can move through other creatures and objects as if they were Difficult Terrain. It takes 5 (1d10) Force damage if it ends its turn inside an object.
+
+      Actions
+      Shock. Melee Attack Roll: +4, reach 5 ft. Hit: 11 (2d8 + 2) Lightning damage.
+
+      Bonus Actions
+      Consume Life. Constitution Saving Throw: DC 10, one living creature the wisp can see within 5 feet that has 0 Hit Points. Failure: The target dies, and the wisp regains 10 (3d6) Hit Points.
+      Vanish. The wisp and its light have the Invisible condition until the wisp’s Concentration ends on this effect, which ends early immediately after the wisp makes an attack roll or uses Consume Life.
+    name: "Will-o’-Wisp"
+    notes: "SRD 5.2.1 Will-o’-Wisp, CR 2 (XP 450), HP 27 (11d4). can hover."
+    prof: 2
+    resistances:
+      - "acid"
+      - "bludgeoning"
+      - "cold"
+      - "fire"
+      - "necrotic"
+      - "piercing"
+      - "slashing"
+    senses: "Darkvision 120 ft.; Passive perception 12"
+    size: "tiny"
+    tags:
+      - "srd"
+      - "cr-2"
+    speed:
+      fly: 50
+      hover: true
+      walk: 5
+  - id: "wraith"
+    abilities:
+      cha: 15
+      con: 16
+      dex: 16
+      int: 12
+      str: 6
+      wis: 14
+    ac: 13
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "4d8+3"
+            type: "necrotic"
+        id: "life-drain"
+        kind: "melee"
+        manual: "If the target is a creature, its Hit Point maximum decreases by an amount equal to the damage taken."
+        name: "Life Drain"
+        reach: 5
+        to_hit: 6
+    condition_immunities:
+      - "charmed"
+      - "exhaustion"
+      - "grappled"
+      - "paralyzed"
+      - "petrified"
+      - "poisoned"
+      - "prone"
+      - "restrained"
+      - "unconscious"
+    creature_type: "undead"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "wraith-create-specter"
+        manual: "The wraith targets a Humanoid corpse within 10 feet of itself that has been dead for no longer than 1 minute. The target’s spirit rises as a Specter in the space of its corpse or in the nearest unoccupied space. The specter is under the wraith’s control. The wraith can have no more than seven specters under its control at a time."
+        name: "Create Specter"
+      -
+        activation: "passive"
+        concentration: false
+        id: "wraith-incorporeal-movement"
+        manual: "The wraith can move through other creatures and objects as if they were Difficult Terrain. It takes 5 (1d10) Force damage if it ends its turn inside an object."
+        name: "Incorporeal Movement"
+      -
+        activation: "passive"
+        concentration: false
+        id: "wraith-sunlight-sensitivity"
+        manual: "While in sunlight, the wraith has Disadvantage on ability checks and attack rolls."
+        name: "Sunlight Sensitivity"
+    hp: 67
+    immunities:
+      - "necrotic"
+      - "poison"
+    init_bonus: 3
+    kind: "monster"
+    manual: |-
+      Wraith
+      Medium or small undead, neutral evil
+      AC 13
+      HP 67 (9d8 + 27)
+      Speed fly 60 ft., hover true, walk 5 ft.
+      STR 6 (-2), DEX 16 (+3), CON 16 (+3), INT 12 (+1), WIS 14 (+2), CHA 15 (+2)
+      Senses darkvision 60 ft., passive perception 12
+      Languages Common plus two other languages
+      CR 5 (XP 1800)
+
+      Traits
+      Incorporeal Movement. The wraith can move through other creatures and objects as if they were Difficult Terrain. It takes 5 (1d10) Force damage if it ends its turn inside an object.
+      Sunlight Sensitivity. While in sunlight, the wraith has Disadvantage on ability checks and attack rolls.
+
+      Actions
+      Life Drain. Melee Attack Roll: +6, reach 5 ft. Hit: 21 (4d8 + 3) Necrotic damage. If the target is a creature, its Hit Point maximum decreases by an amount equal to the damage taken.
+      Create Specter. The wraith targets a Humanoid corpse within 10 feet of itself that has been dead for no longer than 1 minute. The target’s spirit rises as a Specter in the space of its corpse or in the nearest unoccupied space. The specter is under the wraith’s control. The wraith can have no more than seven specters under its control at a time.
+    name: "Wraith"
+    notes: "SRD 5.2.1 Wraith, CR 5 (XP 1800), HP 67 (9d8 + 27). can hover."
+    prof: 3
+    resistances:
+      - "acid"
+      - "bludgeoning"
+      - "cold"
+      - "fire"
+      - "piercing"
+      - "slashing"
+    senses: "Darkvision 60 ft.; Passive perception 12"
+    size: "unknown"
+    tags:
+      - "srd"
+      - "cr-5"
+    speed:
+      fly: 60
+      hover: true
+      walk: 5
+  - id: "xorn"
+    abilities:
+      cha: 11
+      con: 22
+      dex: 10
+      int: 11
+      str: 17
+      wis: 10
+    ac: 19
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "4d6+3"
+            type: "piercing"
+        id: "bite"
+        kind: "melee"
+        name: "Bite"
+        reach: 5
+        to_hit: 6
+      -
+        damage:
+          -
+            dice: "1d10+3"
+            type: "slashing"
+        id: "claw"
+        kind: "melee"
+        name: "Claw"
+        reach: 5
+        to_hit: 6
+    condition_immunities:
+      - "paralyzed"
+      - "petrified"
+      - "poisoned"
+    creature_type: "elemental"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "xorn-multiattack"
+        manual: "The xorn makes one Bite attack and three Claw attacks."
+        name: "Multiattack"
+      -
+        activation: "passive"
+        concentration: false
+        id: "xorn-earth-glide"
+        manual: "The xorn can burrow through nonmagical, unworked earth and stone. While doing so, the xorn doesn’t disturb the material it moves through."
+        name: "Earth Glide"
+      -
+        activation: "passive"
+        concentration: false
+        id: "xorn-treasure-sense"
+        manual: "The xorn can pinpoint the location of precious metals and stones within 60 feet of itself."
+        name: "Treasure Sense"
+    hp: 84
+    immunities:
+      - "poison"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Xorn
+      Medium elemental, neutral
+      AC 19
+      HP 84 (8d8 + 48)
+      Speed burrow 20 ft., walk 20 ft.
+      STR 17 (+3), DEX 10 (+0), CON 22 (+6), INT 11 (+0), WIS 10 (+0), CHA 11 (+0)
+      Senses darkvision 60 ft., passive perception 16, tremorsense 60 ft.
+      Languages Primordial (Terran)
+      CR 5 (XP 1800)
+
+      Traits
+      Earth Glide. The xorn can burrow through nonmagical, unworked earth and stone. While doing so, the xorn doesn’t disturb the material it moves through.
+      Treasure Sense. The xorn can pinpoint the location of precious metals and stones within 60 feet of itself.
+
+      Actions
+      Multiattack. The xorn makes one Bite attack and three Claw attacks.
+      Bite. Melee Attack Roll: +6, reach 5 ft. Hit: 17 (4d6 + 3) Piercing damage.
+      Claw. Melee Attack Roll: +6, reach 5 ft. Hit: 8 (1d10 + 3) Slashing damage.
+
+      Bonus Actions
+      Charge. The xorn moves up to its Speed or Burrow Speed straight toward an enemy it can sense.
+    multiattack:
+      - "bite"
+      - "claw"
+      - "claw"
+      - "claw"
+    name: "Xorn"
+    notes: "SRD 5.2.1 Xorn, CR 5 (XP 1800), HP 84 (8d8 + 48). burrow speed 20 ft.."
+    prof: 3
+    senses: "Darkvision 60 ft.; Passive perception 16; Tremorsense 60 ft."
+    size: "medium"
+    skills:
+      perception: 6
+      stealth: 6
+    tags:
+      - "srd"
+      - "cr-5"
+    speed:
+      burrow: 20
+      walk: 20
+  - id: "young-blue-dragon"
+    abilities:
+      cha: 17
+      con: 19
+      dex: 10
+      int: 14
+      str: 21
+      wis: 13
+    ac: 18
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d6+5"
+            type: "slashing"
+          -
+            dice: "1d10"
+            type: "lightning"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 5 (1d10) Lightning damage."
+        name: "Rend"
+        reach: 10
+        to_hit: 9
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "young-blue-dragon-multiattack"
+        manual: "The dragon makes three Rend attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "young-blue-dragon-lightning-breath"
+        manual: "Dexterity Saving Throw: DC 16, each creature in a 60-foot-long, 5-footwide Line. Failure: 55 (10d10) Lightning damage. Success: Half damage."
+        name: "Lightning Breath"
+    hp: 152
+    immunities:
+      - "lightning"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Young Blue Dragon
+      Large dragon, lawful evil
+      AC 18
+      HP 152 (16d10 + 64)
+      Speed burrow 20 ft., fly 80 ft., walk 40 ft.
+      STR 21 (+5), DEX 10 (+0), CON 19 (+4), INT 14 (+2), WIS 13 (+1), CHA 17 (+3)
+      Senses blindsight 30 ft., darkvision 120 ft., passive perception 19
+      Languages Common, Draconic
+      CR 9 (XP 5000)
+
+      Actions
+      Multiattack. The dragon makes three Rend attacks.
+      Rend. Melee Attack Roll: +9, reach 10 ft. Hit: 12 (2d6 + 5) Slashing damage plus 5 (1d10) Lightning damage.
+      Lightning Breath. Dexterity Saving Throw: DC 16, each creature in a 60-foot-long, 5-footwide Line. Failure: 55 (10d10) Lightning damage. Success: Half damage.
+    multiattack:
+      - "rend"
+      - "rend"
+      - "rend"
+    name: "Young Blue Dragon"
+    notes: "SRD 5.2.1 Young Blue Dragon, CR 9 (XP 5000), HP 152 (16d10 + 64). burrow speed 20 ft.."
+    prof: 4
+    saves:
+      dex: 4
+      wis: 5
+    senses: "Blindsight 30 ft.; Darkvision 120 ft.; Passive perception 19"
+    size: "large"
+    skills:
+      perception: 9
+      stealth: 4
+    tags:
+      - "srd"
+      - "cr-9"
+    speed:
+      burrow: 20
+      fly: 80
+      walk: 40
+  - id: "young-brass-dragon"
+    abilities:
+      cha: 15
+      con: 17
+      dex: 10
+      int: 12
+      str: 19
+      wis: 11
+    ac: 17
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d10+4"
+            type: "slashing"
+        id: "rend"
+        kind: "melee"
+        name: "Rend"
+        reach: 10
+        to_hit: 7
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "young-brass-dragon-multiattack"
+        manual: "The dragon makes three Rend attacks. It can replace two attacks with a use of Sleep Breath."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "young-brass-dragon-fire-breath"
+        manual: "Dexterity Saving Throw: DC 14, each creature in a 40-foot-long, 5-footwide Line. Failure: 38 (11d6) Fire damage. Success: Half damage."
+        name: "Fire Breath"
+      -
+        activation: "action"
+        concentration: false
+        id: "young-brass-dragon-sleep-breath"
+        manual: "Constitution Saving Throw: DC 14, each creature in a 30-foot Cone. Failure: The target has the Incapacitated condition until the end of its next turn, at which point it repeats the save. Second Failure: The target has the Unconscious condition for 1 minute. This effect ends for the target if it takes damage or a creature within 5 feet of it takes an action to wake it."
+        name: "Sleep Breath"
+    hp: 110
+    immunities:
+      - "fire"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Young Brass Dragon
+      Large dragon, chaotic good
+      AC 17
+      HP 110 (13d10 + 39)
+      Speed burrow 20 ft., fly 80 ft., walk 40 ft.
+      STR 19 (+4), DEX 10 (+0), CON 17 (+3), INT 12 (+1), WIS 11 (+0), CHA 15 (+2)
+      Senses blindsight 30 ft., darkvision 120 ft., passive perception 16
+      Languages Common, Draconic
+      CR 6 (XP 2300)
+
+      Actions
+      Multiattack. The dragon makes three Rend attacks. It can replace two attacks with a use of Sleep Breath.
+      Rend. Melee Attack Roll: +7, reach 10 ft. Hit: 15 (2d10 + 4) Slashing damage.
+      Fire Breath. Dexterity Saving Throw: DC 14, each creature in a 40-foot-long, 5-footwide Line. Failure: 38 (11d6) Fire damage. Success: Half damage.
+      Sleep Breath. Constitution Saving Throw: DC 14, each creature in a 30-foot Cone. Failure: The target has the Incapacitated condition until the end of its next turn, at which point it repeats the save. Second Failure: The target has the Unconscious condition for 1 minute. This effect ends for the target if it takes damage or a creature within 5 feet of it takes an action to wake it.
+    multiattack:
+      - "rend"
+    name: "Young Brass Dragon"
+    notes: "SRD 5.2.1 Young Brass Dragon, CR 6 (XP 2300), HP 110 (13d10 + 39). burrow speed 20 ft.."
+    prof: 3
+    saves:
+      dex: 3
+      wis: 3
+    senses: "Blindsight 30 ft.; Darkvision 120 ft.; Passive perception 16"
+    size: "large"
+    skills:
+      perception: 6
+      persuasion: 5
+      stealth: 3
+    tags:
+      - "srd"
+      - "cr-6"
+    speed:
+      burrow: 20
+      fly: 80
+      walk: 40
+  - id: "young-white-dragon"
+    abilities:
+      cha: 12
+      con: 18
+      dex: 10
+      int: 6
+      str: 18
+      wis: 11
+    ac: 17
+    ai:
+      template: "brute"
+    attacks:
+      -
+        damage:
+          -
+            dice: "2d4+4"
+            type: "slashing"
+          -
+            dice: "1d4"
+            type: "cold"
+        id: "rend"
+        kind: "melee"
+        manual: "plus 2 (1d4) Cold damage."
+        name: "Rend"
+        reach: 10
+        to_hit: 7
+    creature_type: "dragon"
+    features:
+      -
+        activation: "action"
+        concentration: false
+        id: "young-white-dragon-multiattack"
+        manual: "The dragon makes three Rend attacks."
+        name: "Multiattack"
+      -
+        activation: "action"
+        concentration: false
+        id: "young-white-dragon-cold-breath"
+        manual: "Constitution Saving Throw: DC 15, each creature in a 30-foot Cone. Failure: 40 (9d8) Cold damage. Success: Half damage."
+        name: "Cold Breath"
+      -
+        activation: "passive"
+        concentration: false
+        id: "young-white-dragon-ice-walk"
+        manual: "The dragon can move across and climb icy surfaces without needing to make an ability check. Additionally, Difficult Terrain composed of ice or snow doesn’t cost it extra movement."
+        name: "Ice Walk"
+    hp: 123
+    immunities:
+      - "cold"
+    init_bonus: 0
+    kind: "monster"
+    manual: |-
+      Young White Dragon
+      Large dragon, chaotic evil
+      AC 17
+      HP 123 (13d10 + 52)
+      Speed burrow 20 ft., fly 80 ft., swim 40 ft., walk 40 ft.
+      STR 18 (+4), DEX 10 (+0), CON 18 (+4), INT 6 (-2), WIS 11 (+0), CHA 12 (+1)
+      Senses blindsight 30 ft., darkvision 120 ft., passive perception 16
+      Languages Common, Draconic
+      CR 6 (XP 2300)
+
+      Traits
+      Ice Walk. The dragon can move across and climb icy surfaces without needing to make an ability check. Additionally, Difficult Terrain composed of ice or snow doesn’t cost it extra movement.
+
+      Actions
+      Multiattack. The dragon makes three Rend attacks.
+      Rend. Melee Attack Roll: +7, reach 10 ft. Hit: 9 (2d4 + 4) Slashing damage plus 2 (1d4) Cold damage.
+      Cold Breath. Constitution Saving Throw: DC 15, each creature in a 30-foot Cone. Failure: 40 (9d8) Cold damage. Success: Half damage.
+    multiattack:
+      - "rend"
+      - "rend"
+      - "rend"
+    name: "Young White Dragon"
+    notes: "SRD 5.2.1 Young White Dragon, CR 6 (XP 2300), HP 123 (13d10 + 52). burrow speed 20 ft.."
+    prof: 3
+    saves:
+      dex: 3
+      int: 2
+      wis: 3
+    senses: "Blindsight 30 ft.; Darkvision 120 ft.; Passive perception 16"
+    size: "large"
+    skills:
+      perception: 6
+      stealth: 3
+    tags:
+      - "srd"
+      - "cr-6"
+    speed:
+      burrow: 20
+      fly: 80
+      swim: 40
+      walk: 40

@@ -83,6 +83,63 @@ is a possible follow-up if that becomes noticeable in play.
 - Monsters keep automation for plain attacks/multiattack; special abilities,
   legendary actions and complex riders stay in the statblock text.
 
+### Spatial fields (TASK-0094)
+
+The frozen #170 schema stores `Speed.hover`, `Speed.burrow` and
+`Ability.area` (`radius`, `shape`, `width_ft`). The SRD import fills them from
+the same pinned 5e-database commit:
+
+- 2014 monsters: 7 `hover` and 21 `burrow` speeds are structured; the generated
+  notes no longer repeat those phrases as prose.
+- 2014 spells: 81 `area_of_effect` entries are mapped: 37 sphere, 26 cube,
+  9 cylinder, 6 cone and 3 line. Line width (5 or 10 ft) comes from the SRD
+  spell text.
+- 2024 monsters: the pack generator emits the same fields, but the committed
+  2024 pack is owned by #182. `2024/monsters/srd-spatial.yaml` is an SRD-only
+  overlay for the 38 creatures whose SRD speed has hover or burrow (17 hover,
+  21 burrow). It copies the pack fields and adds the structured speed fields.
+- 2024 spells: upstream 5e-database has no `area_of_effect` for 2024. Six SRD
+  shape examples are added to `2024/spells.yaml` from the SRD text: Fireball
+  (sphere 20), Burning Hands (cone 15), Thunderwave (cube 15), Moonbeam
+  (cylinder 5), Lightning Bolt (line 100 × 5) and Spirit Guardians (emanation
+  15).
+
+Regenerate the 2014 YAML with:
+
+```bash
+cargo run --manifest-path tools/combat-sim/Cargo.toml -- content import-srd \
+  --monsters /tmp/5e-database/src/2014/en/5e-SRD-Monsters.json \
+  --spells /tmp/5e-database/src/2014/en/5e-SRD-Spells.json \
+  --out LetsPlay/Rules/combat/2014/srd \
+  --skip-ids-from LetsPlay/Rules/combat/2014 \
+  --skip-ids-from LetsPlay/Rules/combat/common
+```
+
+The run exits 0 and writes 331 creatures and 302 spells; a second run produces
+byte-identical files. The regenerated `srd-monsters.yaml` also carries the
+`manual` statblock field introduced by #182; that is generator output, not a
+new rule. `AreaSpec.radius` is the generic size for every shape (sphere radius,
+cone length, cube side, cylinder radius, line length); `width_ft` is only the
+line width.
+
+Known spatial gaps:
+
+- 2014 `line` entries that describe walls (Blade Barrier, Prismatic Wall, Wall
+  of Fire, Wall of Thorns, Wind Wall) are not mapped: the frozen shape enum has
+  no wall.
+- Cylinder height is not in `AreaSpec` (or `AreaSpecV1`); only the radius is
+  structured, the height stays in `manual` (Moonbeam 40 ft, Ice Storm 40 ft,
+  Sleet Storm 20 ft, ...).
+- The 2014 hand-written `sleep` and `detect-magic` entries keep their
+  hand-written form; the generator does not overwrite them, so their upstream
+  area is not added.
+- The committed 2024 pack still has the #182 shape (no structured hover/burrow
+  or area). Regenerating it with the current generator would add the monster
+  fields; that pack update is outside TASK-0094's allowed paths and remains a
+  follow-up.
+- 2024 AoE coverage is representative, not exhaustive: only the six spells
+  above have structured shape data until a 2024 area source exists.
+
 ## SRD 5.2.1 rules prose
 
 The 2024 rules chapters are not in 5e-database, so they are extracted from the
