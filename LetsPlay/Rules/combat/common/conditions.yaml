@@ -51,6 +51,7 @@ conditions:
       - {applies: save, effect: disadvantage, filter: {ability: [dex]}}
   - id: stunned
     implies: [incapacitated]
+    flags: [speed_zero]
     modifiers:
       - {applies: save, effect: auto_fail, filter: {ability: [str, dex]}}
       - {applies: incoming_attack, effect: advantage}
