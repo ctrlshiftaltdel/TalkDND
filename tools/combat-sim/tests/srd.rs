@@ -24,7 +24,7 @@ fn converts_a_monster_and_spells() {
     let (v, n) = convert_monsters(&m, &BTreeSet::new());
     assert_eq!(n, 1);
     let c = &v["creatures"][0];
-    assert_eq!(c["speed"], json!({"walk": 40}));
+    assert_eq!(c["speed"], json!({"walk": 40, "burrow": 10}));
     assert_eq!(c["init_bonus"], 2);
     assert_eq!(c["skills"]["perception"], 3);
     assert_eq!(c["saves"]["dex"], 4);
@@ -34,7 +34,7 @@ fn converts_a_monster_and_spells() {
     assert_eq!(c["attacks"][0]["manual"], "The target is knocked prone.");
     assert_eq!(c["attacks"].as_array().unwrap().len(), 1);
     assert!(c["notes"].as_str().unwrap().contains("CR 1/4 (XP 50)"));
-    assert!(c["notes"].as_str().unwrap().contains("burrow speed 10"));
+    assert!(!c["notes"].as_str().unwrap().contains("burrow speed 10"));
     assert_eq!(c["ai"]["template"], "mindless");
     let skip: BTreeSet<String> = ["cog-wolf".to_string()].into();
     assert_eq!(convert_monsters(&m, &skip).1, 0);

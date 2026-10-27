@@ -318,6 +318,22 @@ enum LibraryCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Identify the full books under Rules/<edition>/ from their converted
+    /// front matter (never file names, never a PDF hash)
+    Scan,
+    /// Full-pack status for 2014/2024 PHB, DMG and MM (SRD is always available)
+    Packs,
+    /// Record the player's explicit choice for an ambiguous book
+    Choose {
+        /// Book folder or the `source` printed by `library scan`
+        book: String,
+        /// 2014 or 2024
+        #[arg(long)]
+        edition: String,
+        /// phb, dmg or mm
+        #[arg(long)]
+        kind: String,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -1210,8 +1226,84 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                 println!("{l}");
             }
         }
+        Cmd::Library {
+            cmd: LibraryCmd::Scan,
+        } => {
+            let records = library::scan_and_register(&root)?;
+            print_book_scan(&records);
+        }
+        Cmd::Library {
+            cmd: LibraryCmd::Packs,
+        } => {
+            library::scan_and_register(&root)?;
+            for status in library::pack_status(&root) {
+                let state = match status.state {
+                    library::PackState::Unlocked => "已解锁",
+                    library::PackState::MissingBook => "未解锁（缺少书）",
+                    library::PackState::MissingPack => "未解锁（缺少内容包）",
+                    library::PackState::WrongEdition => "未解锁（版本不符）",
+                    library::PackState::Ambiguous => "未解锁（识别不确定）",
+                    library::PackState::Invalid => "内容包无效",
+                };
+                println!("{} — {state}：{}", status.id, status.detail);
+                if let Some(f) = &status.file {
+                    println!("  文件：`{f}`");
+                }
+            }
+            println!("SRD：始终可用（2014 与 2024）");
+        }
+        Cmd::Library {
+            cmd:
+                LibraryCmd::Choose {
+                    book,
+                    edition,
+                    kind,
+                },
+        } => {
+            let chosen = library::choose_book(&root, &book, &edition, &kind)?;
+            println!(
+                "已按玩家选择登记：{} {} — `{}`",
+                chosen.edition.as_deref().unwrap_or("?"),
+                library::book_label(chosen.book.as_deref().unwrap_or("")),
+                chosen.source
+            );
+            println!(
+                "运行 `talkdnd library packs` 查看内容包状态；`talkdnd start` 更新存档内容源。"
+            );
+        }
     }
     Ok(())
+}
+
+fn print_book_scan(records: &[library::BookRecord]) {
+    if records.is_empty() {
+        println!("书库识别：Rules/2014/ 与 Rules/2024/ 里还没有可识别的书");
+    }
+    for r in records {
+        let what = match r.status {
+            library::BookStatus::Identified => format!(
+                "已识别 {} {}",
+                r.edition.as_deref().unwrap_or("?"),
+                library::book_label(r.book.as_deref().unwrap_or(""))
+            ),
+            library::BookStatus::Ambiguous => format!(
+                "无法确定：可选 {}；运行 `talkdnd library choose <source> --edition <2014|2024> --kind <phb|dmg|mm>`",
+                r.candidates.join("、")
+            ),
+            library::BookStatus::Unknown => format!(
+                "无法识别（可选 {}；运行 `talkdnd library choose <source> --edition <2014|2024> --kind <phb|dmg|mm>`）",
+                r.candidates.join("、")
+            ),
+            library::BookStatus::SrdOnly => "SRD（不解锁完整书）".to_string(),
+            library::BookStatus::MissingIndex => {
+                "有 PDF，但还没有转换索引，或索引缺少 PDF".to_string()
+            }
+        };
+        println!("- {what} — `{}`（{}）", r.source, r.evidence);
+    }
+    println!(
+        "完整书内容包：运行 `talkdnd library packs` 查看状态；`talkdnd start` 更新存档内容源。"
+    );
 }
 
 fn rel(root: &Path, p: &Path) -> String {
