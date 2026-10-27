@@ -1033,6 +1033,54 @@ fn fall_with_checks_rolls_r09_and_applies_the_landing() {
     );
 }
 
+/// Healing from a named creature uses the same line-of-sight gate as a spell;
+/// a wall blocks it instead of silently healing through the wall.
+#[test]
+fn heal_from_a_creature_uses_line_of_sight() {
+    let mut state = state_with(
+        registry("2024"),
+        vec![
+            grounded(
+                "Healer",
+                creature("synthetic-healer", Size::Medium, 0, false, no_attacks()),
+                "party",
+                0,
+                0,
+            ),
+            {
+                let mut wounded = grounded(
+                    "Wounded",
+                    creature("synthetic-wounded", Size::Medium, 0, false, no_attacks()),
+                    "party",
+                    2,
+                    0,
+                );
+                wounded.hp = 10;
+                wounded
+            },
+        ],
+        grid_scene(
+            &[".W."],
+            json!({".": {"elevation": 0}, "W": {"wall": true, "height_ft": 10}}),
+        ),
+        spatial(),
+    );
+    let error = engine::heal(
+        &mut state,
+        "Wounded",
+        "1d8",
+        Some("Healer"),
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .expect_err("a wall blocks healing from the named source");
+    assert!(
+        error.to_string().contains("line of sight") || error.to_string().contains("total cover"),
+        "{error}"
+    );
+    assert_eq!(state.combatants[index(&state, "Wounded")].hp, 10);
+}
+
 // ---------------------------------------------------------------------------
 // Phase 4: legacy regression
 // ---------------------------------------------------------------------------

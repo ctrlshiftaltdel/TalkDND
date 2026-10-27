@@ -6042,6 +6042,13 @@ pub fn heal(
         ),
         None => None,
     };
+    // Direct healing is a DM correction, but when a source creature is named
+    // the spatial target rules still apply: no healing through total cover.
+    if let Some(source) = from_index {
+        if source != target && spatial_query_enabled(state) {
+            ensure_cover_allows(state, source, target)?;
+        }
+    }
     let parsed = expression
         .parse::<DiceExpr>()
         .with_context(|| format!("invalid healing expression `{expression}`"))?;
