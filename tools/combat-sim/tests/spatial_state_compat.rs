@@ -685,6 +685,19 @@ fn ac9_p4_p5_state_and_schema_fields_are_complete_with_defaults() {
     let speed: Speed = serde_json::from_value(json!({"walk": 30})).expect("legacy speed");
     assert!(!speed.hover);
     assert_eq!(speed.burrow, 0);
+    let flying_speed = Speed {
+        walk: 30,
+        climb: 10,
+        fly: 60,
+        swim: 0,
+        hover: true,
+        burrow: 5,
+    };
+    assert_eq!(
+        serde_json::from_value::<Speed>(serde_json::to_value(&flying_speed).expect("speed json"))
+            .expect("speed round-trip"),
+        flying_speed
+    );
 
     // SpatialState mirrors the scene-level P1 fields.
     let spatial = SpatialState::default();
