@@ -1,5 +1,7 @@
-# PHB 2024 spells used so far in TalkDND. Spellcasting numbers come from the caster's
-# `spellcasting` block ({spell_attack}, {spell_dc}, {spell_mod}).
+# PHB 2024 spells used so far in TalkDND, plus SRD 5.2.1 spatial overlays for
+# the AoE shapes that the 2024 upstream JSON does not structure. Spellcasting
+# numbers come from the caster's `spellcasting` block ({spell_attack}, {spell_dc},
+# {spell_mod}).
 abilities:
   - id: fire-bolt
     name: Fire Bolt
@@ -142,3 +144,185 @@ abilities:
     target: {type: self}
     effects: [{note: "Minor Illusion: sound or image; Investigation vs spell DC to discern."}]
     ai: {role: none}
+  # SRD 5.2.1 AoE shape overlays. The upstream 2024 JSON has no
+  # area_of_effect; these shapes come from the SRD spell text.
+  - id: "burning-hands"
+    activation: "action"
+    ai:
+      role: "none"
+    area:
+      radius: 15
+      shape: "cone"
+    cost:
+      amount: 1
+      resource: "spell-slot-1"
+    effects:
+      -
+        note: "Burning Hands (SRD 5.2.1, manual): see `manual`."
+    manual: |-
+      action; Self ; V, S; Instantaneous.
+
+      A thin sheet of flames shoots forth from you. Each creature in a 15-foot Cone makes a Dexterity saving throw, taking 3d6 Fire damage on a failed save or half as much damage on a successful one.
+        Flammable objects in the Cone that aren't being worn or carried start burning.
+
+      At higher levels: The damage increases by 1d6 for each spell slot level above 1.
+    name: "Burning Hands"
+    range: 0
+    slot_level: 1
+    source: "SRD 5.2.1 Burning Hands"
+    tags:
+      - "spell"
+      - "srd"
+      - "evocation"
+    target:
+      type: "self"
+  - id: "fireball"
+    activation: "action"
+    ai:
+      role: "none"
+    area:
+      radius: 20
+      shape: "sphere"
+    cost:
+      amount: 1
+      resource: "spell-slot-3"
+    effects:
+      -
+        note: "Fireball (SRD 5.2.1, manual): see `manual`."
+    manual: |-
+      action; 150 feet ; V, S, M; Instantaneous.
+
+      A bright streak flashes from you to a point you choose within range and then blossoms with a low roar into a fiery explosion. Each creature in a 20-foot-radius Sphere centered on that point makes a Dexterity saving throw, taking 8d6 Fire damage on a failed save or half as much damage on a successful one.
+        Flammable objects in the area that aren't being worn or carried start burning.
+
+      At higher levels: The damage increases by 1d6 for each spell slot level above 3.
+    name: "Fireball"
+    range: 150
+    slot_level: 3
+    source: "SRD 5.2.1 Fireball"
+    tags:
+      - "spell"
+      - "srd"
+      - "evocation"
+    target:
+      type: "self"
+  - id: "lightning-bolt"
+    activation: "action"
+    ai:
+      role: "none"
+    area:
+      radius: 100
+      shape: "line"
+      width_ft: 5
+    cost:
+      amount: 1
+      resource: "spell-slot-3"
+    effects:
+      -
+        note: "Lightning Bolt (SRD 5.2.1, manual): see `manual`."
+    manual: |-
+      action; Self ; V, S, M; Instantaneous.
+
+      A stroke of lightning forming a 100-foot-long, 5-foot-wide Line blasts out from you in a direction you choose. Each creature in the Line makes a Dexterity saving throw, taking 8d6 Lightning damage on a failed save or half as much damage on a successful one.
+
+      At higher levels: The damage increases by 1d6 for each spell slot level above 3.
+    name: "Lightning Bolt"
+    range: 0
+    slot_level: 3
+    source: "SRD 5.2.1 Lightning Bolt"
+    tags:
+      - "spell"
+      - "srd"
+      - "evocation"
+    target:
+      type: "self"
+  - id: "moonbeam"
+    activation: "action"
+    ai:
+      role: "none"
+    area:
+      radius: 5
+      shape: "cylinder"
+    concentration: true
+    cost:
+      amount: 1
+      resource: "spell-slot-2"
+    effects:
+      -
+        note: "Moonbeam (SRD 5.2.1, manual): see `manual`."
+    manual: |-
+      action; 120 feet ; V, S, M; up to 1 minute.
+
+       A silvery beam of pale light shines down in a 5-foot-radius, 40-foot-high Cylinder centered on a point within range. Until the spell ends, Dim Light fills the Cylinder, and you can take a Magic action on later turns to move the Cylinder up to 60 feet.
+        When the Cylinder appears, each creature in it makes a Constitution saving throw. On a failed save, a creature takes 2d10 Radiant damage, and if the creature is shape-shifted (as a result of the Polymorph spell, for example), it reverts to its true form and can't shape-shift until it leaves the Cylinder. On a successful save, a creature takes half as much damage only. A creature also makes this save when the spell's area moves into its space and when it enters the spell's area or ends its turn there. A creature makes this save only once per turn.
+
+      At higher levels: The damage increases by 1d10 for each spell slot level above 2.
+    name: "Moonbeam"
+    range: 120
+    slot_level: 2
+    source: "SRD 5.2.1 Moonbeam"
+    tags:
+      - "spell"
+      - "srd"
+      - "evocation"
+    target:
+      type: "self"
+  - id: "spirit-guardians"
+    activation: "action"
+    ai:
+      role: "none"
+    area:
+      radius: 15
+      shape: "emanation"
+    concentration: true
+    cost:
+      amount: 1
+      resource: "spell-slot-3"
+    effects:
+      -
+        note: "Spirit Guardians (SRD 5.2.1, manual): see `manual`."
+    manual: |-
+      action; Self ; V, S, M; up to 10 minutes.
+
+      Protective spirits flit around you in a 15-foot Emanation for the duration. If you are good or neutral, their spectral form appears angelic or fey (your choice). If you are evil, they appear fiendish.
+        When you cast this spell, you can designate creatures to be unaffected by it. Any other creature's Speed is halved in the Emanation, and whenever the Emanation enters a creature's space and whenever a creature enters the Emanation or ends its turn there, the creature must make a Wisdom saving throw. On a failed save, the creature takes 3d8 Radiant damage (if you are good or neutral) or 3d8 Necrotic damage (if you are evil). On a successful save, the creature takes half as much damage. A creature makes this save only once per turn.
+
+      At higher levels: The damage increases by 1d8 for each spell slot level above 3.
+    name: "Spirit Guardians"
+    range: 0
+    slot_level: 3
+    source: "SRD 5.2.1 Spirit Guardians"
+    tags:
+      - "spell"
+      - "srd"
+      - "conjuration"
+    target:
+      type: "self"
+  - id: "thunderwave"
+    activation: "action"
+    ai:
+      role: "none"
+    area:
+      radius: 15
+      shape: "cube"
+    cost:
+      amount: 1
+      resource: "spell-slot-1"
+    effects:
+      -
+        note: "Thunderwave (SRD 5.2.1, manual): see `manual`."
+    manual: |-
+      action; Self ; V, S; Instantaneous.
+
+      You unleash a wave of thunderous energy. Each creature in a 15-foot Cube originating from you makes a Constitution saving throw. On a failed save, a creature takes 2d8 Thunder damage and is pushed 10 feet away from you. On a successful save, a creature takes half as much damage only.
+        In addition, unsecured objects that are entirely within the Cube are pushed 10 feet away from you, and a thunderous boom is audible within 300 feet.   Using a Higher-Level Spell Slot. The damage increases by 1d8 for each spell slot level above 1.
+    name: "Thunderwave"
+    range: 0
+    slot_level: 1
+    source: "SRD 5.2.1 Thunderwave"
+    tags:
+      - "spell"
+      - "srd"
+      - "evocation"
+    target:
+      type: "self"

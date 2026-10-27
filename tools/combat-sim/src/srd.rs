@@ -255,14 +255,18 @@ pub fn monster(m: &Value, label: &str) -> Option<Value> {
         .into_iter()
         .flatten()
     {
+        if k == "hover" {
+            if v.as_bool() == Some(true) {
+                speed.insert("hover".into(), json!(true));
+            }
+            continue;
+        }
         if let Some(f) = feet(v) {
-            if ["walk", "climb", "fly", "swim"].contains(&k.as_str()) {
+            if ["walk", "climb", "fly", "swim", "burrow"].contains(&k.as_str()) {
                 speed.insert(k.clone(), json!(f));
             } else {
                 notes.push(format!("{k} speed {f} ft."));
             }
-        } else if k == "hover" {
-            notes.push("can hover".into());
         }
     }
     speed.entry("walk").or_insert(json!(0));
@@ -537,6 +541,50 @@ fn first_dice(map: Option<&Value>) -> Option<(String, String)> {
     Some((k.clone(), v.as_str()?.replace(' ', "")))
 }
 
+/// Width of a line area in the SRD text ("5-foot-wide", "10 feet wide").
+fn line_width(text: &str) -> Option<i32> {
+    for marker in ["-foot-wide", "-feet-wide", " foot wide", " feet wide"] {
+        let Some(index) = text.find(marker) else {
+            continue;
+        };
+        let digits: String = text[..index]
+            .chars()
+            .rev()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        if let Ok(width) = digits.parse() {
+            return Some(width);
+        }
+    }
+    None
+}
+
+/// Maps upstream `area_of_effect` to the frozen #170 `AreaSpec`. `radius` is
+/// the generic size (sphere radius, cone length, cube side, cylinder radius,
+/// line length); `width_ft` only carries the line width. Wall-shaped upstream
+/// lines are not a line area and stay unset.
+fn spell_area(s: &Value) -> Option<Value> {
+    let kind = s.pointer("/area_of_effect/type")?.as_str()?;
+    let size = s.pointer("/area_of_effect/size")?.as_i64()?;
+    let name = s.get("name").and_then(Value::as_str).unwrap_or("");
+    let desc = text_blocks(s.get("desc").or_else(|| s.get("description"))).join(" ");
+    let text = format!("{name} {desc}").to_lowercase();
+    match kind {
+        "sphere" | "cone" | "cube" | "cylinder" => Some(json!({"radius": size, "shape": kind})),
+        "line" if !text.contains("wall") => {
+            let mut area = json!({"radius": size, "shape": "line"});
+            if let Some(width) = line_width(&text) {
+                area["width_ft"] = json!(width);
+            }
+            Some(area)
+        }
+        _ => None,
+    }
+}
+
 /// A text field that upstream writes either as a string (2024) or an array of
 /// paragraphs (2014).
 pub(crate) fn text_blocks(value: Option<&Value>) -> Vec<String> {
@@ -618,7 +666,7 @@ pub fn spell(s: &Value, label: &str) -> Option<Value> {
         .pointer("/dc/dc_success")
         .and_then(Value::as_str)
         .unwrap_or("none");
-    let area = s.pointer("/area_of_effect/size").and_then(Value::as_i64);
+    let area = spell_area(s);
     let mut effects = Vec::new();
     let mut role = "none";
     let mut target = json!({"type": "creature", "side": "enemy", "count": 1});
@@ -635,15 +683,6 @@ pub fn spell(s: &Value, label: &str) -> Option<Value> {
             }
             effects.push(json!({"save": sv}));
             role = "damage";
-            if let Some(r) = area {
-                a.insert("area".into(), json!({"radius": r}));
-                todo.push(format!(
-                    "area shape: {}",
-                    s.pointer("/area_of_effect/type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("?")
-                ));
-            }
         }
         (None, None, None, None, Some((_, h))) => {
             let h = h.replace("MOD", "{spell_mod}");
@@ -659,6 +698,9 @@ pub fn spell(s: &Value, label: &str) -> Option<Value> {
         target = json!({"type": "self"});
     }
     a.insert("target".into(), target);
+    if let Some(area) = area {
+        a.insert("area".into(), area);
+    }
     let mut text = desc.join("\n\n");
     if !higher.is_empty() {
         text.push_str("\n\nAt higher levels: ");
@@ -761,4 +803,84 @@ pub fn convert_spells(v: &Value, skip: &BTreeSet<String>) -> (Value, usize) {
         .collect();
     let n = list.len();
     (json!({"abilities": list}), n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn monster_json(speed: Value) -> Value {
+        json!({
+            "index": "test-monster",
+            "name": "Test Monster",
+            "size": "Medium",
+            "type": "beast",
+            "armor_class": [{"value": 12}],
+            "hit_points": 10,
+            "speed": speed,
+            "strength": 10,
+            "dexterity": 10,
+            "constitution": 10,
+            "intelligence": 10,
+            "wisdom": 10,
+            "charisma": 10,
+            "challenge_rating": 1,
+            "xp": 200
+        })
+    }
+
+    #[test]
+    fn monster_speed_structures_hover_and_burrow() {
+        let value = monster(
+            &monster_json(json!({
+                "walk": "0 ft.",
+                "fly": "50 ft.",
+                "hover": true,
+                "burrow": "20 ft."
+            })),
+            "SRD 5.1",
+        )
+        .expect("monster");
+        assert_eq!(
+            value["speed"],
+            json!({"walk": 0, "fly": 50, "hover": true, "burrow": 20})
+        );
+        let notes = value["notes"].as_str().unwrap_or("");
+        assert!(!notes.contains("can hover"), "{notes}");
+        assert!(!notes.contains("burrow speed"), "{notes}");
+    }
+
+    #[test]
+    fn spell_area_maps_shapes_and_line_width() {
+        let sphere = json!({
+            "index": "fireball", "name": "Fireball", "level": 3,
+            "desc": ["A 20-foot-radius sphere."],
+            "range": "150 feet", "casting_time": "1 action",
+            "area_of_effect": {"type": "sphere", "size": 20}
+        });
+        assert_eq!(
+            spell_area(&sphere),
+            Some(json!({"radius": 20, "shape": "sphere"}))
+        );
+
+        let line = json!({
+            "index": "lightning-bolt", "name": "Lightning Bolt", "level": 3,
+            "desc": ["A stroke of lightning forming a line 100 feet long and 5 feet wide."],
+            "area_of_effect": {"type": "line", "size": 100}
+        });
+        assert_eq!(
+            spell_area(&line),
+            Some(json!({"radius": 100, "shape": "line", "width_ft": 5}))
+        );
+    }
+
+    #[test]
+    fn spell_area_skips_wall_shaped_lines() {
+        let wall = json!({
+            "index": "wall-of-fire", "name": "Wall of Fire", "level": 4,
+            "desc": ["You create a wall of fire on a solid surface."],
+            "area_of_effect": {"type": "line", "size": 60}
+        });
+        assert_eq!(spell_area(&wall), None);
+    }
 }
