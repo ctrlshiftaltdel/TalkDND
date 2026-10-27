@@ -6,9 +6,10 @@ licensed full-book and local content. A pack wraps the existing content schema
 domain entities and rules) with metadata, an optional search index and an
 integrity hash.
 
-This task defines the format and loader only. It does not import SRD or full-book
-content, and it does not implement PDF presence gating (that is the 1.2 full-book
-track).
+This document defines the pack format, the loader, and (from v1.2a) the
+full-book pack builder. It does not implement PDF presence gating or unlocking;
+that is the separate v1.2b track. Full packs are release artifacts, never Git
+content.
 
 ## File shape
 
@@ -137,6 +138,83 @@ see `DATA.md` for the upstream commit, counts and known gaps. Regenerate rather
 than hand-edit. The older `srd-monsters.yaml` / `srd-spells.yaml` stay as the
 engine overlay for 2014: they load after the packs and keep the automated
 attack/spell fields.
+
+## Full packs (v1.2a)
+
+A full pack is built from the owner's local pdf2md output for a 2014/2024 PHB,
+DMG or MM. The input is a book folder with a converted `index/`
+(`manifest.json`, `index.json`, `<book>.pages.md`, optional `img/`). The PDF and
+the converted index stay local; only the generated pack leaves the build.
+
+```bash
+combat-sim content pack build \
+  --edition 2014 --book phb \
+  --index LetsPlay/Rules/2014/2014-players-handbook/index \
+  --out target/full-packs
+
+combat-sim content pack build \
+  --edition 2014 --book phb \
+  --index LetsPlay/Rules/2014/2014-players-handbook/index \
+  --out target/full-packs --dry-run
+```
+
+`--edition` is `2014` or `2024`; `--book` is `phb`, `dmg` or `mm`. The output is
+`<pack-id>.pack.json` with ids `full-<edition>-<book>` (for example
+`full-2014-phb`). `target/` is gitignored: verify with `git check-ignore -v`
+before building, and never commit the result.
+
+The builder records:
+
+- `distribution: full`, schema version 1 and the normal content hash.
+- `license`: the owner's full-book distribution decision, pointing at
+  `docs/PROJECT-CHARTER.md`.
+- `source`: the book label, `pdf2md index`, and the first 12 characters of the
+  source PDF SHA-256. That hash is provenance only; unlocking does not check it
+  (TASK-0103 identifies a book by its content).
+- `created_at`: the pdf2md manifest's creation time, when present.
+- `rule_sections`: one entity per Markdown heading, with its text, page,
+  chapter, heading level and page anchor in `data`, and references to other
+  sections when the body links to `#pN`.
+- `index.entries`: the same sections as `rule-section` entries.
+- `index.images`: figure, art and map images referenced by `index.json`, as
+  relative paths. Absolute paths, `..` components and Windows drive paths are
+  skipped and reported as a gap, so a pack never carries a local path.
+
+Chapter starts come from `index.json`, then the manifest intake audit, then
+chapter-like headings. The command prints only counts and gaps: section,
+chapter and image counts, missing/empty pages, low-quality pages, stat-block
+pages, skipped headings and skipped image paths. It never prints section text.
+An unconverted or unreadable book fails closed; a book with no headings is not
+turned into an empty pack.
+
+The six expected packs are `full-2014-{phb,dmg,mm}` and
+`full-2024-{phb,dmg,mm}`. Build each book separately; a missing chapter list or
+short converted page range is reported, not filled with invented content.
+
+### Release packaging
+
+```bash
+combat-sim content pack release --packs target/full-packs --out target/full-packs-release --dry-run
+combat-sim content pack release --packs target/full-packs --out target/full-packs-release
+```
+
+`release` re-validates every `*.pack.json` with the pack loader, rejects
+non-`full` packs, duplicate ids and empty directories, then writes
+`full-packs-manifest.json` plus copies of the packs. The manifest is
+deterministic (sorted by pack id, no timestamps or local paths) and records each
+pack's file name, edition, book, size, section/chapter/image counts, content
+hash, source and license. `--dry-run` prints the manifest and writes nothing.
+
+Full packs are attached to a GitHub Release as a separate
+`talkdnd-full-packs-<tag>.tar.gz` (with `.sha256`), not inside the LetsPlay
+archive. `.github/workflows/release.yml` stages that archive only when the
+release runner already has `target/full-packs/`; a normal hosted runner has no
+books, so the step skips. CI must never build or download full packs. The owner
+can also build locally and attach the archive with `gh release upload <tag>
+<archive> <archive>.sha256`.
+
+Do not put full-pack output, book text, converted pages or scanned images into
+Git, Issues, pull requests, commit messages or CI logs.
 
 ## Distribution policy
 
