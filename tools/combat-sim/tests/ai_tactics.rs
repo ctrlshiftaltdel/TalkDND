@@ -400,6 +400,55 @@ fn retreat_uses_disengage_and_flee_zone() {
 }
 
 #[test]
+fn failed_retreat_falls_back_to_legacy() {
+    let mut state = encounter_state(
+        "ai-fight",
+        &["ai-ranger", "ai-striker"],
+        &[("ai-brute", "alpha", 1)],
+    );
+    let ranger = index(&state, "Ranger X");
+    state.combatants[ranger].hp = 4;
+    state.combatants[ranger].ai = Some(AiAssignment {
+        template: "ai-coward".to_string(),
+        params: None,
+    });
+    begin(&mut state, "Ranger X");
+    // No defence candidate (bonus already spent) and no movement candidate
+    // (zero speed): the fleeing branch must report failure, not a successful
+    // no-op, so `take_turn` reaches the legacy fallback.
+    state.combatants[ranger].bonus_action_used = true;
+    state.combatants[ranger].speed_left = 0;
+    let ai = Ai::prepare_with(&state, AiStrategy::Utility);
+    let preview = ai.preview_turn(&state).expect("plan");
+    assert!(!preview.candidates.iter().any(|candidate| {
+        matches!(
+            &candidate.kind,
+            CandidateKind::Action {
+                role: combat_sim::content::schema::AiRole::Defense,
+                ..
+            } | CandidateKind::Move {
+                purpose: MovePurpose::Retreat,
+                ..
+            }
+        )
+    }));
+
+    let mut rng = dice::seeded_rng(13);
+    let mut log = Vec::new();
+    ai.take_turn(&mut state, &mut rng, &mut log).expect("turn");
+    assert!(
+        log.iter()
+            .any(|line| line.contains("using heuristic fallback")),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter().any(|line| line.contains("Disengage Test")),
+        "{log:?}"
+    );
+    assert_eq!(state.combatants[ranger].zone, "alpha", "{log:?}");
+}
+
+#[test]
 fn heal_downed_ally_scores_rescue() {
     let mut state = encounter_state("ai-fight", &["ai-healer", "ai-striker"], &[]);
     let striker = index(&state, "Striker X");

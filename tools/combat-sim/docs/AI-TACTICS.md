@@ -114,6 +114,8 @@ changing the engine.
   execution. A target that becomes dormant/dead, a route that closes, a
   resource that is spent, or an engine rejection causes the next candidate to
   be tried. If none executes, `take_turn` falls back to the legacy heuristic.
+  The flee branch returns success only when its defense or movement phase
+  actually executed, so a fully failed retreat also reaches that fallback.
 
 Known limit: line-of-sight/height details and a few engine-only rejection
 paths are authoritative in `engine.rs`; the planner can still propose a
@@ -194,7 +196,7 @@ P6 comparison: objective legacy=false utility=true; melee damage legacy=3 utilit
 | AC-1 | `preview_separates_profile_candidates_and_legality`, `utility_terms_have_explicit_weights` |
 | AC-2 | `preview_separates_profile_candidates_and_legality`, `escort_profile_holds_with_ally_and_supports`, `retreat_uses_disengage_and_flee_zone`, `stop_objective_interacts_with_configured_object` |
 | AC-3 | `utility_terms_have_explicit_weights`, `preview_separates_profile_candidates_and_legality` |
-| AC-4 | `execution_revalidates_before_acting` |
+| AC-4 | `execution_revalidates_before_acting`, `failed_retreat_falls_back_to_legacy` |
 | AC-5 | `hold_point_does_not_chase_beyond_leash`, `escort_profile_holds_with_ally_and_supports`, `retreat_uses_disengage_and_flee_zone`, `heal_downed_ally_scores_rescue`, `resource_conservation_keeps_the_limited_resource`, `cover_candidate_moves_into_cover`, `stop_objective_interacts_with_configured_object` |
 | AC-6 | `quantitative_comparison_reports_improvement_and_parity` |
 | AC-7 | `candidate_generation_skips_dormant_dead_and_unaware_targets` |

@@ -268,8 +268,10 @@ impl Ai {
                     return Ok(());
                 }
                 Ok(false) => {
-                    // No utility candidate executed; the legacy heuristic is
-                    // the documented fallback.
+                    log.log(format_args!(
+                        "tactical planner found no executable candidate for {}; using heuristic fallback",
+                        state.combatants[actor].name
+                    ));
                 }
                 Err(error) => {
                     log.log(format_args!(
@@ -2375,10 +2377,12 @@ pub mod tactics {
                 .filter(is_retreat_candidate)
                 .partition(is_defense_candidate);
             // Disengage/Dash first so the retreat path does not eat an
-            // opportunity attack; then the movement candidate.
-            let _ = execute_candidates(ai, state, actor, &defense, rng, log)?;
-            let _ = execute_candidates(ai, state, actor, &movement, rng, log)?;
-            return Ok(true);
+            // opportunity attack; then the movement candidate. Return whether
+            // either phase actually executed so a fully failed retreat still
+            // reaches the legacy fallback.
+            let defense_ok = execute_candidates(ai, state, actor, &defense, rng, log)?;
+            let movement_ok = execute_candidates(ai, state, actor, &movement, rng, log)?;
+            return Ok(defense_ok || movement_ok);
         }
 
         // Bonus-action support/defence first; this keeps the legacy economy
