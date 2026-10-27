@@ -4,7 +4,7 @@ Living charter for TalkDND. This file is the project charter AgentOrch looks up 
 
 This document states purpose, audience, goals, non-goals, scope, constraints, success criteria, and decisions. It does not contain game-save contents, DM secrets, or text from rulebooks or adventures.
 
-Player guide: [LetsPlay/README.md](../LetsPlay/README.md). DM guide: [LetsPlay/AGENTS.md](../LetsPlay/AGENTS.md). Development contract: [AGENTS.md](../AGENTS.md) and [ORCHESTRATION-PROJECT.md](../ORCHESTRATION-PROJECT.md). The root [README.md](../README.md) is for developers.
+Player guide: [LetsPlay/README.md](../LetsPlay/README.md). DM guide: [LetsPlay/AGENTS.md](../LetsPlay/AGENTS.md). Development contract: [AGENTS.md](../AGENTS.md), project configuration [docs/PROJECT.md](PROJECT.md), design goals [docs/PLAN.md](PLAN.md). The root [README.md](../README.md) is for developers.
 
 ## Purpose
 
@@ -12,7 +12,7 @@ TalkDND is an AI dungeon-master play kit for Dungeons & Dragons, plus a Rust com
 
 An AI assistant runs the game in chat. It narrates, plays NPCs, and offers choices. The player plays their own character and may type any action. Dice are rolled by the local `combat-sim` program, and the full expression is shown. Combat (attack rolls, damage, conditions, concentration, movement, opportunity attacks) is resolved by that same Rust engine. Play state is written into a local save so a later session can resume.
 
-The repository ships the program, original docs, and SRD-derived combat data. It does not ship the books the player reads.
+The repository ships the program, original docs, the SRD 5.1 / 5.2.1 content packs, and SRD-derived combat data. Starting with v1.2 it also ships licensed PHB/DMG/MM content packs that stay locked until the player supplies the matching PDF; it does not ship the printed books themselves.
 
 ## Audience
 
@@ -35,7 +35,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 
 ## Non-goals
 
-- Never distribute copyrighted rulebooks or adventures. Players supply their own. The minimum they add locally is the SRD for the chosen ruleset (SRD 5.1 for 2014, SRD 5.2.1 for 2024). Official books, when the player owns them, stay on that player's machine.
+- Never distribute copyrighted adventures. Rulebook content ships only under the owner's licence: SRD 5.1 / 5.2.1 packs under CC-BY-4.0, and (from v1.2) PHB/DMG/MM full packs unlocked by the player's own PDF. Players add PDFs only when they want page images, PDF fallback, or full-book content; their books stay on their machine.
 - Do not commit save contents, character sheets, session logs, or DM secrets. `LetsPlay/Saves/README.md` is the only save-tree file that belongs in Git.
 - Do not mix 2014 and 2024 rules inside one save.
 - Do not hard-code a campaign, an adventure, or a monster that is outside the SRD into the engine or into tracked combat data.
@@ -49,7 +49,7 @@ Play and development are separate roots.
 | Tree | Role |
 |------|------|
 | `LetsPlay/` | Play. The DM agent starts here. `LetsPlay/README.md` is the player guide. `LetsPlay/AGENTS.md` is the core DM guide (command table first, under 150 lines); details live in `LetsPlay/docs/*.md`, read on demand. Players put book PDFs in `LetsPlay/Rules/2014/`, `LetsPlay/Rules/2024/`, and `LetsPlay/Adventures/`, one folder per book (`<slug>/` with the PDF, its converted `index/` and, for adventures, `combat/`; `talkdnd start` tidies loose files into place). Those directories are local except their README files. Combat data the engine loads lives in `LetsPlay/Rules/combat/`. Saves live in `LetsPlay/Saves/` and are not committed. The programs they run are the gitignored binaries `LetsPlay/bin/combat-sim` and `LetsPlay/bin/talkdnd` (Windows: `.exe`). |
-| Repository root | Development only. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine), `tools/talkdnd` (play helper) and `tools/talkdnd-dev` (dev tools). AgentOrch files, CI, and this charter stay at the root. Nothing required to play lives here. |
+| Repository root | Development only. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine), `tools/talkdnd` (play helper) and `tools/talkdnd-dev` (dev tools). AgentOrch core is `AGENTS.md` plus `kit/`, `editions/`, `templates/`, `scripts/`, `tests/` and `MANIFEST.json`; project configuration is `docs/PROJECT.md`, design goals are `docs/PLAN.md`, and the living charter is `docs/PROJECT-CHARTER.md`. Nothing required to play lives here. |
 
 Release archives contain the whole git-tracked `LetsPlay/` tree plus the binary at `LetsPlay/bin/`; extracting one gives a ready play folder. `build-artifacts` artifacts contain only the binary at the archive root; extracting one into `LetsPlay/bin/` is the install. No launcher script points outside `LetsPlay/`.
 
@@ -77,7 +77,7 @@ Project programs, tools, and scripts are Rust.
 
 Accepted exceptions, and no others:
 
-1. AgentOrch Python kit scripts, maintained as part of this project: `scripts/orchestrator.py`, `scripts/validate_kit.py`, `tests/test_orchestrator.py`. They use the Python standard library only and run through `uv run --no-project`.
+1. AgentOrch Python kit under `scripts/` and `tests/`, maintained as part of this project: `orchestrator.py`, `validate_kit.py`, `check_drift.py`, `check_scope.py`, `report_metrics.py`, `run_delivery_scenarios.py`, `scripts/architecture/`, `scripts/self_improvement/`, `scripts/update_agentorch/`, and their tests. They use the Python standard library only and run through `uv run --no-project`.
 2. CI YAML under `.github/workflows/`, including the shell steps those workflow files contain.
 3. `LetsPlay/tools/pdf2md/`, the Python PDF → Markdown extractor needed for play (decision "pdf2md" below).
 
@@ -108,22 +108,22 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - Orchestration is AgentOrch, **github** edition. Issues are the task list. Evidence is the pull request, CI, and the head SHA. Do not run `uv run --no-project python scripts/orchestrator.py init`. Do not keep a parallel local task database.
 - The Execution Agent is a Grok Build session. It implements one dispatched task in its own worktree on a `task/<ID>-<name>` branch. It does not approve or merge its own work.
 - The Master Agent plans, schedules, reviews, and merges. The Master does not implement a task unless the owner writes that exception into the task record.
-- Review uses the merge gates in `AGENT-ORCHESTRATION.md`. A green CI run does not replace a criterion-by-criterion review.
+- Review uses the merge gates in `kit/orchestration.md`. A green CI run does not replace a criterion-by-criterion review.
 - **Living charter.** The Master MUST update `docs/PROJECT-CHARTER.md` (the Decision Log and every affected section) in the same pull request whenever a task changes scope, goals, tech stack, rules support, or a user decision. Reviewers check this at the merge gate. If that update is missing, the review fails and the pull request is not merged.
-- Agent bootstrap treats the charter as present when this file exists and has no placeholders. The path is recorded in `AGENTS.md` and `ORCHESTRATION-PROJECT.md`. Vendored kit files are not edited to retarget that lookup.
+- Agent bootstrap treats the charter as present when this file exists and has no placeholders. The path is recorded in `AGENTS.md` and `docs/PROJECT.md`. The kit is maintained in-project, but the charter lookup stays at `docs/PROJECT-CHARTER.md`; no kit file hard-codes a different path.
 
 ## Constraints and assumptions
 
 - Platform: a local CLI. Linux, Windows, and macOS are the player platforms. The three prebuilt targets are listed above.
 - Data and privacy: player books and saves are local. Tracked combat data is SRD-only. The privacy rule above is mandatory.
 - Reliability: dice come from the operating system's entropy through `combat-sim`, not from the model inventing a roll.
-- Assumptions: the player can obtain the SRD (or owns the books) and can run an agent that reads `LetsPlay/` and executes `LetsPlay/bin/combat-sim`. GitHub is reachable for Issues, pull requests, and CI. One ruleset per save is enough.
+- Assumptions: the player can run an agent that reads `LetsPlay/` and executes `LetsPlay/bin/combat-sim`. The SRD packs ship with the program; adding the SRD PDFs is optional. GitHub is reachable for Issues, pull requests, and CI. One ruleset per save is enough.
 
 ## Success criteria
 
 - A player can follow `LetsPlay/README.md`, add their own SRD, start an agent in `LetsPlay/`, and play with real `combat-sim` rolls from `LetsPlay/bin/combat-sim`.
 - A save's `ruleset` selects 2014 or 2024 data, and the engine does not load the other version's directory.
-- `uv run --no-project python scripts/validate_kit.py`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
+- `uv run --no-project python scripts/validate_kit.py --project-ready`, `uv run --no-project python -m unittest discover -s tests`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
 - Release automation builds the three prebuilt targets named in this charter.
 - A pull request that changes scope, goals, tech stack, rules support, or a user decision also updates this charter in that same pull request.
 - As of v1.0.0, a session interrupted mid-play can be resumed from the last good checkpoint, and the structured diff since the previous session is available without rereading the whole log.
@@ -134,7 +134,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 
 - Play files live under `LetsPlay/`. Development files live at the repository root.
 - The AgentOrch edition is `github`.
-- Implementation language is Rust, plus the two exceptions in Tech stack.
+- Implementation language is Rust, plus the named exceptions in Tech stack.
 - The play directory is self-contained. The binary lives in `LetsPlay/bin/` and is not committed.
 - Prebuilt releases cover Linux x86_64, Windows x86_64, and macOS arm64.
 - This file is a living charter, updated in the same pull request as the decision it records.
@@ -158,11 +158,31 @@ None. A new product decision is written into the Decision Log, and into the sect
 
 The smallest end-to-end slice is already the play kit: a player supplies an SRD, starts in `LetsPlay/`, and uses `combat-sim` to roll dice and resolve one combat under a single `ruleset`. This charter is the signed description of that slice. Further work stays inside it until the Decision Log says otherwise. The 2026-10-24 Decision Log authorizes the P00–P08 campaign-continuity program as the next scope, shipping as v1.0.0 on 2026-10-25 (see the 2026-10-25 Decision Log entry).
 
-Validation is the kit check and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `ORCHESTRATION-PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
+Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
 
-## Decision Log
+### 2026-10-27 — AgentOrch 1.6.3 update and HD-10 resolution (TASK-0109)
+
+The owner asked to update AgentOrch. The 1.6.3 release (`AgentOrch-1.6.3.zip`, SHA256 `dcce5b242997ccac44ee1dea225ca13c2e9af6583dc6bca3d5bdc35acb046885`, 92 `REQUIRED` + `MANIFEST.json`) includes the upstream fixes for the downstream docs/manifest/path issues (#85). The update entry reported `STOPPED_CONFLICT` on five files; the owner approved the recommended `HD-10` resolution: accept upstream for `kit/orchestration.md`, `scripts/check_drift.py`, and the downstream mode in `scripts/validate_kit.py`; manually merge `AGENTS.md` (TalkDND section + upstream #102 reading discipline); keep only the local-book/generated-output skip in `scripts/validate_kit.py` and its regression test. Local drift drops from six to three files (`AGENTS.md`, `scripts/validate_kit.py`, `tests/test_validate_kit.py`). New `scripts/check_scope.py` and `tests/test_check_scope.py` ship with 1.6.3. No product code, rules data, save schema, crate version or player-visible behavior changes. The 1.6.3 `MANIFEST.json` is the new baseline; it is not regenerated from this tree.
+
+### 2026-10-27 — Validator ignores local books and caches (TASK-0101)
+
+The post-merge check on a developer machine with the player's local books exposed that the 1.6 global Markdown link scan read `LetsPlay/Adventures/*/index/` and `LetsPlay/Rules/*/*/index/` and failed on generated cross-links. The 1.1 validator had a local-only skip; 1.6 lost it. The validator now skips gitignored player trees (except their tracked README), pdf2md `.md/` output, `.worktrees`, `target`, `.pytest_cache`, `.codegraph` and `.opencode`; tracked documentation links are still checked. A regression test covers both sides. No product code or save schema change. CI has no books, so the test and the new skip are the durable guard.
+
+### 2026-10-27 — AgentOrch 1.6 upgrade with an official baseline (TASK-0100)
+
+The owner asked on 2026-10-27 to bring the project's AgentOrch to the latest release and to open an upstream issue first when a downstream gap blocks it. The kit is upgraded from Format 1.1 to **Format 1.6** (`AgentOrch-1.6.zip`, SHA256 `bc0a64e35f0d70b937a4a40d923f03638376c97af5d3c55026084d12c04f8d57`) and the official `MANIFEST.json` is installed as the baseline for future updates. This is a manual 1.1 → 1.6 migration: the release page has no v1.1 asset or manifest, so the update entry cannot verify a 1.1 baseline (`STOPPED_INVALID_BASELINE`); after this migration the 1.6 baseline is `VALID` and a future 1.7 release can use the update entry. The layout migration is the 1.5 one plus the 1.6 additions: `AGENT-BOOTSTRAP.md` + `AGENT-ORCHESTRATION.md` + `AGENT-ORCHESTRATION-ACCEPTANCE.md` become `kit/orchestration.md`; `ORCHESTRATION-PROJECT.md` becomes `docs/PROJECT.md`; `docs/PLAN.md` is added as the design-goal authority; editions shrink from 14 to 7 lowercase files; templates become the 1.6 lowercase set; `prompts/` is removed; `VERSION.txt`/`LICENSE.txt` become `VERSION.md`/`LICENSE.md`; the 1.6 scripts, self-improvement/update/architecture modules, and tests are installed.
+
+Several downstream gaps in the 1.6 package are handled locally and reported upstream (AgentOrch issue #85): `validate_kit.py` now treats a tree with `docs/` but no `docs/upgrade.md` as a downstream project, checks `docs/PROJECT.md` / `docs/PLAN.md` and the manifest structure, and leaves manifest hash drift to `check_drift.py`; the shipped tests gate upstream-only `docs/README.md` / `docs/upgrade.md` assertions on those files and add downstream-mode tests; stale `MASTER.md` / `START-MASTER-*.md` references are corrected to `master.md` and its sections; `check_drift.py` skips Rust build output and local tool caches. The expected `check_drift.py` result is six modified files (`AGENTS.md`, `kit/orchestration.md`, `scripts/check_drift.py`, `scripts/validate_kit.py`, `templates/project-charter.md`, `tests/test_validate_kit.py`) and two project-profile files (`docs/PROJECT.md`, `docs/PLAN.md`). The manifest is not regenerated from this tree, and the update engine must stop on `THREE_WAY_CONFLICT` rather than overwrite local files.
+
+No product code, rule data, save schema, crate version or player-visible behavior changes. Existing GitHub Issues keep the old task-packet shape; the 1.6 evidence matrix applies to new tasks. Rollback is a normal revert of the merge commit; no data migration is needed.
+
+Alternative considered: stay on 1.1 or install 1.6 without the manifest. Rejected because the project would not get the 1.6 self-improvement/update/architecture tooling, and because a 1.6 tree without the baseline could not use the update entry at all. Alternative considered: generate a fresh manifest from the customized tree. Rejected because it would record TalkDND's local edits as upstream and make future three-way classification lie. Alternative considered: block the upgrade on an upstream 1.6.1. Rejected for this task: the local patch is small, tested, and reversible; the upstream issue tracks the clean fix.
+
+### 2026-10-27 — v1.1.0 content platform (TASK-0097)
+
+The owner ships the content platform as TalkDND 1.1.0. The behavior baseline is main `f34d523fd0af8c900e67a07ffc5b4cac0423569b` (PR #197). It contains PR #188 (TASK-0098: ContentPack v1 format, loader, pack CLI, metadata and integrity hash), PR #192 (TASK-0104: item/class/subclass/species/background/feat/rule-section/table domain entities in packs), PR #193 (TASK-0099: full SRD 5.1 and 5.2.1 packs generated from 5e-database commit `a6212beb4b278917c2cff41c2b04c4ef4f3e0d6f`: 2014 eight packs, 2024 seven packs), PR #195 (TASK-0106: 2024 rules prose extracted from the local pdf2md index into a 213-section pack) and PR #197 (TASK-0085: spatial rules matrix and contract v1). On `f34d523`, combat-sim 235, talkdnd 279 and talkdnd-dev 45 tests passed, and `validate_kit.py`, `check-leaks` and `check-letsplay` exited 0. The release commit changes release metadata only — the three crate versions to 1.1.0 (with the three `Cargo.lock` files), the CHANGELOG v1.1.0 section, this charter and `LetsPlay/README.md` — with no source, test or CI behavior change beyond what those merged PRs already introduced. The tag builds from the merged main tree. No save-schema change and no migration (schema stays 8); the `ruleset` values `2014` and `2024` remain valid. The bundled content is SRD-only and ships under CC-BY-4.0; full PHB/DMG/MM packs, the four player-visible rulesets (5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD) and PDF-based unlocking are v1.2 work (TASK-0102 #189, TASK-0103 #190, TASK-0107 #196). Known limitations recorded in the changelog: the SRD is a condensed text (no class introductions, no separate 2024 squeezing clause), 2024 rules prose depends on pdf2md heading structure, content adds about 9.9 MB and 0.14–0.26 s per load, one ruleset per save, and the spatial contract records Tiny sharing, creature cover degree and zone distance as project approximations pending confirmation.
 
 ### 2026-10-26 — v1.0.3 quality patch (TASK-0083)
 
@@ -315,9 +335,9 @@ Alternative considered: source-only installs, or an Intel macOS prebuilt package
 
 `docs/PROJECT-CHARTER.md` is the project charter. The Master MUST update the Decision Log and every affected section in the same pull request whenever a task changes scope, goals, tech stack, rules support, or a user decision. Reviewers check that update at the merge gate. A missing update fails review.
 
-The charter path is declared in the project docs (`AGENTS.md` and `ORCHESTRATION-PROJECT.md`) so AgentOrch bootstrap resolves "charter missing" against this file. Vendored kit files are not modified to point at it.
+The charter path is declared in the project docs (`AGENTS.md` and `docs/PROJECT.md`) so AgentOrch bootstrap resolves "charter missing" against this file. The kit is maintained in-project, but the charter lookup stays at `docs/PROJECT-CHARTER.md`; no kit file hard-codes a different path.
 
-Alternative considered: leave scope only inside `ORCHESTRATION-PROJECT.md` and skip a charter. Rejected. AgentOrch expects `docs/PROJECT-CHARTER.md`, and a config file is a poor decision log.
+Alternative considered: leave scope only inside `docs/PROJECT.md` and skip a charter. Rejected. AgentOrch expects `docs/PROJECT-CHARTER.md`, and a config file is a poor decision log.
 
 ### 2026-10-20 — Play directory is self-contained
 
@@ -370,7 +390,7 @@ Every Python invocation goes through uv: `uv sync` / `uv run --project <dir>` fo
 
 ### 2026-10-21 — AgentOrch is part of the project; uv everywhere
 
-AgentOrch is no longer treated as a vendored, read-only kit. Its docs (`AGENT-BOOTSTRAP.md`, `AGENT-ORCHESTRATION.md`, `editions/`, `prompts/`, `templates/`) and scripts may be changed through normal tasks. Every Python command in them is `uv run --no-project python scripts/...`. `validate_kit.py` skips local-only trees: `.venv`, `.worktrees`, pdf2md `.md/` output, player books and saves. CI runs the kit's unit tests through uv.
+AgentOrch is no longer treated as a vendored, read-only kit. Its files (`AGENTS.md`, `kit/orchestration.md`, `editions/`, `templates/`, `scripts/`, `tests/`) may be changed through normal tasks. Every Python command in them is `uv run --no-project python ...`. The 1.6 validator has a documented downstream mode: a tree with `docs/` but no `docs/upgrade.md` checks project docs and the manifest structure, and `check_drift.py` reports local drift. CI runs the kit's full unittest suite through uv.
 
 Alternative considered: keep the kit read-only and only document uv at the project level. Rejected by the owner.
 
@@ -440,6 +460,11 @@ Alternative considered: rely on DM discipline alone. Rejected: the new tools mak
 | 2026-10-22 | Per-save adventure deviation (scope 0–2, ratio 5–25%) locked in `save-meta.yaml` schema 4; DM-only `original.yaml` ledger with scope/rarity/chapter-budget checks; `char item add` source check; `start`/`check` surfacing; v0.7.0. |
 | 2026-10-23 | v0.8.0 information discipline: scene-scoped reading, known list, secret terms/guard, hidden original aspects, player-facing name masking, option-writing rules, per-save dice display and roll log; schema 5. |
 | 2026-10-23 | v0.9.0 party companions live in `Characters/` next to the PC, told apart by `controller: player|dm` in `sheets/<id>.yaml`; `talkdnd companion`; `NPCs/` is for story NPCs only; schema 6 migration. |
+| 2026-10-27 | AgentOrch Format 1.1 → 1.6 upgrade (TASK-0100): `kit/orchestration.md`, `docs/PROJECT.md`, `docs/PLAN.md`, 1.6 scripts/tests, official `MANIFEST.json` baseline, downstream validator mode; no product behavior change. |
+| 2026-10-27 | TASK-0101 post-merge fix: validator skips local player books/saves, pdf2md output and build/cache dirs; tracked doc links still checked. |
+| 2026-10-27 | TASK-0109: AgentOrch 1.6.3; HD-10 resolved by accepting upstream fixes and keeping only the local-book validator skip; local drift 6 → 3. |
+| 2026-10-27 | TASK-0099: SRD 5.1 / 5.2.1 full content packs ship with the program (CC-BY-4.0, generated from 5e-database); players no longer need to add the SRD PDFs. PHB/DMG/MM are still not shipped. |
+| 2026-10-27 | Owner confirmed the licence to distribute full PHB/DMG/MM content (legal review). Full packs ship from v1.2 but stay locked until the player supplies the matching PDF; no hash check, book identification is by content. If the licence scope changes, the full packs are withdrawn or replaced. Player-visible rulesets are 5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD (TASK-0107). |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 

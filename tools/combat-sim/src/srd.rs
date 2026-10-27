@@ -129,7 +129,107 @@ fn damage_traits(v: &Value, notes: &mut Vec<String>, label: &str) -> Vec<Value> 
     out
 }
 
-fn monster(m: &Value) -> Option<Value> {
+/// Human-readable statblock kept next to the structured fields so the DM can
+/// read the full action text without the PDF.
+fn statblock(m: &Value) -> String {
+    let mut out = String::new();
+    let name = m.get("name").and_then(Value::as_str).unwrap_or("");
+    let size = m.get("size").and_then(Value::as_str).unwrap_or("");
+    let ty = m.get("type").and_then(Value::as_str).unwrap_or("");
+    let alignment = m.get("alignment").and_then(Value::as_str).unwrap_or("");
+    out.push_str(name);
+    out.push_str(&format!("\n{size} {ty}, {alignment}"));
+    if let Some(ac) = m.pointer("/armor_class/0/value").and_then(Value::as_i64) {
+        let kind = m
+            .pointer("/armor_class/0/type")
+            .and_then(Value::as_str)
+            .filter(|k| !k.is_empty())
+            .map(|k| format!(" ({k})"))
+            .unwrap_or_default();
+        out.push_str(&format!("\nAC {ac}{kind}"));
+    }
+    if let Some(hp) = m.get("hit_points").and_then(Value::as_i64) {
+        let roll = m
+            .get("hit_points_roll")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        out.push_str(&format!("\nHP {hp} ({roll})"));
+    }
+    if let Some(speed) = m.get("speed").and_then(Value::as_object) {
+        let parts: Vec<String> = speed
+            .iter()
+            .map(|(k, v)| {
+                let v = v
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v.to_string());
+                format!("{} {v}", k.replace('_', " "))
+            })
+            .collect();
+        out.push_str(&format!("\nSpeed {}", parts.join(", ")));
+    }
+    let abilities: Vec<String> = ABILITIES
+        .iter()
+        .map(|(long, short)| {
+            let score = m.get(*long).and_then(Value::as_i64).unwrap_or(10);
+            format!("{} {score} ({:+})", short.to_uppercase(), modifier(score))
+        })
+        .collect();
+    out.push_str(&format!("\n{}", abilities.join(", ")));
+    for (key, label) in [
+        ("skills", "Skills"),
+        ("senses", "Senses"),
+        ("languages", "Languages"),
+    ] {
+        match m.get(key) {
+            Some(Value::String(s)) if !s.is_empty() => out.push_str(&format!("\n{label} {s}")),
+            Some(Value::Object(o)) if !o.is_empty() => {
+                let parts: Vec<String> = o
+                    .iter()
+                    .map(|(k, v)| {
+                        format!(
+                            "{} {}",
+                            k.replace('_', " "),
+                            v.as_str()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| v.to_string())
+                        )
+                    })
+                    .collect();
+                out.push_str(&format!("\n{label} {}", parts.join(", ")));
+            }
+            _ => {}
+        }
+    }
+    if let Some(cr) = m.get("challenge_rating").and_then(Value::as_f64) {
+        let xp = m.get("xp").and_then(Value::as_i64).unwrap_or(0);
+        out.push_str(&format!("\nCR {cr} (XP {xp})"));
+    }
+    for (key, heading) in [
+        ("special_abilities", "Traits"),
+        ("actions", "Actions"),
+        ("bonus_actions", "Bonus Actions"),
+        ("reactions", "Reactions"),
+        ("legendary_actions", "Legendary Actions"),
+    ] {
+        let items = m.get(key).and_then(Value::as_array).into_iter().flatten();
+        let mut block = String::new();
+        for item in items {
+            let n = item.get("name").and_then(Value::as_str).unwrap_or("");
+            let d = item.get("desc").and_then(Value::as_str).unwrap_or("");
+            if n.is_empty() && d.is_empty() {
+                continue;
+            }
+            block.push_str(&format!("\n{n}. {d}"));
+        }
+        if !block.is_empty() {
+            out.push_str(&format!("\n\n{heading}{block}"));
+        }
+    }
+    out.trim().to_string()
+}
+
+pub fn monster(m: &Value, label: &str) -> Option<Value> {
     let id = m.get("index")?.as_str()?.to_string();
     let name = m.get("name")?.as_str()?;
     let mut c = Map::new();
@@ -374,7 +474,7 @@ fn monster(m: &Value) -> Option<Value> {
         .and_then(Value::as_str)
         .unwrap_or("");
     let mut note = format!(
-        "SRD 5.1 {name}, CR {cr_s} (XP {xp}), HP {} ({roll}).",
+        "{label} {name}, CR {cr_s} (XP {xp}), HP {} ({roll}).",
         c["hp"]
     );
     if !notes.is_empty() {
@@ -383,6 +483,7 @@ fn monster(m: &Value) -> Option<Value> {
         note.push('.');
     }
     c.insert("notes".into(), json!(note));
+    c.insert("manual".into(), json!(statblock(m)));
     c.insert(
         "tags".into(),
         json!(["srd", format!("cr-{}", cr_s.replace('/', "-"))]),
@@ -436,23 +537,29 @@ fn first_dice(map: Option<&Value>) -> Option<(String, String)> {
     Some((k.clone(), v.as_str()?.replace(' ', "")))
 }
 
-fn spell(s: &Value) -> Option<Value> {
+/// A text field that upstream writes either as a string (2024) or an array of
+/// paragraphs (2014).
+pub(crate) fn text_blocks(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::String(text)) => vec![text.clone()],
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+pub fn spell(s: &Value, label: &str) -> Option<Value> {
     let id = s.get("index")?.as_str()?;
     let name = s.get("name")?.as_str()?;
     let level = s.get("level")?.as_i64()?;
-    let desc: Vec<&str> = s
-        .get("desc")?
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_str)
-        .collect();
-    let higher: Vec<&str> = s
-        .get("higher_level")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
+    let desc = text_blocks(s.get("desc").or_else(|| s.get("description")));
+    if desc.is_empty() {
+        return None;
+    }
+    let higher = text_blocks(s.get("higher_level"));
     let mut a = Map::new();
     let mut tags = vec![json!("spell"), json!("srd")];
     if level == 0 {
@@ -558,7 +665,7 @@ fn spell(s: &Value) -> Option<Value> {
         text.push_str(&higher.join(" "));
     }
     if effects.is_empty() {
-        effects.push(json!({"note": format!("{name} (SRD 5.1, manual): see `manual`.")}));
+        effects.push(json!({"note": format!("{name} ({label}, manual): see `manual`.")}));
     } else if !higher.is_empty() || dice.as_ref().is_some_and(|(k, _)| k != "1" && level == 0) {
         todo.push("upcast / cantrip scaling not modelled (lowest level dice used)".into());
     }
@@ -582,7 +689,7 @@ fn spell(s: &Value) -> Option<Value> {
             s.get("range").and_then(Value::as_str).unwrap_or("")
         )),
     );
-    a.insert("source".into(), json!(format!("SRD 5.1 {name}")));
+    a.insert("source".into(), json!(format!("{label} {name}")));
     if !todo.is_empty() {
         a.insert("todo".into(), json!(todo));
     }
@@ -634,7 +741,7 @@ pub fn convert_monsters(v: &Value, skip: &BTreeSet<String>) -> (Value, usize) {
                 .and_then(Value::as_str)
                 .is_some_and(|i| !skip.contains(i))
         })
-        .filter_map(monster)
+        .filter_map(|m| monster(m, "SRD 5.1"))
         .collect();
     let n = list.len();
     (json!({"creatures": list}), n)
@@ -650,7 +757,7 @@ pub fn convert_spells(v: &Value, skip: &BTreeSet<String>) -> (Value, usize) {
                 .and_then(Value::as_str)
                 .is_some_and(|i| !skip.contains(i))
         })
-        .filter_map(spell)
+        .filter_map(|s| spell(s, "SRD 5.1"))
         .collect();
     let n = list.len();
     (json!({"abilities": list}), n)

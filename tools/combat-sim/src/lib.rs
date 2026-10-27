@@ -18,4 +18,6 @@ pub mod roll;
 pub mod sim;
 pub mod space;
 pub mod srd;
+pub mod srd_pack;
+pub mod srd_prose;
 pub mod state;

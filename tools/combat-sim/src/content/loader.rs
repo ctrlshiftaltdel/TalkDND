@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use super::pack::{ContentPack, PackMeta};
 use super::schema::{
     Ability, AbilityEntry, AiTemplate, CampaignManifest, ConditionDef, ContentFile, Creature,
-    Encounter, ExprValue, MasteryDef, Rules, Scene,
+    DomainEntity, Encounter, ExprValue, MasteryDef, Rules, Scene,
 };
 
 /// Top-level keys that make a map a content container.
@@ -24,6 +25,14 @@ pub const CONTAINER_KEYS: &[&str] = &[
     "ai_templates",
     "scenes",
     "encounters",
+    "items",
+    "classes",
+    "subclasses",
+    "species",
+    "backgrounds",
+    "feats",
+    "rule_sections",
+    "tables",
     "rules",
 ];
 
@@ -37,10 +46,18 @@ pub enum ItemKind {
     AiTemplate,
     Scene,
     Encounter,
+    Item,
+    Class,
+    Subclass,
+    Species,
+    Background,
+    Feat,
+    RuleSection,
+    Table,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 7] = [
+    pub const ALL: [ItemKind; 15] = [
         ItemKind::Condition,
         ItemKind::Mastery,
         ItemKind::Ability,
@@ -48,6 +65,14 @@ impl ItemKind {
         ItemKind::AiTemplate,
         ItemKind::Scene,
         ItemKind::Encounter,
+        ItemKind::Item,
+        ItemKind::Class,
+        ItemKind::Subclass,
+        ItemKind::Species,
+        ItemKind::Background,
+        ItemKind::Feat,
+        ItemKind::RuleSection,
+        ItemKind::Table,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -59,6 +84,14 @@ impl ItemKind {
             Self::AiTemplate => "ai-template",
             Self::Scene => "scene",
             Self::Encounter => "encounter",
+            Self::Item => "item",
+            Self::Class => "class",
+            Self::Subclass => "subclass",
+            Self::Species => "species",
+            Self::Background => "background",
+            Self::Feat => "feat",
+            Self::RuleSection => "rule-section",
+            Self::Table => "table",
         }
     }
 
@@ -72,6 +105,14 @@ impl ItemKind {
             "ai-template" | "ai-templates" | "template" | "templates" => Some(Self::AiTemplate),
             "scene" | "scenes" => Some(Self::Scene),
             "encounter" | "encounters" => Some(Self::Encounter),
+            "item" | "items" => Some(Self::Item),
+            "class" | "classes" => Some(Self::Class),
+            "subclass" | "subclasses" => Some(Self::Subclass),
+            "species" | "race" | "races" => Some(Self::Species),
+            "background" | "backgrounds" => Some(Self::Background),
+            "feat" | "feats" => Some(Self::Feat),
+            "rule-section" | "rule-sections" | "rule" | "rules-section" => Some(Self::RuleSection),
+            "table" | "tables" => Some(Self::Table),
             _ => None,
         }
     }
@@ -183,6 +224,26 @@ pub struct ContentRegistry {
     #[serde(default)]
     pub encounters: ItemStore<Encounter>,
     #[serde(default)]
+    pub items: ItemStore<DomainEntity>,
+    #[serde(default)]
+    pub classes: ItemStore<DomainEntity>,
+    #[serde(default)]
+    pub subclasses: ItemStore<DomainEntity>,
+    #[serde(default)]
+    pub species: ItemStore<DomainEntity>,
+    #[serde(default)]
+    pub backgrounds: ItemStore<DomainEntity>,
+    #[serde(default)]
+    pub feats: ItemStore<DomainEntity>,
+    #[serde(default)]
+    pub rule_sections: ItemStore<DomainEntity>,
+    #[serde(default)]
+    pub tables: ItemStore<DomainEntity>,
+    /// Metadata for content packs loaded from this registry. Old state files
+    /// without this field load with an empty map.
+    #[serde(default)]
+    pub packs: BTreeMap<String, PackMeta>,
+    #[serde(default)]
     pub rules: Rules,
     /// Active rules edition (`2014` or `2024`).
     pub ruleset: String,
@@ -213,6 +274,14 @@ pub enum AnyItem<'a> {
     AiTemplate(&'a AiTemplate),
     Scene(&'a Scene),
     Encounter(&'a Encounter),
+    Item(&'a DomainEntity),
+    Class(&'a DomainEntity),
+    Subclass(&'a DomainEntity),
+    Species(&'a DomainEntity),
+    Background(&'a DomainEntity),
+    Feat(&'a DomainEntity),
+    RuleSection(&'a DomainEntity),
+    Table(&'a DomainEntity),
 }
 
 impl AnyItem<'_> {
@@ -225,6 +294,14 @@ impl AnyItem<'_> {
             Self::AiTemplate(_) => ItemKind::AiTemplate,
             Self::Scene(_) => ItemKind::Scene,
             Self::Encounter(_) => ItemKind::Encounter,
+            Self::Item(_) => ItemKind::Item,
+            Self::Class(_) => ItemKind::Class,
+            Self::Subclass(_) => ItemKind::Subclass,
+            Self::Species(_) => ItemKind::Species,
+            Self::Background(_) => ItemKind::Background,
+            Self::Feat(_) => ItemKind::Feat,
+            Self::RuleSection(_) => ItemKind::RuleSection,
+            Self::Table(_) => ItemKind::Table,
         }
     }
 
@@ -237,6 +314,14 @@ impl AnyItem<'_> {
             Self::AiTemplate(item) => &item.id,
             Self::Scene(item) => &item.id,
             Self::Encounter(item) => &item.id,
+            Self::Item(item) => &item.id,
+            Self::Class(item) => &item.id,
+            Self::Subclass(item) => &item.id,
+            Self::Species(item) => &item.id,
+            Self::Background(item) => &item.id,
+            Self::Feat(item) => &item.id,
+            Self::RuleSection(item) => &item.id,
+            Self::Table(item) => &item.id,
         }
     }
 
@@ -249,6 +334,14 @@ impl AnyItem<'_> {
             Self::AiTemplate(item) => serde_json::to_value(item),
             Self::Scene(item) => serde_json::to_value(item),
             Self::Encounter(item) => serde_json::to_value(item),
+            Self::Item(item) => serde_json::to_value(item),
+            Self::Class(item) => serde_json::to_value(item),
+            Self::Subclass(item) => serde_json::to_value(item),
+            Self::Species(item) => serde_json::to_value(item),
+            Self::Background(item) => serde_json::to_value(item),
+            Self::Feat(item) => serde_json::to_value(item),
+            Self::RuleSection(item) => serde_json::to_value(item),
+            Self::Table(item) => serde_json::to_value(item),
         }
         .expect("content schema must serialize")
     }
@@ -274,7 +367,34 @@ impl ContentRegistry {
         if let Some(item) = self.scenes.get(id) {
             return Some(AnyItem::Scene(item));
         }
-        self.encounters.get(id).map(AnyItem::Encounter)
+        if let Some(item) = self.encounters.get(id) {
+            return Some(AnyItem::Encounter(item));
+        }
+        for (kind, store) in [
+            (ItemKind::Item, &self.items),
+            (ItemKind::Class, &self.classes),
+            (ItemKind::Subclass, &self.subclasses),
+            (ItemKind::Species, &self.species),
+            (ItemKind::Background, &self.backgrounds),
+            (ItemKind::Feat, &self.feats),
+            (ItemKind::RuleSection, &self.rule_sections),
+            (ItemKind::Table, &self.tables),
+        ] {
+            if let Some(item) = store.get(id) {
+                return Some(match kind {
+                    ItemKind::Item => AnyItem::Item(item),
+                    ItemKind::Class => AnyItem::Class(item),
+                    ItemKind::Subclass => AnyItem::Subclass(item),
+                    ItemKind::Species => AnyItem::Species(item),
+                    ItemKind::Background => AnyItem::Background(item),
+                    ItemKind::Feat => AnyItem::Feat(item),
+                    ItemKind::RuleSection => AnyItem::RuleSection(item),
+                    ItemKind::Table => AnyItem::Table(item),
+                    _ => unreachable!(),
+                });
+            }
+        }
+        None
     }
 
     pub fn source_of(&self, kind: ItemKind, id: &str) -> Option<&ContentSource> {
@@ -286,6 +406,14 @@ impl ContentRegistry {
             ItemKind::AiTemplate => self.ai_templates.source(id),
             ItemKind::Scene => self.scenes.source(id),
             ItemKind::Encounter => self.encounters.source(id),
+            ItemKind::Item => self.items.source(id),
+            ItemKind::Class => self.classes.source(id),
+            ItemKind::Subclass => self.subclasses.source(id),
+            ItemKind::Species => self.species.source(id),
+            ItemKind::Background => self.backgrounds.source(id),
+            ItemKind::Feat => self.feats.source(id),
+            ItemKind::RuleSection => self.rule_sections.source(id),
+            ItemKind::Table => self.tables.source(id),
         }
     }
 
@@ -324,6 +452,46 @@ impl ContentRegistry {
                 .collect(),
             ItemKind::Encounter => self
                 .encounters
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Item => self
+                .items
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Class => self
+                .classes
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Subclass => self
+                .subclasses
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Species => self
+                .species
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Background => self
+                .backgrounds
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Feat => self
+                .feats
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::RuleSection => self
+                .rule_sections
+                .iter_sourced()
+                .map(|(id, sourced)| (id, &sourced.source))
+                .collect(),
+            ItemKind::Table => self
+                .tables
                 .iter_sourced()
                 .map(|(id, sourced)| (id, &sourced.source))
                 .collect(),
@@ -427,6 +595,25 @@ impl ContentRegistry {
                 self.encounters
                     .insert(item.id.clone(), item, source.clone())
             }
+            ContentItem::Item(item) => self.items.insert(item.id.clone(), item, source.clone()),
+            ContentItem::Class(item) => self.classes.insert(item.id.clone(), item, source.clone()),
+            ContentItem::Subclass(item) => {
+                self.subclasses
+                    .insert(item.id.clone(), item, source.clone())
+            }
+            ContentItem::Species(item) => {
+                self.species.insert(item.id.clone(), item, source.clone())
+            }
+            ContentItem::Background(item) => {
+                self.backgrounds
+                    .insert(item.id.clone(), item, source.clone())
+            }
+            ContentItem::Feat(item) => self.feats.insert(item.id.clone(), item, source.clone()),
+            ContentItem::RuleSection(item) => {
+                self.rule_sections
+                    .insert(item.id.clone(), item, source.clone())
+            }
+            ContentItem::Table(item) => self.tables.insert(item.id.clone(), item, source.clone()),
         }
     }
 
@@ -446,6 +633,14 @@ enum ContentItem {
     AiTemplate(AiTemplate),
     Scene(Scene),
     Encounter(Encounter),
+    Item(DomainEntity),
+    Class(DomainEntity),
+    Subclass(DomainEntity),
+    Species(DomainEntity),
+    Background(DomainEntity),
+    Feat(DomainEntity),
+    RuleSection(DomainEntity),
+    Table(DomainEntity),
 }
 
 /// Explicit source flags. A campaign manifest, if supplied (or found in
@@ -544,6 +739,10 @@ impl ContentSources {
             for path in source {
                 let mut files = Vec::new();
                 collect_files(path, &mut files, &ruleset)?;
+                // Packs are the base layer; ordinary content overrides them by
+                // entity id. `sort_by_key` is stable, so files keep their path
+                // order inside each group.
+                files.sort_by_key(|file| !super::pack::is_pack_path(file));
                 for file in files {
                     load_file(&file, &mut registry)?;
                 }
@@ -806,6 +1005,11 @@ fn apply_document(
     source: &ContentSource,
     registry: &mut ContentRegistry,
 ) -> Result<()> {
+    if super::pack::looks_like_pack(value) {
+        let pack = ContentPack::from_value(value).map_err(|error| anyhow!("{source}: {error}"))?;
+        apply_pack(pack, source, registry)?;
+        return Ok(());
+    }
     let object = value
         .as_object()
         .ok_or_else(|| anyhow!("top-level content must be a map"))?;
@@ -819,6 +1023,23 @@ fn apply_document(
     }
     let item = parse_single_item(value)?;
     registry.insert_item(item, source);
+    Ok(())
+}
+
+fn apply_pack(
+    pack: ContentPack,
+    source: &ContentSource,
+    registry: &mut ContentRegistry,
+) -> Result<()> {
+    let meta = pack.pack.clone();
+    if registry.packs.contains_key(&meta.id) {
+        bail!(
+            "{source}: duplicate content pack id `{}` (already loaded)",
+            meta.id
+        );
+    }
+    registry.packs.insert(meta.id.clone(), meta);
+    apply_container(pack.content, source, registry);
     Ok(())
 }
 
@@ -843,6 +1064,30 @@ fn apply_container(file: ContentFile, source: &ContentSource, registry: &mut Con
     }
     for item in file.encounters.unwrap_or_default() {
         registry.insert_item(ContentItem::Encounter(item), source);
+    }
+    for item in file.items.unwrap_or_default() {
+        registry.insert_item(ContentItem::Item(item), source);
+    }
+    for item in file.classes.unwrap_or_default() {
+        registry.insert_item(ContentItem::Class(item), source);
+    }
+    for item in file.subclasses.unwrap_or_default() {
+        registry.insert_item(ContentItem::Subclass(item), source);
+    }
+    for item in file.species.unwrap_or_default() {
+        registry.insert_item(ContentItem::Species(item), source);
+    }
+    for item in file.backgrounds.unwrap_or_default() {
+        registry.insert_item(ContentItem::Background(item), source);
+    }
+    for item in file.feats.unwrap_or_default() {
+        registry.insert_item(ContentItem::Feat(item), source);
+    }
+    for item in file.rule_sections.unwrap_or_default() {
+        registry.insert_item(ContentItem::RuleSection(item), source);
+    }
+    for item in file.tables.unwrap_or_default() {
+        registry.insert_item(ContentItem::Table(item), source);
     }
     if let Some(rules) = file.rules {
         registry.apply_rules(rules, source);

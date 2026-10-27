@@ -20,18 +20,25 @@ combat-sim YAML format):
   - LetsPlay/Rules/combat/2024/**/*.yaml       SRD 5.2.1
   - LetsPlay/Rules/combat/2014/srd/*.yaml      SRD 5.1, generated from the
     5e-database JSON (https://github.com/5e-bits/5e-database, MIT License)
+  - LetsPlay/Rules/combat/2014/srd/*.pack.json SRD 5.1, generated from the
+    5e-database JSON (https://github.com/5e-bits/5e-database, MIT License)
+  - LetsPlay/Rules/combat/2024/srd/*.pack.json SRD 5.2.1, generated from the
+    5e-database JSON (https://github.com/5e-bits/5e-database, MIT License)
+  - LetsPlay/Rules/combat/2024/srd/srd-5.2.1-rules-prose.pack.json
+    SRD 5.2.1 rules text, extracted from the SRD PDF conversion
 
 Dungeons & Dragons and D&D are trademarks of Wizards of the Coast LLC. This
 project is unofficial fan content and is not affiliated with or endorsed by
 Wizards of the Coast.
 
 The agent-orchestration files in this repository (the root development
-contract AGENTS.md, AGENT-BOOTSTRAP.md, AGENT-ORCHESTRATION.md,
-AGENT-ORCHESTRATION-ACCEPTANCE.md, editions/, prompts/, templates/,
-scripts/orchestrator.py, scripts/validate_kit.py, and
-tests/test_orchestrator.py) are taken from AgentOrch, MIT License,
-https://github.com/ctrlshiftaltdel/AgentOrch. The kit license text is in
-LICENSE.txt. TalkDND's own code and original documents remain under LICENSE.
+contract AGENTS.md, kit/orchestration.md, editions/, templates/, scripts/
+(orchestrator.py, validate_kit.py, check_drift.py, check_scope.py,
+report_metrics.py, run_delivery_scenarios.py, architecture/,
+self_improvement/, update_agentorch/), tests/, and MANIFEST.json) are taken
+from AgentOrch 1.6.3, MIT License, https://github.com/ctrlshiftaltdel/AgentOrch. The kit
+license text is in LICENSE.md. TalkDND's own code and original documents
+remain under LICENSE.
 
 pdf2md (LetsPlay/tools/pdf2md) contains text-repair, table-repair, heading and
 check routines ported from ConvertPDF by the project owner, relicensed here

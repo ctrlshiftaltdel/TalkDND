@@ -168,10 +168,13 @@ jobs:
         uses: astral-sh/setup-uv@v6
 
       - name: Validate AgentOrch kit
-        run: uv run --no-project python scripts/validate_kit.py
+        run: uv run --no-project python scripts/validate_kit.py --project-ready
 
       - name: AgentOrch kit tests
-        run: uv run --no-project python -m unittest tests/test_orchestrator.py
+        run: uv run --no-project python -m unittest discover -s tests
+
+      - name: AgentOrch syntax check
+        run: uv run --no-project python -m compileall -q scripts tests
 
       - name: Check tracked files for leaks
         run: cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks

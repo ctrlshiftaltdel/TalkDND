@@ -1,0 +1,119 @@
+{
+  "schema_version": "1.0",
+  "contract_version": "1.0.0",
+  "project_name": "example-project",
+  "enforcement_mode": "DIAGNOSTIC_ONLY",
+  "modules": [
+    {
+      "module_id": "app",
+      "paths": ["src/app/"],
+      "responsibilities": ["HTTP entry points and dependency wiring"],
+      "owns_state": [],
+      "public_interfaces": [
+        { "name": "app.main", "kind": "python_module", "stability": "stable" }
+      ],
+      "private_paths": ["src/app/internal/"]
+    },
+    {
+      "module_id": "domain",
+      "paths": ["src/domain/"],
+      "responsibilities": ["domain rules and the state they own"],
+      "owns_state": ["order state"],
+      "public_interfaces": [
+        { "name": "domain.model", "kind": "python_module", "stability": "additive_only" }
+      ],
+      "private_paths": ["src/domain/internal/"]
+    },
+    {
+      "module_id": "infra",
+      "paths": ["src/infra/"],
+      "responsibilities": ["database and filesystem adapters"],
+      "public_interfaces": [
+        { "name": "infra.db", "kind": "python_module", "stability": "experimental" }
+      ]
+    }
+  ],
+  "dependencies": {
+    "allowed": [
+      { "from": "app", "to": "domain", "reason": "app orchestrates domain use cases" }
+    ],
+    "forbidden": [
+      {
+        "from": "domain",
+        "to": "infra",
+        "reason": "domain code must stay free of infrastructure details",
+        "rule_id": "ARCH-FORBID-DOMAIN-INFRA"
+      }
+    ]
+  },
+  "boundaries": [
+    {
+      "boundary_id": "BND-LAYERS",
+      "kind": "layer",
+      "members": ["app", "domain", "infra"],
+      "notes": "outer layers may depend inwards only"
+    }
+  ],
+  "invariants": [
+    {
+      "invariant_id": "INV-ORDER-STATE",
+      "statement": "Only the domain module writes order state.",
+      "checked_by": "STATIC_RULE",
+      "severity": "ERROR",
+      "rule_ids": ["ARCH-PRIVATE"],
+      "notes": "state ownership is declared in modules[].owns_state"
+    }
+  ],
+  "rules": [
+    {
+      "rule_id": "ARCH-NO-CYCLE",
+      "kind": "NO_CYCLE",
+      "severity": "ERROR",
+      "enabled": true,
+      "description": "module dependencies must stay acyclic"
+    },
+    {
+      "rule_id": "ARCH-FORBID-DOMAIN-INFRA",
+      "kind": "FORBIDDEN_EDGE",
+      "severity": "ERROR",
+      "enabled": true,
+      "description": "domain must not import infrastructure"
+    },
+    {
+      "rule_id": "ARCH-LAYERS",
+      "kind": "LAYER_DIRECTION",
+      "severity": "ERROR",
+      "enabled": true,
+      "description": "dependencies may only point from outer to inner layers",
+      "params": { "order": ["app", "domain", "infra"], "direction": "downward" }
+    },
+    {
+      "rule_id": "ARCH-PRIVATE",
+      "kind": "PRIVATE_ACCESS",
+      "severity": "ERROR",
+      "enabled": true,
+      "description": "other modules may import public paths only"
+    },
+    {
+      "rule_id": "ARCH-FANOUT",
+      "kind": "MODULE_FAN_OUT",
+      "severity": "WARNING",
+      "enabled": true,
+      "description": "report modules with a wide outgoing dependency surface",
+      "params": { "max": 6 }
+    },
+    {
+      "rule_id": "ARCH-SIZE",
+      "kind": "MODULE_SIZE",
+      "severity": "WARNING",
+      "enabled": true,
+      "description": "report oversized implementation files",
+      "params": { "max_lines": 600 }
+    }
+  ],
+  "baseline": {
+    "frozen_at": "2026-01-01T00:00:00Z",
+    "frozen_by": "project-owner",
+    "migration_notes": null
+  }
+}
