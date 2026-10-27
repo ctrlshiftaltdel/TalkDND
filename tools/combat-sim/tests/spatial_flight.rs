@@ -17,7 +17,7 @@ use std::fs;
 use std::path::Path;
 
 use combat_sim::content::schema::{ConditionDef, ConditionFlag, Creature, Scene, Size, Speed};
-use combat_sim::content::{ContentRegistry, ContentSource};
+use combat_sim::content::{ContentRegistry, ContentSource, ContentSources};
 use combat_sim::dice::DiceRng;
 use combat_sim::engine::{self, FallOptions};
 use combat_sim::space::{
@@ -1283,24 +1283,51 @@ fn legacy_grid_scene_stays_legacy_until_spatial_state_is_present() {
 // ---------------------------------------------------------------------------
 // AC-8: real TASK-0094 hover/burrow data reaches the capability seam
 // ---------------------------------------------------------------------------
+//
+// The 2014 data lives in the hand-maintained `srd-monsters.yaml`; the generated
+// `.pack.json` is a separate artifact and is not used as the source of truth
+// here. Loading the real 2014 fixture registry matches the #178 test and keeps
+// this test independent of pack regeneration.
 
 #[derive(serde::Deserialize)]
 struct SpatialOverlay {
     creatures: Vec<Creature>,
 }
 
-#[derive(serde::Deserialize)]
-struct MonsterPack {
-    content: MonsterPackContent,
-}
-
-#[derive(serde::Deserialize)]
-struct MonsterPackContent {
-    creatures: Vec<Creature>,
+fn real_2014_registry() -> ContentRegistry {
+    let manifest =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rulesets/real-2014.yaml");
+    ContentSources {
+        campaign: Some(manifest),
+        ..ContentSources::default()
+    }
+    .load()
+    .expect("real 2014 SRD registry should load")
 }
 
 #[test]
 fn real_hover_and_burrow_fields_reach_flight_capability() {
+    let registry = real_2014_registry();
+    let hovering = registry
+        .creatures
+        .iter()
+        .find(|(_, creature)| creature.speed().fly > 0 && creature.speed().hover)
+        .expect("at least one 2014 hover creature in the real registry");
+    let hovering = FlightCapability::from_speed(&hovering.1.speed());
+    assert!(hovering.can_fly());
+    assert!(hovering.can_hover());
+    assert!(hovering.fly_speed_ft > 0);
+
+    let burrowing = registry
+        .creatures
+        .iter()
+        .find(|(_, creature)| creature.speed().burrow > 0)
+        .expect("at least one 2014 burrow creature in the real registry");
+    let burrowing = FlightCapability::from_speed(&burrowing.1.speed());
+    assert!(burrowing.can_burrow());
+    assert!(burrowing.burrow_speed_ft > 0);
+
+    // Keep the 2024 overlay assertions: the overlay is the real 2024 source.
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let overlay_path = root.join("LetsPlay/Rules/combat/2024/monsters/srd-spatial.yaml");
     let text = fs::read_to_string(&overlay_path).expect("tracked 2024 SRD spatial overlay");
@@ -1325,17 +1352,4 @@ fn real_hover_and_burrow_fields_reach_flight_capability() {
     let burrowing = FlightCapability::from_speed(&burrowing.speed());
     assert!(burrowing.can_burrow());
     assert!(burrowing.burrow_speed_ft > 0);
-
-    // The 2014 SRD currently has no structured hover/burrow fields; only the
-    // 2024 overlay does (V-07 / TASK-0094 data gap).
-    let pack_2014: MonsterPack = serde_json::from_str(
-        &fs::read_to_string(root.join("LetsPlay/Rules/combat/2014/srd/srd-5.1-monsters.pack.json"))
-            .expect("tracked 2014 SRD monster pack"),
-    )
-    .expect("parse 2014 SRD monster pack");
-    assert!(pack_2014
-        .content
-        .creatures
-        .iter()
-        .all(|creature| !creature.speed().hover && creature.speed().burrow == 0));
 }
