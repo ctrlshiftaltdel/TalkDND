@@ -206,7 +206,7 @@ fn unlocks_only_the_matching_full_pack_for_the_save_edition() {
         "2024",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     talkdnd::library::scan_and_register(&r).unwrap();
     let loaded = talkdnd::library::sync_campaign_packs(&r, &s).unwrap();
     assert_eq!(loaded, vec!["2014 Player's Handbook".to_string()]);
@@ -226,7 +226,7 @@ fn unlocks_only_the_matching_full_pack_for_the_save_edition() {
         &[
             "new",
             "--ruleset",
-            "2024",
+            "5.5e-full",
             "--scope",
             "0",
             "--date",
@@ -248,7 +248,7 @@ fn a_pack_without_a_matching_pdf_never_unlocks() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     let before = library_line(&s);
     let records = talkdnd::library::scan_and_register(&r).unwrap();
     assert!(records.is_empty(), "{records:#?}");
@@ -266,9 +266,11 @@ fn a_pack_without_a_matching_pdf_never_unlocks() {
         status.detail
     );
     assert!(
-        talkdnd::library::pack_digest_line(&r, &s).contains("仅 SRD"),
-        "{}",
         talkdnd::library::pack_digest_line(&r, &s)
+            .unwrap()
+            .contains("未解锁"),
+        "{}",
+        talkdnd::library::pack_digest_line(&r, &s).unwrap()
     );
 }
 
@@ -289,7 +291,7 @@ fn a_wrong_edition_does_not_unlock_another_editions_pack() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     let records = talkdnd::library::scan_and_register(&r).unwrap();
     assert_eq!(records.len(), 1, "{records:#?}");
     assert_eq!(records[0].edition.as_deref(), Some("2024"));
@@ -324,7 +326,7 @@ fn an_ambiguous_scan_waits_for_the_player_and_then_unlocks() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     let records = talkdnd::library::scan_and_register(&r).unwrap();
     let record = &records[0];
     assert_eq!(record.status, BookStatus::Ambiguous, "{record:#?}");
@@ -405,7 +407,7 @@ fn duplicate_copies_register_separately_but_unlock_once() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     let records = talkdnd::library::scan_and_register(&r).unwrap();
     assert_eq!(
         records
@@ -442,7 +444,7 @@ fn an_srd_or_masquerading_file_is_not_a_full_book() {
         "2024",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2024");
+    let s = save(&r, "5.5e-srd");
     let records = talkdnd::library::scan_and_register(&r).unwrap();
     assert_eq!(records[0].status, BookStatus::SrdOnly, "{records:#?}");
     assert!(talkdnd::library::sync_campaign_packs(&r, &s)
@@ -472,7 +474,7 @@ fn an_invalid_pack_never_unlocks() {
         "2014",
         combat_sim::content::Distribution::Srd,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     talkdnd::library::scan_and_register(&r).unwrap();
     let status = talkdnd::library::pack_status(&r)
         .into_iter()
@@ -488,7 +490,7 @@ fn an_invalid_pack_never_unlocks() {
         .unwrap()
         .is_empty());
     assert!(!library_line(&s).contains("full-"));
-    let digest = talkdnd::library::pack_digest_line(&r, &s);
+    let digest = talkdnd::library::pack_digest_line(&r, &s).unwrap();
     assert!(
         digest.contains("full-2014-phb"),
         "invalid pack must be named in the digest: {digest}"
@@ -535,7 +537,7 @@ fn detection_and_commands_never_write_or_print_book_prose() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-srd");
     let scan = ok(&r, &["library", "scan"]);
     assert!(!scan.contains(marker), "scan leaked book text: {scan}");
     let packs = ok(&r, &["library", "packs"]);
@@ -582,10 +584,10 @@ fn cli_scan_and_packs_name_the_book_and_edition() {
 #[test]
 fn start_keeps_the_old_digest_and_stays_srd_only_without_books() {
     let r = root("start");
-    let s = save(&r, "2024");
+    let s = save(&r, "5.5e-srd");
     let before = library_line(&s);
     let out = ok(&r, &["start"]);
-    assert!(out.contains("规则：**2024**"), "{out}");
+    assert!(out.contains("规则集：**5.5e SRD**"), "{out}");
     assert!(out.contains("content check"), "{out}");
     assert!(out.contains("完整书内容包：仅 SRD"), "{out}");
     assert_eq!(library_line(&s), before);
@@ -608,8 +610,9 @@ fn start_loads_the_matching_pack_and_drops_it_when_the_pdf_is_gone() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     let out = ok(&r, &["start"]);
+    assert!(out.contains("规则集：**5e FULL**"), "{out}");
     assert!(
         out.contains("完整书内容包：已解锁 2014 Player's Handbook"),
         "{out}"
@@ -620,21 +623,37 @@ fn start_loads_the_matching_pack_and_drops_it_when_the_pdf_is_gone() {
         library_line(&s)
     );
 
-    // Taking the pack away keeps SRD-only but names the missing book/pack.
-    fs::remove_file(r.join("Rules/packs/full-2014-phb.pack.json")).unwrap();
-    let out = ok(&r, &["start"]);
-    assert!(out.contains("完整书内容包：仅 SRD"), "{out}");
+    // Taking the pack away must fail closed, not fall back to SRD.
+    let pack_path = r.join("Rules/packs/full-2014-phb.pack.json");
+    let pack_bytes = fs::read(&pack_path).unwrap();
+    fs::remove_file(&pack_path).unwrap();
+    let (good, out) = run(&r, &["start"]);
+    assert!(!good, "5e FULL without a pack must fail: {out}");
+    for needle in [
+        "5e FULL",
+        "Player's Handbook",
+        "Rules/2014",
+        "talkdnd library scan",
+        "5e SRD",
+    ] {
+        assert!(out.contains(needle), "missing {needle} in {out}");
+    }
     assert!(
-        out.contains("full-2014-phb") && out.contains("Player's Handbook"),
-        "missing pack must be named: {out}"
+        !out.contains("完整书内容包：仅 SRD"),
+        "must not fall back: {out}"
     );
-    assert!(!library_line(&s).contains("full-"), "{}", library_line(&s));
+    assert!(
+        library_line(&s).contains("full-2014-phb.pack.json"),
+        "a failed start must not rewrite the library: {}",
+        library_line(&s)
+    );
 
-    // Taking the book PDF away must also drop the pack: no false unlock.
+    // Taking the book PDF away must also fail closed: no false unlock.
+    fs::write(&pack_path, pack_bytes).unwrap();
     fs::remove_dir_all(r.join("Rules/2014/book")).unwrap();
-    let out = ok(&r, &["start"]);
-    assert!(out.contains("完整书内容包：仅 SRD"), "{out}");
-    assert!(!library_line(&s).contains("full-"), "{}", library_line(&s));
+    let (good, out) = run(&r, &["start"]);
+    assert!(!good, "5e FULL without the book must fail: {out}");
+    assert!(out.contains("Player's Handbook"), "{out}");
 }
 
 #[test]
@@ -684,7 +703,7 @@ fn a_wrong_book_does_not_unlock_the_other_books_pack() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     talkdnd::library::scan_and_register(&r).unwrap();
     let status = talkdnd::library::pack_status(&r)
         .into_iter()
@@ -710,7 +729,7 @@ fn choose_on_the_cli_records_the_player_selection() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     ok(&r, &["library", "scan"]);
     let out = ok(
         &r,
@@ -821,7 +840,7 @@ fn sync_keeps_unmanaged_srd_packs_in_the_library_list() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     let manifest = s.join("combat/campaign.yaml");
     let text = fs::read_to_string(&manifest).unwrap();
     fs::write(
@@ -861,7 +880,7 @@ fn the_save_manifest_loads_only_the_unlocked_full_pack() {
         "2024",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     ok(&r, &["start"]);
     fs::create_dir_all(r.join("Rules/combat")).unwrap();
     let sources = combat_sim::content::ContentSources {
@@ -894,7 +913,7 @@ fn a_manual_choice_does_not_survive_losing_the_pdf() {
         "2014",
         combat_sim::content::Distribution::Full,
     );
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     let records = talkdnd::library::scan_and_register(&r).unwrap();
     talkdnd::library::choose_book(&r, &records[0].source, "2014", "phb").unwrap();
     talkdnd::library::sync_campaign_packs(&r, &s).unwrap();
@@ -927,7 +946,7 @@ fn each_matching_book_unlocks_its_own_pack() {
     for id in ["full-2014-phb", "full-2014-dmg"] {
         pack(&r, id, "2014", combat_sim::content::Distribution::Full);
     }
-    let s = save(&r, "2014");
+    let s = save(&r, "5e-full");
     talkdnd::library::scan_and_register(&r).unwrap();
     let loaded = talkdnd::library::sync_campaign_packs(&r, &s).unwrap();
     assert_eq!(

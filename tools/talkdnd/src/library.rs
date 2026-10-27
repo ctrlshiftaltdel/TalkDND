@@ -27,6 +27,7 @@
 //! pdf2md derived from the paged Markdown.
 
 use anyhow::{bail, Context, Result};
+use combat_sim::content::loader::Ruleset;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -652,9 +653,14 @@ pub fn scan_and_register(root: &Path) -> Result<Vec<BookRecord>> {
 /// Record the player's explicit choice for an ambiguous/unknown converted
 /// book. The source stamp is kept, so a later reconversion asks again.
 pub fn choose_book(root: &Path, query: &str, edition: &str, kind: &str) -> Result<BookRecord> {
-    if !EDITIONS.contains(&edition) {
-        bail!("无效的规则版本「{edition}」；可选 {}", EDITIONS.join(" / "));
-    }
+    let edition = Ruleset::parse(edition)
+        .map(|ruleset| ruleset.edition())
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "无效的规则版本「{edition}」；可选 {} 或 2014 / 2024",
+                Ruleset::VALUES.join(" / ")
+            )
+        })?;
     let kind = book_kind(kind)
         .ok_or_else(|| anyhow::anyhow!("无效的书型「{kind}」；可选 {}", BOOK_KINDS.join(" / ")))?;
     let mut records = scan_and_register(root)?;
@@ -956,19 +962,24 @@ pub fn pack_status(root: &Path) -> Vec<PackStatus> {
     pack_statuses(root)
 }
 
-/// Rewrite the save's `library:` list so it contains exactly the full packs
-/// unlocked for its ruleset, plus every unmanaged entry it already had.
-/// Removed packs drop back to SRD-only; unmatched packs are never added.
+/// Rewrite the save's `library:` list so a FULL ruleset contains exactly the
+/// full packs unlocked for its edition, plus every unmanaged entry it already
+/// had. An SRD ruleset removes the managed full packs. Unmatched packs are
+/// never added, and the next write also migrates an old ruleset value.
 pub fn sync_campaign_packs(root: &Path, save: &Path) -> Result<Vec<String>> {
-    let rs = crate::save::ruleset(save);
+    crate::save::migrate_ruleset(save)?;
+    let ruleset = crate::save::ruleset(save)?;
+    let rs = ruleset.edition();
     let statuses = pack_status(root);
     let mut loaded = Vec::new();
     let mut files = Vec::new();
-    for status in &statuses {
-        if status.edition == rs && status.state == PackState::Unlocked {
-            if let Some(file) = &status.file {
-                loaded.push(format!("{} {}", status.edition, book_label(&status.book)));
-                files.push(root.join(file));
+    if ruleset.is_full() {
+        for status in &statuses {
+            if status.edition == rs && status.state == PackState::Unlocked {
+                if let Some(file) = &status.file {
+                    loaded.push(format!("{} {}", status.edition, book_label(&status.book)));
+                    files.push(root.join(file));
+                }
             }
         }
     }
@@ -1067,22 +1078,29 @@ fn relative_from(base: &Path, target: &Path) -> String {
 
 /// A one-line digest: which full packs the save loads, or exactly which book
 /// or pack is missing. Never book prose.
-pub fn pack_digest_line(root: &Path, save: &Path) -> String {
-    let rs = crate::save::ruleset(save);
+pub fn pack_digest_line(root: &Path, save: &Path) -> Result<String> {
+    let ruleset = crate::save::ruleset(save)?;
+    let rs = ruleset.edition();
     let statuses = pack_status(root);
+    if ruleset.is_srd() {
+        return Ok(format!(
+            "仅 SRD（{} 只使用 SRD 层，不加载完整书内容包）",
+            ruleset.display()
+        ));
+    }
     let loaded: Vec<&PackStatus> = statuses
         .iter()
         .filter(|s| s.edition == rs && s.state == PackState::Unlocked)
         .collect();
     if !loaded.is_empty() {
-        return format!(
-            "已解锁 {}（SRD 始终可用）",
+        return Ok(format!(
+            "已解锁 {}（SRD 仍是基础层）",
             loaded
                 .iter()
                 .map(|s| format!("{} {}", s.edition, book_label(&s.book)))
                 .collect::<Vec<_>>()
                 .join("、")
-        );
+        ));
     }
     let ambiguous = statuses
         .iter()
@@ -1092,15 +1110,23 @@ pub fn pack_digest_line(root: &Path, save: &Path) -> String {
         .iter()
         .filter(|s| s.edition == rs && s.state == PackState::MissingPack)
         .collect();
+    let missing_book: Vec<&PackStatus> = statuses
+        .iter()
+        .filter(|s| s.edition == rs && s.state == PackState::MissingBook)
+        .collect();
     let invalid: Vec<&PackStatus> = statuses
         .iter()
         .filter(|s| s.edition == rs && s.state == PackState::Invalid)
         .collect();
-    if ambiguous > 0 {
-        format!("仅 SRD（{ambiguous} 本书无法确定；运行 `talkdnd library scan` 选择）")
+    Ok(if ambiguous > 0 {
+        format!(
+            "未解锁（{} 需要至少一本完整书；{ambiguous} 本书无法确定，运行 `talkdnd library scan` 选择）",
+            ruleset.display()
+        )
     } else if !missing.is_empty() {
         format!(
-            "仅 SRD（已识别 {}，但缺少 {}；运行 `talkdnd library packs`）",
+            "未解锁（{} 已识别 {}，但缺少 {}；运行 `talkdnd library packs`）",
+            ruleset.display(),
             missing
                 .iter()
                 .map(|s| format!("{} {}", s.edition, book_label(&s.book)))
@@ -1114,16 +1140,64 @@ pub fn pack_digest_line(root: &Path, save: &Path) -> String {
         )
     } else if !invalid.is_empty() {
         format!(
-            "仅 SRD（内容包无效：{}；运行 `talkdnd library packs`）",
+            "未解锁（{} 的内容包无效：{}；运行 `talkdnd library packs`）",
+            ruleset.display(),
             invalid
                 .iter()
                 .map(|s| s.id.as_str())
                 .collect::<Vec<_>>()
                 .join("、")
         )
+    } else if !missing_book.is_empty() {
+        format!(
+            "未解锁（{} 未识别到 {} 的完整书 PDF；运行 `talkdnd library scan`）",
+            ruleset.display(),
+            missing_book
+                .iter()
+                .map(|s| book_label(&s.book))
+                .collect::<Vec<_>>()
+                .join("、")
+        )
     } else {
-        "仅 SRD（未识别到匹配的完整书 PDF；运行 `talkdnd library scan`）".into()
+        format!(
+            "未解锁（{} 未识别到匹配的完整书 PDF；运行 `talkdnd library scan`）",
+            ruleset.display()
+        )
+    })
+}
+
+/// FULL rulesets fail closed: at least one full pack for the save's edition
+/// must be unlocked. The error names every missing book and how to add it.
+pub fn require_full_packs(root: &Path, ruleset: Ruleset) -> Result<()> {
+    if !ruleset.is_full() {
+        return Ok(());
     }
+    let edition = ruleset.edition();
+    let statuses = pack_status(root);
+    let unlocked = statuses
+        .iter()
+        .filter(|status| status.edition == edition && status.state == PackState::Unlocked)
+        .count();
+    if unlocked > 0 {
+        return Ok(());
+    }
+    let mut details = String::new();
+    for status in statuses.iter().filter(|status| status.edition == edition) {
+        details.push_str(&format!(
+            "\n  - {}：{}",
+            book_label(&status.book),
+            status.detail
+        ));
+    }
+    let alternative = if edition == "2014" {
+        "5e SRD"
+    } else {
+        "5.5e SRD"
+    };
+    bail!(
+        "{} 需要至少一本已解锁的 {edition} 完整规则书（Player's Handbook / Dungeon Master's Guide / Monster Manual），当前一本都没有解锁。{details}\n把对应 PDF 放进 Rules/{edition}/<书名>/ 并运行 `talkdnd library scan`；完整书内容包放到 Rules/packs/full-{edition}-<phb|dmg|mm>.pack.json；`talkdnd library packs` 查看每本书的状态。也可以改用 {alternative}。",
+        ruleset.display()
+    )
 }
 
 /// Program data under `Rules/` that is not a book.

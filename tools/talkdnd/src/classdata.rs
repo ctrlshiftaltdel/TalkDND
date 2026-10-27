@@ -7,6 +7,7 @@
 use crate::chargen::Creation;
 use crate::data;
 use anyhow::{Context, Result};
+use combat_sim::content::loader::Ruleset;
 use combat_sim::fsutil::atomic_write;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -252,6 +253,13 @@ impl Book {
             let df: DataFile = serde_norway::from_str(&fs::read_to_string(&f)?)
                 .with_context(|| format!("{} is not valid local chargen data", f.display()))?;
             let r = df.ruleset.as_deref().unwrap_or("any");
+            let r = if r == "any" {
+                "any"
+            } else {
+                Ruleset::parse(r)
+                    .map(|ruleset| ruleset.edition())
+                    .unwrap_or(r)
+            };
             if r != "any" && r != rs {
                 continue;
             }

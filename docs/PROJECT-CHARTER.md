@@ -26,7 +26,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 
 - Run a D&D session in chat: narration, NPCs, choices, free-text actions, and a written save the player can resume.
 - Resolve dice and combat with `combat-sim`, a data-driven Rust engine that does not hard-code a campaign.
-- Support the 2014 and 2024 rulesets, one ruleset per save, selected by that save's `ruleset` field.
+- Support four player-visible rulesets — **5.5e FULL, 5e FULL, 5.5e SRD, 5e SRD** — one per save, selected by that save's `ruleset` field. SRD loads only the edition's SRD layer; FULL adds the player's unlocked full-book packs for that edition.
 - Keep copyrighted books and adventures, personal saves, and DM secrets out of Git, Issues, pull requests, commit messages, and CI logs.
 - Publish prebuilt `combat-sim` binaries for the release targets in this charter, and keep a from-source build for everyone else.
 - Record product decisions in this charter so later tasks do not drift from them.
@@ -37,7 +37,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 
 - Never distribute copyrighted adventures. Rulebook content ships only under the owner's licence: SRD 5.1 / 5.2.1 packs under CC-BY-4.0, and (from v1.2) PHB/DMG/MM full packs unlocked by the player's own PDF. Players add PDFs only when they want page images, PDF fallback, or full-book content; their books stay on their machine.
 - Do not commit save contents, character sheets, session logs, or DM secrets. `LetsPlay/Saves/README.md` is the only save-tree file that belongs in Git.
-- Do not mix 2014 and 2024 rules inside one save.
+- Do not mix 5e and 5.5e rules inside one save.
 - Do not hard-code a campaign, an adventure, or a monster that is outside the SRD into the engine or into tracked combat data.
 - Do not run a second task system. The `local` AgentOrch edition files stay in the tree only because kit validation requires them. They are not a source of truth.
 - Do not add a network service, an account system, or a hosted game.
@@ -55,14 +55,18 @@ Release archives contain the whole git-tracked `LetsPlay/` tree plus the binary 
 
 ## Supported rulesets
 
-Both rulesets are supported. Each save picks one.
+Each save picks exactly one of four player-visible rulesets. The save manifest field is `ruleset`; values are case- and whitespace-insensitive on read, and the old `2014` / `2024` values are read as `5e-srd` / `5.5e-srd` and migrated on the next manifest write.
 
-| Ruleset | Save field | Player books (local) | Engine data |
-|---------|------------|----------------------|-------------|
-| 5e (2014) | `ruleset: "2014"` | `LetsPlay/Rules/2014/`, at least SRD 5.1 | `LetsPlay/Rules/combat/common/` then `LetsPlay/Rules/combat/2014/` |
-| 5.5e (2024) | `ruleset: "2024"` | `LetsPlay/Rules/2024/`, at least SRD 5.2.1 | `LetsPlay/Rules/combat/common/` then `LetsPlay/Rules/combat/2024/` |
+| Player option | `ruleset` value | Engine edition / layers | Content loaded |
+|---------------|-----------------|-------------------------|----------------|
+| 5.5e FULL | `5.5e-full` | 2024 | `common/` then `2024/`, then unlocked `full-2024-*` packs, then hand-written/adventure/campaign overrides |
+| 5e FULL | `5e-full` | 2014 | `common/` then `2014/`, then unlocked `full-2014-*` packs, then hand-written/adventure/campaign overrides |
+| 5.5e SRD | `5.5e-srd` | 2024 | `LetsPlay/Rules/combat/common/` then `2024/`; no full packs |
+| 5e SRD | `5e-srd` | 2014 | `LetsPlay/Rules/combat/common/` then `2014/`; no full packs |
 
-The field is the save manifest `ruleset`. The engine loads `common/`, then the directory for that value, and ignores the other version directory. Shared rulings are `LetsPlay/Rules/rulings.md`. Version differences are `LetsPlay/Rules/rulings-2014.md` and `LetsPlay/Rules/rulings-2024.md`.
+The engine still selects the on-disk layer with the edition (`2014` or `2024`) and ignores the other edition's directory. SRD is always the base layer. A FULL save requires at least one unlocked full pack for its edition: when the pack is missing, locked or invalid, `talkdnd start` and `combat-sim content check` fail explicitly, name the missing book and explain how to add the PDF/pack. They never silently fall back to SRD. One save never mixes editions.
+
+The migration is idempotent: it preserves every other manifest field and the player's comments, rewrites only the `ruleset` line, and records the old/new values in a comment next to it. Shared rulings are `LetsPlay/Rules/rulings.md`. Version differences are `LetsPlay/Rules/rulings-2014.md` and `LetsPlay/Rules/rulings-2024.md`; the file names use the edition, not the player option.
 
 Tracked combat data comes only from the SRD (CC-BY-4.0). Attribution is in `NOTICE`. Data that exists only in a non-SRD book stays in ignored local files.
 
@@ -117,12 +121,12 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - Platform: a local CLI. Linux, Windows, and macOS are the player platforms. The three prebuilt targets are listed above.
 - Data and privacy: player books and saves are local. Tracked combat data is SRD-only. The privacy rule above is mandatory. Full-book packs are built locally from pdf2md indexes, are never in Git, and are published only as separate release assets; CI uses synthetic fixtures and never builds or downloads them.
 - Reliability: dice come from the operating system's entropy through `combat-sim`, not from the model inventing a roll.
-- Assumptions: the player can run an agent that reads `LetsPlay/` and executes `LetsPlay/bin/combat-sim`. The SRD packs ship with the program; adding the SRD PDFs is optional. GitHub is reachable for Issues, pull requests, and CI. One ruleset per save is enough.
+- Assumptions: the player can run an agent that reads `LetsPlay/` and executes `LetsPlay/bin/combat-sim`. The SRD packs ship with the program; adding the SRD PDFs is optional. GitHub is reachable for Issues, pull requests, and CI. One of the four rulesets per save is enough.
 
 ## Success criteria
 
 - A player can follow `LetsPlay/README.md`, add their own SRD, start an agent in `LetsPlay/`, and play with real `combat-sim` rolls from `LetsPlay/bin/combat-sim`.
-- A save's `ruleset` selects 2014 or 2024 data, and the engine does not load the other version's directory.
+- A save's `ruleset` selects one of the four options: `*-srd` loads only the edition's SRD layer, `*-full` requires an unlocked full pack for that edition, and the engine does not load the other edition's directory.
 - `uv run --no-project python scripts/validate_kit.py --project-ready`, `uv run --no-project python -m unittest discover -s tests`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
 - Release automation builds the three prebuilt targets named in this charter.
 - Full-book packs build from the owner's local pdf2md indexes, validate as `distribution: full`, and are published as separate release assets without entering Git, the LetsPlay archive or CI logs.
@@ -135,6 +139,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 
 - Play files live under `LetsPlay/`. Development files live at the repository root.
 - The AgentOrch edition is `github`.
+- Player-visible rulesets are the four save values `5.5e-full`, `5e-full`, `5.5e-srd`, `5e-srd`. The edition layer stays `2024` / `2014`; the suffix controls whether unlocked full packs load. FULL fails closed when its edition has no unlocked pack.
 - Implementation language is Rust, plus the named exceptions in Tech stack.
 - The play directory is self-contained. The binary lives in `LetsPlay/bin/` and is not committed.
 - Prebuilt releases cover Linux x86_64, Windows x86_64, and macOS arm64.
@@ -162,6 +167,14 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-27 — Four player-visible rulesets (TASK-0107)
+
+The owner's 2026-10-27 ruleset decision is implemented as four save-visible values: **5.5e FULL** (`5.5e-full`), **5e FULL** (`5e-full`), **5.5e SRD** (`5.5e-srd`) and **5e SRD** (`5e-srd`). Read parsing trims whitespace and ignores case; any other value is rejected with an error that lists all four options and the legacy aliases. `2014` is still read as `5e-srd` and `2024` as `5.5e-srd`, so old saves load. The next manifest write (including `talkdnd start`, `talkdnd migrate`, and any `chargen` field that writes the manifest) rewrites only the `ruleset` line to the canonical value, preserves other fields and comments, records the old/new values in a comment, and is idempotent.
+
+The edition layer stays `2014` / `2024`. `*-srd` loads only `common/` plus that edition's layer and ignores full packs, even if an old manifest still lists one. `*-full` loads `common/` plus the edition layer, then the unlocked `full-<edition>-{phb,dmg,mm}` packs (same ids override the SRD layer), then hand-written library, adventure and character overrides. A full pack for the other edition is a hard error; one save never mixes editions. FULL requires at least one unlocked full pack for its edition; when no matching pack is loaded, `talkdnd start` and `combat-sim content check` fail with the missing book and the PDF/pack instructions instead of falling back to SRD. A save may switch between FULL and SRD; switching to SRD removes the managed full-pack entries on the next start.
+
+`talkdnd start`'s digest, `talkdnd new` / `chargen` prompts, errors and the player docs use 5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD; `2014` / `2024` remain only as edition labels and legacy values. No save schema, pack schema, dependency or crate version changes. Tests cover the four values, normalization, illegal values, legacy migration and idempotency, SRD-only layering, full-pack layering and same-id override, the other-edition rejection and the fail-closed start/content-check paths. Rollback is a normal revert; old values remain accepted.
 
 ### 2026-10-27 — Full-book pack builder and release packaging (TASK-0102)
 

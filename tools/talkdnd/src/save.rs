@@ -1,6 +1,8 @@
 //! Locating the play folder, saves and session logs.
 
 use anyhow::{bail, Context, Result};
+use combat_sim::content::loader::Ruleset;
+use combat_sim::fsutil::atomic_write;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -121,23 +123,101 @@ pub fn next_slot_name(root: &Path, date: &str) -> Result<String> {
     Ok(format!("{date}-{:02}", n + 1))
 }
 
-/// Ruleset from combat/campaign.yaml; default 2024.
-pub fn ruleset(save: &Path) -> String {
-    let text = fs::read_to_string(save.join("combat/campaign.yaml")).unwrap_or_default();
+/// The save-visible ruleset from `combat/campaign.yaml`. Missing file/value
+/// defaults to `5.5e-srd`; the old `2014` / `2024` values map to the SRD
+/// variants. Any other value is an actionable error (fail closed).
+pub fn ruleset(save: &Path) -> Result<Ruleset> {
+    let path = save.join("combat/campaign.yaml");
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Ruleset::FivePointFiveESrd)
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("read {}", path.display()));
+        }
+    };
+    let Some(value) = manifest_ruleset_value(&text) else {
+        return Ok(Ruleset::FivePointFiveESrd);
+    };
+    Ruleset::parse(&value).with_context(|| format!("in {}", path.display()))
+}
+
+/// Engine edition (`2014` / `2024`) for callers that select the on-disk layer.
+pub fn edition(save: &Path) -> Result<String> {
+    Ok(ruleset(save)?.edition().to_string())
+}
+
+/// Rewrites an old `ruleset` value in place, preserving every other line and
+/// the player's comments. The migration is idempotent and records itself in a
+/// comment next to the field. Returns a digest line when it wrote something.
+pub fn migrate_ruleset(save: &Path) -> Result<Option<String>> {
+    let path = save.join("combat/campaign.yaml");
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let Some(old) = manifest_ruleset_value(&text) else {
+        return Ok(None);
+    };
+    let canonical = Ruleset::parse(&old)
+        .with_context(|| format!("in {}", path.display()))?
+        .value();
+    if old == canonical {
+        return Ok(None);
+    }
+
+    let mut out = String::with_capacity(text.len() + 96);
+    let mut replaced = false;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if !replaced && trimmed.starts_with("ruleset:") {
+            replaced = true;
+            let indent = &line[..line.len() - trimmed.len()];
+            let comment = trimmed
+                .find('#')
+                .map(|index| trimmed[index..].trim_end().to_string());
+            let eol = if line.ends_with("\r\n") { "\r\n" } else { "\n" };
+            let comment = match comment.as_deref() {
+                Some("# 2014 | 2024") => " # 5.5e-full | 5e-full | 5.5e-srd | 5e-srd".to_string(),
+                Some(comment) => format!(" {comment}"),
+                None => String::new(),
+            };
+            out.push_str(&format!(
+                "{indent}# ruleset migrated from {old} to {canonical}{eol}"
+            ));
+            out.push_str(&format!("{indent}ruleset: \"{canonical}\"{comment}{eol}"));
+            continue;
+        }
+        out.push_str(line);
+    }
+    if !replaced {
+        return Ok(None);
+    }
+    let before = combat_sim::integrity::snapshot(save);
+    atomic_write(&path, out.as_bytes())?;
+    combat_sim::integrity::after_write(save, &before)?;
+    Ok(Some(format!("ruleset：{old} -> {canonical}（已迁移）")))
+}
+
+/// Raw `ruleset:` value without its inline comment or quotes.
+fn manifest_ruleset_value(text: &str) -> Option<String> {
     for line in text.lines() {
-        if let Some(rest) = line.trim_start().strip_prefix("ruleset:") {
-            let v = rest
-                .split('#')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .trim_matches(['"', '\'']);
-            if v == "2014" || v == "2024" {
-                return v.to_string();
-            }
+        let Some(rest) = line.trim_start().strip_prefix("ruleset:") else {
+            continue;
+        };
+        let value = rest
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches(['"', '\'']);
+        if !value.is_empty() {
+            return Some(value.to_string());
         }
     }
-    "2024".to_string()
+    None
 }
 
 /// Newest session log (by file name) in Sessions/.

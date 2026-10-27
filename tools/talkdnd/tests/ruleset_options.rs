@@ -92,14 +92,7 @@ fn four_values_normalize_and_illegal_values_are_actionable() {
 
     let (good, out) = run(&r, &["new", "--ruleset", "5.5", "--date", "2030-02-01"]);
     assert!(!good, "{out}");
-    for needle in [
-        "5.5e FULL",
-        "5.5e SRD",
-        "5e FULL",
-        "5e SRD",
-        "2014",
-        "2024",
-    ] {
+    for needle in ["5.5e FULL", "5.5e SRD", "5e FULL", "5e SRD", "2014", "2024"] {
         assert!(out.contains(needle), "missing {needle} in {out}");
     }
 }
@@ -108,6 +101,7 @@ fn four_values_normalize_and_illegal_values_are_actionable() {
 fn new_save_and_digest_use_display_names_not_bare_edition_values() {
     let r = root("display");
     let save = new_save(&r, None, "2030-03-01");
+    assert!(manifest(&save).contains("ruleset: \"5.5e-srd\""));
     let d = ok(&r, &["start", "--save", "2030-03-01-01"]);
     assert!(d.contains("规则集：**5.5e SRD**"), "{d}");
     assert!(!d.contains("规则：**2024**"), "{d}");
@@ -121,7 +115,10 @@ fn new_save_and_digest_use_display_names_not_bare_edition_values() {
     let save24 = new_save(&r, Some("5.5e-srd"), "2030-03-03");
     let d = ok(&r, &["start", "--save", "2030-03-03-01"]);
     assert!(d.contains("规则集：**5.5e SRD**"), "{d}");
-    assert_eq!(manifest(&save24).matches("ruleset: \"5.5e-srd\"").count(), 1);
+    assert_eq!(
+        manifest(&save24).matches("ruleset: \"5.5e-srd\"").count(),
+        1
+    );
 }
 
 #[test]
@@ -143,7 +140,10 @@ fn old_manifest_values_load_and_migrate_on_the_next_write() {
     let migrated = manifest(&save);
     assert!(migrated.contains("ruleset: \"5.5e-srd\""), "{migrated}");
     assert!(migrated.contains("# keep this comment"), "{migrated}");
-    assert!(migrated.contains("party: []   # keep the party field"), "{migrated}");
+    assert!(
+        migrated.contains("party: []   # keep the party field"),
+        "{migrated}"
+    );
     assert!(
         migrated.contains("ruleset migrated from 2024 to 5.5e-srd"),
         "{migrated}"
@@ -187,6 +187,26 @@ fn chargen_set_ruleset_writes_the_canonical_value() {
 }
 
 #[test]
+fn an_invalid_manifest_ruleset_fails_start_with_actionable_error() {
+    let r = root("invalid-manifest");
+    let save = new_save(&r, None, "2030-01-04");
+    set_old_ruleset(&save, "5e");
+    let (good, out) = run(&r, &["start", "--save", "2030-01-04-01"]);
+    assert!(!good, "an invalid ruleset must fail closed: {out}");
+    for needle in [
+        "unsupported ruleset",
+        "5.5e FULL",
+        "5e FULL",
+        "5.5e SRD",
+        "5e SRD",
+        "2014",
+        "2024",
+    ] {
+        assert!(out.contains(needle), "missing {needle} in {out}");
+    }
+}
+
+#[test]
 fn full_without_an_unlocked_pack_fails_start_instead_of_falling_back() {
     let r = root("full-missing");
     let save = new_save(&r, Some("5e-full"), "2030-06-01");
@@ -204,6 +224,13 @@ fn full_without_an_unlocked_pack_fails_start_instead_of_falling_back() {
     ] {
         assert!(out.contains(needle), "missing {needle} in {out}");
     }
-    assert_eq!(manifest(&save), before, "a failed start must not rewrite the manifest");
-    assert!(!out.contains("完整书内容包：仅 SRD"), "must not fall back: {out}");
+    assert_eq!(
+        manifest(&save),
+        before,
+        "a failed start must not rewrite the manifest"
+    );
+    assert!(
+        !out.contains("完整书内容包：仅 SRD"),
+        "must not fall back: {out}"
+    );
 }

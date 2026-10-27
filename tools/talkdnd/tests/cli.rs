@@ -164,7 +164,7 @@ fn full_creation_flow() {
     );
     let manifest = fs::read_to_string(save.join("combat/campaign.yaml")).unwrap();
     assert!(manifest.contains("party: [aria]"));
-    assert!(manifest.contains("ruleset: \"2024\""));
+    assert!(manifest.contains("ruleset: \"5.5e-srd\""));
     let log = fs::read_to_string(save.join("Sessions/2030-01-02-session-00-setup.md")).unwrap();
     assert!(log.contains("属性掷骰 6×4d6dl1 (seeded test roll)"));
 
@@ -202,7 +202,7 @@ fn full_creation_flow() {
     ok(&r, &["log", "进入酒馆"]);
     ok(&r, &["checkpoint", "时间：第 1 天 08:00；Aria HP 12/12"]);
     let d = ok(&r, &["start"]);
-    assert!(d.contains("规则：**2024**"));
+    assert!(d.contains("规则集：**5.5e SRD**"));
     assert!(d.contains("Aria HP 12/12"));
     assert!(d.contains("`kel`"));
     assert!(d.contains("combat-sim") || d.contains("missing"));
@@ -240,7 +240,7 @@ fn newest_slot_and_numbering() {
     assert!(d.contains("2030-01-02-02"));
     assert!(d.contains("建卡未完成"));
     let d = ok(&r, &["--save", "2030-01-02-01", "start"]);
-    assert!(d.contains("**2014**"));
+    assert!(d.contains("**5e SRD**"));
     assert!(!run(&r, &["--save", "1999-01-01-01", "start"]).0);
     let _ = fs::remove_dir_all(&r);
 }

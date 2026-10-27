@@ -56,9 +56,9 @@ fn creature(id: &str, name: &str, ac: i32) -> serde_json::Value {
 
 fn write_base(root: &Path) {
     let lib = root.join("lib");
-    fs::create_dir_all(&lib).unwrap();
+    fs::create_dir_all(lib.join("common")).unwrap();
     fs::write(
-        lib.join("base.yaml"),
+        lib.join("common/base.yaml"),
         serde_json::to_string_pretty(&json!({
             "creatures": [creature("shared", "SRD shared", 10)]
         }))
@@ -139,6 +139,31 @@ fn four_values_are_accepted_and_legacy_values_map_to_srd() {
 }
 
 #[test]
+fn full_values_load_their_edition_pack() {
+    for (ruleset, edition, pack_id) in [
+        ("5e-full", "2014", "full-2014-phb"),
+        ("  5.5E-FULL  ", "2024", "full-2024-phb"),
+    ] {
+        let root = TempDir::new("full-values");
+        write_base(root.path());
+        write_pack(root.path(), pack_id, edition, Distribution::Full);
+        let manifest = write_manifest(
+            root.path(),
+            ruleset,
+            &["../lib", &format!("../packs/{pack_id}.pack.json")],
+        );
+        let registry = load(&manifest).unwrap_or_else(|e| panic!("{ruleset}: {e:#}"));
+        assert_eq!(registry.ruleset, edition, "{ruleset}");
+        assert!(registry.packs.contains_key(pack_id), "{ruleset}");
+        assert_eq!(
+            registry.creatures.get("shared").unwrap().name.as_deref(),
+            Some("Full shared"),
+            "{ruleset}"
+        );
+    }
+}
+
+#[test]
 fn illegal_values_name_every_accepted_value_and_the_legacy_alias() {
     let root = TempDir::new("illegal");
     write_base(root.path());
@@ -194,9 +219,16 @@ fn full_layers_srd_then_full_pack_then_adventure_override() {
     )
     .unwrap();
 
-    let srd = write_manifest(root.path(), "5e-srd", &["../lib", "../packs/full-2014-phb.pack.json"]);
+    let srd = write_manifest(
+        root.path(),
+        "5e-srd",
+        &["../lib", "../packs/full-2014-phb.pack.json"],
+    );
     let registry = load(&srd).unwrap();
-    assert_eq!(registry.creatures.get("shared").unwrap().name.as_deref(), Some("SRD shared"));
+    assert_eq!(
+        registry.creatures.get("shared").unwrap().name.as_deref(),
+        Some("SRD shared")
+    );
     assert!(registry.packs.is_empty(), "*-srd must not load full packs");
 
     let manifest = {
@@ -214,9 +246,12 @@ fn full_layers_srd_then_full_pack_then_adventure_override() {
         Some("Adventure shared"),
         "hand-written adventure content must win over the full pack"
     );
-    assert!(
-        registry.creatures.source("shared").unwrap().path.ends_with("adventure/override.yaml")
-    );
+    assert!(registry
+        .creatures
+        .source("shared")
+        .unwrap()
+        .path
+        .ends_with("adventure/override.yaml"));
 }
 
 #[test]
@@ -251,7 +286,59 @@ fn a_full_save_never_loads_the_other_edition_pack() {
     let text = format!("{error:#}");
     assert!(text.contains("full-2024-phb"), "{text}");
     assert!(text.contains("2014"), "{text}");
-    assert!(text.contains("5e-full") || text.contains("5e FULL"), "{text}");
+    assert!(
+        text.contains("5e-full") || text.contains("5e FULL"),
+        "{text}"
+    );
+}
+
+#[test]
+fn handwritten_library_overrides_a_full_pack() {
+    let root = TempDir::new("handwritten");
+    write_base(root.path());
+    write_pack(root.path(), "full-2014-phb", "2014", Distribution::Full);
+    let hand = root.path().join("hand");
+    fs::create_dir_all(&hand).unwrap();
+    fs::write(
+        hand.join("override.yaml"),
+        serde_json::to_string_pretty(&json!({
+            "creatures": [creature("shared", "Handwritten shared", 13)]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let manifest = write_manifest(
+        root.path(),
+        "5e-full",
+        &["../lib", "../packs/full-2014-phb.pack.json", "../hand"],
+    );
+    let registry = load(&manifest).unwrap();
+    assert_eq!(
+        registry.creatures.get("shared").unwrap().name.as_deref(),
+        Some("Handwritten shared"),
+        "hand-written library content must load after the full pack"
+    );
+}
+
+#[test]
+fn an_invalid_full_pack_fails_closed() {
+    let root = TempDir::new("invalid-pack");
+    write_base(root.path());
+    write_pack(root.path(), "full-2014-phb", "2014", Distribution::Full);
+    let path = root.path().join("packs/full-2014-phb.pack.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    value["pack"]["content_hash"] = json!("fnv1a64:0000000000000000:0");
+    fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+    let manifest = write_manifest(
+        root.path(),
+        "5e-full",
+        &["../lib", "../packs/full-2014-phb.pack.json"],
+    );
+    let error = load(&manifest).expect_err("a corrupt full pack must fail closed");
+    let text = format!("{error:#}");
+    assert!(text.contains("content hash mismatch"), "{text}");
+    assert!(text.contains("full-2014-phb"), "{text}");
 }
 
 #[test]

@@ -358,7 +358,7 @@ pub fn xp_add(save_dir: &Path, aw: &Award) -> Result<Vec<String>> {
             );
         }
     }
-    let rs = save::ruleset(save_dir);
+    let rs = save::edition(save_dir)?;
     let level_of = |id: &str| {
         sheets
             .iter()
@@ -845,7 +845,7 @@ pub fn level_up(
             XP_TABLE[old as usize]
         );
     }
-    let rs = save::ruleset(save_dir);
+    let rs = save::edition(save_dir)?;
     let book = classdata::Book::load(&rs, Some(root))?;
     let class = class_arg
         .map(str::to_string)

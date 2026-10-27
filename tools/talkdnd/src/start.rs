@@ -314,7 +314,7 @@ fn members(save: &Path) -> Vec<Member> {
 fn rules_source_line(root: &Path, rs: &str) -> String {
     let books = crate::classdata::rulebooks(&root.join("Rules").join(rs));
     if books.is_empty() {
-        return format!("- 规则来源：仅 SRD（Rules/{rs}/ 下没有转换好的完整规则书；见 docs/chargen.md「本地规则书数据」）\n");
+        return format!("- 规则来源：仅 SRD 书页（Rules/{rs}/ 下没有转换好的完整规则书；完整书内容包状态见下一行；见 docs/chargen.md「本地规则书数据」）\n");
     }
     let mut s = String::new();
     if crate::classdata::import_stale(root, rs) {
@@ -507,7 +507,9 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let rs = save::ruleset(save);
+    let ruleset = save::ruleset(save)?;
+    let ruleset_migration = save::migrate_ruleset(save)?;
+    let rs = ruleset.edition().to_string();
     // Tidy the book library before pdf2md starts (it skips itself while a
     // worker is converting) and before anything reads a book path.
     let tidy = match crate::library::tidy(root, false) {
@@ -530,13 +532,12 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         }
     };
     timing.mark("library_scan");
-    let mut packs_synced = false;
+    crate::library::require_full_packs(root, ruleset)?;
     if books_scanned {
-        match crate::library::sync_campaign_packs(root, save) {
-            Ok(_) => packs_synced = true,
-            Err(e) => early_warnings.push(format!(
+        if let Err(e) = crate::library::sync_campaign_packs(root, save) {
+            early_warnings.push(format!(
                 "完整书内容包同步失败：{e:#}（本次保持原有内容源；SRD 仍可用）"
-            )),
+            ));
         }
     }
     timing.mark("full_packs");
@@ -560,7 +561,13 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     let mut d = String::new();
     d += &format!("# 接档摘要：{slot}\n\n");
     d += &format!(
-        "- 规则：**{rs}**（只用 `Rules/{rs}/` 与 `Rules/rulings.md`、`Rules/rulings-{rs}.md`；出厂默认在 `Rules/defaults/`，`Rules/` 下的是本机副本）\n"
+        "- 规则集：**{}**（{}；引擎只读 `Rules/{rs}/`、`Rules/combat/{rs}/` 与 `Rules/rulings.md`、`Rules/rulings-{rs}.md`；出厂默认在 `Rules/defaults/`，`Rules/` 下的是本机副本）\n",
+        ruleset.display(),
+        if ruleset.is_full() {
+            format!("{rs}；SRD 层 + 已解锁完整书内容包")
+        } else {
+            format!("{rs}；只用 SRD 层")
+        }
     );
     let name = campaign_name(save);
     if !name.is_empty() {
@@ -581,11 +588,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         }
     );
     d += &rules_source_line(root, &rs);
-    let pack_digest = if packs_synced {
-        crate::library::pack_digest_line(root, save)
-    } else {
-        "未知（完整书内容包未同步，保持原有内容源；SRD 仍可用）".to_string()
-    };
+    let pack_digest = crate::library::pack_digest_line(root, save)?;
     d += &format!("- 完整书内容包：{pack_digest}\n");
     timing.mark("rules_source_line");
     if !ok {
@@ -606,6 +609,9 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         }
     }
     d += "\n## 存档结构\n\n";
+    if let Some(line) = &ruleset_migration {
+        d += &format!("- {line}\n");
+    }
     for line in migration.lines() {
         d += &format!("- {line}\n");
     }
