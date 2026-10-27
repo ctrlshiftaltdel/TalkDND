@@ -179,7 +179,7 @@ $CS roll 1d20+5 --adv --dc 15
 
 人物来自角色卡里的 combat 数据块。怪物、法术、状态、武器精通来自 `Rules/combat/`（按 edition 分层）。场景和遭遇来自 `Adventures/<冒险>/combat/`。
 
-两个 edition 的差异由数据决定：`Rules/combat/common/` 是通用部分，`Rules/combat/2014/`、`Rules/combat/2024/` 是各 edition 特有的内容。引擎读存档清单里的 `ruleset` 自动选择；`*-srd` 只用 SRD 层，`*-full` 再叠加已解锁的完整书内容包。
+两个 edition 的差异由数据决定：`Rules/combat/common/` 是通用部分，`Rules/combat/2014/`、`Rules/combat/2024/` 是各 edition 特有的内容。`srd/` 与 `srd-*` 覆盖属于 SRD 层；FULL 先加载 SRD 层，再加载已解锁的完整书内容包，最后加载 `<edition>/` 下其余手写内容与冒险/战役覆盖。引擎读存档清单里的 `ruleset` 自动选择。
 
 ## 更新到新版本
 

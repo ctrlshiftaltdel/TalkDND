@@ -407,6 +407,72 @@ fn real_default_rules_combat_layout_puts_handwritten_after_the_full_pack() {
 }
 
 #[test]
+fn srd_overlay_under_monsters_loads_before_the_full_pack() {
+    let root = TempDir::new("srd-overlay");
+    let combat = root.path().join("Rules/combat");
+    for dir in ["common", "2024/srd", "2024/monsters"] {
+        fs::create_dir_all(combat.join(dir)).unwrap();
+    }
+    fs::write(
+        combat.join("common/creatures.yaml"),
+        serde_json::to_string_pretty(&json!({
+            "creatures": [creature("overlay-id", "SRD overlay", 10)]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        combat.join("2024/monsters/srd-spatial.yaml"),
+        serde_json::to_string_pretty(&json!({
+            "creatures": [creature("overlay-id", "SRD overlay", 10)]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_pack_content(
+        root.path(),
+        "full-2024-phb",
+        "2024",
+        Distribution::Full,
+        json!({
+            "creatures": [creature("overlay-id", "Full overlay", 12)]
+        }),
+    );
+    fs::create_dir_all(root.path().join("Rules/packs")).unwrap();
+    fs::rename(
+        root.path().join("packs/full-2024-phb.pack.json"),
+        root.path().join("Rules/packs/full-2024-phb.pack.json"),
+    )
+    .unwrap();
+
+    let save = root.path().join("Saves/2030-01-01-01/combat");
+    fs::create_dir_all(&save).unwrap();
+    let manifest = save.join("campaign.yaml");
+    fs::write(
+        &manifest,
+        "name: synthetic\nruleset: \"5.5e-full\"\nlibrary: [\"../../../Rules/combat\", \"../../../Rules/packs/full-2024-phb.pack.json\"]\n",
+    )
+    .unwrap();
+    let registry = load(&manifest).unwrap();
+    assert_eq!(
+        registry
+            .creatures
+            .get("overlay-id")
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("Full overlay"),
+        "2024/monsters/srd-* is SRD base and must load before the full pack"
+    );
+    assert!(registry
+        .creatures
+        .source("overlay-id")
+        .unwrap()
+        .path
+        .ends_with("Rules/packs/full-2024-phb.pack.json"));
+}
+
+#[test]
 fn handwritten_library_overrides_a_full_pack() {
     let root = TempDir::new("handwritten");
     write_base(root.path());

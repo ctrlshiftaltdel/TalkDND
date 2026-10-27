@@ -734,8 +734,9 @@ impl ContentSources {
         // non-strict callers keep the original library order and behavior.
         if strict && ruleset.is_full() {
             let mut srd_libraries = Vec::new();
+            let mut srd_overlays: Vec<FilteredSource> = Vec::new();
             let mut full_libraries = Vec::new();
-            let mut handwritten_libraries: Vec<HandwrittenSource> = Vec::new();
+            let mut handwritten_libraries: Vec<FilteredSource> = Vec::new();
             for path in libraries {
                 if super::pack::is_pack_path(&path) {
                     let meta = read_pack_header(&path)?;
@@ -765,9 +766,9 @@ impl ContentSources {
                         }
                         super::pack::Distribution::Srd => srd_libraries.push(path),
                         super::pack::Distribution::Local => {
-                            handwritten_libraries.push(HandwrittenSource {
+                            handwritten_libraries.push(FilteredSource {
                                 path,
-                                exclude: None,
+                                filter: FileFilter::All,
                             })
                         }
                     }
@@ -780,13 +781,14 @@ impl ContentSources {
                 // files (monsters/, spells.yaml, ...) keep overriding the
                 // full pack.
                 if path.is_dir() && path.join("common").is_dir() {
-                    let (srd, hand) = full_layers(&path, ruleset.edition());
+                    let (srd, overlays, hand) = full_layers(&path, ruleset.edition());
                     srd_libraries.extend(srd);
+                    srd_overlays.extend(overlays);
                     handwritten_libraries.extend(hand);
                 } else {
-                    handwritten_libraries.push(HandwrittenSource {
+                    handwritten_libraries.push(FilteredSource {
                         path,
-                        exclude: None,
+                        filter: FileFilter::All,
                     });
                 }
             }
@@ -795,13 +797,25 @@ impl ContentSources {
                 .iter()
                 .flat_map(|path| expand_layers(path, ruleset.edition()))
                 .collect();
-            for source in srd_libraries.iter().chain(full_libraries.iter()) {
+            for source in &srd_libraries {
+                load_source(source, None, ruleset, strict, &mut registry)?;
+            }
+            for source in &srd_overlays {
+                load_source(
+                    &source.path,
+                    Some(&source.filter),
+                    ruleset,
+                    strict,
+                    &mut registry,
+                )?;
+            }
+            for source in &full_libraries {
                 load_source(source, None, ruleset, strict, &mut registry)?;
             }
             for source in &handwritten_libraries {
                 load_source(
                     &source.path,
-                    source.exclude.as_deref(),
+                    Some(&source.filter),
                     ruleset,
                     strict,
                     &mut registry,
@@ -943,24 +957,44 @@ impl fmt::Display for Ruleset {
     }
 }
 
-/// A source that loads after the full packs. `exclude` drops the SRD subfolder
-/// from a full-mode layered edition layer.
+/// Which files of a layered directory belong to this load step.
 #[derive(Debug, Clone)]
-struct HandwrittenSource {
-    path: PathBuf,
-    exclude: Option<PathBuf>,
+enum FileFilter {
+    All,
+    /// Hand-written overrides: everything except the edition's `srd/`
+    /// subdirectory and `srd-*` SRD overlays.
+    HandWritten {
+        exclude: PathBuf,
+    },
+    /// SRD-only overlay files (`srd-*`) outside `srd/`, e.g.
+    /// `2024/monsters/srd-spatial.yaml`. They stay in the SRD base.
+    SrdOverlayNames {
+        exclude: PathBuf,
+    },
 }
 
-/// Split a layered library for a FULL save: `common/` and `<edition>/srd/`
-/// stay in the SRD base; the rest of `<edition>/` is hand-written/overlay
-/// content and loads after the full packs. `*-srd` keeps using
-/// [`expand_layers`] unchanged.
-fn full_layers(path: &Path, edition: &str) -> (Vec<PathBuf>, Vec<HandwrittenSource>) {
+/// A source plus the filter that selects its files.
+#[derive(Debug, Clone)]
+struct FilteredSource {
+    path: PathBuf,
+    filter: FileFilter,
+}
+
+/// Split a layered library for a FULL save:
+/// - SRD base: `common/`, `<edition>/srd/`, and `<edition>/**/srd-*` overlays;
+/// - full packs;
+/// - the rest of `<edition>/` as hand-written overrides.
+///   `*-srd` keeps using [`expand_layers`] unchanged.
+fn full_layers(
+    path: &Path,
+    edition: &str,
+) -> (Vec<PathBuf>, Vec<FilteredSource>, Vec<FilteredSource>) {
     let mut srd = Vec::new();
     let common = path.join("common");
     if common.is_dir() {
         srd.push(common);
     }
+    let mut overlays = Vec::new();
     let mut hand = Vec::new();
     let edition_dir = path.join(edition);
     if edition_dir.is_dir() {
@@ -968,25 +1002,47 @@ fn full_layers(path: &Path, edition: &str) -> (Vec<PathBuf>, Vec<HandwrittenSour
         if srd_dir.is_dir() {
             srd.push(srd_dir.clone());
         }
-        hand.push(HandwrittenSource {
+        overlays.push(FilteredSource {
+            path: edition_dir.clone(),
+            filter: FileFilter::SrdOverlayNames {
+                exclude: srd_dir.clone(),
+            },
+        });
+        hand.push(FilteredSource {
             path: edition_dir,
-            exclude: Some(srd_dir),
+            filter: FileFilter::HandWritten { exclude: srd_dir },
         });
     }
-    (srd, hand)
+    (srd, overlays, hand)
 }
 
 fn load_source(
     source: &Path,
-    exclude: Option<&Path>,
+    filter: Option<&FileFilter>,
     ruleset: Ruleset,
     strict: bool,
     registry: &mut ContentRegistry,
 ) -> Result<()> {
     let mut files = Vec::new();
     collect_files(source, &mut files, ruleset.edition())?;
-    if let Some(exclude) = exclude {
-        files.retain(|file| !file.starts_with(exclude));
+    if let Some(filter) = filter {
+        files.retain(|file| match filter {
+            FileFilter::All => true,
+            FileFilter::HandWritten { exclude } => {
+                !file.starts_with(exclude)
+                    && !file
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.to_ascii_lowercase().starts_with("srd-"))
+            }
+            FileFilter::SrdOverlayNames { exclude } => {
+                !file.starts_with(exclude)
+                    && file
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.to_ascii_lowercase().starts_with("srd-"))
+            }
+        });
     }
     // Packs are the base layer; ordinary content overrides them by entity id.
     // `sort_by_key` is stable, so files keep their path order inside each group.

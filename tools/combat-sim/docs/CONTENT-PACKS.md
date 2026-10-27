@@ -127,11 +127,16 @@ Read parsing trims whitespace and ignores case. The legacy `2014` / `2024`
 values are read as `5e-srd` / `5.5e-srd`; `talkdnd` migrates them on the next
 manifest write.
 
-The loader order is: the edition's SRD layer (`common/` plus `2014/` or
-`2024/`, including SRD packs), then the unlocked full packs for a FULL save,
-then hand-written library content, adventures and characters. Full packs
-override the SRD layer by id; later hand-written/adventure/character content
-overrides a full pack. A full pack for the other edition is a hard error.
+The loader order for a FULL save is: the SRD base (`common/`, `<edition>/srd/`
+and SRD-only `srd-*` overlays such as `2024/monsters/srd-spatial.yaml`), then
+the unlocked full packs, then the rest of `<edition>/` (hand-written monsters,
+spells, conditions, ...), then hand-written library content, adventures and
+characters. Full packs override the SRD base by id; later hand-written,
+adventure and character content overrides a full pack. A full pack for the
+other edition is a hard error.
+
+For `*-srd`, the whole edition layer (`common/` plus `2014/` or `2024/`) keeps
+its existing order and full packs are ignored.
 
 `content check` is fail-closed: a FULL save with no matching loaded full pack
 fails with the missing book and the PDF/pack steps; a corrupt or wrongly
