@@ -33,10 +33,10 @@ Wizards of the Coast.
 
 The agent-orchestration files in this repository (the root development
 contract AGENTS.md, kit/orchestration.md, editions/, templates/, scripts/
-(orchestrator.py, validate_kit.py, check_drift.py, report_metrics.py,
-run_delivery_scenarios.py, architecture/, self_improvement/,
-update_agentorch/), tests/, and MANIFEST.json) are taken from AgentOrch
-1.6, MIT License, https://github.com/ctrlshiftaltdel/AgentOrch. The kit
+(orchestrator.py, validate_kit.py, check_drift.py, check_scope.py,
+report_metrics.py, run_delivery_scenarios.py, architecture/,
+self_improvement/, update_agentorch/), tests/, and MANIFEST.json) are taken
+from AgentOrch 1.6.3, MIT License, https://github.com/ctrlshiftaltdel/AgentOrch. The kit
 license text is in LICENSE.md. TalkDND's own code and original documents
 remain under LICENSE.
 

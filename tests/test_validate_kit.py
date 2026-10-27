@@ -3,13 +3,18 @@
 The field names / status enum are read back from kit/orchestration.md, so these
 tests fail if the authoritative definition and the validator drift apart.
 """
-import importlib.util, json, re, subprocess, sys, tempfile, unittest
+import importlib.util, json, re, shutil, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'validate_kit.py'
 spec = importlib.util.spec_from_file_location('validate_kit', SCRIPT)
 validate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(validate)
+
+DRIFT_SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'check_drift.py'
+drift_spec = importlib.util.spec_from_file_location('check_drift_for_validate_kit_tests', DRIFT_SCRIPT)
+drift = importlib.util.module_from_spec(drift_spec)
+drift_spec.loader.exec_module(drift)
 
 ROOT = SCRIPT.parents[1]
 HEAD = 'a' * 40
@@ -457,7 +462,7 @@ class ContractTemplateTests(unittest.TestCase):
             self.assertIn(column, text)
 
     @unittest.skipUnless((ROOT / 'docs' / 'README.md').is_file(),
-                         'upstream README is not vendored downstream')
+                         'docs/README.md is repository-only and absent inside a release package')
     def test_readme_and_acceptance_programme_point_at_the_templates(self):
         readme = (ROOT / 'docs' / 'README.md').read_text(encoding='utf-8')
         for rel in ('templates/design.md', 'templates/contract-decision-log.md',
@@ -547,7 +552,7 @@ class CapabilityAndMetricsTemplateTests(unittest.TestCase):
             self.assertTrue(any(expected in error for error in errors), errors)
 
     @unittest.skipUnless((ROOT / 'docs' / 'README.md').is_file(),
-                         'upstream README is not vendored downstream')
+                         'docs/README.md is repository-only and absent inside a release package')
     def test_readme_and_acceptance_point_at_the_new_artifacts(self):
         readme = (ROOT / 'docs' / 'README.md').read_text(encoding='utf-8')
         for rel in (self.CAPABILITY, self.METRICS, 'scripts/report_metrics.py'):
@@ -620,29 +625,36 @@ class DeliveryScenarioIntegrationTests(unittest.TestCase):
     def test_scenario_document_is_a_repository_only_requirement(self):
         # It cannot be in REQUIRED: build_release.py refuses any path with a
         # `docs` segment, so shipping it would fail the release self-check.
-        self.assertIn(self.SCENARIO_DOC, validate.UPSTREAM_DOCS)
+        self.assertIn(self.SCENARIO_DOC, validate.REQUIRED_DOCS)
         self.assertNotIn(self.SCENARIO_DOC, validate.REQUIRED)
 
     @unittest.skipUnless((ROOT / 'docs' / 'upgrade.md').is_file(),
-                         'upstream repository docs are not vendored downstream')
+                         'upstream document structure is only checked in an upstream checkout')
     def test_scenario_document_is_structurally_complete(self):
-        self.assertEqual(validate.required_doc_errors(ROOT, upstream=True), [])
+        self.assertEqual(validate.required_doc_errors(ROOT), [])
 
     def test_missing_scenario_document_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'docs').mkdir()
-            errors = validate.required_doc_errors(root, upstream=True)
+            # docs/upgrade.md is the upstream marker: without it the tree is a
+            # downstream project and only PROJECT.md / PLAN.md are required.
+            (root / validate.UPSTREAM_MARKER_DOC).write_text(
+                '# upgrade\n\n## 升级\n\nx\n', encoding='utf-8')
+            errors = validate.required_doc_errors(root)
         self.assertTrue(any(f'missing required document: {self.SCENARIO_DOC}' in e
                             for e in errors), errors)
 
     def test_document_without_a_required_section_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            (root / validate.UPSTREAM_MARKER_DOC).parent.mkdir(parents=True)
+            (root / validate.UPSTREAM_MARKER_DOC).write_text(
+                '# upgrade\n\n## 升级\n\nx\n', encoding='utf-8')
             target = root / self.SCENARIO_DOC
             target.parent.mkdir(parents=True)
             target.write_text('# Scenarios\n\n## 场景矩阵\n\nno other section\n', encoding='utf-8')
-            errors = validate.required_doc_errors(root, upstream=True)
+            errors = validate.required_doc_errors(root)
         self.assertTrue(any('is missing required section' in e for e in errors), errors)
 
     def test_document_check_is_skipped_inside_a_release_package(self):
@@ -650,7 +662,7 @@ class DeliveryScenarioIntegrationTests(unittest.TestCase):
             self.assertEqual(validate.required_doc_errors(Path(tmp)), [])
 
     @unittest.skipUnless((ROOT / 'docs' / 'README.md').is_file(),
-                         'upstream README is not vendored downstream')
+                         'docs/README.md is repository-only and absent inside a release package')
     def test_readme_and_acceptance_point_at_the_scenario_runner(self):
         readme = (ROOT / 'docs' / 'README.md').read_text(encoding='utf-8')
         acceptance = (ROOT / 'kit/orchestration.md').read_text(encoding='utf-8')
@@ -659,58 +671,240 @@ class DeliveryScenarioIntegrationTests(unittest.TestCase):
         self.assertIn(self.SCENARIO_DOC, readme)
 
 
-class DownstreamManifestModeTests(unittest.TestCase):
-    """A downstream project has docs/ but not the upstream docs/upgrade.md."""
+class TreeModeTests(unittest.TestCase):
+    """validate_kit has to work in all three trees it can be pointed at.
 
-    def test_downstream_tree_detection(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.assertFalse(validate.downstream_tree(root))
-            (root / 'docs').mkdir()
-            self.assertTrue(validate.downstream_tree(root))
-            (root / 'docs' / 'upgrade.md').write_text('# 升级\n', encoding='utf-8')
-            self.assertFalse(validate.downstream_tree(root))
+    - `package`: a pristine release package, no `docs/` at all.
+    - `downstream`: a project that unzipped the kit and filled in its own
+      `docs/PROJECT.md` + `docs/PLAN.md`; it has `docs/` but no
+      `docs/upgrade.md` (the upstream marker).
+    - `upstream`: this repository, where `docs/upgrade.md` exists.
 
-    def test_project_docs_are_checked_downstream(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / 'docs').mkdir()
-            errors = validate.required_doc_errors(root)
-            self.assertTrue(any('docs/PROJECT.md' in e for e in errors), errors)
-            self.assertTrue(any('docs/PLAN.md' in e for e in errors), errors)
-            self.assertFalse(any('docs/upgrade.md' in e for e in errors), errors)
+    Downstream mode drops exactly one thing: the manifest *hash* comparison.
+    Structure, categories, path legality, the REQUIRED set and missing files stay
+    errors in every mode, and `check_drift.py` keeps reporting the byte drift.
+    """
 
-    def test_upstream_docs_are_checked_in_the_upstream_tree(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / 'docs').mkdir()
-            (root / 'docs' / 'upgrade.md').write_text('# 升级\n', encoding='utf-8')
-            errors = validate.required_doc_errors(root)
-            self.assertTrue(any('docs/README.md' in e for e in errors), errors)
-            self.assertTrue(any('docs/testing/delivery-regression-scenarios.md' in e
-                                for e in errors), errors)
+    PROJECT_DOC = '# docs/PROJECT.md\n\n- `edition`：`local`\n'
+    PLAN_DOC = '# PLAN\n\n## 设计目标\n\nx\n'
+    UPGRADE_DOC = '# upgrade\n\n## 升级\n\nx\n'
+    SUITE = 'Agent-Orchestration Starter Kit'
+    FORMAT = '1.6'
 
-    def _manifest_root(self, tmp):
-        root = Path(tmp)
-        manifest = ROOT / validate.MANIFEST_DOC
-        self.assertTrue(manifest.is_file(), 'the 1.6 baseline manifest is missing')
-        (root / validate.MANIFEST_DOC).write_bytes(manifest.read_bytes())
-        (root / 'AGENTS.md').write_text('locally customized\n', encoding='utf-8')
+    # --- fixture builders ---------------------------------------------------
+    def downstream_docs(self, root):
+        (root / 'docs').mkdir(parents=True, exist_ok=True)
+        (root / 'docs' / 'PROJECT.md').write_text(self.PROJECT_DOC, encoding='utf-8')
+        (root / 'docs' / 'PLAN.md').write_text(self.PLAN_DOC, encoding='utf-8')
+
+    def kit_tree(self, root, docs='downstream'):
+        """Every REQUIRED file, so the manifest checks can be complete.
+
+        Only the shipped file set is copied (no docs/, release/ or .git), which
+        is what a release package contains; `docs` then adds the tree-specific
+        documents.
+        """
+        for rel in validate.REQUIRED:
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / rel, target)
+        if docs == 'downstream':
+            self.downstream_docs(root)
+        elif docs == 'upstream':
+            (root / 'docs').mkdir(parents=True, exist_ok=True)
+            (root / validate.UPSTREAM_MARKER_DOC).write_text(self.UPGRADE_DOC, encoding='utf-8')
         return root
 
-    def test_manifest_hashes_are_strict_in_a_release_package(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = self._manifest_root(tmp)
-            errors = validate.check_release_manifest(root)
-            self.assertTrue(any('sha256 does not match the file: AGENTS.md' in e
-                                for e in errors), errors)
+    def emit_manifest(self, root, paths=None):
+        paths = list(validate.REQUIRED) if paths is None else list(paths)
+        packed = {rel: (root / rel).read_bytes() for rel in paths}
+        manifest = drift.build_manifest(packed, self.SUITE, self.FORMAT)
+        (root / validate.MANIFEST_DOC).write_text(
+            drift.dumps_manifest(manifest), encoding='utf-8')
+        return manifest
 
-    def test_manifest_hashes_are_diagnostic_downstream(self):
+    def read_manifest(self, root):
+        return json.loads((root / validate.MANIFEST_DOC).read_text(encoding='utf-8'))
+
+    def write_manifest(self, root, manifest):
+        (root / validate.MANIFEST_DOC).write_text(
+            drift.dumps_manifest(manifest), encoding='utf-8')
+
+    # --- document set -------------------------------------------------------
+    def test_document_sets_partition_the_union(self):
+        self.assertEqual(set(validate.REQUIRED_DOCS),
+                         set(validate.PROJECT_DOCS) | set(validate.UPSTREAM_DOCS))
+        self.assertEqual(set(validate.PROJECT_DOCS) & set(validate.UPSTREAM_DOCS), set())
+        self.assertEqual(set(validate.PROJECT_DOCS),
+                         {'docs/PROJECT.md', 'docs/PLAN.md'})
+        self.assertIn(validate.UPSTREAM_MARKER_DOC, validate.UPSTREAM_DOCS)
+
+    def test_pristine_package_skips_repository_documents(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = self._manifest_root(tmp)
+            root = Path(tmp)
+            self.assertEqual(validate.tree_mode(root), validate.TREE_PACKAGE)
+            self.assertEqual(validate.required_doc_errors(root), [])
+
+    def test_downstream_tree_only_requires_project_and_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.downstream_docs(root)
+            self.assertEqual(validate.tree_mode(root), validate.TREE_DOWNSTREAM)
+            self.assertEqual(validate.required_doc_errors(root), [])
+
+    def test_downstream_tree_reports_a_missing_project_or_plan(self):
+        for rel in ('docs/PROJECT.md', 'docs/PLAN.md'):
+            with self.subTest(missing=rel), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.downstream_docs(root)
+                (root / rel).unlink()
+                errors = validate.required_doc_errors(root)
+                self.assertIn(f'missing required document: {rel}', errors)
+
+    def test_downstream_plan_still_needs_the_design_goal_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.downstream_docs(root)
+            (root / 'docs' / 'PLAN.md').write_text('# PLAN\n\nno goals here\n', encoding='utf-8')
+            errors = validate.required_doc_errors(root)
+        self.assertIn('docs/PLAN.md is missing required section: 设计目标', errors)
+
+    def test_upstream_tree_requires_every_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
             (root / 'docs').mkdir()
-            errors = validate.check_release_manifest(root)
+            (root / validate.UPSTREAM_MARKER_DOC).write_text(self.UPGRADE_DOC, encoding='utf-8')
+            self.assertEqual(validate.tree_mode(root), validate.TREE_UPSTREAM)
+            errors = validate.required_doc_errors(root)
+        for rel in validate.UPSTREAM_DOCS:
+            if rel == validate.UPSTREAM_MARKER_DOC:
+                continue
+            self.assertTrue(any(f'missing required document: {rel}' in e for e in errors), errors)
+
+    def test_downstream_tree_passes_the_whole_validator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.kit_tree(Path(tmp))
+            self.emit_manifest(root)
+            errors, _ = validate.validate_kit(root)
+        self.assertEqual(errors, [])
+
+    # --- manifest strictness ------------------------------------------------
+    def test_downstream_manifest_ignores_local_byte_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.kit_tree(Path(tmp))
+            self.emit_manifest(root)
+            (root / 'AGENTS.md').write_text('# locally edited contract\n', encoding='utf-8')
+            self.assertEqual(validate.check_release_manifest(root), [])
+            # AC-3 asks for the *whole* validator, not just the manifest check:
+            # a downstream project that edits a core file must still be able to
+            # run validate_kit end to end.
+            errors, _ = validate.validate_kit(root)
             self.assertEqual(errors, [])
+            # The drift tool is still the place that reports the local edit.
+            manifest = self.read_manifest(root)
+            self.assertTrue(any('sha256 does not match' in e
+                                for e in drift.validate_manifest(root, manifest)))
+            report = drift.diagnose(root)
+        self.assertEqual(report['exit_code'], 2)
+        self.assertIn('AGENTS.md', [item['path'] for item in report['findings']['modified']])
+
+    def test_pristine_package_manifest_still_checks_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.kit_tree(Path(tmp), docs='package')
+            self.emit_manifest(root)
+            (root / 'AGENTS.md').write_text('# tampered\n', encoding='utf-8')
+            errors = validate.check_release_manifest(root)
+        self.assertTrue(any('sha256 does not match' in e and 'AGENTS.md' in e
+                            for e in errors), errors)
+
+    def test_upstream_manifest_still_checks_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.kit_tree(Path(tmp), docs='upstream')
+            self.emit_manifest(root)
+            (root / 'AGENTS.md').write_text('# tampered\n', encoding='utf-8')
+            errors = validate.check_release_manifest(root)
+        self.assertTrue(any('sha256 does not match' in e and 'AGENTS.md' in e
+                            for e in errors), errors)
+
+    def test_downstream_manifest_still_rejects_a_broken_contract(self):
+        cases = {
+            'missing entry': lambda root, manifest: self.write_manifest(
+                root, {**manifest, 'files': manifest['files'][1:]}),
+            'extra entry': lambda root, manifest: self.write_manifest(
+                root, drift.build_manifest(
+                    {rel: (root / rel).read_bytes()
+                     for rel in list(validate.REQUIRED) + ['docs/PROJECT.md']},
+                    self.SUITE, self.FORMAT)),
+            'wrong category': lambda root, manifest: self.write_manifest(
+                root, {**manifest, 'files': [
+                    {**manifest['files'][0], 'category': 'template'}] + manifest['files'][1:]}),
+            'broken structure': lambda root, manifest: self.write_manifest(
+                root, {**manifest, 'generated_at': '2026-10-27T00:00:00Z'}),
+        }
+        needles = {
+            'missing entry': 'does not list required file',
+            'extra entry': 'lists a file that is not in REQUIRED',
+            'wrong category': 'does not match the single classification rule',
+            'broken structure': 'must not carry',
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                root = self.kit_tree(Path(tmp))
+                manifest = self.emit_manifest(root)
+                mutate(root, manifest)
+                errors = validate.check_release_manifest(root)
+                self.assertTrue(any(needles[name] in e for e in errors), errors)
+
+    def test_downstream_manifest_reports_a_listed_file_missing_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.kit_tree(Path(tmp))
+            self.emit_manifest(root)
+            (root / 'editions' / 'local' / 'master.md').unlink()
+            errors = validate.check_release_manifest(root)
+        self.assertTrue(any('missing on disk' in e and 'editions/local/master.md' in e
+                            for e in errors), errors)
+
+
+class ShippedPathResidueTests(unittest.TestCase):
+    """Every path the kit tells an Agent to read must exist with that exact case.
+
+    Linux and macOS are case-sensitive, so a `MASTER.md` under `editions/<edition>/`
+    is a dead end even though `master.md` sits right there. Historical prose (the
+    "原 MASTER.md" headings, `docs/upgrade.md`, `release/README.md`) may keep the
+    old names because it describes the past; shipped files may not.
+    """
+
+    # Exact bad paths, not a loose `MASTER.md` substring: the historical headings
+    # and the "原 START-MASTER-*" section titles are legitimate. The needles are
+    # assembled from parts so this guard's own source does not contain them —
+    # the guard ships in the package and therefore scans itself too.
+    BAD_PATHS = (
+        'editions/<edition>/' + 'MASTER.md',
+        'editions/<edition>/' + 'START-MASTER-',
+        'templates/' + 'PLAN.md',
+        'VERSION' + '.txt',
+        'AGENT-' + 'ORCHESTRATION.md',
+    )
+
+    def test_shipped_files_do_not_point_at_renamed_paths(self):
+        offenders = []
+        for rel in validate.REQUIRED:
+            path = ROOT / rel
+            if not path.is_file():
+                continue
+            raw = path.read_bytes()
+            if b'\x00' in raw:
+                continue
+            text = raw.decode('utf-8', errors='replace')
+            for bad in self.BAD_PATHS:
+                if bad in text:
+                    offenders.append(f'{rel}: {bad}')
+        self.assertEqual(offenders, [])
+
+    def test_the_guard_would_catch_a_reintroduced_path(self):
+        """A negative control: the scan is not vacuous."""
+        sample = 'read `editions/<edition>/' + 'MASTER.md`\n'
+        self.assertTrue(any(bad in sample for bad in self.BAD_PATHS))
 
 
 class MarkdownLinkScanTests(unittest.TestCase):

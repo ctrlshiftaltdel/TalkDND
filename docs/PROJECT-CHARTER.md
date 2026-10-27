@@ -77,7 +77,7 @@ Project programs, tools, and scripts are Rust.
 
 Accepted exceptions, and no others:
 
-1. AgentOrch Python kit under `scripts/` and `tests/`, maintained as part of this project: `orchestrator.py`, `validate_kit.py`, `check_drift.py`, `report_metrics.py`, `run_delivery_scenarios.py`, `scripts/architecture/`, `scripts/self_improvement/`, `scripts/update_agentorch/`, and their tests. They use the Python standard library only and run through `uv run --no-project`.
+1. AgentOrch Python kit under `scripts/` and `tests/`, maintained as part of this project: `orchestrator.py`, `validate_kit.py`, `check_drift.py`, `check_scope.py`, `report_metrics.py`, `run_delivery_scenarios.py`, `scripts/architecture/`, `scripts/self_improvement/`, `scripts/update_agentorch/`, and their tests. They use the Python standard library only and run through `uv run --no-project`.
 2. CI YAML under `.github/workflows/`, including the shell steps those workflow files contain.
 3. `LetsPlay/tools/pdf2md/`, the Python PDF → Markdown extractor needed for play (decision "pdf2md" below).
 
@@ -161,6 +161,10 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-27 — AgentOrch 1.6.3 update and HD-10 resolution (TASK-0109)
+
+The owner asked to update AgentOrch. The 1.6.3 release (`AgentOrch-1.6.3.zip`, SHA256 `dcce5b242997ccac44ee1dea225ca13c2e9af6583dc6bca3d5bdc35acb046885`, 92 `REQUIRED` + `MANIFEST.json`) includes the upstream fixes for the downstream docs/manifest/path issues (#85). The update entry reported `STOPPED_CONFLICT` on five files; the owner approved the recommended `HD-10` resolution: accept upstream for `kit/orchestration.md`, `scripts/check_drift.py`, and the downstream mode in `scripts/validate_kit.py`; manually merge `AGENTS.md` (TalkDND section + upstream #102 reading discipline); keep only the local-book/generated-output skip in `scripts/validate_kit.py` and its regression test. Local drift drops from six to three files (`AGENTS.md`, `scripts/validate_kit.py`, `tests/test_validate_kit.py`). New `scripts/check_scope.py` and `tests/test_check_scope.py` ship with 1.6.3. No product code, rules data, save schema, crate version or player-visible behavior changes. The 1.6.3 `MANIFEST.json` is the new baseline; it is not regenerated from this tree.
 
 ### 2026-10-27 — Validator ignores local books and caches (TASK-0101)
 
@@ -458,6 +462,7 @@ Alternative considered: rely on DM discipline alone. Rejected: the new tools mak
 | 2026-10-23 | v0.9.0 party companions live in `Characters/` next to the PC, told apart by `controller: player|dm` in `sheets/<id>.yaml`; `talkdnd companion`; `NPCs/` is for story NPCs only; schema 6 migration. |
 | 2026-10-27 | AgentOrch Format 1.1 → 1.6 upgrade (TASK-0100): `kit/orchestration.md`, `docs/PROJECT.md`, `docs/PLAN.md`, 1.6 scripts/tests, official `MANIFEST.json` baseline, downstream validator mode; no product behavior change. |
 | 2026-10-27 | TASK-0101 post-merge fix: validator skips local player books/saves, pdf2md output and build/cache dirs; tracked doc links still checked. |
+| 2026-10-27 | TASK-0109: AgentOrch 1.6.3; HD-10 resolved by accepting upstream fixes and keeping only the local-book validator skip; local drift 6 → 3. |
 | 2026-10-27 | TASK-0099: SRD 5.1 / 5.2.1 full content packs ship with the program (CC-BY-4.0, generated from 5e-database); players no longer need to add the SRD PDFs. PHB/DMG/MM are still not shipped. |
 | 2026-10-27 | Owner confirmed the licence to distribute full PHB/DMG/MM content (legal review). Full packs ship from v1.2 but stay locked until the player supplies the matching PDF; no hash check, book identification is by content. If the licence scope changes, the full packs are withdrawn or replaced. Player-visible rulesets are 5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD (TASK-0107). |
 

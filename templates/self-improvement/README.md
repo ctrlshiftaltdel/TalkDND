@@ -116,6 +116,16 @@ start it.
    "no new candidates". A real scan needs `gh` auth and network; without it report
    `BLOCKED` / `NOT_RUN`.
 
+   `--max-pages` caps the pages read per source **and per evidence kind**
+   (default `DEFAULT_MAX_PAGES`). It bounds how much of the window is actually
+   read; it does not change the `lookback_days` window semantics — the registry
+   still decides which range is asked for. When the last page read is still full
+   at the cap, that source is reported `PARTIAL` (`truncated` names the kinds and
+   the notes give the reason `page_limit`) and the cursor is not advanced. A
+   first scan over an active repository is therefore **almost always** `PARTIAL`;
+   it is not `OK` and not a complete history. Read more by raising the cap, or
+   rely on the later incremental scans once an `OK` watermark exists.
+
 4. Planning and the loop report live in `scripts/self_improvement/planning.py` and
    `scripts/self_improvement/orchestration.py`. A proposal is `READY` only for an
    eligible lesson, a complete task packet, verified dependencies and no high-risk

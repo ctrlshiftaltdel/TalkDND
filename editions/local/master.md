@@ -15,6 +15,8 @@
 - 项目规模较小、任务数量有限，人工清理分支和 Worktree 可接受。
 - 只需要本地 Git 与 Worktree，不需要公开可核验的协作记录。
 
+**成本口径**：本工具不采集 token 与耗时；M1–M7 的定义与缺失处理只在随包的 [templates/metrics.md](../../templates/metrics.md) 定义（仓库检出中的 `docs/metrics.md` 是落地说明，不随发行包）。`local` 上路径冲突与资源冲突可采集（`task dispatch` 拒绝时写入 `CONFLICT_RECORDED`），检查 / 验收 / 回归仍未采集；旧任务库没有 path 事件时，该部分按未采集（`unknown` / `partial`）处理，不补 `0`。
+
 ## 任务载体
 
 - `.orchestration/state.sqlite3` 是唯一任务状态源，由 `scripts/orchestrator.py` 读写。
@@ -40,7 +42,7 @@ python scripts/orchestrator.py task status TASK-0001 REVIEW_READY --head-sha <sh
 python scripts/orchestrator.py backup
 ```
 
-`python` 指代当前环境的 Python 3 解释器；本套件不引入第三方依赖。完整流程见本目录 [MASTER.md](master.md) 与 [START-EXECUTION.md](execution.md)。
+`python` 指代当前环境的 Python 3 解释器；本套件不引入第三方依赖。`--paths`、`--depends`、`--acceptance`、`--resources` 可重复出现，也可一次给多个值，二者都会合并保留（`--acceptance` 保序；`--paths` / `--depends` 排序去重）。完整流程见本目录 [master.md](master.md) 与 [execution.md](execution.md)。
 
 ## 证据
 
@@ -66,7 +68,7 @@ python scripts/orchestrator.py backup
 
 ## 每次接手
 
-1. 阅读 `AGENTS.md`、`kit/orchestration.md`、`docs/PROJECT.md`，确认 `edition` 为 `local`。
+1. 阅读 `AGENTS.md`、`docs/PROJECT.md`、`kit/orchestration.md` 第一、二部分与 `editions/local/master.md`，确认 `edition` 为 `local`；`kit/orchestration.md` 第三部分按需读（必读集合与触发条件的唯一权威见 `AGENTS.md` 的「阅读口径」段）。
 2. 运行：
    ```bash
    python scripts/orchestrator.py task list
