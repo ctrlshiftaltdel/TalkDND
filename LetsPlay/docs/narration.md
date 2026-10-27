@@ -30,7 +30,7 @@
 
 ## 叙事风格与关键记忆（`settings style`、`memory`）
 
-每档存档有一套 DM 风格设置（`save-meta.yaml` 的 `settings.style`，schema 8），用 `$T settings style show` 查看。各字段含义与可选值（加粗是默认值）：
+每档存档有一套 DM 风格设置（`save-meta.yaml` 的 `settings.style`，schema 8+），用 `$T settings style show` 查看。各字段含义与可选值（加粗是默认值）：
 
 | 字段 | 含义 | 可选值 |
 |------|------|--------|
@@ -41,7 +41,7 @@
 | options | 每幕结尾建议选项 | **2-4** / none（玩家明确表示自己来时才关） |
 
 - **只有玩家明确反馈才改**：玩家说「太啰嗦了」「再详细点」「选项少给点」时才改，一次一项：`$T settings style set <字段> <值> --reason "<玩家的话>"`。`--reason` 必填，写玩家为什么要求改，并记入会话日志。**不要从气氛或剧情自动推断**，也不要替玩家预设。
-- 旧存档第一次使用时自动迁移到 schema 8，风格字段按默认值补齐（迁移前整档备份，见 `Saves/_backups/`）。
+- 旧存档第一次使用时自动迁移到当前 schema（9），风格字段按默认值补齐（迁移前整档备份，见 `Saves/_backups/`）。
 - `npc_voice: distinct` 时按上面「同伴与演绎」执行：每个同伴声音可分辨；`neutral` 时同伴台词平实、少口音化修饰，但仍按角色卡性格说话。
 
 **关键记忆（memory）**是跨会话长期有效的固定事实与偏好。玩家明确说「记住这个」时录入：`$T memory add "<事实>" --source player-confirmed`（可加 `--tag npc:<id>`）；`$T memory list` 只列玩家确认条目，`--all` 是 DM 视图；`$T memory remove <id>` 删除。玩家确认的条目会出现在 `$T start` 摘要的「关键记忆」节里。
