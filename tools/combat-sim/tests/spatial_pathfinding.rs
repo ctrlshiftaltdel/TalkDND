@@ -112,6 +112,10 @@ fn reached(plan: &PathPlan) -> &MovementPath {
     }
 }
 
+fn reached_owned(plan: &PathPlan) -> MovementPath {
+    reached(plan).clone()
+}
+
 fn over_budget(plan: &PathPlan) -> &MovementPath {
     match &plan.outcome {
         PlanOutcome::OverBudget(path) => path,
@@ -170,7 +174,14 @@ fn ac1_dijkstra_reachable_set_has_costs_and_reconstructible_paths() {
 
     let small = planner.reachable(5).expect("budget");
     assert_eq!(small.entries.len(), 9, "start plus eight neighbours");
-    assert_eq!(small.entries.iter().filter(|entry| entry.cost_ft == 5).count(), 8);
+    assert_eq!(
+        small
+            .entries
+            .iter()
+            .filter(|entry| entry.cost_ft == 5)
+            .count(),
+        8
+    );
 
     for entry in &reach.entries {
         let path = reach.path_to(&entry.pose).expect("entry path");
@@ -237,7 +248,7 @@ fn ac2_astar_is_admissible_and_matches_dijkstra() {
     };
     assert!(astar_heuristic_is_admissible(&five_ten_five));
     let planner = MovementPlanner::new(&map, &five_ten_five, &mover);
-    let path = reached(&planner.path(&goal, 100).expect("plan"));
+    let path = reached_owned(&planner.path(&goal, 100).expect("plan"));
     assert_eq!(path.total_cost_ft, 60);
     let reach = planner.reachable(60).expect("budget");
     for entry in &reach.entries {
@@ -252,9 +263,29 @@ fn ac2_astar_is_admissible_and_matches_dijkstra() {
     };
     assert!(astar_heuristic_is_admissible(&manhattan));
     let planner = MovementPlanner::new(&map, &manhattan, &mover);
-    let path = reached(&planner.path(&goal, 100).expect("plan"));
+    let path = reached_owned(&planner.path(&goal, 100).expect("plan"));
     assert_eq!(path.total_cost_ft, 80);
     assert_eq!(movement_heuristic(&mover.pose, &goal, &manhattan), 80);
+
+    // An obstacle detour must keep A* optimal against Dijkstra.
+    let maze = map_from(7, 7, |x, y| {
+        if y == 3 && x != 6 {
+            MovementCell::wall()
+        } else {
+            MovementCell::open()
+        }
+    });
+    let planner = MovementPlanner::new(&maze, &profile, &mover);
+    let maze_goal = pose(6, 6, 0, 1);
+    let auto = planner.path(&maze_goal, 100).expect("plan");
+    let dijkstra = planner
+        .path_with_algorithm(&maze_goal, 100, PathAlgorithm::Dijkstra)
+        .expect("plan");
+    assert!(auto.is_reached());
+    assert_eq!(
+        reached(&auto).total_cost_ft,
+        reached(&dijkstra).total_cost_ft
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +341,22 @@ fn ac3_diagonal_costs_corners_and_five_ten_five_are_defined() {
         20,
         "two diagonals + one straight = 15 + 5"
     );
+
+    // A multi-cell footprint sweeps the intermediate anchors too: a wall that
+    // is in neither the source nor the destination footprint still blocks.
+    let swept = map_from(4, 4, |x, y| {
+        if (x, y) == (2, 0) {
+            MovementCell::wall()
+        } else {
+            MovementCell::open()
+        }
+    });
+    let large = body("large", 0, 0, 0, Size::Large);
+    let planner = MovementPlanner::new(&swept, &profile, &large);
+    assert_eq!(
+        planner.step(&pose(0, 0, 0, 2), &pose(1, 1, 0, 2)).blocked,
+        Some(MoveBlock::Wall)
+    );
 }
 
 #[test]
@@ -338,18 +385,14 @@ fn ac3_walls_doors_bounds_height_and_modes_have_structured_edges() {
     let map = open_map(3, 1);
     let planner = MovementPlanner::new(&map, &profile, &mover);
     assert_eq!(
-        planner
-            .step(&pose(2, 0, 0, 1), &pose(3, 0, 0, 1))
-            .blocked,
+        planner.step(&pose(2, 0, 0, 1), &pose(3, 0, 0, 1)).blocked,
         Some(MoveBlock::OutOfBounds)
     );
     let map = open_map(3, 2);
     let large = body("large", 1, 0, 0, Size::Large);
     let planner = MovementPlanner::new(&map, &profile, &large);
     assert_eq!(
-        planner
-            .step(&pose(1, 0, 0, 2), &pose(2, 0, 0, 2))
-            .blocked,
+        planner.step(&pose(1, 0, 0, 2), &pose(2, 0, 0, 2)).blocked,
         Some(MoveBlock::OutOfBounds)
     );
 
@@ -381,9 +424,7 @@ fn ac3_walls_doors_bounds_height_and_modes_have_structured_edges() {
     });
     let planner = MovementPlanner::new(&steep, &profile, &mover);
     assert_eq!(
-        planner
-            .step(&pose(0, 0, 0, 1), &pose(1, 0, 10, 1))
-            .blocked,
+        planner.step(&pose(0, 0, 0, 1), &pose(1, 0, 10, 1)).blocked,
         Some(MoveBlock::TooSteep)
     );
     let drop_map = map_from(2, 1, |x, _| {
@@ -395,10 +436,23 @@ fn ac3_walls_doors_bounds_height_and_modes_have_structured_edges() {
     });
     let planner = MovementPlanner::new(&drop_map, &profile, &mover);
     assert_eq!(
-        planner
-            .step(&pose(0, 0, 10, 1), &pose(1, 0, 0, 1))
-            .blocked,
+        planner.step(&pose(0, 0, 10, 1), &pose(1, 0, 0, 1)).blocked,
         Some(MoveBlock::Drop)
+    );
+
+    // A footprint that lands on two floor levels is not one placement.
+    let seam = map_from(3, 2, |x, _| {
+        if x == 2 {
+            MovementCell::open().with_elevation(5)
+        } else {
+            MovementCell::open()
+        }
+    });
+    let large = body("large", 0, 0, 0, Size::Large);
+    let planner = MovementPlanner::new(&seam, &profile, &large);
+    assert_eq!(
+        planner.step(&pose(0, 0, 0, 2), &pose(1, 0, 0, 2)).blocked,
+        Some(MoveBlock::Height)
     );
 
     let water_map = map_from(2, 1, |x, _| {
@@ -410,7 +464,10 @@ fn ac3_walls_doors_bounds_height_and_modes_have_structured_edges() {
     });
     let planner = MovementPlanner::new(&water_map, &profile, &mover);
     let swim = planner.step(&pose(0, 0, 0, 1), &pose(1, 0, 0, 1));
-    assert_eq!(swim.edge.as_ref().expect("swim allowed").mode, MoveMode::Swim);
+    assert_eq!(
+        swim.edge.as_ref().expect("swim allowed").mode,
+        MoveMode::Swim
+    );
     assert_eq!(swim.edge.as_ref().expect("swim allowed").cost_ft, 10);
 
     let planner = MovementPlanner::new(&water_map, &profile, &mover)
@@ -438,7 +495,7 @@ fn ac3_mode_switches_are_per_edge_and_terrain_flags_are_reported() {
         _ => MovementCell::water().with_elevation(5),
     });
     let planner = MovementPlanner::new(&map, &profile, &mover);
-    let path = reached(&planner.path(&pose(4, 0, 5, 1), 100).expect("plan"));
+    let path = reached_owned(&planner.path(&pose(4, 0, 5, 1), 100).expect("plan"));
     assert_eq!(path.total_cost_ft, 35);
     assert_eq!(path.steps[0].mode, MoveMode::Walk);
     assert!(path.steps[0].difficult);
@@ -467,39 +524,45 @@ fn ac4_full_footprint_and_squeeze_follow_the_edition_profile() {
     });
     let goal = pose(4, 1, 0, 2);
 
-    let p14 = MovementPlanner::new(&squeeze_map, &p2014(), &mover);
+    let p14_profile = p2014();
+    let p14 = MovementPlanner::new(&squeeze_map, &p14_profile, &mover);
     assert!(
         p14.can_end_at(&mover.pose).allowed,
         "a squeezed start is legal"
     );
-    let path = reached(&p14.path(&goal, 100).expect("plan"));
+    let path = reached_owned(&p14.path(&goal, 100).expect("plan"));
     assert_eq!(path.steps.len(), 4);
     assert!(path.steps.iter().all(|step| step.squeezed));
     assert!(path.steps.iter().all(|step| step.cost_ft == 10));
-    assert!(path.steps.iter().all(|step| step
-        .triggers
-        .contains(&MoveTrigger::Squeeze {
+    assert!(path
+        .steps
+        .iter()
+        .all(|step| step.triggers.contains(&MoveTrigger::Squeeze {
             at: step.to.cell,
             disadvantage: true,
         })));
 
-    let p24 = MovementPlanner::new(&squeeze_map, &p2024(), &mover);
-    let path = reached(&p24.path(&goal, 100).expect("plan"));
+    let p24_profile = p2024();
+    let p24 = MovementPlanner::new(&squeeze_map, &p24_profile, &mover);
+    let path = reached_owned(&p24.path(&goal, 100).expect("plan"));
     assert!(path.steps.iter().all(|step| step.squeezed));
     assert!(path.steps.iter().all(|step| step.cost_ft == 10));
-    assert!(path.steps.iter().all(|step| step
-        .triggers
+    assert!(path
+        .steps
         .iter()
-        .any(|trigger| matches!(trigger, MoveTrigger::Squeeze { disadvantage: false, .. }))));
+        .all(|step| step.triggers.iter().any(|trigger| matches!(
+            trigger,
+            MoveTrigger::Squeeze {
+                disadvantage: false,
+                ..
+            }
+        ))));
 
-    let forbid = MovementPlanner::new(
-        &squeeze_map,
-        &SpatialProfile {
-            squeeze: Squeeze::Forbid,
-            ..p2024()
-        },
-        &mover,
-    );
+    let forbid_profile = SpatialProfile {
+        squeeze: Squeeze::Forbid,
+        ..p2024()
+    };
+    let forbid = MovementPlanner::new(&squeeze_map, &forbid_profile, &mover);
     assert_eq!(
         forbid.can_end_at(&mover.pose).reason,
         Some(MoveBlock::TooNarrow)
@@ -510,8 +573,9 @@ fn ac4_full_footprint_and_squeeze_follow_the_edition_profile() {
     );
 
     let wide = map_from(6, 3, |_, _| MovementCell::open());
-    let planner = MovementPlanner::new(&wide, &p2024(), &mover);
-    let path = reached(&planner.path(&goal, 100).expect("plan"));
+    let wide_profile = p2024();
+    let planner = MovementPlanner::new(&wide, &wide_profile, &mover);
+    let path = reached_owned(&planner.path(&goal, 100).expect("plan"));
     assert_eq!(path.total_cost_ft, 20);
     assert!(path.steps.iter().all(|step| !step.squeezed));
 }
@@ -520,15 +584,14 @@ fn ac4_full_footprint_and_squeeze_follow_the_edition_profile() {
 fn ac4_squeeze_cannot_pass_through_impassable_cells_or_diagonally() {
     let mover = body("large", 0, 1, 0, Size::Large);
     let map = map_from(6, 3, |x, y| {
-        if y != 1 {
-            MovementCell::wall()
-        } else if x == 3 {
+        if y != 1 || x == 3 {
             MovementCell::wall()
         } else {
             MovementCell::open()
         }
     });
-    let planner = MovementPlanner::new(&map, &p2014(), &mover);
+    let profile = p2014();
+    let planner = MovementPlanner::new(&map, &profile, &mover);
     let (reason, blockers) = unreachable(&planner.path(&pose(4, 1, 0, 2), 100).expect("plan"));
     assert_eq!(reason, MoveBlock::Wall);
     assert!(
@@ -549,10 +612,13 @@ fn ac4_squeeze_cannot_pass_through_impassable_cells_or_diagonally() {
             MovementCell::wall()
         }
     });
-    let planner = MovementPlanner::new(&two_rows, &p2014(), &huge);
+    let planner = MovementPlanner::new(&two_rows, &profile, &huge);
     assert!(planner.can_end_at(&huge.pose).allowed);
-    let path = reached(&planner.path(&pose(3, 1, 0, 3), 100).expect("plan"));
-    assert!(path.steps.iter().all(|step| step.squeezed && step.cost_ft == 10));
+    let path = reached_owned(&planner.path(&pose(3, 1, 0, 3), 100).expect("plan"));
+    assert!(path
+        .steps
+        .iter()
+        .all(|step| step.squeezed && step.cost_ft == 10));
 
     let one_row = map_from(6, 3, |_, y| {
         if y == 1 {
@@ -561,7 +627,7 @@ fn ac4_squeeze_cannot_pass_through_impassable_cells_or_diagonally() {
             MovementCell::wall()
         }
     });
-    let planner = MovementPlanner::new(&one_row, &p2014(), &huge);
+    let planner = MovementPlanner::new(&one_row, &profile, &huge);
     assert!(!planner.can_end_at(&huge.pose).allowed);
 }
 
@@ -582,11 +648,12 @@ fn ac5_paths_report_cost_mode_height_triggers_and_failures() {
         (2, 0) => MovementCell::open(),
         (3, 0) => MovementCell::open().with_elevation(5),
         (4, 0) => MovementCell::water().with_elevation(5),
-        (0, 1) | (1, 1) | (2, 1) | (3, 1) | (4, 1) => MovementCell::open(),
+        (0, 1) => MovementCell::open(),
+        (1, 1) | (2, 1) | (3, 1) | (4, 1) => MovementCell::wall(),
         _ => MovementCell::wall(),
     });
     let planner = MovementPlanner::new(&map, &profile, &mover).with_observers(&observers);
-    let path = reached(&planner.path(&pose(4, 0, 5, 1), 100).expect("plan"));
+    let path = reached_owned(&planner.path(&pose(4, 0, 5, 1), 100).expect("plan"));
     assert_eq!(path.total_cost_ft, 35);
     assert_eq!(path.steps.len(), 4);
     assert!(path.steps[0]
@@ -623,19 +690,36 @@ fn ac5_paths_report_cost_mode_height_triggers_and_failures() {
         "{blockers:?}"
     );
 
-    let check = walled_planner.verify_path(path, 100);
+    let check = {
+        let blocker = TraversalCreature::hostile(body("blocker", 2, 0, 0, Size::Medium));
+        let blockers = [blocker];
+        let blocked_planner =
+            MovementPlanner::new(&map, &profile, &mover).with_occupants(&blockers);
+        blocked_planner.verify_path(&path, 100)
+    };
     match check.verdict {
         PathVerdict::Blocked {
-            step_index,
-            reason,
-            ..
+            step_index, reason, ..
         } => {
             assert_eq!(step_index, 1);
-            assert_eq!(reason, MoveBlock::Wall);
+            assert_eq!(reason, MoveBlock::Occupied);
         }
         other => panic!("expected a blocked step, got {other:?}"),
     }
     assert_eq!(check.checked_steps, 2);
+
+    // Re-verification is bound to the mover's current pose.
+    let elsewhere = body("elsewhere", 0, 1, 0, Size::Medium);
+    let elsewhere_planner = MovementPlanner::new(&map, &profile, &elsewhere);
+    let wrong_start = elsewhere_planner.verify_path(&path, 100);
+    assert_eq!(wrong_start.checked_steps, 0);
+    assert!(matches!(
+        wrong_start.verdict,
+        PathVerdict::Blocked {
+            reason: MoveBlock::NotAdjacent,
+            ..
+        }
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -660,13 +744,13 @@ fn ac6_forced_movement_does_not_consume_speed_or_provoke() {
     let map = map_from(5, 2, |_, _| MovementCell::open());
     let planner = MovementPlanner::new(&map, &profile, &mover).with_observers(&observers);
 
-    let voluntary_path = reached(&planner.path(&pose(4, 0, 0, 1), 100).expect("plan"));
+    let voluntary_path = reached_owned(&planner.path(&pose(4, 0, 0, 1), 100).expect("plan"));
     assert!(voluntary_path.steps.iter().any(|step| step
         .triggers
         .iter()
         .any(|trigger| matches!(trigger, MoveTrigger::LeavesReach { .. }))));
 
-    let push = planner.push((1, 0), 20).expect("push");
+    let push = planner.forced_move((1, 0), 20).expect("push");
     assert_eq!(push.steps.len(), 4);
     assert_eq!(push.moved_ft, 20);
     assert_eq!(push.stopped_by, None);
@@ -690,7 +774,7 @@ fn ac6_forced_movement_does_not_consume_speed_or_provoke() {
         }
     });
     let planner = MovementPlanner::new(&walled, &profile, &mover);
-    let push = planner.push((1, 0), 20).expect("push");
+    let push = planner.forced_move((1, 0), 20).expect("push");
     assert_eq!(push.moved_ft, 5);
     assert_eq!(push.stopped_by, Some(MoveBlock::Wall));
 
@@ -698,19 +782,42 @@ fn ac6_forced_movement_does_not_consume_speed_or_provoke() {
     let occupants = [hostile];
     let open = open_map(5, 1);
     let planner = MovementPlanner::new(&open, &profile, &mover).with_occupants(&occupants);
-    let push = planner.push((1, 0), 20).expect("push");
+    let push = planner.forced_move((1, 0), 20).expect("push");
     assert_eq!(push.moved_ft, 0);
     assert_eq!(push.stopped_by, Some(MoveBlock::Occupied));
 
     let ally = TraversalCreature::ally(body("ally", 2, 0, 0, Size::Medium));
     let occupants = [ally];
     let planner = MovementPlanner::new(&open, &profile, &mover).with_occupants(&occupants);
-    let push = planner.push((1, 0), 20).expect("push");
+    let push = planner.forced_move((1, 0), 20).expect("push");
     assert_eq!(push.moved_ft, 20);
     assert_eq!(push.stopped_by, None);
-    let short = planner.push((1, 0), 10).expect("push");
+    let short = planner.forced_move((1, 0), 10).expect("push");
     assert_eq!(short.moved_ft, 5);
     assert_eq!(short.stopped_by, Some(MoveBlock::EndOccupied));
+
+    // Two ally spaces followed by a wall: the push must not end in an ally's
+    // space. It truncates to the last legal cell before the first ally.
+    let blocked = map_from(5, 1, |x, _| {
+        if x == 4 {
+            MovementCell::wall()
+        } else {
+            MovementCell::open()
+        }
+    });
+    let first = TraversalCreature::ally(body("ally-a", 2, 0, 0, Size::Medium));
+    let second = TraversalCreature::ally(body("ally-b", 3, 0, 0, Size::Medium));
+    let pair = [first, second];
+    let planner = MovementPlanner::new(&blocked, &profile, &mover).with_occupants(&pair);
+    let push = planner.forced_move((1, 0), 20).expect("push");
+    assert_eq!(push.moved_ft, 5);
+    assert_eq!(push.steps.len(), 1);
+    assert!(
+        planner
+            .can_end_at(&push.steps.last().expect("last step").to)
+            .allowed
+    );
+    assert_eq!(push.stopped_by, Some(MoveBlock::EndOccupied));
 }
 
 // ---------------------------------------------------------------------------
@@ -747,7 +854,8 @@ fn ac7_legacy_zone_and_grid_movement_is_unchanged_and_the_new_planner_is_opt_in(
 
     // Legacy grid movement treats a token as one cell; the new footprint and
     // squeeze semantics are only reachable through the explicit planner.
-    let legacy = GridSpace::new(&grid_scene(&["...."])).expect("grid");
+    let legacy_scene = grid_scene(&["...."]);
+    let legacy = GridSpace::new(&legacy_scene).expect("grid");
     assert_eq!(
         legacy.travel_distance(&Position::cell(0, 0), &Position::cell(3, 0)),
         Some(15)
@@ -817,8 +925,7 @@ fn ac9_creature_traversal_and_end_positions_follow_the_matrix() {
     for (label, creature, allowed) in cases {
         let occupants = [creature];
         for profile in [p2014(), p2024()] {
-            let planner =
-                MovementPlanner::new(&map, &profile, &mover).with_occupants(&occupants);
+            let planner = MovementPlanner::new(&map, &profile, &mover).with_occupants(&occupants);
             let plan = planner.path(&goal, 100).expect("plan");
             if allowed {
                 let path = reached(&plan);
@@ -842,9 +949,10 @@ fn ac9_creature_traversal_and_end_positions_follow_the_matrix() {
         }
     }
 
+    let profile2024 = p2024();
     let ally = TraversalCreature::ally(sized_body("ally", 2, 0, 0, Size::Medium));
     let occupants = [ally];
-    let planner = MovementPlanner::new(&map, &p2024(), &mover).with_occupants(&occupants);
+    let planner = MovementPlanner::new(&map, &profile2024, &mover).with_occupants(&occupants);
     assert_eq!(
         planner.can_end_at(&pose(2, 0, 0, 1)).reason,
         Some(MoveBlock::EndOccupied)
@@ -854,9 +962,22 @@ fn ac9_creature_traversal_and_end_positions_follow_the_matrix() {
         MoveBlock::EndOccupied
     );
 
+    // The ally's space is reachable and marked transit-only, not an end pose.
+    let reach = planner.reachable(20).expect("reachable");
+    let transit = reach
+        .entries
+        .iter()
+        .find(|entry| entry.pose.cell == cell(2, 0, 0))
+        .expect("transit-only entry");
+    assert_eq!(
+        transit.cost_ft, 15,
+        "5 ft to (1,0) + 10 ft into the ally's space"
+    );
+    assert!(!transit.end_allowed);
+
     let tiny = TraversalCreature::hostile(sized_body("tiny", 2, 0, 0, Size::Tiny));
     let occupants = [tiny];
-    let planner = MovementPlanner::new(&map, &p2024(), &mover).with_occupants(&occupants);
+    let planner = MovementPlanner::new(&map, &profile2024, &mover).with_occupants(&occupants);
     assert!(
         planner.can_end_at(&pose(2, 0, 0, 1)).allowed,
         "Medium may end in a Tiny creature's space"
@@ -865,8 +986,7 @@ fn ac9_creature_traversal_and_end_positions_follow_the_matrix() {
     let tiny_mover = body("tiny-mover", 0, 0, 0, Size::Tiny);
     let tiny_other = TraversalCreature::hostile(sized_body("tiny-other", 2, 0, 0, Size::Tiny));
     let occupants = [tiny_other];
-    let planner =
-        MovementPlanner::new(&map, &p2024(), &tiny_mover).with_occupants(&occupants);
+    let planner = MovementPlanner::new(&map, &profile2024, &tiny_mover).with_occupants(&occupants);
     assert_eq!(
         planner.can_end_at(&pose(2, 0, 0, 1)).reason,
         Some(MoveBlock::EndOccupied)
@@ -933,13 +1053,14 @@ fn ac10_invalid_inputs_return_structured_errors() {
     );
     let map = open_map(2, 2);
     let mover = body("mover", 0, 0, 0, Size::Medium);
-    let planner = MovementPlanner::new(&map, &p2024(), &mover);
+    let profile = p2024();
+    let planner = MovementPlanner::new(&map, &profile, &mover);
     assert_eq!(
         planner.reachable(-1).unwrap_err(),
         SpatialError::InvalidBudget { budget_ft: -1 }
     );
     assert_eq!(
-        planner.push((0, 0), 5).unwrap_err(),
+        planner.forced_move((0, 0), 5).unwrap_err(),
         SpatialError::InvalidDirection { dx: 0, dy: 0 }
     );
     assert_eq!(
