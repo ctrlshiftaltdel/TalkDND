@@ -460,22 +460,20 @@ fn spatial_can_reach(
     Some(crate::space::can_reach_bodies(&from, &to, reach_ft, &profile).reachable)
 }
 
-/// Pose for an arbitrary area centre. A creature standing on that cell wins
-/// (it carries altitude); otherwise the cell floor is used.
-fn spatial_pose_for_position(state: &EncounterState, position: &Position) -> Option<SpatialPose> {
+/// Pose for an area centre. A named creature keeps its full pose (altitude and
+/// facing); an explicit `x,y` centre is always the cell floor. This prevents a
+/// flyer standing over a cell from lifting a ground-targeted area to its own
+/// altitude.
+fn spatial_pose_for_position(
+    state: &EncounterState,
+    position: &Position,
+    creature: Option<usize>,
+) -> Option<SpatialPose> {
+    if let Some(index) = creature {
+        return spatial_body_for(state, index).map(|body| body.pose);
+    }
     match position {
         Position::Cell { x, y } => {
-            if let Some(pose) = state
-                .combatants
-                .iter()
-                .enumerate()
-                .filter(|(_, combatant)| !combatant.dormant && !combatant.is_dead())
-                .find(|(_, combatant)| combatant.cell() == Some([*x, *y]))
-                .and_then(|(index, _)| spatial_body_for(state, index))
-                .map(|body| body.pose)
-            {
-                return Some(pose);
-            }
             let floor = state
                 .scene
                 .as_deref()
@@ -500,7 +498,7 @@ fn spatial_distance_to_position(state: &EncounterState, from: usize, to: &Positi
     let from = spatial_body_for(state, from)?;
     let to = SpatialBody::new(
         "target-position",
-        spatial_pose_for_position(state, to)?,
+        spatial_pose_for_position(state, to, None)?,
         Size::Medium,
     );
     let profile = state.effective_spatial_profile();
@@ -2556,13 +2554,19 @@ pub fn use_planned_ability(
 ) -> Result<()> {
     let source = EffectSource::from_ability(&resolved.ability, &resolved.params);
     let options = AttackOptions::default();
+    // The AI passes a position, not a creature identity; treat it as a cell
+    // centre so a flyer cannot lift a ground-targeted area.
+    let center = zone_center.map(|position| AreaCenter {
+        position: position.clone(),
+        creature: None,
+    });
     use_resolved_ability(
         state,
         actor,
         resolved,
         &source,
         targets,
-        zone_center,
+        center.as_ref(),
         &options,
         option,
         slot_level,
@@ -4071,9 +4075,10 @@ fn apply_effect(
             }
             let source = EffectSource::from_ability(&resolved.ability, &resolved.params);
             let targets: Vec<usize> = context.target.into_iter().collect();
-            let zone_center = context
-                .target
-                .map(|target| state.combatants[target].position());
+            let zone_center = context.target.map(|target| AreaCenter {
+                position: state.combatants[target].position(),
+                creature: Some(target),
+            });
             use_resolved_ability(
                 state,
                 context.actor,
@@ -5118,7 +5123,7 @@ fn use_resolved_ability(
     resolved: &ResolvedAbility,
     source: &EffectSource,
     targets: &[usize],
-    zone_center: Option<&Position>,
+    zone_center: Option<&AreaCenter>,
     options: &AttackOptions,
     option: Option<usize>,
     slot_level: Option<i32>,
@@ -5132,24 +5137,33 @@ fn use_resolved_ability(
     let mut effective_targets: Vec<usize> = targets.to_vec();
     match target_spec.target_type {
         TargetType::Zone => {
-            let center = zone_center
-                .cloned()
-                .or_else(|| {
-                    targets
-                        .first()
-                        .map(|target| state.combatants[*target].position())
-                })
-                .unwrap_or_else(|| state.combatants[actor].position());
+            let center = zone_center.cloned().unwrap_or_else(|| {
+                if let Some(target) = targets.first().copied() {
+                    AreaCenter {
+                        position: state.combatants[target].position(),
+                        creature: Some(target),
+                    }
+                } else {
+                    AreaCenter {
+                        position: state.combatants[actor].position(),
+                        creature: Some(actor),
+                    }
+                }
+            });
+            let center_position = center.position.clone();
             if let (Some(range), Some(space)) = (ability.range, state.space()) {
                 if range > 0 {
                     let spatial_distance = if spatial_query_enabled(state) {
-                        spatial_distance_to_position(state, actor, &center)
+                        match center.creature {
+                            Some(target) => spatial_body_distance(state, actor, target),
+                            None => spatial_distance_to_position(state, actor, &center_position),
+                        }
                     } else {
                         None
                     };
                     let distance = spatial_distance.unwrap_or_else(|| {
                         space
-                            .distance(&state.combatants[actor].position(), &center)
+                            .distance(&state.combatants[actor].position(), &center_position)
                             .unwrap_or(i32::MAX)
                     });
                     if distance > range {
@@ -5160,8 +5174,12 @@ fn use_resolved_ability(
                     }
                 }
             }
-            let radius = ability.area.as_ref().map(|area| area.radius).unwrap_or(0);
-            effective_targets = area_targets(state, &center, radius);
+            effective_targets = area_targets(
+                state,
+                &center_position,
+                center.creature,
+                ability.area.as_ref(),
+            )?;
         }
         TargetType::SelfTarget => {
             if !targets.is_empty() && targets.iter().any(|target| *target != actor) {
@@ -5323,36 +5341,49 @@ fn target_matches_side(
 }
 
 /// Every non-dormant, living creature inside an area.
-fn area_targets(state: &EncounterState, center: &Position, radius: i32) -> Vec<usize> {
-    if spatial_query_enabled(state) {
-        if let Some(origin_pose) = spatial_pose_for_position(state, center) {
+fn area_targets(
+    state: &EncounterState,
+    center: &Position,
+    center_creature: Option<usize>,
+    area_spec: Option<&crate::content::schema::AreaSpec>,
+) -> Result<Vec<usize>> {
+    let radius = area_spec.map(|spec| spec.radius).unwrap_or(0);
+    if spatial_query_enabled(state)
+        && radius > 0
+        && state
+            .space()
+            .is_some_and(|space| space.mode() == SceneMode::Grid)
+    {
+        if let Some(origin_pose) = spatial_pose_for_position(state, center, center_creature) {
             let profile = state.effective_spatial_profile();
             let spec = AreaSpecV1 {
-                shape: AreaShape::Sphere,
+                shape: area_spec
+                    .and_then(|spec| spec.shape)
+                    .unwrap_or(AreaShape::Sphere),
                 size_ft: radius,
-                width_ft: None,
+                width_ft: area_spec.and_then(|spec| spec.width_ft),
             };
-            if let Ok(area) = crate::space::area_cells(&spec, &origin_pose, &profile) {
-                let origin = SpatialBody::new("area-origin", origin_pose, Size::Medium);
-                let blockers = spatial_blockers(state, &profile);
-                return state
-                    .combatants
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, combatant)| !combatant.dormant && !combatant.is_dead())
-                    .filter(|(index, _)| {
-                        spatial_body_for(state, *index).is_some_and(|target| {
-                            crate::space::area_intersection(&area, &origin, &target, &blockers)
-                                .intersects
-                        })
+            let area = crate::space::area_cells(&spec, &origin_pose, &profile)
+                .map_err(|error| anyhow!("area shape {:?}: {error}", spec.shape))?;
+            let origin = SpatialBody::new("area-origin", origin_pose, Size::Medium);
+            let blockers = spatial_blockers(state, &profile);
+            return Ok(state
+                .combatants
+                .iter()
+                .enumerate()
+                .filter(|(_, combatant)| !combatant.dormant && !combatant.is_dead())
+                .filter(|(index, _)| {
+                    spatial_body_for(state, *index).is_some_and(|target| {
+                        crate::space::area_intersection(&area, &origin, &target, &blockers)
+                            .intersects
                     })
-                    .map(|(index, _)| index)
-                    .collect();
-            }
+                })
+                .map(|(index, _)| index)
+                .collect());
         }
     }
     let Some(space) = state.space() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let owned;
     let positions: &[Position] = match space.area_slice(center, radius) {
@@ -5362,14 +5393,14 @@ fn area_targets(state: &EncounterState, center: &Position, radius: i32) -> Vec<u
             &owned
         }
     };
-    state
+    Ok(state
         .combatants
         .iter()
         .enumerate()
         .filter(|(_, combatant)| !combatant.dormant && !combatant.is_dead())
         .filter(|(_, combatant)| positions.contains(&combatant.position()))
         .map(|(index, _)| index)
-        .collect()
+        .collect())
 }
 
 /// CLI `cast`/`use` for an owned ability.
@@ -5394,7 +5425,7 @@ pub fn use_ability(
         .unwrap_or_default()
         .target_type;
     let mut targets = Vec::new();
-    let mut zone_center = None;
+    let mut zone_center: Option<AreaCenter> = None;
     if target_type == TargetType::Zone {
         zone_center = options
             .targets
@@ -5434,23 +5465,40 @@ pub fn use_ability(
     Ok(())
 }
 
+/// A resolved area centre. `creature` is `Some` only when the caller named a
+/// creature; an explicit `x,y` or zone centre keeps the cell/zone floor.
+#[derive(Debug, Clone)]
+struct AreaCenter {
+    position: Position,
+    creature: Option<usize>,
+}
+
 /// Resolves a zone id, `x,y` grid cell, or creature name to an area centre.
-fn resolve_area_center(state: &EncounterState, label: &str) -> Result<Position> {
+fn resolve_area_center(state: &EncounterState, label: &str) -> Result<AreaCenter> {
     let label = label.trim();
     if let Some((x, y)) = label.split_once(',') {
         if let (Ok(x), Ok(y)) = (x.trim().parse::<i32>(), y.trim().parse::<i32>()) {
-            return Ok(Position::cell(x, y));
+            return Ok(AreaCenter {
+                position: Position::cell(x, y),
+                creature: None,
+            });
         }
     }
     if let Some(space) = state.space() {
         if space.has_zone(label) {
-            return Ok(Position::Zone {
-                zone: label.to_string(),
+            return Ok(AreaCenter {
+                position: Position::Zone {
+                    zone: label.to_string(),
+                },
+                creature: None,
             });
         }
     }
     if let Ok(index) = state.find_index(label) {
-        return Ok(state.combatants[index].position());
+        return Ok(AreaCenter {
+            position: state.combatants[index].position(),
+            creature: Some(index),
+        });
     }
     bail!("unknown zone or area target `{label}`")
 }
@@ -6706,7 +6754,13 @@ fn spatial_move_to_at(
         .path(&goal_pose, budget)
         .map_err(|error| anyhow!(error.to_string()))?;
     let path = match plan.outcome {
-        PlanOutcome::Reached(path) | PlanOutcome::OverBudget(path) => path,
+        PlanOutcome::Reached(path) => path,
+        PlanOutcome::OverBudget(path) => {
+            bail!(
+                "cannot move to ({dest_x},{dest_y}): the route needs {} ft but only {budget} ft of movement remains",
+                path.total_cost_ft
+            );
+        }
         PlanOutcome::Unreachable { reason, blockers } => {
             if blockers.is_empty() {
                 bail!("cannot move to ({dest_x},{dest_y}): {}", reason.as_str());
@@ -7727,9 +7781,6 @@ fn maybe_fall_after_condition(
     if !check.falls {
         return Ok(());
     }
-    if let Some(vertical) = state.combatants[index].vertical.as_mut() {
-        vertical.flight = FlightState::Falling;
-    }
     log.log(format_args!(
         "{name} loses flight support ({}, {})",
         check
@@ -7738,18 +7789,21 @@ fn maybe_fall_after_condition(
             .unwrap_or_else(|| "unstated".to_string()),
         check.edition
     ));
-    if let Err(error) = fall_with_checks(
+    // Resolve before mutating flight state. A zone scene (or a state with no
+    // fall map) must fail explicitly and leave the creature Flying, never in a
+    // half-applied Falling state. `apply_fall` marks Falling itself before it
+    // applies the landing condition, so nested Prone cannot re-trigger here.
+    fall_with_checks(
         state,
         &name,
         FallOptions::default(),
         FallAbility::Dexterity,
         rng,
         log,
-    ) {
-        log.log(format_args!(
-            "{name}'s flight fall could not be resolved: {error}"
-        ));
-    }
+    )
+    .map_err(|error| {
+        anyhow!("`{name}` lost flight support but the fall could not be resolved: {error}")
+    })?;
     Ok(())
 }
 

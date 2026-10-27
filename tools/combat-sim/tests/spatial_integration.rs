@@ -22,7 +22,7 @@ use combat_sim::content::schema::{ConditionFlag, Creature, Scene, Size};
 use combat_sim::content::{ContentRegistry, ContentSources};
 use combat_sim::dice::DiceRng;
 use combat_sim::engine::{self, AddConditionOptions, AttackOptions};
-use combat_sim::space::{FlightState, SpatialPose, SpatialProfile, Squeeze};
+use combat_sim::space::{Facing, FlightState, SpatialPose, SpatialProfile, Squeeze};
 use combat_sim::state::{CombatantState, EncounterState, SpatialState, STATE_SCHEMA_VERSION};
 use serde_json::json;
 
@@ -608,6 +608,48 @@ fn movement_fires_enter_triggers_on_zone_boundaries_only() {
     );
 }
 
+/// A route that costs more than the remaining Speed is rejected before any
+/// state change. A 0-ft or 5-ft budget must not move the full 10-ft route.
+#[test]
+fn movement_rejects_over_budget_before_any_state_change() {
+    for budget in [0, 5] {
+        let mut state = state_with(
+            registry("2024"),
+            vec![grounded(
+                "Mover",
+                creature("synthetic-mover", Size::Medium, 0, false, no_attacks()),
+                "party",
+                0,
+                0,
+            )],
+            grid_scene(&["...."], json!({".": {"elevation": 0}})),
+            spatial(),
+        );
+        state.combatants[0].speed_left = budget;
+        let mut log = Vec::new();
+        let error = engine::move_to(
+            &mut state,
+            "Mover",
+            &engine::MoveTarget::Cell(2, 0),
+            true,
+            &mut ScriptedRng::new(&[]),
+            &mut log,
+        )
+        .expect_err("a 10-ft route needs more than the budget");
+        let text = error.to_string();
+        assert!(
+            text.contains("needs 10 ft") && text.contains(&format!("only {budget} ft")),
+            "budget {budget}: {text}"
+        );
+        assert_eq!(
+            state.combatants[0].cell(),
+            Some([0, 0]),
+            "budget {budget}: no teleport"
+        );
+        assert_eq!(state.combatants[0].speed_left, budget, "budget {budget}");
+    }
+}
+
 /// Height 5 is a solid obstacle on the ground, but a creature flying at 10 ft
 /// passes above it.
 #[test]
@@ -890,6 +932,61 @@ fn condition_stunned_drops_a_flyer_in_both_editions() {
     }
 }
 
+/// A zone scene has no fall map. Losing flight support must fail explicitly
+/// and leave the creature Flying, never in a half-applied Falling state.
+#[test]
+fn failed_zone_fall_is_explicit_and_does_not_leave_falling() {
+    let mut state = state_with(
+        registry("2024"),
+        vec![combatant(
+            "Flyer",
+            creature("synthetic-flyer", Size::Medium, 30, false, no_attacks()),
+            "party",
+            0,
+            0,
+            20,
+            FlightState::Flying,
+            (1, 1),
+            &[],
+        )],
+        json!({
+            "id": "synthetic-zone-scene",
+            "mode": "zones",
+            "zones": [{"id": "open"}]
+        }),
+        spatial(),
+    );
+    let error = engine::add_condition(
+        &mut state,
+        "Flyer",
+        "stunned",
+        &AddConditionOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .expect_err("a zone scene cannot resolve a grid fall");
+    let text = error.to_string();
+    assert!(
+        text.contains("lost flight support") && text.contains("fall map"),
+        "{text}"
+    );
+    let vertical = state.combatants[0].vertical.expect("vertical state");
+    assert_eq!(
+        vertical.flight,
+        FlightState::Flying,
+        "the failed fall must not leave a half-applied Falling state"
+    );
+    assert_eq!(vertical.altitude_ft, 20);
+    assert_eq!(state.combatants[0].pose.expect("pose").cell.z, 20);
+    assert!(
+        state.combatants[0]
+            .conditions
+            .iter()
+            .any(|active| active.condition == "stunned"),
+        "the triggering condition itself is still recorded"
+    );
+}
+
 /// `fly` keeps absolute pose elevation and relative altitude in sync, and a
 /// ceiling stops the climb at the body-height limit.
 #[test]
@@ -1079,6 +1176,170 @@ fn heal_from_a_creature_uses_line_of_sight() {
         "{error}"
     );
     assert_eq!(state.combatants[index(&state, "Wounded")].hp, 10);
+}
+
+/// A cone uses the ability's `shape`, not a hard-coded sphere. A target behind
+/// the caster is inside a 10-ft sphere but outside a 10-ft east-facing cone.
+#[test]
+fn area_shapes_use_the_actual_shape_not_a_sphere() {
+    let caster_creature: Creature = serde_json::from_value(json!({
+        "id": "synthetic-cone-caster",
+        "name": "synthetic-cone-caster",
+        "size": "medium",
+        "hp": 30,
+        "ac": 12,
+        "speed": {"walk": 30},
+        "abilities": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10},
+        "actions": [{
+            "id": "synthetic-cone",
+            "name": "Synthetic Cone",
+            "activation": "action",
+            "target": {"type": "zone"},
+            "area": {"radius": 10, "shape": "cone"},
+            "effects": [{"damage": {"dice": "1d6", "type": "fire"}}]
+        }]
+    }))
+    .expect("caster with a cone");
+    let mut caster = combatant(
+        "Caster",
+        caster_creature,
+        "party",
+        0,
+        1,
+        0,
+        FlightState::Grounded,
+        (1, 1),
+        &[],
+    );
+    caster.pose.as_mut().expect("pose").facing = Some(Facing::East);
+    let mut state = state_with(
+        registry("2024"),
+        vec![
+            caster,
+            grounded(
+                "Front",
+                creature("synthetic-front", Size::Medium, 0, false, no_attacks()),
+                "enemy",
+                1,
+                1,
+            ),
+            grounded(
+                "Behind",
+                creature("synthetic-behind", Size::Medium, 0, false, no_attacks()),
+                "enemy",
+                0,
+                0,
+            ),
+        ],
+        grid_scene(&["...", "...", "..."], json!({".": {"elevation": 0}})),
+        spatial(),
+    );
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Caster",
+        "synthetic-cone",
+        &engine::UseOptions {
+            targets: vec!["Caster".to_string()],
+            ..Default::default()
+        },
+        &mut ScriptedRng::new(&[3]),
+        &mut log,
+    )
+    .expect("cone resolves");
+    assert_eq!(
+        state.combatants[index(&state, "Front")].hp,
+        27,
+        "the front target is inside the cone: {log:?}"
+    );
+    assert_eq!(
+        state.combatants[index(&state, "Behind")].hp,
+        30,
+        "the target behind the caster is inside a sphere but outside the cone: {log:?}"
+    );
+}
+
+/// An explicit `x,y` centre is the cell floor even when a flyer is the only
+/// creature on that cell; the area must still hit a ground target.
+#[test]
+fn explicit_cell_center_uses_the_floor_not_a_flyer_overhead() {
+    let caster_creature: Creature = serde_json::from_value(json!({
+        "id": "synthetic-sphere-caster",
+        "name": "synthetic-sphere-caster",
+        "size": "medium",
+        "hp": 30,
+        "ac": 12,
+        "speed": {"walk": 30},
+        "abilities": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10},
+        "actions": [{
+            "id": "synthetic-sphere",
+            "name": "Synthetic Sphere",
+            "activation": "action",
+            "target": {"type": "zone"},
+            "area": {"radius": 5, "shape": "sphere"},
+            "effects": [{"damage": {"dice": "1d6", "type": "fire"}}]
+        }]
+    }))
+    .expect("caster with a sphere");
+    let mut state = state_with(
+        registry("2024"),
+        vec![
+            combatant(
+                "Caster",
+                caster_creature,
+                "party",
+                4,
+                0,
+                0,
+                FlightState::Grounded,
+                (1, 1),
+                &[],
+            ),
+            combatant(
+                "Flyer",
+                creature("synthetic-flyer", Size::Medium, 30, false, no_attacks()),
+                "enemy",
+                1,
+                1,
+                10,
+                FlightState::Flying,
+                (1, 1),
+                &[],
+            ),
+            grounded(
+                "Ground",
+                creature("synthetic-ground", Size::Medium, 0, false, no_attacks()),
+                "enemy",
+                1,
+                0,
+            ),
+        ],
+        grid_scene(&[".....", ".....", "....."], json!({".": {"elevation": 0}})),
+        spatial(),
+    );
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Caster",
+        "synthetic-sphere",
+        &engine::UseOptions {
+            targets: vec!["1,1".to_string()],
+            ..Default::default()
+        },
+        &mut ScriptedRng::new(&[3]),
+        &mut log,
+    )
+    .expect("sphere resolves");
+    assert_eq!(
+        state.combatants[index(&state, "Ground")].hp,
+        27,
+        "the ground target is inside the floor-centred 5-ft sphere: {log:?}"
+    );
+    assert_eq!(
+        state.combatants[index(&state, "Flyer")].hp,
+        30,
+        "the 10-ft-high flyer is outside the sphere centred on the floor: {log:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
