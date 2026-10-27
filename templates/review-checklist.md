@@ -4,7 +4,7 @@ Use this checklist when reviewing an execution task's delivery, independently of
 
 ## Stage 1 — Spec Compliance (do first; decides whether to continue)
 
-- [ ] Delivered scope matches allowed paths; no out-of-scope changes
+- [ ] Delivered scope matches allowed paths; the review packet includes the `scripts/check_scope.py` output for this task (it prints the base SHA and exits 0 in scope / 2 out of scope / 1 undetermined); no out-of-scope changes
 - [ ] Every acceptance criterion checked individually against real evidence (diff, command output, exit codes)
 - [ ] Stated head SHA matches the delivered commit
 - [ ] No self-approval or self-merge happened
@@ -22,7 +22,7 @@ Apply this block whenever the task touches shared mutable state, a lock file, a 
 - [ ] **No swallowed errors (R6).** Directory reads, cleanup and rollback failures are either surfaced or explicitly counted and justified; a success report that skipped an entry is a defect, not best effort.
 - [ ] **Structured fields (4.1).** `invariants`, `negative_cases`, `migration_cases`, `integration_paths` and `unverified_assumptions` are filled for these surfaces, or say `N/A: <reason>` with a concrete reason.
 - [ ] **Minimal reproduction first (R6).** Before accepting a fix, the review can point at the reproduction or the source-level evidence that showed the problem was real; a fix without one is returned.
-- [ ] **Reviewer items stay open.** Anything this checklist cannot settle statically is recorded as an explicit reviewer judgement, not presented as an automated check.
+- [ ] **Reviewer items stay open.** Anything this checklist cannot settle statically is recorded as an explicit reviewer judgement, not presented as an automated check, and the same record states what this review did **not** cover (tests, platforms, environments or external services left unexercised) so a clean checklist is not read as full coverage.
 
 If any Stage 1 item fails, stop: do not proceed to Stage 2; return the task with findings.
 

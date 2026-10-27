@@ -194,6 +194,8 @@ class ReleaseAssetNamingTests(unittest.TestCase):
 
     def test_patch_release_version_is_allowed(self):
         self.assertEqual(self.builder.release_asset_stem(None, '1.6.1'), 'AgentOrch-1.6.1')
+        self.assertEqual(self.builder.release_asset_stem(None, '1.6.2'), 'AgentOrch-1.6.2')
+        self.assertEqual(self.builder.release_asset_stem(None, '1.6.3'), 'AgentOrch-1.6.3')
 
     def test_default_date_naming_still_works(self):
         self.assertEqual(self.builder.release_asset_stem('20261026'), 'agentorch-20261026')
@@ -237,6 +239,31 @@ class ReleaseAssetNamingTests(unittest.TestCase):
             self.assertEqual(names, sorted(f'AgentOrch-1.6/{rel}' for rel in files))
             self.assertIn('AgentOrch-1.6/MANIFEST.json', names)
             self.assertEqual(shipped['format_version'], FORMAT)
+
+    def test_patch_archive_keeps_the_format_version_and_is_reproducible(self):
+        """1.6.1 is a release number: the top dir follows it, the Format does not."""
+        files = {
+            'kit/orchestration.md': b'# core\n',
+            'editions/local/master.md': b'# edition\n',
+        }
+        suite, format_version = drift.read_version(ROOT)
+        self.assertEqual(format_version, '1.6')
+        manifest = drift.build_manifest(files, suite, format_version)
+        self.assertEqual(manifest['format_version'], '1.6')
+        files[drift.MANIFEST_NAME] = drift.dumps_manifest(manifest).encode('utf-8')
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / 'AgentOrch-1.6.1.zip'
+            second = Path(tmp) / 'second.zip'
+            self.builder.write_zip(first, files, 'AgentOrch-1.6.1')
+            self.builder.write_zip(second, files, 'AgentOrch-1.6.1')
+            self.assertEqual(drift.sha256_bytes(first.read_bytes()),
+                             drift.sha256_bytes(second.read_bytes()))
+            with zipfile.ZipFile(first) as archive:
+                names = sorted(archive.namelist())
+                shipped = json.loads(archive.read(f'AgentOrch-1.6.1/{drift.MANIFEST_NAME}'))
+            self.assertEqual(names, sorted(f'AgentOrch-1.6.1/{rel}' for rel in files))
+            self.assertIn('AgentOrch-1.6.1/MANIFEST.json', names)
+            self.assertEqual(shipped['format_version'], '1.6')
 
     def test_cli_rejects_a_v_prefixed_version_without_building(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -283,11 +310,15 @@ class VersionConsistencyTests(unittest.TestCase):
     def test_release_tag_matches_the_format_version(self):
         release = self.release_version()
         _, format_version = drift.read_version(ROOT)
-        self.assertEqual(release, '1.6')
+        self.assertEqual(release, '1.6.3')
         self.assertEqual(format_version, '1.6')
         self.assertTrue(self.versions.tag_matches_format(f'v{release}', format_version))
-        # The previous tag must NOT be accepted against the current Format: the
-        # rule compares major.minor, so a silent mismatch would be a real defect.
+        # The rule compares major.minor: a different major.minor (v1.5) must NOT
+        # be accepted, while patch tags that share the Format (v1.6 / v1.6.1 /
+        # v1.6.2 / v1.6.3) all match. A silent mismatch would be a real defect.
+        self.assertTrue(self.versions.tag_matches_format('v1.6', format_version))
+        self.assertTrue(self.versions.tag_matches_format('v1.6.1', format_version))
+        self.assertTrue(self.versions.tag_matches_format('v1.6.2', format_version))
         self.assertFalse(self.versions.tag_matches_format('v1.5', format_version))
 
     def test_manifest_generated_from_version_file_records_format_1_6(self):
@@ -503,6 +534,49 @@ class DiagnosisTests(unittest.TestCase):
         result = run_cli(str(self.tree.root))
         self.assertEqual(result.returncode, 1)
         self.assertIn('is invalid', result.stderr)
+
+
+class SkipDirsTests(unittest.TestCase):
+    """Build output and tool caches must not drown the drift report.
+
+    A project that vendors a Rust crate, runs pytest, or indexes itself with
+    codegraph / opencode would otherwise report thousands of generated files as
+    `extension` — and as `unknown` when the cache sits inside an upstream
+    namespace, which would turn a clean tree into a false drift.
+    """
+
+    SKIPPED = (
+        'tools/app/target/debug/x',
+        '.pytest_cache/x',
+        '.codegraph/x',
+        '.opencode/x',
+        'tests/.pytest_cache/x',   # inside an upstream namespace: would be `unknown`
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tree = FixtureTree(self.tmp.name)
+        self.tree.emit_manifest()
+        for rel in self.SKIPPED:
+            self.tree.write(rel, 'generated\n')
+        self.tree.write('src/app.py', 'x = 1\n')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_iter_local_files_prunes_build_and_cache_directories(self):
+        found = drift.iter_local_files(self.tree.root)
+        self.assertIn('src/app.py', found)
+        for rel in self.SKIPPED:
+            self.assertNotIn(rel, found)
+
+    def test_report_does_not_list_them_as_extension_or_unknown(self):
+        report = drift.diagnose(self.tree.root)
+        reported = [item['path'] for key in ('extensions', 'unknown')
+                    for item in report['findings'][key]]
+        self.assertEqual(reported, ['src/app.py'])
+        self.assertEqual(report['status'], 'clean')
+        self.assertEqual(report['exit_code'], 0)
 
 
 class CliContractTests(unittest.TestCase):

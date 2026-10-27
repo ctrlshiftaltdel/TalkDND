@@ -9,7 +9,7 @@
 - 现有项目 / 新项目：`现有项目`
 - 本地主分支：`main`
 - 语言 / 框架 / 运行方式：项目自己的程序、工具和脚本一律用 Rust（`tools/combat-sim` 战斗引擎，`tools/talkdnd` 游玩助手（开局摘要、建卡、同伴、存档点），`tools/talkdnd-dev` 开发工具）与 Markdown/YAML 规则数据。玩家在 `LetsPlay/` 里开局。**TECH STACK** 的接受例外只有下面三项，不得再扩大：
-  - 作为本项目一部分维护的 AgentOrch Python 套件（只用标准库，经 `uv run --no-project` 运行）：`scripts/` 与 `tests/` 下的套件脚本和测试，包括 `orchestrator.py`、`validate_kit.py`、`check_drift.py`、`report_metrics.py`、`run_delivery_scenarios.py`、`scripts/architecture/`、`scripts/self_improvement/`、`scripts/update_agentorch/`；
+  - 作为本项目一部分维护的 AgentOrch Python 套件（只用标准库，经 `uv run --no-project` 运行）：`scripts/` 与 `tests/` 下的套件脚本和测试，包括 `orchestrator.py`、`validate_kit.py`、`check_drift.py`、`check_scope.py`、`report_metrics.py`、`run_delivery_scenarios.py`、`scripts/architecture/`、`scripts/self_improvement/`、`scripts/update_agentorch/`；
   - CI YAML（`.github/workflows/`，含其中的 shell 步骤）；
   - `LetsPlay/tools/pdf2md/`：游玩所需的 Python PDF → Markdown 转换工具。
   所有 Python 一律经 uv 运行（`uv sync` / `uv run`），不用裸 `pip`、`venv` 或 `python3`。套件文档里出现的裸 `python` 在本仓库一律按 `uv run --no-project python` 执行。
@@ -71,14 +71,14 @@
 
 ## AgentOrch 本地差异
 
-本树是 **AgentOrch Format 1.6**，安装官方 `AgentOrch-1.6.zip` 的 90 个 `REQUIRED` 文件与官方 `MANIFEST.json` 基线。由于上游 1.6 包在“下游项目有 `docs/`”场景存在缺陷（详见 AgentOrch Issue #85），本树保留以下有意差异：
+本树是 **AgentOrch 1.6.3（Format 1.6）**，安装官方 `AgentOrch-1.6.3.zip` 的 92 个 `REQUIRED` 文件与官方 `MANIFEST.json` 基线。1.6.3 已包含上游对下游 `docs/`、manifest drift、路径大小写和 `check_drift` 缓存跳过的修复；本树只保留以下有意差异：
 
-- `scripts/validate_kit.py`：下游模式。有 `docs/` 且没有 `docs/upgrade.md` 时，只检查 `docs/PROJECT.md` / `docs/PLAN.md` 和清单结构，不因本地修改的 core 文件失败；发布包（无 `docs/`）与上游 checkout 仍严格校验哈希。链接扫描跳过 gitignored 玩家书籍/存档（保留其 README）、pdf2md `.md/` 输出、`.worktrees`、`target` 与本地缓存，被跟踪文档的真实断链仍会报告。漂移由 `scripts/check_drift.py` 报告。
-- `scripts/check_drift.py`：`SKIP_DIRS` 增加 Rust 与本地工具缓存（`target`、`.pytest_cache`、`.codegraph`、`.opencode`），避免把构建产物当成项目扩展。
-- `tests/test_validate_kit.py`：上游仓库专用测试按 `docs/README.md` / `docs/upgrade.md` 是否存在 skip；新增下游模式测试。没有删除断言。
-- `AGENTS.md`、`kit/orchestration.md`、`templates/project-charter.md`：把 `MASTER.md` / `START-MASTER-*.md` 的旧路径改为实际存在的 `master.md` 及章节。
-- `AGENTS.md` 的 TalkDND 第 8 节是本项目契约，不属于上游通用文件。
+- `scripts/validate_kit.py`：链接扫描跳过 gitignored 玩家书籍/存档（保留其 `README.md`）、pdf2md `.md/` 输出、`.worktrees`、`target` 与本地缓存；被跟踪文档的真实断链仍会报告。上游 1.6.3 的下游模式（只检查 `docs/PROJECT.md` / `docs/PLAN.md` 和清单结构，core drift 交给 `check_drift.py`）保持原样。
+- `tests/test_validate_kit.py`：在 1.6.3 上游测试上增加本地书/生成目录跳过的回归测试；没有删除断言。
+- `AGENTS.md`：TalkDND 第 8 节、顶部 PLAY 提示与合并门说明，不属于上游通用文件；1.6.3 的「阅读口径（唯一权威）」段已保留。
 
-预期 `check_drift.py .` 报告 **6 个 modified 文件**（`AGENTS.md`、`kit/orchestration.md`、`scripts/check_drift.py`、`scripts/validate_kit.py`、`templates/project-charter.md`、`tests/test_validate_kit.py`）与 **2 个 project-profile 文件**（`docs/PROJECT.md`、`docs/PLAN.md`）。这是公开、可解释的漂移，不是失败。**不要**用本树重新生成 `MANIFEST.json`：那会把本地修改记成上游基线。后续更新先运行 `uv run --no-project python -m scripts.update_agentorch.entry --project . --request "更新 AgentOrch" --mode PLAN`；出现 `THREE_WAY_CONFLICT` 时停下交人工决定，不得自动覆盖。
+1.6.3 新增的 `scripts/check_scope.py` 与 `tests/test_check_scope.py` 随包安装。
+
+预期 `check_drift.py .` 报告 **3 个 modified 文件**（`AGENTS.md`、`scripts/validate_kit.py`、`tests/test_validate_kit.py`）与 **2 个 project-profile 文件**（`docs/PROJECT.md`、`docs/PLAN.md`）。这是公开、可解释的漂移，不是失败。**不要**用本树重新生成 `MANIFEST.json`：那会把本地修改记成上游基线。后续更新先运行 `uv run --no-project python -m scripts.update_agentorch.entry --project . --request "更新 AgentOrch" --mode PLAN`；出现 `THREE_WAY_CONFLICT` 时停下交人工决定，不得自动覆盖。
 
 本树未内置上游仓库专用的 `docs/README.md`、`docs/charter.md`、`docs/upgrade.md`、`docs/drift.md`、`docs/metrics.md`、`docs/design/resource-locks.md`、`docs/testing/delivery-regression-scenarios.md`、`docs/self-improvement/*`。需要时：自我完善读 `templates/self-improvement/README.md`；资源锁语义读 `kit/orchestration.md` 第 3.3 节与 `templates/` 下的说明；更新安全语义以 `templates/self-improvement/README.md` 和引擎报告为准。`github` 底座不使用本地资源锁，资源占用只以 Issue 登记块协作记录。

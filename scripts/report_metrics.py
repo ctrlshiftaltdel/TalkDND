@@ -34,6 +34,7 @@ STATUS_CHANGED = 'STATUS_CHANGED'
 CHECK_RECORDED = 'CHECK_RECORDED'
 ACCEPTANCE_RECORDED = 'ACCEPTANCE_RECORDED'
 CONFLICT_RECORDED = 'CONFLICT_RECORDED'
+PATH_PREFLIGHT_REFUSED = 'PATH_PREFLIGHT_REFUSED'
 REGRESSION_REPORTED = 'REGRESSION_REPORTED'
 APPROVAL_INVALIDATED = 'APPROVAL_INVALIDATED'
 TASK_DISPATCHED = 'TASK_DISPATCHED'
@@ -41,16 +42,22 @@ TASK_DISPATCHED = 'TASK_DISPATCHED'
 KNOWN_ACTIONS = frozenset({
     'TASK_CREATED', STATUS_CHANGED, TASK_DISPATCHED, 'WORKSPACE_UPDATED',
     'LOCKS_RELEASED', 'MANUAL_UNLOCK', 'RECORD_AMENDED', APPROVAL_INVALIDATED,
-    CHECK_RECORDED, ACCEPTANCE_RECORDED, CONFLICT_RECORDED, REGRESSION_REPORTED,
+    CHECK_RECORDED, ACCEPTANCE_RECORDED, CONFLICT_RECORDED, PATH_PREFLIGHT_REFUSED,
+    REGRESSION_REPORTED,
 })
-# Record kinds the report can consume. `local` task libraries only carry the
-# resource-conflict subset today; the rest stay `unknown` until a task records
-# them, which is exactly what the report must say instead of printing 0.
+# Record kinds the report can consume. `local` task libraries carry the
+# resource-conflict subset, plus the path conflicts a refused dispatch now
+# writes; the rest stay `unknown` until a task records them, which is exactly
+# what the report must say instead of printing 0.
 COLLECTION_KINDS = ('checks', 'path_conflicts', 'resource_conflicts',
                     'regressions', 'acceptances')
 SQLITE_COLLECTION = {
     'checks': False,
-    'path_conflicts': False,      # a refused dispatch is rolled back, no event
+    # A refused dispatch writes CONFLICT_RECORDED kind=path, but libraries from
+    # before that event hold none: the flag stays False here and `load_sqlite`
+    # promotes it only when the dataset really carries a path conflict, so a
+    # library without one stays `unknown` instead of being reported as 0.
+    'path_conflicts': False,
     'resource_conflicts': True,   # resource_lock_events LOCK_DENIED_CONFLICT
     'regressions': False,
     'acceptances': False,
@@ -225,6 +232,12 @@ def load_sqlite(path):
             'ref': f'task/{row["task_id"]}',
         })
     collection = dict(SQLITE_COLLECTION)
+    # The event is the evidence: only a library that actually holds a path
+    # conflict is reported as collecting it. Older libraries keep the legacy
+    # False and stay `unknown`, never a fabricated 0.
+    if any(entry['action'] == CONFLICT_RECORDED
+           and str(entry['data'].get('kind') or '').lower() == 'path' for entry in raw):
+        collection['path_conflicts'] = True
     try:
         conflicts = con.execute(
             "SELECT task_id, at, resource_id FROM resource_lock_events "
@@ -460,6 +473,11 @@ def metric_conflicts(grouped, events, collection):
         'per_dispatched_task': r4(total / len(dispatched)) if dispatched else None,
         'path_supported': supported['path'], 'resource_supported': supported['resource'],
     }
+    # M4 keeps TASK_DISPATCHED as its denominator (owner decision 2026-10-27):
+    # a refused conflict can involve a task that was never dispatched, so the
+    # figure is a count over dispatched tasks, not a comparable rate.
+    m['notes'].append('per_dispatched_task is not a comparable rate: a refused conflict can '
+                      'involve a task that was never dispatched, so it can exceed 1')
     if not all(supported.values()):
         missing_kinds = [k for k, ok in supported.items() if not ok]
         return mark_unknown(

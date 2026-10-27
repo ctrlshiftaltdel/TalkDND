@@ -105,6 +105,15 @@ class GoldSampleTests(unittest.TestCase):
         self.assertEqual(m['detail']['resource'], 1)
         self.assertEqual(m['detail']['dispatched_tasks'], 9)
 
+    def test_conflict_count_is_not_presented_as_a_comparable_rate(self):
+        # M4 keeps TASK_DISPATCHED as its denominator (owner decision 2026-10-27):
+        # a refused task can be counted without ever being dispatched, so the
+        # per-task figure is not a rate anyone may compare across windows.
+        m = self.metrics['M4']
+        note = ' '.join(m['notes'])
+        self.assertIn('per_dispatched_task', note)
+        self.assertIn('not a comparable rate', note)
+
     def test_blocked_time_does_not_extrapolate_the_open_block(self):
         m = self.metrics['M5']
         self.assertEqual((m['sample_size'], m['missing']), (2, 1))
@@ -324,8 +333,63 @@ class SqliteSourceTests(unittest.TestCase):
         m4 = metric(payload, 'M4')
         self.assertEqual(m4['detail']['resource'], 1)
         self.assertEqual(m4['detail']['path'], 0)
-        self.assertEqual(m4['status'], 'unknown')  # path conflicts are not recorded locally
+        # A legacy library predates the path event: the kind stays uncollected
+        # (unknown, never a fabricated 0) until the library really holds one.
+        self.assertEqual(m4['status'], 'unknown')
+        self.assertEqual(payload['collection']['path_conflicts'], 'unsupported')
         self.assertEqual(payload['collection']['checks'], 'unsupported')
+
+    def test_path_conflict_event_makes_the_kind_collected(self):
+        # The library really carries a refused-dispatch record, so the source
+        # now collects path conflicts; the report must say so instead of
+        # marking the kind unsupported while it counts the event.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.build(tmp)
+            con = sqlite3.connect(path)
+            try:
+                con.execute(
+                    "INSERT INTO events(task_id,at,action,data_json) "
+                    "VALUES('T-1','2026-01-02T09:06:00Z','CONFLICT_RECORDED',?)",
+                    (json.dumps({'kind': 'path', 'phase': 'dispatch',
+                                 'conflicts': [{'path': 'src/', 'held_path': 'src/',
+                                                'holder_task': 'T-0'}]}),))
+                con.commit()
+            finally:
+                con.close()
+            result = report.load_sqlite(path)
+            payload = report_for(result)
+        self.assertEqual(payload['collection']['path_conflicts'], 'supported')
+        m4 = metric(payload, 'M4')
+        self.assertEqual(m4['status'], 'ok')
+        self.assertEqual(m4['detail']['path'], 1)
+        self.assertEqual(m4['detail']['resource'], 1)
+        self.assertEqual(m4['value'], 2)
+
+    def test_ready_preflight_refusal_is_not_a_dispatch_conflict(self):
+        # `task ready` records its own event. It is a known action (so it is not
+        # an ignored record) but it is not a CONFLICT_RECORDED: M4 stays
+        # unknown on this library rather than counting a preflight refusal.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.build(tmp)
+            con = sqlite3.connect(path)
+            try:
+                con.execute(
+                    "INSERT INTO events(task_id,at,action,data_json) "
+                    "VALUES('T-1','2026-01-02T09:06:00Z','PATH_PREFLIGHT_REFUSED',?)",
+                    (json.dumps({'kind': 'path', 'phase': 'ready',
+                                 'conflicts': [{'path': 'src/', 'held_path': 'src/',
+                                                'holder_task': 'T-0'}]}),))
+                con.commit()
+            finally:
+                con.close()
+            result = report.load_sqlite(path)
+            payload = report_for(result)
+        self.assertEqual(result['records_ignored'], 0)
+        self.assertEqual(payload['collection']['path_conflicts'], 'unsupported')
+        m4 = metric(payload, 'M4')
+        self.assertEqual(m4['detail']['path'], 0)
+        self.assertEqual(m4['status'], 'unknown')
+        self.assertIsNone(m4['value'])
 
     def test_unknown_action_counts_are_reported_as_ignored_records(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -349,6 +413,25 @@ class SqliteSourceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('source: sqlite', result.stdout)
         self.assertEqual(before, after, 'the report must not modify the task library')
+
+
+class MetricsTemplateTests(unittest.TestCase):
+    """The template and the reader must not tell two stories about M4."""
+
+    def setUp(self):
+        self.text = (ROOT / 'templates' / 'metrics.md').read_text(encoding='utf-8')
+
+    def test_template_no_longer_claims_a_refused_dispatch_leaves_no_event(self):
+        self.assertNotIn('leaves no event', self.text)
+        self.assertIn('records rejected path locks', self.text)
+
+    def test_template_documents_the_preflight_event_as_audit_only(self):
+        self.assertIn('PATH_PREFLIGHT_REFUSED', self.text)
+        self.assertIn('not counted', self.text)
+
+    def test_template_marks_the_conflict_ratio_as_non_comparable(self):
+        self.assertIn('not a comparable rate', self.text)
+        self.assertIn('can exceed 1', self.text)
 
 
 class CliTests(unittest.TestCase):

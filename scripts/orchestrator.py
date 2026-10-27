@@ -12,6 +12,10 @@ from pathlib import Path, PurePosixPath
 
 ACTIVE = {'DISPATCHED','IN_PROGRESS','REVIEW_READY','MASTER_REVIEW','APPROVED','MERGED','BLOCKED','NEEDS_HUMAN_DECISION','FAILED'}
 TERMINAL = {'VERIFIED','CANCELED'}
+# Paths may only be re-scoped while the task is parked (kit 3.1 rule 4). These
+# are exactly the states that keep their locks: an active task must be blocked
+# first, and a merged task is frozen.
+AMENDABLE_PATH_STATES = {'BLOCKED','NEEDS_HUMAN_DECISION','FAILED'}
 TRANSITIONS = {
  'PLANNED': {'READY','BLOCKED','NEEDS_HUMAN_DECISION','CANCELED'},
  'READY': {'DISPATCHED','BLOCKED','NEEDS_HUMAN_DECISION','CANCELED'},
@@ -55,7 +59,7 @@ EDITIONS = ('local','github')
 RUNTIME_DEFAULTS = {'retry_cap': RETRY_CAP_DEFAULT, 'local_dir': '.local'}
 PROJECT_CONFIG = 'docs/PROJECT.md'
 # docs/PLAN.md is the plan of record (task registration, dispatch and phase
-# close-out read it); templates/PLAN.md is only the seed copy that `init`
+# close-out read it); templates/plan.md is only the seed copy that `init`
 # copies once. A root-level PLAN.md is the legacy (<=1.3) location: init never
 # touches it and never seeds docs/PLAN.md while it exists, so the design goals
 # always keep a single authority. Both names are relative to the project root.
@@ -220,8 +224,23 @@ def event(con, task_id, action, from_status=None, to_status=None, note='', data=
     con.execute('INSERT INTO events(task_id,at,action,from_status,to_status,note,data_json) VALUES(?,?,?,?,?,?,?)',
         (task_id,now(),action,from_status,to_status,note,json.dumps(data or {},ensure_ascii=False)))
 
+def record_path_conflict(con, task_id, phase, status, conflicts):
+    """Persist a refused path check in the caller's transaction (M4 evidence).
+
+    `phase` is `dispatch` or `ready`. A dispatch refusal is the conflict M4
+    reads (`CONFLICT_RECORDED`, `data.kind=path`); a `ready` preflight is a
+    separate, audit-only event and must never be read as a dispatch conflict.
+    The caller COMMITs before re-raising, so the refusal leaves evidence while
+    still inserting no lock row.
+    """
+    action='CONFLICT_RECORDED' if phase=='dispatch' else 'PATH_PREFLIGHT_REFUSED'
+    detail=[{'path':p,'held_path':held,'holder_task':holder} for p,held,holder in conflicts]
+    event(con,task_id,action,None,None,
+          f'{phase} refused: path conflict; no lock row was inserted',
+          {'kind':'path','phase':phase,'status':status,'conflicts':detail})
+
 def init_plan(root):
-    """Seed <root>/docs/PLAN.md from templates/PLAN.md exactly once.
+    """Seed <root>/docs/PLAN.md from templates/plan.md exactly once.
 
     docs/PLAN.md is the plan of record, so an existing file is never
     overwritten (that would destroy the project owner's plan). A legacy root
@@ -236,7 +255,7 @@ def init_plan(root):
     legacy=root/LEGACY_PLAN_DOC
     if target.exists():
         print(f'PLAN.md already present, kept unchanged: {target}')
-        print('Next: judge task direction from the design goals in docs/PLAN.md; templates/PLAN.md is only the initial copy.')
+        print('Next: judge task direction from the design goals in docs/PLAN.md; templates/plan.md is only the initial copy.')
         return 'kept'
     if legacy.exists():
         print(f'Legacy root PLAN.md found; docs/PLAN.md not created: {legacy}')
@@ -245,7 +264,7 @@ def init_plan(root):
     template=root/PLAN_TEMPLATE
     if not template.is_file():
         print(f'PLAN.md not created: template missing at {template}')
-        print('Next: copy templates/PLAN.md into docs/PLAN.md (kit installed there), then rerun init.')
+        print('Next: copy templates/plan.md into docs/PLAN.md (kit installed there), then rerun init.')
         return 'template-missing'
     (root/'docs').mkdir(parents=True,exist_ok=True)
     target.write_bytes(template.read_bytes())
@@ -397,7 +416,13 @@ def task_show(root, task_id):
         print('\nResource locks (contract: docs/design/RESOURCE-LOCKS.md):\n'+'\n'.join(lines))
         print('\nEvents:')
         for e in con.execute('SELECT * FROM events WHERE task_id=? ORDER BY id',(task_id,)):
-            print(f"- {e['at']} {e['action']} {e['from_status'] or '-'}→{e['to_status'] or '-'} {e['note']}")
+            line=f"- {e['at']} {e['action']} {e['from_status'] or '-'}→{e['to_status'] or '-'} {e['note']}"
+            data=json.loads(e['data_json'] or '{}')
+            if e['action']=='RECORD_AMENDED' and data.get('field')=='paths':
+                # The before/after path sets stay readable without opening data_json.
+                line+=(f" [paths: {', '.join(data.get('before') or []) or '(none)'}"
+                       f" -> {', '.join(data.get('after') or []) or '(none)'}]")
+            print(line)
     finally: con.close()
 
 def dependency_check(con, row):
@@ -414,10 +439,18 @@ def task_ready(root, task_id):
         dependency_check(con,r)
         # Current locks must not overlap declared paths. It is OK that lock is not acquired until dispatch; this is a preflight only.
         paths=json.loads(r['paths_json'])
-        for lock in con.execute('SELECT path,task_id FROM locks'):
+        for lock in con.execute('SELECT path,task_id FROM locks').fetchall():
             if lock['task_id']==task_id: continue
             for p in paths:
-                if overlaps(p,lock['path']): raise RuntimeError(f'path conflict: {p} overlaps {lock["path"]}, held by {lock["task_id"]}')
+                if overlaps(p,lock['path']):
+                    # Preflight refusals are auditable but are not dispatch
+                    # conflicts: record the separate event, commit it, and then
+                    # raise the unchanged error (M4 never counts this event).
+                    message=f'path conflict: {p} overlaps {lock["path"]}, held by {lock["task_id"]}'
+                    record_path_conflict(con,task_id,'ready',r['status'],
+                                         [(p,lock['path'],lock['task_id'])])
+                    con.execute('COMMIT')
+                    raise RuntimeError(message)
         old=r['status']; con.execute("UPDATE tasks SET status='READY',updated_at=?,last_note=? WHERE id=?",(now(),'Dependencies and paths checked',task_id))
         event(con,task_id,'STATUS_CHANGED',old,'READY','Dependencies and paths checked')
         con.execute('COMMIT')
@@ -451,6 +484,11 @@ def task_dispatch(root, task_id, options=None):
                 if overlaps(p,lock['path']): conflicts.append((p,lock['path'],lock['task_id']))
         if conflicts:
             detail='; '.join(f'{p} overlaps {held} (task {tid})' for p,held,tid in conflicts)
+            # The refusal is the event M4 counts. Write it in this transaction
+            # and commit it before raising, so the audit trail survives while no
+            # lock row is inserted and the message / exit code stay unchanged.
+            record_path_conflict(con,task_id,'dispatch',r['status'],conflicts)
+            con.execute('COMMIT')
             raise RuntimeError('dispatch refused; path conflict: '+detail)
         # Resource locks are an independent second gate (contract §1.2): the path
         # check above keeps its wording and runs first, then the resource set is
@@ -579,13 +617,23 @@ def task_status(root, args):
         print(f'{args.id}: released {len(released_resources)} resource lock(s): {", ".join(released_resources)}')
 
 def task_amend(root, args):
-    """Correct an already-recorded merge SHA on a MERGED / VERIFIED task.
+    """Audited corrections to task fields that were already recorded.
 
-    The only audited entry point for changing merged_sha after MERGED: requires a
-    full 40-hex SHA and a --note reason, and records a RECORD_AMENDED event with
-    the old/new values. No other command mutates merged_sha outside MERGED set-up.
+    Two mutually exclusive modes:
+
+    - `--merge-sha` corrects `merged_sha` on a MERGED / VERIFIED task. Behaviour
+      and error text are unchanged from before `--paths` existed.
+    - `--paths` re-scopes a task parked in BLOCKED / NEEDS_HUMAN_DECISION / FAILED
+      (kit 3.1 rule 4). The conflict check against every other task's locks and
+      the lock rewrite happen in one BEGIN IMMEDIATE, so a half lock set can
+      never be committed.
     """
     require_local_scheduler(root,'task amend')
+    raw_paths=getattr(args,'paths',None)
+    if raw_paths is not None and (args.merge_sha or '').strip():
+        raise RuntimeError('amend accepts either --paths or --merge-sha, not both')
+    if raw_paths is not None:
+        amend_task_paths(root,args,raw_paths); return
     sha=(args.merge_sha or '').strip()
     if not re.fullmatch(r'[0-9a-fA-F]{40}', sha):
         raise RuntimeError('amend requires a full 40-character hex --merge-sha')
@@ -605,6 +653,50 @@ def task_amend(root, args):
         safe_rollback(con); raise
     finally: con.close()
     print(f'{args.id}: merge SHA amended {old or "(unset)"} -> {new}')
+
+def amend_task_paths(root, args, raw_paths):
+    """Re-scope a parked task and rewrite its path locks atomically (kit 3.1 rule 4).
+
+    Only states that keep their locks are eligible, so an active task must be
+    blocked first. Every new path is checked against the other tasks' locks with
+    the same `overlaps()` rule dispatch uses; one conflict refuses the whole
+    rewrite. On success the task's lock rows are exactly the new path set.
+    """
+    if not raw_paths:
+        raise RuntimeError('amend --paths requires at least one allowed path')
+    note=(args.note or '').strip()
+    if not note:
+        raise RuntimeError('amend --paths requires --note explaining the reason and the authorisation')
+    paths=sorted(set(normalize_path(p) for p in raw_paths))
+    con=connect(root)
+    try:
+        con.execute('BEGIN IMMEDIATE'); r=get_task(con,args.id)
+        if r['status'] not in AMENDABLE_PATH_STATES:
+            raise RuntimeError('paths can only be amended on BLOCKED / NEEDS_HUMAN_DECISION / FAILED tasks; '
+                               f'current status is {r["status"]}')
+        before=json.loads(r['paths_json'])
+        conflicts=[]
+        locks=con.execute('SELECT path,task_id FROM locks WHERE task_id<>?',(args.id,)).fetchall()
+        for p in paths:
+            for lock in locks:
+                if overlaps(p,lock['path']): conflicts.append((p,lock['path'],lock['task_id']))
+        if conflicts:
+            detail='; '.join(f'{p} overlaps {held} (task {tid})' for p,held,tid in conflicts)
+            raise RuntimeError('amend refused; path conflict: '+detail)
+        con.execute('UPDATE tasks SET paths_json=?,updated_at=?,last_note=? WHERE id=?',
+                    (json.dumps(paths),now(),note,args.id))
+        # Rewrite the lock set in the same transaction: the old rows go, exactly
+        # the new paths remain. Any failure above rolled back before this point.
+        con.execute('DELETE FROM locks WHERE task_id=?',(args.id,))
+        for p in paths:
+            con.execute('INSERT OR REPLACE INTO locks(path,task_id,created_at) VALUES(?,?,?)',(p,args.id,now()))
+        event(con,args.id,'RECORD_AMENDED',r['status'],r['status'],note,
+              {'field':'paths','before':before,'after':paths,'reason':note})
+        con.execute('COMMIT')
+    except Exception:
+        safe_rollback(con); raise
+    finally: con.close()
+    print(f'{args.id}: allowed paths amended {", ".join(before) or "(none)"} -> {", ".join(paths)}')
 
 def find_task_resource_lock(con, task_id, reference):
     """Resolve `--resource` as a lock_id or a resource_id held by this task."""
@@ -1336,14 +1428,18 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root',default='.',help='project root (default: current directory)')
     sub=parser.add_subparsers(dest='cmd',required=True)
-    sub.add_parser('init',help='initialize the local task database and .orchestration/config.json (retry_cap, local_dir); seed docs/PLAN.md from templates/PLAN.md when absent')
+    sub.add_parser('init',help='initialize the local task database and .orchestration/config.json (retry_cap, local_dir); seed docs/PLAN.md from templates/plan.md when absent')
     sub.add_parser('backup',help='create a consistent SQLite backup')
     cf=sub.add_parser('config',help='inspect runtime configuration'); cs=cf.add_subparsers(dest='configcmd',required=True)
     cs.add_parser('show',help='print effective config values and their source')
     t=sub.add_parser('task',help='task operations'); ts=t.add_subparsers(dest='taskcmd',required=True)
-    a=ts.add_parser('add'); a.add_argument('--id',required=True); a.add_argument('--title',required=True); a.add_argument('--description',default=''); a.add_argument('--paths',nargs='+',required=True); a.add_argument('--depends',nargs='*',default=[]); a.add_argument('--acceptance',nargs='+',required=True)
-    a.add_argument('--resources',nargs='*',default=[],
-                   help='optional declared resource set: <resource_id>:<mode>[:<ttl>], comma-free list; empty means the task takes no resource lock')
+    # Multi-value options are repeatable: `action='extend'` merges every occurrence
+    # instead of letting the last one overwrite the earlier ones (argparse's default
+    # `store`). `--acceptance` keeps the given order; task_add() still sorts and
+    # de-duplicates `--paths` / `--depends`.
+    a=ts.add_parser('add'); a.add_argument('--id',required=True); a.add_argument('--title',required=True); a.add_argument('--description',default=''); a.add_argument('--paths',action='extend',nargs='+',required=True); a.add_argument('--depends',action='extend',nargs='*',default=[]); a.add_argument('--acceptance',action='extend',nargs='+',required=True)
+    a.add_argument('--resources',action='extend',nargs='*',default=[],
+                   help='optional declared resource set: <resource_id>:<mode>[:<ttl>], comma-free list; repeatable; empty means the task takes no resource lock')
     l=ts.add_parser('list'); l.add_argument('--active-only',action='store_true')
     sh=ts.add_parser('show'); sh.add_argument('id')
     rd=ts.add_parser('ready'); rd.add_argument('id')
@@ -1353,7 +1449,11 @@ def main():
     dp.add_argument('--holder',default='',help='locatable holder ID (default: host:pid or $ORCH_HOLDER)')
     dp.add_argument('--evidence',default='',help='locatable evidence reference recorded on the granted locks')
     st=ts.add_parser('status'); st.add_argument('id'); st.add_argument('status',choices=sorted(TRANSITIONS)); st.add_argument('--head-sha'); st.add_argument('--merge-sha',help='full 40-hex merge commit SHA (required for MERGED)'); st.add_argument('--note',default='')
-    am=ts.add_parser('amend',help='correct the merge SHA of a MERGED/VERIFIED task (audited; requires --note)'); am.add_argument('id'); am.add_argument('--merge-sha',required=True); am.add_argument('--note',required=True)
+    am=ts.add_parser('amend',help='correct the merge SHA of a MERGED/VERIFIED task, or re-scope a BLOCKED/NEEDS_HUMAN_DECISION/FAILED task (audited; requires --note)'); am.add_argument('id')
+    am.add_argument('--merge-sha',default=None,help='full 40-hex merge commit SHA (required for the merge-SHA mode)')
+    am.add_argument('--paths',action='extend',nargs='+',default=None,
+                    help='new allowed path set for a BLOCKED / NEEDS_HUMAN_DECISION / FAILED task; rewrites its path locks')
+    am.add_argument('--note',default=None,help='audit reason (required; for --paths include the authorisation)')
     ws=ts.add_parser('workspace'); ws.add_argument('id'); ws.add_argument('--branch',default=''); ws.add_argument('--worktree',default=''); ws.add_argument('--head-sha',default=''); ws.add_argument('--note',default='')
     ul=ts.add_parser('unlock'); ul.add_argument('id'); ul.add_argument('--reason',required=True); ul.add_argument('--force',action='store_true')
     ul.add_argument('--resource',default='',help='release/force-unlock one named resource lock (id or lock_id) instead of the path locks')
@@ -1369,6 +1469,11 @@ def main():
     rf=ts.add_parser('reconcile',help='rebuild resource lock facts from the store; quarantine what cannot be proven')
     rf.add_argument('--reason',default='cross-session recovery'); rf.add_argument('--evidence',default='')
     args=parser.parse_args(); root=root_path(args.root)
+    if args.cmd=='task' and args.taskcmd=='amend' and args.paths is None:
+        # --merge-sha / --note were mandatory options before --paths existed. Keep
+        # the pre-existing missing-argument error text and exit code 2 exactly.
+        missing=[name for name,value in (('--merge-sha',args.merge_sha),('--note',args.note)) if value is None]
+        if missing: am.error('the following arguments are required: '+', '.join(missing))
     try:
         if args.cmd=='init': init(root)
         elif args.cmd=='backup': backup(root)
