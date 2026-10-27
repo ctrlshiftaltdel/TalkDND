@@ -47,7 +47,7 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 - 战斗中每个掷骰同样要抄进会话日志（引擎输出已经是完整算式，可直接贴）。
 - 程序文件是 `bin/combat-sim`（Windows 是 `bin\combat-sim.exe`）。没有它时按 `README.md` 放好再开局，不要改用心算。
 
-规则数据分层：引擎按清单的 `ruleset` 加载 `Rules/combat/common/` + `Rules/combat/<版本>/`。只把 SRD 内容提交进仓库；非 SRD 数据（如只在 MM 里的怪物）放到 `Rules/combat/local/` 或加进 `.gitignore`，并在清单的 `library:` 里另列。清单模板是 `example/save/combat/campaign.yaml`。
+规则数据分层：引擎按清单的 `ruleset` 选 edition（2014 或 2024），加载 `Rules/combat/common/` + `Rules/combat/<edition>/`。`5e-srd` / `5.5e-srd` 只用这一层；`5e-full` / `5.5e-full` 先加载 SRD 层（`common/`、`<edition>/srd/` 与 `<edition>/**/srd-*` 覆盖，如 `2024/monsters/srd-spatial.yaml`），再加载同 edition 已解锁的完整书 pack，最后才加载 `<edition>/` 下手写内容与冒险/战役覆盖。FULL 缺书或 pack 无效时 `content check` 失败，不会静默退回 SRD。只把 SRD 内容提交进仓库；非 SRD 数据（如只在 MM 里的怪物）放到 `Rules/combat/local/` 或加进 `.gitignore`，并在清单的 `library:` 里另列。清单模板是 `example/save/combat/campaign.yaml`。
 
 ## 队伍状态跨战斗保留（party-state）
 

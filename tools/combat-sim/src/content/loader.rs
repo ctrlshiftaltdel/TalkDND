@@ -671,25 +671,22 @@ impl ContentSources {
     }
 
     /// Loads the manifest (if any) plus explicit sources and returns a ready
-    /// registry. Libraries are scanned first, then adventures, then characters.
+    /// registry. The edition's SRD libraries load first, then the unlocked
+    /// full packs (FULL rulesets), then adventures and characters.
     pub fn load(&self) -> Result<ContentRegistry> {
         let mut registry = ContentRegistry::default();
         let mut libraries = Vec::new();
         let mut adventures = Vec::new();
         let mut characters = Vec::new();
 
-        let mut ruleset = String::from("2024");
+        let mut ruleset = Ruleset::FivePointFiveESrd;
+        let mut strict = false;
         if let Some(manifest_path) = self.campaign_path() {
+            strict = true;
             let manifest = load_manifest(&manifest_path)?;
             if let Some(value) = &manifest.ruleset {
-                if !SUPPORTED_RULESETS.contains(&value.as_str()) {
-                    bail!(
-                        "unsupported ruleset `{value}` in {}; expected one of {:?}",
-                        manifest_path.display(),
-                        SUPPORTED_RULESETS
-                    );
-                }
-                ruleset = value.clone();
+                ruleset = Ruleset::parse(value)
+                    .with_context(|| format!("in campaign manifest {}", manifest_path.display()))?;
             }
             let base = manifest_path
                 .parent()
@@ -730,22 +727,127 @@ impl ContentSources {
             );
         }
 
-        registry.ruleset = ruleset.clone();
-        let libraries: Vec<PathBuf> = libraries
-            .iter()
-            .flat_map(|path| expand_layers(path, &ruleset))
-            .collect();
-        for source in [&libraries, &adventures, &characters] {
-            for path in source {
-                let mut files = Vec::new();
-                collect_files(path, &mut files, &ruleset)?;
-                // Packs are the base layer; ordinary content overrides them by
-                // entity id. `sort_by_key` is stable, so files keep their path
-                // order inside each group.
-                files.sort_by_key(|file| !super::pack::is_pack_path(file));
-                for file in files {
-                    load_file(&file, &mut registry)?;
+        registry.ruleset = ruleset.edition().to_string();
+
+        // For a FULL save, split explicit pack files and the layered edition
+        // into SRD base, full packs, and hand-written overrides. `*-srd` and
+        // non-strict callers keep the original library order and behavior.
+        if strict && ruleset.is_full() {
+            let mut srd_libraries = Vec::new();
+            let mut srd_overlays: Vec<FilteredSource> = Vec::new();
+            let mut full_libraries = Vec::new();
+            let mut handwritten_libraries: Vec<FilteredSource> = Vec::new();
+            for path in libraries {
+                if super::pack::is_pack_path(&path) {
+                    let meta = read_pack_header(&path)?;
+                    if meta.id.starts_with("full-")
+                        && meta.distribution != super::pack::Distribution::Full
+                    {
+                        bail!(
+                            "full pack `{}` ({}) must declare distribution: full, not {}; one save uses one ruleset",
+                            meta.id,
+                            path.display(),
+                            meta.distribution.as_str()
+                        );
+                    }
+                    match meta.distribution {
+                        super::pack::Distribution::Full => {
+                            if meta.edition != ruleset.edition() {
+                                bail!(
+                                    "full pack `{}` ({}) is for edition {} but this save uses {} (edition {}); one save uses one ruleset",
+                                    meta.id,
+                                    path.display(),
+                                    meta.edition,
+                                    ruleset.display(),
+                                    ruleset.edition()
+                                );
+                            }
+                            full_libraries.push(path);
+                        }
+                        super::pack::Distribution::Srd => srd_libraries.push(path),
+                        super::pack::Distribution::Local => {
+                            handwritten_libraries.push(FilteredSource {
+                                path,
+                                filter: FileFilter::All,
+                            })
+                        }
+                    }
+                    continue;
                 }
+                // A layered library (`common/` + edition folders) is the SRD
+                // base; every other directory is hand-written or campaign
+                // content. Split the edition folder so only `common/` and
+                // `<edition>/srd/` stay in the SRD layer; the edition's other
+                // files (monsters/, spells.yaml, ...) keep overriding the
+                // full pack.
+                if path.is_dir() && path.join("common").is_dir() {
+                    let (srd, overlays, hand) = full_layers(&path, ruleset.edition());
+                    srd_libraries.extend(srd);
+                    srd_overlays.extend(overlays);
+                    handwritten_libraries.extend(hand);
+                } else {
+                    handwritten_libraries.push(FilteredSource {
+                        path,
+                        filter: FileFilter::All,
+                    });
+                }
+            }
+
+            let srd_libraries: Vec<PathBuf> = srd_libraries
+                .iter()
+                .flat_map(|path| expand_layers(path, ruleset.edition()))
+                .collect();
+            for source in &srd_libraries {
+                load_source(source, None, ruleset, strict, &mut registry)?;
+            }
+            for source in &srd_overlays {
+                load_source(
+                    &source.path,
+                    Some(&source.filter),
+                    ruleset,
+                    strict,
+                    &mut registry,
+                )?;
+            }
+            for source in &full_libraries {
+                load_source(source, None, ruleset, strict, &mut registry)?;
+            }
+            for source in &handwritten_libraries {
+                load_source(
+                    &source.path,
+                    Some(&source.filter),
+                    ruleset,
+                    strict,
+                    &mut registry,
+                )?;
+            }
+            for source in adventures.iter().chain(characters.iter()) {
+                load_source(source, None, ruleset, strict, &mut registry)?;
+            }
+        } else {
+            let libraries: Vec<PathBuf> = libraries
+                .iter()
+                .flat_map(|path| expand_layers(path, ruleset.edition()))
+                .collect();
+            for source in libraries
+                .iter()
+                .chain(adventures.iter())
+                .chain(characters.iter())
+            {
+                load_source(source, None, ruleset, strict, &mut registry)?;
+            }
+        }
+
+        // Fail closed: FULL must actually add full-book content. Packs reached
+        // through a directory (not listed individually) are validated too.
+        if strict && ruleset.is_full() {
+            let matching = registry.packs.values().any(|meta| {
+                meta.distribution == super::pack::Distribution::Full
+                    && meta.edition == ruleset.edition()
+                    && meta.id.starts_with(&format!("full-{}-", ruleset.edition()))
+            });
+            if !matching {
+                return Err(full_pack_required_error(ruleset));
             }
         }
 
@@ -753,8 +855,219 @@ impl ContentSources {
     }
 }
 
-/// Rules editions the loader understands.
+/// Rules editions the loader understands. These are the on-disk layer names
+/// (`Rules/combat/<edition>/`); the save-visible ruleset values are
+/// [`Ruleset`], which also selects whether full-book packs may load.
 pub const SUPPORTED_RULESETS: [&str; 2] = ["2014", "2024"];
+
+/// The four player-visible rulesets. `srd` loads only the edition's SRD layer;
+/// `full` additionally requires at least one unlocked full pack for that
+/// edition. The engine itself still receives `2014` / `2024` in
+/// [`ContentRegistry::ruleset`], so spatial and rules defaults do not change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Ruleset {
+    #[serde(rename = "5e-srd")]
+    FiveESrd,
+    #[serde(rename = "5e-full")]
+    FiveEFull,
+    #[serde(rename = "5.5e-srd")]
+    FivePointFiveESrd,
+    #[serde(rename = "5.5e-full")]
+    FivePointFiveEFull,
+}
+
+impl Ruleset {
+    /// Display order used in errors and help text.
+    pub const ALL: [Ruleset; 4] = [
+        Ruleset::FivePointFiveEFull,
+        Ruleset::FiveEFull,
+        Ruleset::FivePointFiveESrd,
+        Ruleset::FiveESrd,
+    ];
+
+    pub const VALUES: [&'static str; 4] = ["5.5e-full", "5e-full", "5.5e-srd", "5e-srd"];
+
+    /// Parses a save manifest value. Case and surrounding whitespace are
+    /// ignored. The old edition-only values migrate to the SRD ruleset.
+    pub fn parse(text: &str) -> Result<Self> {
+        let normalized = text.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "5e-srd" => Ok(Self::FiveESrd),
+            "5e-full" => Ok(Self::FiveEFull),
+            "5.5e-srd" => Ok(Self::FivePointFiveESrd),
+            "5.5e-full" => Ok(Self::FivePointFiveEFull),
+            "2014" => Ok(Self::FiveESrd),
+            "2024" => Ok(Self::FivePointFiveESrd),
+            _ => bail!(
+                "unsupported ruleset `{}`; expected one of {} (legacy `2014` -> `5e-srd`, `2024` -> `5.5e-srd`)",
+                text.trim(),
+                Self::ALL
+                    .iter()
+                    .map(|ruleset| format!(
+                        "{} (`{}`)",
+                        ruleset.display(),
+                        ruleset.value()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+
+    /// Canonical save-manifest value.
+    pub fn value(self) -> &'static str {
+        match self {
+            Self::FiveESrd => "5e-srd",
+            Self::FiveEFull => "5e-full",
+            Self::FivePointFiveESrd => "5.5e-srd",
+            Self::FivePointFiveEFull => "5.5e-full",
+        }
+    }
+
+    /// Player-facing name used by the digest, prompts and errors.
+    pub fn display(self) -> &'static str {
+        match self {
+            Self::FiveESrd => "5e SRD",
+            Self::FiveEFull => "5e FULL",
+            Self::FivePointFiveESrd => "5.5e SRD",
+            Self::FivePointFiveEFull => "5.5e FULL",
+        }
+    }
+
+    /// Engine edition / on-disk layer: `2014` or `2024`.
+    pub fn edition(self) -> &'static str {
+        match self {
+            Self::FiveESrd | Self::FiveEFull => "2014",
+            Self::FivePointFiveESrd | Self::FivePointFiveEFull => "2024",
+        }
+    }
+
+    pub fn is_full(self) -> bool {
+        matches!(self, Self::FiveEFull | Self::FivePointFiveEFull)
+    }
+
+    pub fn is_srd(self) -> bool {
+        !self.is_full()
+    }
+}
+
+impl fmt::Display for Ruleset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.display())
+    }
+}
+
+/// Which files of a layered directory belong to this load step.
+#[derive(Debug, Clone)]
+enum FileFilter {
+    All,
+    /// Hand-written overrides: everything except the edition's `srd/`
+    /// subdirectory and `srd-*` SRD overlays.
+    HandWritten {
+        exclude: PathBuf,
+    },
+    /// SRD-only overlay files (`srd-*`) outside `srd/`, e.g.
+    /// `2024/monsters/srd-spatial.yaml`. They stay in the SRD base.
+    SrdOverlayNames {
+        exclude: PathBuf,
+    },
+}
+
+/// A source plus the filter that selects its files.
+#[derive(Debug, Clone)]
+struct FilteredSource {
+    path: PathBuf,
+    filter: FileFilter,
+}
+
+/// Split a layered library for a FULL save:
+/// - SRD base: `common/`, `<edition>/srd/`, and `<edition>/**/srd-*` overlays;
+/// - full packs;
+/// - the rest of `<edition>/` as hand-written overrides.
+///   `*-srd` keeps using [`expand_layers`] unchanged.
+fn full_layers(
+    path: &Path,
+    edition: &str,
+) -> (Vec<PathBuf>, Vec<FilteredSource>, Vec<FilteredSource>) {
+    let mut srd = Vec::new();
+    let common = path.join("common");
+    if common.is_dir() {
+        srd.push(common);
+    }
+    let mut overlays = Vec::new();
+    let mut hand = Vec::new();
+    let edition_dir = path.join(edition);
+    if edition_dir.is_dir() {
+        let srd_dir = edition_dir.join("srd");
+        if srd_dir.is_dir() {
+            srd.push(srd_dir.clone());
+        }
+        overlays.push(FilteredSource {
+            path: edition_dir.clone(),
+            filter: FileFilter::SrdOverlayNames {
+                exclude: srd_dir.clone(),
+            },
+        });
+        hand.push(FilteredSource {
+            path: edition_dir,
+            filter: FileFilter::HandWritten { exclude: srd_dir },
+        });
+    }
+    (srd, overlays, hand)
+}
+
+fn load_source(
+    source: &Path,
+    filter: Option<&FileFilter>,
+    ruleset: Ruleset,
+    strict: bool,
+    registry: &mut ContentRegistry,
+) -> Result<()> {
+    let mut files = Vec::new();
+    collect_files(source, &mut files, ruleset.edition())?;
+    if let Some(filter) = filter {
+        files.retain(|file| match filter {
+            FileFilter::All => true,
+            FileFilter::HandWritten { exclude } => {
+                !file.starts_with(exclude)
+                    && !file
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.to_ascii_lowercase().starts_with("srd-"))
+            }
+            FileFilter::SrdOverlayNames { exclude } => {
+                !file.starts_with(exclude)
+                    && file
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.to_ascii_lowercase().starts_with("srd-"))
+            }
+        });
+    }
+    // Packs are the base layer; ordinary content overrides them by entity id.
+    // `sort_by_key` is stable, so files keep their path order inside each group.
+    files.sort_by_key(|file| !super::pack::is_pack_path(file));
+    for file in files {
+        load_file(&file, ruleset, strict, registry)?;
+    }
+    Ok(())
+}
+
+fn full_pack_required_error(ruleset: Ruleset) -> anyhow::Error {
+    let edition = ruleset.edition();
+    let alternative = if edition == "2014" {
+        "5e SRD"
+    } else {
+        "5.5e SRD"
+    };
+    anyhow!(
+        "{} requires at least one unlocked {edition} full pack (Player's Handbook, Dungeon Master's Guide or Monster Manual); none was loaded. \
+         Put the matching PDF in Rules/{edition}/<book>/ and run `talkdnd library scan`, \
+         put the built pack at Rules/packs/full-{edition}-<book>.pack.json, then run `talkdnd start`. \
+         Or choose {alternative}.",
+        ruleset.display()
+    )
+}
 
 /// A layered library (`<dir>/common/` present) expands to `common/` then
 /// `<ruleset>/`; other edition folders are ignored. Plain dirs load as-is.
@@ -792,6 +1105,25 @@ fn load_manifest(path: &Path) -> Result<CampaignManifest> {
         .with_context(|| format!("failed to parse campaign manifest {}", path.display()))?;
     serde_json::from_value(value)
         .with_context(|| format!("failed to parse campaign manifest {}", path.display()))
+}
+
+/// Reads only the `pack` metadata of an explicitly listed pack file, so the
+/// loader can decide whether it is a full pack before loading its content.
+fn read_pack_header(path: &Path) -> Result<PackMeta> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read content pack {}", path.display()))?;
+    let format = if extension_of(path).as_deref() == Some("json") {
+        Format::Json
+    } else {
+        Format::Yaml
+    };
+    let value = parse_value(&text, format)
+        .with_context(|| format!("failed to parse content pack {}", path.display()))?;
+    let pack = value
+        .get("pack")
+        .ok_or_else(|| anyhow!("{} has no `pack` metadata", path.display()))?;
+    serde_json::from_value(pack.clone())
+        .with_context(|| format!("failed to read content pack metadata {}", path.display()))
 }
 
 fn extension_of(path: &Path) -> Option<String> {
@@ -915,7 +1247,12 @@ struct FencedBlock {
     line: usize,
 }
 
-fn load_file(path: &Path, registry: &mut ContentRegistry) -> Result<()> {
+fn load_file(
+    path: &Path,
+    ruleset: Ruleset,
+    strict: bool,
+    registry: &mut ContentRegistry,
+) -> Result<()> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read content file {}", path.display()))?;
     match extension_of(path).as_deref() {
@@ -926,7 +1263,7 @@ fn load_file(path: &Path, registry: &mut ContentRegistry) -> Result<()> {
                 let source = ContentSource::new(path, Some(block.line));
                 let value = parse_value(&block.content, block.format)
                     .map_err(|error| anyhow!("{source}: {error}"))?;
-                apply_document(&value, &source, registry)
+                apply_document(&value, &source, ruleset, strict, registry)
                     .map_err(|error| anyhow!("{source}: {error}"))?;
             }
         }
@@ -934,14 +1271,14 @@ fn load_file(path: &Path, registry: &mut ContentRegistry) -> Result<()> {
             let source = ContentSource::new(path, None);
             let value = serde_json::from_str::<serde_json::Value>(&text)
                 .map_err(|error| anyhow!("{}: invalid JSON: {error}", source))?;
-            apply_document(&value, &source, registry)
+            apply_document(&value, &source, ruleset, strict, registry)
                 .map_err(|error| anyhow!("{source}: {error}"))?;
         }
         Some("yaml" | "yml") => {
             let source = ContentSource::new(path, None);
             let value =
                 parse_value(&text, Format::Yaml).map_err(|error| anyhow!("{source}: {error}"))?;
-            apply_document(&value, &source, registry)
+            apply_document(&value, &source, ruleset, strict, registry)
                 .map_err(|error| anyhow!("{source}: {error}"))?;
         }
         _ => bail!("unsupported content file {}", path.display()),
@@ -1003,11 +1340,13 @@ fn extract_combat_blocks(text: &str) -> Result<Vec<FencedBlock>> {
 fn apply_document(
     value: &serde_json::Value,
     source: &ContentSource,
+    ruleset: Ruleset,
+    strict: bool,
     registry: &mut ContentRegistry,
 ) -> Result<()> {
     if super::pack::looks_like_pack(value) {
         let pack = ContentPack::from_value(value).map_err(|error| anyhow!("{source}: {error}"))?;
-        apply_pack(pack, source, registry)?;
+        apply_pack(pack, source, ruleset, strict, registry)?;
         return Ok(());
     }
     let object = value
@@ -1029,9 +1368,37 @@ fn apply_document(
 fn apply_pack(
     pack: ContentPack,
     source: &ContentSource,
+    ruleset: Ruleset,
+    strict: bool,
     registry: &mut ContentRegistry,
 ) -> Result<()> {
     let meta = pack.pack.clone();
+    if strict && meta.distribution == super::pack::Distribution::Full {
+        // SRD rulesets never load full-book content, even if an old manifest
+        // still lists a pack path.
+        if ruleset.is_srd() {
+            return Ok(());
+        }
+        if meta.edition != ruleset.edition() {
+            bail!(
+                "{source}: full pack `{}` is for edition {} but this save uses {} (edition {}); one save uses one ruleset",
+                meta.id,
+                meta.edition,
+                ruleset.display(),
+                ruleset.edition()
+            );
+        }
+        let expected =
+            ["phb", "dmg", "mm"].map(|book| format!("full-{}-{book}", ruleset.edition()));
+        if !expected.contains(&meta.id) {
+            bail!(
+                "{source}: full pack `{}` is not a valid {} book pack (expected one of {})",
+                meta.id,
+                ruleset.display(),
+                expected.join(", ")
+            );
+        }
+    }
     if registry.packs.contains_key(&meta.id) {
         bail!(
             "{source}: duplicate content pack id `{}` (already loaded)",

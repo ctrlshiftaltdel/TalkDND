@@ -8,7 +8,7 @@
 
 - 让玩家在聊天里跑完一场 D&D：AI DM 负责叙述、NPC、选项与自由输入，玩家扮演自己的角色，存档可跨会话继续。
 - 所有骰子都由 `combat-sim` 的同一套 Rust 引擎产生并完整显示；战斗（攻击、伤害、条件、专注、移动、借机攻击）由该引擎结算，不靠模型口算。
-- 支持 2014 与 2024 两套规则，一档一版；`ruleset` 选中哪一版，就只加载那一版的战斗数据。
+- 支持 5.5e 与 5e 两套规则，玩家可选 **5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD**，一档一版；SRD 只用该 edition 的 SRD 层，FULL 在 SRD 层之后加载已解锁的完整书内容包。
 - 把玩家自备的规则书、冒险书、个人存档和 DM 秘密留在本机；仓库只收程序、原创文档、SRD 5.1 / 5.2.1 内容包和 SRD 派生的战斗数据。
 - 用 `tools/talkdnd` 把开局、建卡、同伴、存档点、信息边界和完整性检查做成可复用的 DM 助手，而不是把规则散落在提示词里。
 - 把产品决策写进 `docs/PROJECT-CHARTER.md` 的 Decision Log，后续任务按同一份契约推进，不因会话更替而漂移。
@@ -26,13 +26,13 @@
 
 ## 范围与非目标
 
-**范围：** 聊天跑团体验、`combat-sim` 战斗引擎、2014/2024 规则数据、`talkdnd` DM 助手、`talkdnd-dev` 开发工具、`LetsPlay/` 自包含游玩目录、AgentOrch `github` 底座协作流程。
+**范围：** 聊天跑团体验、`combat-sim` 战斗引擎、5e/5.5e 规则数据、`talkdnd` DM 助手、`talkdnd-dev` 开发工具、`LetsPlay/` 自包含游玩目录、AgentOrch `github` 底座协作流程。
 
 **非目标：**
 
 - 不发行受版权保护的冒险书或印刷版规则书；SRD 5.1 / 5.2.1 内容包按 CC-BY-4.0 随程序分发，玩家不必自备 SRD PDF；PHB/DMG/MM 完整书内容包按所有者 2026-10-27 的分发授权随程序提供，但保持锁定直到玩家用匹配的 PDF 解锁，玩家自备的 PDF 只在本机使用。
 - 不提交存档、角色卡、会话日志或 DM 秘密；`LetsPlay/Saves/README.md` 是唯一例外。
-- 不在同一存档里混用 2014 与 2024 规则。
+- 不在同一存档里混用 5e 与 5.5e 规则。
 - 不把非 SRD 的怪物、法术或战役硬编码进引擎或已跟踪数据。
 - 不引入网络服务、账号系统或托管游戏。
 - 不维护第二套任务系统；`editions/local/` 只因为套件校验要求两套底座文件而留在树里。
@@ -42,7 +42,7 @@
 - 平台：本地 CLI；Linux、Windows、macOS 是玩家平台，发布目标为 Linux x86_64、Windows x86_64、macOS arm64。
 - 隐私：书籍、存档、DM 秘密、凭据永不进入 Issue / PR / commit / CI 日志；图片入库前脱敏。
 - 规则数据：只收 SRD 5.1 / 5.2.1，署名见 `NOTICE`；非 SRD 数据只留本地且被 `.gitignore` 覆盖。完整书内容包只作发布资产：从本机 pdf2md 索引构建，永不入 Git，CI 只用合成 fixture、不构建或下载。
-- 完整书解锁：玩家提供 PDF 只为按内容识别并解锁对应 full pack；不校验 hash；授权范围变化时撤下或替换 full pack。
+- 完整书解锁：玩家提供 PDF 只为按内容识别并解锁对应 full pack；不校验 hash；授权范围变化时撤下或替换 full pack。`*-srd` 永不加载 full pack；`*-full` 至少需要一本同 edition 的已解锁 full pack，缺失、未解锁或损坏时 `start` 与 `content check` 失败关闭，不静默退回 SRD。
 - 版本：三个 crate 版本一致；存档 schema 变更必须带自动迁移并升次版本或主版本；发布前 `CHANGELOG.md` 必须有对应小节。
 - 源码只读：`tools/combat-sim/src` 默认不可写；修改前 `chmod u+w`，验证后 `chmod a-w`。
 - 套件：AgentOrch Format 1.6，官方 `MANIFEST.json` 基线；本地差异与预期漂移记录在 `docs/PROJECT.md`。
@@ -50,7 +50,7 @@
 ## 可度量的全局验收
 
 - 玩家在 `LetsPlay/` 启动 Agent，用 `LetsPlay/bin/combat-sim` 完成一次真实掷骰与一场战斗结算；SRD 内容已随程序提供，放入自己的 SRD PDF 是可选的。
-- 存档的 `ruleset` 只加载对应版本目录；另一版目录不被读取。
+- 存档的 `ruleset` 是四个值之一：`*-srd` 只加载对应 edition 的 SRD 层，`*-full` 要求同 edition 至少一本已解锁完整书，另一版目录不被读取；旧值 `2014` / `2024` 可读并在下次写入时迁移。
 - `uv run --no-project python scripts/validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 在无书籍、无存档的干净树上通过。
 - 三个 crate 的 `cargo test`、`cargo fmt --check`、`cargo clippy -D warnings` 通过。
 - AgentOrch 完整套件 `unittest discover -s tests` 通过；`check_drift` 只报告 `docs/PROJECT.md` 中列出的预期漂移。

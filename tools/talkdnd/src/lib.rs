@@ -37,6 +37,7 @@ pub mod worldtime;
 use anyhow::{bail, Context, Result};
 use chargen::Creation;
 use clap::{Parser, Subcommand};
+use combat_sim::content::loader::Ruleset;
 use combat_sim::dice::{seeded_rng, step_rng, DiceRng};
 use combat_sim::fsutil::atomic_write;
 use std::ffi::OsString;
@@ -75,6 +76,7 @@ enum Cmd {
     /// The deviation scope (0-2) and ratio (5-25%) are locked when the save is
     /// created; ask the player first. Without flags in a terminal, asks here.
     New {
+        /// Ruleset: 5.5e-full | 5.5e-srd | 5e-full | 5e-srd (legacy 2024 / 2014 accepted)
         #[arg(long)]
         ruleset: Option<String>,
         #[arg(long)]
@@ -295,7 +297,7 @@ enum Cmd {
     },
     /// List SRD options for a ruleset
     Options {
-        #[arg(long, default_value = "2024")]
+        #[arg(long, default_value = "5.5e-srd")]
         ruleset: String,
     },
 }
@@ -321,13 +323,13 @@ enum LibraryCmd {
     /// Identify the full books under Rules/<edition>/ from their converted
     /// front matter (never file names, never a PDF hash)
     Scan,
-    /// Full-pack status for 2014/2024 PHB, DMG and MM (SRD is always available)
+    /// Full-pack status for the 5e / 5.5e Player's Handbook, DMG and MM (SRD is always available)
     Packs,
     /// Record the player's explicit choice for an ambiguous book
     Choose {
         /// Book folder or the `source` printed by `library scan`
         book: String,
-        /// 2014 or 2024
+        /// Book edition folder: 2014 or 2024 (also accepts a ruleset value)
         #[arg(long)]
         edition: String,
         /// phb, dmg or mm
@@ -528,7 +530,7 @@ enum XpCmd {
     Add {
         /// Total XP (omit with --difficulty)
         amount: Option<i64>,
-        /// Amount from the ruleset table: 2014 easy|medium|hard|deadly, 2024 low|moderate|high
+        /// Amount from the ruleset table: 5e easy|medium|hard|deadly, 5.5e low|moderate|high
         #[arg(long)]
         difficulty: Option<String>,
         /// combat, noncombat, quest, discovery, roleplay, milestone-minor
@@ -645,12 +647,12 @@ enum ChargenCmd {
 enum DataCmd {
     /// Show which local data files are loaded and whether converted Markdown exists
     Status {
-        #[arg(long, default_value = "2024")]
+        #[arg(long, default_value = "5.5e-srd")]
         ruleset: String,
     },
     /// Build Rules/chargen/local/imported-<ruleset>.yaml from the converted paged Markdown (Rules/<edition>/<slug>/index/)
     Import {
-        #[arg(long, default_value = "2024")]
+        #[arg(long, default_value = "5.5e-srd")]
         ruleset: String,
     },
 }
@@ -982,6 +984,11 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
         }
         Cmd::Migrate { dry_run } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            if !dry_run {
+                if let Some(line) = save::migrate_ruleset(&s)? {
+                    println!("{line}");
+                }
+            }
             let report = migrate::ensure(&s, &root, dry_run)?;
             for line in report.lines() {
                 println!("{line}");
@@ -1210,7 +1217,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             oracle::run(&root, &s, cmd, rng)?
         }
-        Cmd::Options { ruleset } => print_options(&ruleset),
+        Cmd::Options { ruleset } => print_options(&ruleset)?,
         Cmd::Data { cmd } => data_cmd(&root, cmd)?,
         Cmd::Library {
             cmd: LibraryCmd::Tidy { dry_run },
@@ -1250,7 +1257,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                     println!("  文件：`{f}`");
                 }
             }
-            println!("SRD：始终可用（2014 与 2024）");
+            println!("SRD：始终可用（5e SRD 与 5.5e SRD）");
         }
         Cmd::Library {
             cmd:
@@ -1313,11 +1320,8 @@ fn rel(root: &Path, p: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn check_ruleset(r: &str) -> Result<()> {
-    if r != "2014" && r != "2024" {
-        bail!("ruleset must be 2014 or 2024");
-    }
-    Ok(())
+fn check_ruleset(r: &str) -> Result<Ruleset> {
+    Ruleset::parse(r)
 }
 
 fn deviation_input(scope: Option<u32>, ratio: Option<u32>) -> Result<migrate::Deviation> {
@@ -1407,9 +1411,8 @@ fn new_save(
     scope: Option<u32>,
     ratio: Option<u32>,
 ) -> Result<()> {
-    if let Some(r) = &ruleset {
-        check_ruleset(r)?;
-    }
+    let chosen = ruleset.as_deref().map(check_ruleset).transpose()?;
+    let manifest_ruleset = chosen.unwrap_or(Ruleset::FivePointFiveESrd);
     let deviation = deviation_input(scope, ratio)?;
     let date = date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     if !save::is_slot_name(&format!("{date}-01")) {
@@ -1420,7 +1423,7 @@ fn new_save(
     for d in ["Characters", "NPCs", "Sessions", "combat"] {
         fs::create_dir_all(dir.join(d))?;
     }
-    let rs = ruleset.clone().unwrap_or_else(|| "2024".into());
+    let rs = manifest_ruleset.value();
     let adv_slug = adventure
         .as_deref()
         .map(|a| library::adventure_folder_name(root, a));
@@ -1432,7 +1435,7 @@ fn new_save(
         None => "adventures: []\n".into(),
     };
     let campaign = format!(
-        "# combat-sim campaign manifest for save {slot} (paths relative to this file)\nname: \"TalkDND {slot}\"\nlibrary: [../../../Rules/combat]\n{adv_line}characters: [../Characters, ../NPCs]\nstate_dir: .\nparty: []\nruleset: \"{rs}\"   # 2014 | 2024\n"
+        "# combat-sim campaign manifest for save {slot} (paths relative to this file)\nname: \"TalkDND {slot}\"\nlibrary: [../../../Rules/combat]\n{adv_line}characters: [../Characters, ../NPCs]\nstate_dir: .\nparty: []\nruleset: \"{rs}\"   # 5.5e-full | 5e-full | 5.5e-srd | 5e-srd\n"
     );
     atomic_write(dir.join("combat/campaign.yaml"), campaign.as_bytes())?;
     atomic_write(dir.join("canon.md"), "# 即兴定论（公开）\n\n".as_bytes())?;
@@ -1443,7 +1446,7 @@ fn new_save(
     let setup = format!(
         "# {slot} 第 0 节：建卡\n\n- [{}] 新存档，规则 {}\n- 剧本偏离度：{}（开档后锁定）\n",
         chrono::Local::now().format("%H:%M"),
-        ruleset.as_deref().unwrap_or("待定"),
+        chosen.map(Ruleset::display).unwrap_or("待定"),
         deviation.describe()
     );
     atomic_write(
@@ -1451,7 +1454,7 @@ fn new_save(
         setup.as_bytes(),
     )?;
     let c = Creation {
-        ruleset,
+        ruleset: chosen.map(|ruleset| ruleset.value().to_string()),
         adventure,
         level: 1,
         ..Default::default()
@@ -1480,6 +1483,11 @@ fn print_next(c: &Creation) {
 }
 
 fn set_campaign_line(save: &Path, key: &str, value: &str) -> Result<()> {
+    // Any manifest write is also the moment an old ruleset value moves to the
+    // canonical one. A direct ruleset write already supplies the new value.
+    if key != "ruleset" {
+        save::migrate_ruleset(save)?;
+    }
     let p = save.join("combat/campaign.yaml");
     let text = fs::read_to_string(&p)?;
     let mut found = false;
@@ -1626,9 +1634,16 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
             };
             match field.as_str() {
                 "ruleset" => {
-                    check_ruleset(&v)?;
-                    set_campaign_line(save, "ruleset", &format!("\"{v}\"   # 2014 | 2024"))?;
-                    c.ruleset = Some(v);
+                    let parsed = check_ruleset(&v)?;
+                    set_campaign_line(
+                        save,
+                        "ruleset",
+                        &format!(
+                            "\"{}\"   # 5.5e-full | 5e-full | 5.5e-srd | 5e-srd",
+                            parsed.value()
+                        ),
+                    )?;
+                    c.ruleset = Some(parsed.value().to_string());
                 }
                 "adventure" => {
                     let mut s = chargen::slug(&v);
@@ -1875,12 +1890,12 @@ fn npc_cmd(
             level,
             count,
         } => {
-            let rs = match (ruleset, &save) {
-                (Some(r), _) => r,
-                (None, Some(s)) => save::ruleset(s),
-                (None, None) => "2024".into(),
+            let parsed = match (ruleset, &save) {
+                (Some(r), _) => check_ruleset(&r)?,
+                (None, Some(s)) => save::ruleset(s)?,
+                (None, None) => Ruleset::FivePointFiveESrd,
             };
-            check_ruleset(&rs)?;
+            let rs = parsed.edition().to_string();
             let level = level
                 .or_else(|| {
                     save.as_ref()
@@ -1962,11 +1977,13 @@ fn npc_cmd(
 fn data_cmd(root: &Path, cmd: DataCmd) -> Result<()> {
     match cmd {
         DataCmd::Status { ruleset } => {
-            check_ruleset(&ruleset)?;
+            let parsed = check_ruleset(&ruleset)?;
+            let ruleset = parsed.edition().to_string();
             let b = classdata::Book::load(&ruleset, Some(root))?;
             let md = classdata::md_files(&root.join("Rules").join(&ruleset));
             println!(
-                "ruleset {ruleset}: {} classes (SRD + local)",
+                "ruleset {} ({ruleset} data): {} classes (SRD + local)",
+                parsed.display(),
                 b.classes.len()
             );
             let books = classdata::rulebooks(&root.join("Rules").join(&ruleset));
@@ -2000,7 +2017,8 @@ fn data_cmd(root: &Path, cmd: DataCmd) -> Result<()> {
             }
         }
         DataCmd::Import { ruleset } => {
-            check_ruleset(&ruleset)?;
+            let parsed = check_ruleset(&ruleset)?;
+            let ruleset = parsed.edition().to_string();
             let (out, subs, bgs) = classdata::run_import(root, &ruleset)?;
             println!(
                 "wrote {} ({subs} non-SRD subclass(es), {bgs} background(s))",
@@ -2011,8 +2029,13 @@ fn data_cmd(root: &Path, cmd: DataCmd) -> Result<()> {
     Ok(())
 }
 
-fn print_options(rs: &str) {
-    println!("ruleset {rs} (SRD options; other books' options are allowed with a warning)");
+fn print_options(rs: &str) -> Result<()> {
+    let parsed = check_ruleset(rs)?;
+    let rs = parsed.edition();
+    println!(
+        "ruleset {} ({rs} data; SRD options; other books' options are allowed with a warning)",
+        parsed.display()
+    );
     println!(
         "species: {}",
         data::species_list(rs)
@@ -2053,4 +2076,5 @@ fn print_options(rs: &str) {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    Ok(())
 }

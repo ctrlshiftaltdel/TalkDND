@@ -472,7 +472,7 @@ pub fn migrate(save_dir: &Path, sheet: &check::Sheet, book: &Book) -> Result<Cha
         name: sheet.name.clone(),
         controller: Some(infer_controller(&rel, &block).to_string()),
         file: rel,
-        ruleset: save::ruleset(save_dir),
+        ruleset: save::edition(save_dir)?,
         ac_base: get_i(&block, "ac").unwrap_or(10) as i32,
         ac_base_armored: text_mentions_armor(&body),
         body_md: body.clone(),
@@ -2196,7 +2196,7 @@ fn m_keys(combat: &Value) -> String {
 /// op, then write yaml + party state + rendered sheet. Atomic: nothing is
 /// written when any op fails.
 pub fn run(save_dir: &Path, who: &str, op: Op, rng: &mut dyn DiceRng) -> Result<Vec<String>> {
-    let rs = save::ruleset(save_dir);
+    let rs = save::edition(save_dir)?;
     let root = save_dir.parent().and_then(|p| p.parent());
     let book = Book::load(&rs, root)?;
     if who == "all" || who == "party" {

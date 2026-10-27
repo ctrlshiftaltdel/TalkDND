@@ -1023,7 +1023,7 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
 }
 
 fn migrate_sheets(save: &Path, root: &Path) -> Result<Vec<String>> {
-    let book = Book::load(&save::ruleset(save), Some(root))?;
+    let book = Book::load(&save::edition(save)?, Some(root))?;
     let mut migrated = Vec::new();
     for sheet in check::sheets(save) {
         if charsheet::path(save, &sheet.id).is_file() {

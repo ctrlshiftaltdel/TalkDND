@@ -6,8 +6,9 @@
 
 | 路径 | 内容 | 是否入库 |
 |------|------|----------|
-| `Rules/2014/<slug>/` | 玩家自备的 2014 版规则书，一本一个文件夹：PDF + `index/`（pdf2md 生成）。至少 SRD 5.1；可加 PHB/DMG/MM 2014 | ❌ 仅 README 入库 |
-| `Rules/2024/<slug>/` | 玩家自备的 2024 版规则书，同上。至少 SRD 5.2.1；可加 PHB/DMG 2024、MM 2025 | ❌ 仅 README 入库 |
+| `Rules/2014/<slug>/` | 玩家自备的 5e（2014）规则书，一本一个文件夹：PDF + `index/`（pdf2md 生成）。至少 SRD 5.1；可加 PHB/DMG/MM 2014 | ❌ 仅 README 入库 |
+| `Rules/2024/<slug>/` | 玩家自备的 5.5e（2024）规则书，同上。至少 SRD 5.2.1；可加 PHB/DMG 2024、MM 2025 | ❌ 仅 README 入库 |
+| `Rules/packs/` | 已构建的完整书内容包 `full-<edition>-<book>.pack.json`（由本机书籍解锁）；只放本机文件，永不入库 | ❌ |
 | `Rules/rulings.md` | 两版通用的 DM 裁定（本机副本，**牌桌上以它为准**；没改过的副本随出厂默认自动升级，改过的不覆盖） | ❌（本机文件，不入库） |
 | `Rules/rulings-2014.md` / `Rules/rulings-2024.md` | 版本差异裁定（本机副本；突袭、精通、睡眠术、激励、躲藏、力竭、擒抱、状态细节…） | ❌（本机文件，不入库） |
 | `Rules/defaults/` | 随版本发布的裁定出厂默认（`rulings*.md`），每次更新覆盖；DM 不读、不改它，只读 `Rules/rulings*.md`。见下文「裁定文件」 | ✅ |
@@ -19,6 +20,22 @@
 | `docs/` | DM 参考章节（本文件、掷骰、叙事、战斗、pdf2md、建卡细节、剧本偏离度、世界时间），按需读 | ✅ |
 | `tools/pdf2md/` | PDF → Markdown 后台转换工具（Python，经 uv 运行）。输出在书文件夹的 `index/`，见 `docs/pdf2md.md` | ✅ 源码；❌ 输出与 `.venv` |
 | `bin/combat-sim`、`bin/talkdnd` | 战斗程序与游玩助手。Windows 加 `.exe`。不入库。放法见 `README.md` 和 `bin/README.md` | ❌ 本地文件 |
+
+## 规则集（`ruleset`）
+
+每个存档在 `combat/campaign.yaml` 里只选一个规则集；开档后不要换 edition。
+
+| 玩家选项 | 存档值 | edition / 目录 | 加载内容 |
+|----------|--------|----------------|----------|
+| 5.5e FULL | `5.5e-full` | 2024 | SRD 层 → 已解锁 `full-2024-*` pack → 手写/冒险/战役覆盖 |
+| 5e FULL | `5e-full` | 2014 | SRD 层 → 已解锁 `full-2014-*` pack → 手写/冒险/战役覆盖 |
+| 5.5e SRD | `5.5e-srd` | 2024 | `Rules/combat/common/` + `Rules/combat/2024/`；不加载完整书 pack |
+| 5e SRD | `5e-srd` | 2014 | `Rules/combat/common/` + `Rules/combat/2014/`；不加载完整书 pack |
+
+- **FULL 失败关闭**：至少需要一本同 edition 的已解锁完整书。缺书、未解锁或内容包损坏时，`talkdnd start` 与 `combat-sim content check` 会报错并指出缺哪本书、PDF 放哪里、pack 放哪里；不会静默退回 SRD。
+- **分层顺序**：FULL 的 SRD 层是 `Rules/combat/common/` + `Rules/combat/<edition>/srd/` + `<edition>/**/srd-*` 覆盖（如 `2024/monsters/srd-spatial.yaml`）；之后加载已解锁 full pack；`<edition>/` 下其余手写文件（`monsters/`、`spells.yaml` 等）与冒险/战役覆盖最后加载，因此手写内容仍可覆盖 full pack。
+- **一个存档只用一版**：FULL/SRD 只影响是否叠加完整书，不能把 5e 与 5.5e 混在同一存档；另一版的 `Rules/combat/<edition>/` 目录不会被读取。
+- **旧值兼容**：旧存档里的 `ruleset: "2014"` / `"2024"` 仍可读取，分别按 `5e-srd` / `5.5e-srd` 处理；下一次写 manifest（`start`、`migrate` 或 `chargen` 写字段）会把值改成新值并留下一行迁移注释，其他字段和你的注释保持不变。
 
 ## 书库：一本书一个文件夹
 

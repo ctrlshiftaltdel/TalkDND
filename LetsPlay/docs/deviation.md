@@ -30,7 +30,7 @@ deviation:
 `talkdnd new` 的 `--scope` / `--ratio`：
 
 ```bash
-$T new --ruleset 2014 --scope 2 --ratio 15
+$T new --ruleset 5.5e-srd --scope 2 --ratio 15
 ```
 
 - 在终端里不带这两个参数时，程序会用中文逐项询问（scope 0/1/2；scope 1/2 再问 5–25 的比例）。

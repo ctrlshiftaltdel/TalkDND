@@ -2,6 +2,7 @@
 
 use crate::data::{self, ABILITIES};
 use anyhow::{bail, Context, Result};
+use combat_sim::content::loader::Ruleset;
 use combat_sim::dice::DiceRng;
 use combat_sim::dice::RollMode;
 use combat_sim::fsutil::atomic_write;
@@ -13,7 +14,10 @@ use std::path::{Path, PathBuf};
 
 /// Steps in the order the DM must walk the player through.
 pub const STEPS: &[(&str, &str)] = &[
-    ("ruleset", "规则版本 2014 / 2024"),
+    (
+        "ruleset",
+        "规则集 5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD",
+    ),
     ("adventure", "冒险"),
     ("species", "种族/物种"),
     ("class", "职业"),
@@ -149,7 +153,16 @@ pub fn load(save: &Path) -> Result<Creation> {
             p.display()
         );
     }
-    serde_json::from_str(&fs::read_to_string(&p)?).context("chargen.json is not valid")
+    let mut c: Creation =
+        serde_json::from_str(&fs::read_to_string(&p)?).context("chargen.json is not valid")?;
+    // Old creation files may still hold `2014` / `2024`; show the canonical
+    // ruleset value from now on. The next store writes it back.
+    if let Some(value) = &c.ruleset {
+        if let Ok(ruleset) = Ruleset::parse(value) {
+            c.ruleset = Some(ruleset.value().to_string());
+        }
+    }
+    Ok(c)
 }
 
 pub fn store(save: &Path, c: &Creation) -> Result<()> {
@@ -161,8 +174,19 @@ pub fn store(save: &Path, c: &Creation) -> Result<()> {
 }
 
 impl Creation {
+    /// Engine edition for rules data. Accepts both the canonical ruleset
+    /// values and the old `2014` / `2024` values.
     pub fn rs(&self) -> &str {
-        self.ruleset.as_deref().unwrap_or("2024")
+        match self.ruleset.as_deref().map(str::trim) {
+            Some(value)
+                if value.eq_ignore_ascii_case("5e-srd")
+                    || value.eq_ignore_ascii_case("5e-full")
+                    || value.eq_ignore_ascii_case("2014") =>
+            {
+                "2014"
+            }
+            _ => "2024",
+        }
     }
 
     pub fn done(&self, step: &str) -> bool {
@@ -445,8 +469,8 @@ pub fn validate(c: &Creation) -> Report {
     let mut e = Vec::new();
     let mut w = Vec::new();
     let rs = c.rs().to_string();
-    if rs != "2014" && rs != "2024" {
-        e.push(format!("ruleset must be 2014 or 2024, got {rs}"));
+    if let Err(error) = Ruleset::parse(c.ruleset.as_deref().unwrap_or("5.5e-srd")) {
+        e.push(error.to_string());
     }
     let sp = c.species.as_deref().and_then(|s| data::species(&rs, s));
     if let Some(s) = c.species.as_deref() {

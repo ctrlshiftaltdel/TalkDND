@@ -112,6 +112,37 @@ existing entity in the pack. An empty index is valid.
   error.
 - A pack does not change entity semantics; it is a container and metadata layer.
 
+## Ruleset selection
+
+A save manifest selects one of four player-visible rulesets:
+
+| Player option | `ruleset` | Edition layer | Full packs |
+|---------------|-----------|---------------|------------|
+| 5.5e FULL | `5.5e-full` | `2024` | required: at least one unlocked `full-2024-*` pack |
+| 5e FULL | `5e-full` | `2014` | required: at least one unlocked `full-2014-*` pack |
+| 5.5e SRD | `5.5e-srd` | `2024` | never loaded |
+| 5e SRD | `5e-srd` | `2014` | never loaded |
+
+Read parsing trims whitespace and ignores case. The legacy `2014` / `2024`
+values are read as `5e-srd` / `5.5e-srd`; `talkdnd` migrates them on the next
+manifest write.
+
+The loader order for a FULL save is: the SRD base (`common/`, `<edition>/srd/`
+and SRD-only `srd-*` overlays such as `2024/monsters/srd-spatial.yaml`), then
+the unlocked full packs, then the rest of `<edition>/` (hand-written monsters,
+spells, conditions, ...), then hand-written library content, adventures and
+characters. Full packs override the SRD base by id; later hand-written,
+adventure and character content overrides a full pack. A full pack for the
+other edition is a hard error.
+
+For `*-srd`, the whole edition layer (`common/` plus `2014/` or `2024/`) keeps
+its existing order and full packs are ignored.
+
+`content check` is fail-closed: a FULL save with no matching loaded full pack
+fails with the missing book and the PDF/pack steps; a corrupt or wrongly
+declared full pack fails validation. `*-srd` never loads a full pack, even if
+an old manifest still lists one. There is no silent fallback to SRD.
+
 ## Commands
 
 ```bash
@@ -127,7 +158,8 @@ hash-checked; a mismatch fails before `verify` can run.
 ## SRD packs
 
 The SRD 5.1 and SRD 5.2.1 packs live next to their edition layer, so the normal
-`library: [Rules/combat]` entry loads only the save's ruleset:
+`library: [Rules/combat]` entry loads only the edition layer selected by the
+save's ruleset (`2014` for `5e-*`, `2024` for `5.5e-*`):
 
 - `LetsPlay/Rules/combat/2014/srd/srd-5.1-*.pack.json`
 - `LetsPlay/Rules/combat/2024/srd/srd-5.2.1-*.pack.json`
@@ -145,6 +177,13 @@ A full pack is built from the owner's local pdf2md output for a 2014/2024 PHB,
 DMG or MM. The input is a book folder with a converted `index/`
 (`manifest.json`, `index.json`, `<book>.pages.md`, optional `img/`). The PDF and
 the converted index stay local; only the generated pack leaves the build.
+
+A generated full pack is loaded only when the save's ruleset is `5e-full` /
+`5.5e-full` for the pack's edition. `5e-srd` / `5.5e-srd` never load it, and a
+FULL save with no matching unlocked pack fails `content check` and
+`talkdnd start` instead of falling back to SRD. Full packs are release
+artifacts; the player's PDF under `Rules/<edition>/` is the unlock evidence,
+not a Git file.
 
 ```bash
 combat-sim content pack build \

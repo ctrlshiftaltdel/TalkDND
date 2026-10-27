@@ -2,12 +2,12 @@
 
 > 本文件是 `AGENTS.md`「开新局」的参考，按需查阅。路径都相对于游戏文件夹（解压出来的那个文件夹，名字随意）。`T=bin/talkdnd`（Windows：`bin\talkdnd.exe`）。
 
-每一步：用中文向玩家说明可选项（必要时查 `Rules/<版本>/` 里的书或 `$T options --ruleset <版本>`），**等玩家回答**，再用命令记录。程序只记录和检查，不替玩家做决定。
+每一步：用中文向玩家说明可选项（必要时查 `Rules/<edition>/` 里的书或 `$T options --ruleset <规则集>`），**等玩家回答**，再用命令记录。程序只记录和检查，不替玩家做决定。下文用 5e（2014）/ 5.5e（2024）说明两套 edition 的机制；存档的 `ruleset` 只写四个选项之一。
 
 | 步骤 | 问玩家什么 | 记录命令 |
 |------|-----------|----------|
-| 规则版本 | 2014 还是 2024（只列 `Rules/2014/`、`Rules/2024/` 里有书的版本） | `$T new --ruleset 2014`（或先 `$T new`，再 `$T chargen set ruleset 2014`） |
-| 剧本偏离度 | 开档时问一次：scope 0（只补空白）/1（次要原创）/2（完整支线）；scope 1/2 再问比例 5–25%。**开档后锁定**，设置前向玩家解释清楚 | 和规则版本一起：`$T new --ruleset 2014 --scope 2 --ratio 15`；交互终端不带参数时程序会中文询问，非交互默认 scope 0。详见 `docs/deviation.md` |
+| 规则集 | 5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD；先看 `Rules/2014/`、`Rules/2024/` 里实际有哪版书。FULL 需要至少一本已解锁的对应 edition 完整书，否则 `start` 会失败 | `$T new --ruleset 5.5e-srd`（或 `5e-srd` / `5.5e-full` / `5e-full`；旧值 `2024` / `2014` 仍可用） |
+| 剧本偏离度 | 开档时问一次：scope 0（只补空白）/1（次要原创）/2（完整支线）；scope 1/2 再问比例 5–25%。**开档后锁定**，设置前向玩家解释清楚 | 和规则集一起：`$T new --ruleset 5.5e-srd --scope 2 --ratio 15`；交互终端不带参数时程序会中文询问，非交互默认 scope 0。详见 `docs/deviation.md` |
 | 冒险 | `Adventures/` 里有哪些书 | `$T chargen set adventure "Keys from the Golden Vault"` |
 | 种族 / 物种 | 列出该版可选项，各一句特点 | `$T chargen set species hill-dwarf` |
 | 职业 | 同上 | `$T chargen set class cleric` |
@@ -65,13 +65,13 @@ $T char <名字> item equip greatsword           # 装备武器/护甲后自动�
 
 **什么时候手动做**（只有这四种情况）：
 1. 首次在这台电脑上开局（建卡之前），且没有先运行 `$T start`。
-2. 玩家要用非 SRD 的职业 / 子职 / 武器，而 `$T data status --ruleset <版本>` 的 local entries 里没有。
+2. 玩家要用非 SRD 的职业 / 子职 / 武器，而 `$T data status --ruleset <规则集>` 的 local entries 里没有。
 3. `Rules/<版本>/` 新加了 PDF。
 4. `talkdnd` 打印了 `warning: ... has no ... data`：**照抄它给出的命令执行**。
 
 **怎么做**：
-1. `$T data status --ruleset 2024`：看有没有转好的 Markdown（`Rules/2024/<slug>/index/<书名>.pages.md`）和已加载的本地文件。
-2. 有 Markdown：`$T data import --ruleset 2024` → 写 `Rules/chargen/local/imported-2024.yaml`，再重新 `$T chargen sheet`。
+1. `$T data status --ruleset 5.5e-srd`：看有没有转好的 Markdown（`Rules/2024/<slug>/index/<书名>.pages.md`）和已加载的本地文件。
+2. 有 Markdown：`$T data import --ruleset 5.5e-srd` → 写 `Rules/chargen/local/imported-2024.yaml`，再重新 `$T chargen sheet`。
 3. 没有 Markdown（pdf2md 还没转完）：
    - 能开后台任务：后台跑 `uv run --project tools/pdf2md python -m pdf2md run`，不等它；
    - 只需要某职业那几页：`uv run --project tools/pdf2md python -m pdf2md run --book "Players Handbook" --pages <页码> --budget 120`，然后回到第 2 步；
@@ -81,7 +81,7 @@ $T char <名字> item equip greatsword           # 装备武器/护甲后自动�
 手写格式（与程序内置的 SRD 职业数据相同，可只写需要的部分）：
 
 ```yaml
-ruleset: "2024"
+ruleset: "5.5e-srd"   # 也可写 "5e-srd"；旧值 "2024" / "2014" 仍可读
 classes:
   fighter:
     subclasses:
