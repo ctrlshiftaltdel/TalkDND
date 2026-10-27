@@ -250,7 +250,7 @@ AI/CLI action proposal → 参数与回合合法性检查 → 空间可达性与
 | TASK-0092 | #176 | v1.12 | TASK-0091 VERIFIED + TASK-0095 结论 | P7 预算约束搜索；默认浅层、可回退。 |
 | TASK-0093 | #177 | v1.12 | TASK-0092 VERIFIED + TASK-0094 数据覆盖 + TASK-0095 预算结论 | P8 质量门、基准、调参与渐进启用。 |
 | TASK-0094 | #178 | v1.8 | TASK-0086 VERIFIED（schema） | 真实 AoE / hover / burrow 与怪物覆盖；P2/P4 在其 VERIFIED 前只用合成 fixture。 |
-| TASK-0095 | #179 | v1.12 | 无硬执行依赖 | P7 前置性能探测；TASK-0092 READY 前必须引用其预算结论。 |
+| TASK-0095 | #179 | v1.12 | TASK-0090（#174）必须 VERIFIED；建议与 TASK-0091（#175）并行或在它之后 | P7 前置性能探测；TASK-0092（#176）READY 前必须引用本任务结论。 |
 | TASK-0096 | #180 | — | PR #167 合并、TASK-0085 VERIFIED | 只同步本文档；不改代码、规则数据、CI 或契约文件。 |
 | TASK-0097 | #183 | v1.1–v1.15 | — | 顶层 AI DM 总路线；本文不再是顶层路线图。 |
 
