@@ -4,6 +4,44 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v1.1.0 — 2026-10-27
+
+### 新功能
+
+- **内容包基座**（TASK-0098，PR #188）：新增 ContentPack v1，带 pack 元数据、可选索引、FNV-1a 64 完整性 hash 与 schema 版本；`content pack list/show/verify` 可查看、校验与运行内容检查。旧的 YAML/JSON/Markdown 内容与旧存档继续按原路径加载。
+- **通用领域实体**（TASK-0104，PR #192）：item、class、subclass、species、background、feat、rule-section、table 八类实体可写入 pack 并按 id/name 检索；pack 索引可引用这些类型。
+- **SRD 5.1 / 5.2.1 全量内容**（TASK-0099，PR #193）：2014 八个 pack（334 怪物、319 法术、12 职业 + 12 子职 + 407 特性 + 12 等级表、9 种族 + 4 亚种 + 38 天赋、1 背景、1 专长、599 物品、39 规则章节）；2024 七个 pack（341 怪物、339 法术、12 职业 + 12 子职 + 232 特性 + 12 等级表、9 物种 + 24 亚种 + 67 天赋、4 背景、17 专长、457 物品含 14 毒素）。内置后不再需要 SRD PDF 才能检索/使用 SRD。
+- **2024 规则章节**（TASK-0106，PR #195）：从本地 pdf2md 输出抽取 Playing the Game、Character Creation、Rules Glossary、Gameplay Toolbox 四章，生成 213 节 prose pack。
+- **空间规则矩阵与契约**（TASK-0085，PR #197）：冻结 2014/2024 的距离、移动成本、占位、掩护、AoE、飞行/坠落与机会攻击语义，作为 P1–P5 的接口基线。
+- **CLI**：`content import-srd-pack`、`content import-srd-prose`、`content pack list/show/verify`。
+
+### 变更
+
+- **pack 先加载、普通内容后加载**：手写 YAML/JSON 与旧 `srd-*.yaml` 仍按 id 覆盖 pack；2014 引擎的自动化攻击/法术字段不变。
+- **分发说明**：`docs/PROJECT-CHARTER.md` 与 `docs/PLAN.md` 改为 SRD 内容包随程序分发；玩家不再必须自备 SRD PDF。
+- **发布包变大**：新增约 9.9 MB 内容（两版 SRD pack 与 2024 prose），随 `LetsPlay/` 一起打包。
+
+### 修复
+
+无（本版是内容基座，不含缺陷修复）。
+
+### 更新说明 / 迁移
+
+- **覆盖式更新**：下载 1.1.0 发布包，把包内 `TalkDND/LetsPlay/` 的内容覆盖到现有游戏文件夹，覆盖同名文件；存档目录原样保留。不要用旧包整个替换。
+- 无存档 schema 变更、无迁移：schema 仍为 8；旧 `ruleset: "2014"/"2024"` 继续有效。
+- 内置内容按存档 `ruleset` 自动选层，不需要改 `campaign.yaml`。
+- `pdf2md` 仍为 0.6.0；放入规则书 PDF 只用于书页图片/原文回退（v1.2 起支持完整书解锁）。
+- 四规则集（5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD）与完整 PHB/DMG/MM 内容在 1.2（#189、#190、#196）。
+- 行为基线是 main `f34d523fd0af8c900e67a07ffc5b4cac0423569b`（PR #197 合并后）。该提交上 combat-sim 235、talkdnd 279、talkdnd-dev 45 个测试通过，`validate_kit.py`、`check-leaks`、`check-letsplay` 退出码 0。发布提交只改三个 crate 的版本号与锁文件、本更新日志、章程和 `LetsPlay/README.md`，不含行为源码变更。
+
+### 已知限制
+
+- SRD 是精简版：职业引言、2024 完整版挤压条款等不在 SRD 文本中；FULL 与 SRD 的差异要等 1.2 的完整书 pack。
+- 2024 规则章节依赖 pdf2md 的标题结构；漏标题会缺节，章节/实体计数是可核对的审计线。
+- 单次内容加载增加约 0.14–0.26 秒（release 构建）；两版内容合计约 9.9 MB。
+- 同一存档仍只支持一个规则版本；四规则集选择在 1.2。
+- Tiny 同格、生物掩护度数、zone 同区距离等空间细节已在契约中列为项目近似或待确认项。
+
 ## v1.0.3 — 2026-10-26
 
 ### 新功能
