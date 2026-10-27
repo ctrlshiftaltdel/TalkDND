@@ -4561,6 +4561,9 @@ fn apply_forced_move(
     if !check_size_limit(state.combatants[target].creature.size(), effect.max_size) {
         return Ok(());
     }
+    if spatial_forced_move(state, target, context.actor, effect, rng, log)? {
+        return Ok(());
+    }
     let Some(space) = state.space() else {
         return Ok(());
     };
@@ -6782,6 +6785,115 @@ fn spatial_move_to_at(
         ));
     }
     Ok(())
+}
+
+/// P3-backed forced movement. Forced movement spends no Speed and provokes no
+/// opportunity attacks; area-entry triggers still fire on zone boundaries.
+/// A drop larger than one step stops the push (`MoveBlock::Drop`); wiring that
+/// into a fall is a separate follow-up because the caller must choose the
+/// landing cell.
+fn spatial_forced_move(
+    state: &mut EncounterState,
+    target: usize,
+    source: usize,
+    effect: &ForcedMoveEffect,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<bool> {
+    if !spatial_query_enabled(state)
+        || !state
+            .space()
+            .is_some_and(|space| space.mode() == SceneMode::Grid)
+    {
+        return Ok(false);
+    }
+    let Some(scene) = state.scene.as_deref().cloned() else {
+        return Ok(false);
+    };
+    let Some(grid) = GridMap::parse(&scene) else {
+        return Ok(false);
+    };
+    let Some(mover_body) = spatial_body_for(state, target) else {
+        return Ok(false);
+    };
+    let (tx, ty) = (mover_body.pose.cell.x, mover_body.pose.cell.y);
+    let Some((sx, sy)) = state.combatants[source].position_ref().cell_coords() else {
+        return Ok(false);
+    };
+    let (dx, dy) = match effect.direction {
+        Direction::Away => ((tx - sx).signum(), (ty - sy).signum()),
+        Direction::Toward => ((sx - tx).signum(), (sy - ty).signum()),
+    };
+    if dx == 0 && dy == 0 {
+        return Ok(true);
+    }
+    let profile = state.effective_spatial_profile();
+    let vertical = state.combatants[target].vertical_state();
+    let flying = matches!(vertical.flight, FlightState::Flying | FlightState::Hovering);
+    let map = spatial_movement_map(state, &grid, mover_body.pose.cell.z, flying)?;
+    let occupants: Vec<TraversalCreature> = state
+        .combatants
+        .iter()
+        .enumerate()
+        .filter(|(other, combatant)| {
+            *other != target && !combatant.dormant && !combatant.is_dead() && combatant.hp > 0
+        })
+        .filter_map(|(other, combatant)| {
+            spatial_body_for(state, other).map(|body| {
+                TraversalCreature::new(
+                    body,
+                    combatant.side == state.combatants[target].side,
+                    is_incapacitated(state, other),
+                )
+            })
+        })
+        .collect();
+    let planner = MovementPlanner::new(&map, &profile, &mover_body).with_occupants(&occupants);
+    let plan = planner
+        .forced_move((dx, dy), effect.distance.max(0))
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let name = state.combatants[target].name.clone();
+    let mut previous_zone = state
+        .space()
+        .and_then(|space| {
+            space.zone_of(&Position::cell(
+                mover_body.pose.cell.x,
+                mover_body.pose.cell.y,
+            ))
+        })
+        .unwrap_or_else(|| OPEN_ZONE.to_string());
+    for step in plan.steps {
+        let x = step.to.cell.x;
+        let y = step.to.cell.y;
+        let zone = grid.zone_at(x, y).unwrap_or_else(|| OPEN_ZONE.to_string());
+        state.combatants[target].set_cell(x, y, zone.clone());
+        state.combatants[target].pose = Some(step.to);
+        let floor = grid
+            .cell_at(x, y)
+            .map(|cell| cell.elevation.unwrap_or(0))
+            .unwrap_or(0);
+        let mut vertical = state.combatants[target].vertical_state();
+        vertical.altitude_ft = (step.to.cell.z - floor).max(0);
+        if vertical.flight == FlightState::Grounded && vertical.altitude_ft != 0 {
+            vertical.flight = FlightState::Flying;
+        }
+        vertical
+            .validate()
+            .map_err(|error| anyhow!(error.to_string()))?;
+        state.combatants[target].vertical = Some(vertical);
+        log.log(format_args!("{name} is moved to {zone}"));
+        if zone != previous_zone {
+            fire_enter_triggers(state, target, &Position::cell(x, y), rng, log)?;
+            previous_zone = zone;
+        }
+    }
+    if let Some(reason) = plan.stopped_by {
+        log.log(format_args!(
+            "{name}'s forced movement stops: {}",
+            reason.as_str()
+        ));
+    }
+    Ok(true)
 }
 
 fn roll_climb(

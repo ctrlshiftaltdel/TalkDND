@@ -679,6 +679,81 @@ fn movement_height_obstacles_block_ground_and_allow_flight() {
     );
 }
 
+/// Forced movement uses P3's straight-line plan: no Speed is spent and the
+/// target stops at a blocked cell instead of teleporting.
+#[test]
+fn forced_movement_uses_the_p3_plan_without_spending_speed() {
+    let caster_creature: Creature = serde_json::from_value(json!({
+        "id": "synthetic-shover",
+        "name": "synthetic-shover",
+        "size": "medium",
+        "hp": 30,
+        "ac": 12,
+        "speed": {"walk": 30},
+        "abilities": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10},
+        "actions": [{
+            "id": "synthetic-shove",
+            "name": "Synthetic Shove",
+            "activation": "action",
+            "target": {"type": "creature"},
+            "effects": [{"forced_move": {"distance": 10, "direction": "away"}}]
+        }]
+    }))
+    .expect("caster with a forced move");
+    let mut state = state_with(
+        registry("2024"),
+        vec![
+            combatant(
+                "Caster",
+                caster_creature,
+                "party",
+                0,
+                0,
+                0,
+                FlightState::Grounded,
+                (1, 1),
+                &[],
+            ),
+            grounded(
+                "Target",
+                creature("synthetic-target", Size::Medium, 0, false, no_attacks()),
+                "enemy",
+                1,
+                0,
+            ),
+        ],
+        grid_scene(&["....", "...."], json!({".": {"elevation": 0}})),
+        spatial(),
+    );
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Caster",
+        "synthetic-shove",
+        &engine::UseOptions {
+            targets: vec!["Target".to_string()],
+            ..Default::default()
+        },
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .expect("forced movement resolves");
+    assert_eq!(
+        state.combatants[index(&state, "Target")].cell(),
+        Some([3, 0]),
+        "{log:?}"
+    );
+    assert_eq!(
+        state.combatants[index(&state, "Target")].speed_left,
+        30,
+        "forced movement does not spend the target's Speed"
+    );
+    assert!(
+        log.iter().any(|line| line.contains("is moved to")),
+        "{log:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Phase 3: attacks and areas
 // ---------------------------------------------------------------------------
