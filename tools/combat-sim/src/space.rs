@@ -10,7 +10,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::content::schema::{ClimbSpec, Cover, Light, Scene, SceneMode, Size};
+use crate::content::schema::{ClimbSpec, Cover, Light, Scene, SceneMode, Size, Speed};
 
 /// Distance from any point in a zone to any other point in the same zone.
 pub const SAME_ZONE_DISTANCE: i32 = 0;
@@ -5671,4 +5671,1605 @@ fn chebyshev(a: CellPos, b: CellPos) -> u32 {
     a.x.saturating_sub(b.x)
         .unsigned_abs()
         .max(a.y.saturating_sub(b.y).unsigned_abs())
+}
+
+// ---------------------------------------------------------------------------
+// P4 flight, vertical movement and fall resolution (TASK-0089)
+// ---------------------------------------------------------------------------
+//
+// This is a planning seam, not a turn-loop integration. P5 (#174) owns the
+// CLI/AI wiring and trigger order. Legacy `Space`/`GridSpace`/`ZoneGraph`
+// behaviour is untouched: callers opt in by constructing a `FallMap` and a
+// `FallResolver` explicitly. The P1 state fields are read only; this module
+// never edits encounter state.
+//
+// Units: x/y are 5-ft cells; z, heights and distances are feet above a scene
+// datum. `VerticalState.altitude_ft` remains the P1 field for height above the
+// local floor; the engine adapter converts between the two representations.
+// A fall is resolved from the actual start elevation to the first solid
+// surface below, never from a path cost.
+
+/// One fall damage die per this many feet.
+pub const FALL_FEET_PER_DIE: i32 = 10;
+/// Sides of one fall damage die.
+pub const FALL_DIE_FACES: u32 = 6;
+/// Maximum number of fall damage dice.
+pub const MAX_FALL_DICE: u32 = 20;
+/// Damage type of a fall.
+pub const FALL_DAMAGE_TYPE: &str = "bludgeoning";
+/// R-09 house rule: DC to avoid being knocked flat after a short fall.
+pub const R09_LANDING_DC: i32 = 10;
+/// R-09 house rule: the check is offered for falls up to this distance.
+pub const R09_LANDING_MAX_FALL_FT: i32 = 10;
+/// 2024 liquid-landing reaction DC.
+pub const LIQUID_LANDING_DC: i32 = 15;
+
+/// Rules edition that selected a flight profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FlightEdition {
+    Edition2014,
+    Edition2024,
+}
+
+impl FlightEdition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Edition2014 => "2014",
+            Self::Edition2024 => "2024",
+        }
+    }
+}
+
+impl fmt::Display for FlightEdition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Why a flying creature loses its support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FallReason {
+    Incapacitated,
+    KnockedDown,
+    SpeedZero,
+    FlySpeedZero,
+    DeprivedOfMovement,
+}
+
+impl FallReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Incapacitated => "incapacitated",
+            Self::KnockedDown => "knocked_down",
+            Self::SpeedZero => "speed_zero",
+            Self::FlySpeedZero => "fly_speed_zero",
+            Self::DeprivedOfMovement => "deprived_of_movement",
+        }
+    }
+}
+
+/// Explicit condition inputs for the edition-specific flight check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FlightConditions {
+    pub knocked_down: bool,
+    pub incapacitated: bool,
+    pub speed_zero: bool,
+    pub fly_speed_zero: bool,
+    pub deprived_of_movement: bool,
+}
+
+/// A flying creature and the facts that decide whether it falls.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FlightSubject {
+    pub fly_speed_ft: i32,
+    pub hover: bool,
+    pub held_aloft_by_magic: bool,
+    pub conditions: FlightConditions,
+}
+
+/// Edition-selected fall triggers. These flags are the only place the 2014 /
+/// 2024 difference lives; callers must not mix editions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlightRules {
+    pub edition: FlightEdition,
+    pub fall_on_incapacitated: bool,
+    pub fall_on_knocked_down: bool,
+    pub fall_on_speed_zero: bool,
+    pub fall_on_fly_speed_zero: bool,
+    pub fall_on_deprived_of_movement: bool,
+    pub hover_prevents_fall: bool,
+    pub falling_into_liquid: bool,
+}
+
+impl FlightRules {
+    /// 2014 names knocked-down, Speed 0 and "otherwise deprived of movement".
+    /// 2024 names Incapacitated, knocked-down and Fly Speed 0.
+    ///
+    /// Matrix V-02 / V-03; Issue #173 AC-2 keeps the editions separate.
+    pub fn for_edition(edition: FlightEdition) -> Self {
+        match edition {
+            FlightEdition::Edition2014 => Self {
+                edition,
+                fall_on_incapacitated: false,
+                fall_on_knocked_down: true,
+                fall_on_speed_zero: true,
+                fall_on_fly_speed_zero: true,
+                fall_on_deprived_of_movement: true,
+                hover_prevents_fall: true,
+                falling_into_liquid: false,
+            },
+            FlightEdition::Edition2024 => Self {
+                edition,
+                fall_on_incapacitated: true,
+                fall_on_knocked_down: true,
+                fall_on_speed_zero: false,
+                fall_on_fly_speed_zero: true,
+                fall_on_deprived_of_movement: false,
+                hover_prevents_fall: true,
+                falling_into_liquid: true,
+            },
+        }
+    }
+
+    /// The save-visible ruleset value. `None` and unknown values are explicit
+    /// errors: P4 never silently applies the other edition.
+    pub fn try_for_ruleset(ruleset: Option<&str>) -> Result<Self, FlightError> {
+        match ruleset.map(str::trim) {
+            Some("2014" | "5e-srd" | "5e-full") => {
+                Ok(Self::for_edition(FlightEdition::Edition2014))
+            }
+            Some("2024" | "5.5e-srd" | "5.5e-full") => {
+                Ok(Self::for_edition(FlightEdition::Edition2024))
+            }
+            Some(other) => Err(FlightError::UnknownRuleset {
+                ruleset: other.to_string(),
+            }),
+            None => Err(FlightError::MissingRuleset),
+        }
+    }
+}
+
+/// Rule provenance for a fall result. House rules are never presented as RAW.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FallRuleKind {
+    Raw,
+    HouseRule,
+}
+
+impl FallRuleKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Raw => "raw",
+            Self::HouseRule => "house_rule",
+        }
+    }
+}
+
+/// Result of the edition-specific flight check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlightCheck {
+    pub edition: FlightEdition,
+    pub falls: bool,
+    pub reason: Option<FallReason>,
+    pub rule_kind: FallRuleKind,
+    pub explain: Vec<Explain>,
+}
+
+/// Evaluate the edition-specific "loses flight support" triggers.
+pub fn flight_fall_trigger(subject: &FlightSubject, rules: FlightRules) -> FlightCheck {
+    let explain = vec![
+        Explain::new("flight-edition", rules.edition.as_str()),
+        Explain::new("flight-fly-speed", format!("{} ft", subject.fly_speed_ft)),
+    ];
+    // Held aloft by magic is an explicit RAW exception in 2014 and is how the
+    // 2024 fly-style effects keep a target aloft.
+    if subject.held_aloft_by_magic {
+        return flight_result(
+            rules.edition,
+            false,
+            None,
+            explain,
+            "flight-held-aloft",
+            "held aloft by magic",
+        );
+    }
+    if subject.hover && rules.hover_prevents_fall {
+        return flight_result(
+            rules.edition,
+            false,
+            None,
+            explain,
+            "flight-hover",
+            "hover keeps the creature aloft",
+        );
+    }
+    if rules.fall_on_incapacitated && subject.conditions.incapacitated {
+        return flight_result(
+            rules.edition,
+            true,
+            Some(FallReason::Incapacitated),
+            explain,
+            "flight-incapacitated",
+            "the edition names this condition as a fall trigger",
+        );
+    }
+    if rules.fall_on_knocked_down && subject.conditions.knocked_down {
+        return flight_result(
+            rules.edition,
+            true,
+            Some(FallReason::KnockedDown),
+            explain,
+            "flight-knocked-down",
+            "the creature is knocked flat",
+        );
+    }
+    if rules.fall_on_speed_zero && subject.conditions.speed_zero {
+        return flight_result(
+            rules.edition,
+            true,
+            Some(FallReason::SpeedZero),
+            explain,
+            "flight-speed-zero",
+            "Speed was reduced to 0",
+        );
+    }
+    if rules.fall_on_fly_speed_zero && subject.conditions.fly_speed_zero {
+        return flight_result(
+            rules.edition,
+            true,
+            Some(FallReason::FlySpeedZero),
+            explain,
+            "flight-fly-speed-zero",
+            "Fly Speed was reduced to 0",
+        );
+    }
+    if rules.fall_on_deprived_of_movement && subject.conditions.deprived_of_movement {
+        return flight_result(
+            rules.edition,
+            true,
+            Some(FallReason::DeprivedOfMovement),
+            explain,
+            "flight-deprived-of-movement",
+            "the creature is deprived of the ability to move",
+        );
+    }
+    // A creature in the air with no Fly Speed cannot stay aloft in either
+    // edition. 2024 names this explicitly; 2014 covers it as Speed 0. This is
+    // a fallback so edition-specific reasons win when several triggers apply.
+    if subject.fly_speed_ft <= 0 {
+        return flight_result(
+            rules.edition,
+            true,
+            Some(FallReason::FlySpeedZero),
+            explain,
+            "flight-no-fly-speed",
+            "the creature has no Fly Speed",
+        );
+    }
+    flight_result(
+        rules.edition,
+        false,
+        None,
+        explain,
+        "flight-stays-aloft",
+        "no edition trigger applies",
+    )
+}
+
+fn flight_result(
+    edition: FlightEdition,
+    falls: bool,
+    reason: Option<FallReason>,
+    mut explain: Vec<Explain>,
+    code: &'static str,
+    detail: impl Into<String>,
+) -> FlightCheck {
+    explain.push(Explain::new(code, detail));
+    FlightCheck {
+        edition,
+        falls,
+        reason,
+        rule_kind: FallRuleKind::Raw,
+        explain,
+    }
+}
+
+/// Flight capability derived from content data. No creature id or display name
+/// participates in the decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlightCapability {
+    pub fly_speed_ft: i32,
+    pub hover: bool,
+    pub burrow_speed_ft: i32,
+}
+
+impl FlightCapability {
+    pub fn from_speed(speed: &Speed) -> Self {
+        Self {
+            fly_speed_ft: speed.fly.max(0),
+            hover: speed.hover,
+            burrow_speed_ft: speed.burrow.max(0),
+        }
+    }
+
+    pub fn can_fly(&self) -> bool {
+        self.fly_speed_ft > 0
+    }
+
+    pub fn can_hover(&self) -> bool {
+        self.hover
+    }
+
+    /// Data is exposed for TASK-0094, but burrowing movement is not automated
+    /// here (V-07 is an explicit GAP in the frozen matrix).
+    pub fn can_burrow(&self) -> bool {
+        self.burrow_speed_ft > 0
+    }
+}
+
+/// Explicit flight-mode actions. The engine stores the resulting
+/// [`FlightState`]; this function only validates the transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FlightAction {
+    TakeOff,
+    Fly,
+    Hover,
+    StopHovering,
+    Fall,
+    Land,
+}
+
+impl FlightAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TakeOff => "take off",
+            Self::Fly => "fly",
+            Self::Hover => "hover",
+            Self::StopHovering => "stop hovering",
+            Self::Fall => "fall",
+            Self::Land => "land",
+        }
+    }
+}
+
+/// Apply one explicit flight-mode action.
+pub fn transition_flight(
+    current: FlightState,
+    action: FlightAction,
+    capability: &FlightCapability,
+    altitude_ft: i32,
+) -> Result<FlightState, FlightError> {
+    let invalid = || FlightError::InvalidTransition {
+        from: current,
+        action,
+    };
+    match action {
+        FlightAction::TakeOff => {
+            if current != FlightState::Grounded || altitude_ft != 0 {
+                return Err(invalid());
+            }
+            if !capability.can_fly() {
+                return Err(FlightError::NoFlySpeed);
+            }
+            Ok(FlightState::Flying)
+        }
+        FlightAction::Fly => {
+            if !matches!(current, FlightState::Flying | FlightState::Hovering) {
+                return Err(invalid());
+            }
+            if !capability.can_fly() {
+                return Err(FlightError::NoFlySpeed);
+            }
+            Ok(FlightState::Flying)
+        }
+        FlightAction::Hover => {
+            if !matches!(current, FlightState::Flying | FlightState::Hovering) {
+                return Err(invalid());
+            }
+            if !capability.can_hover() {
+                return Err(FlightError::HoverUnavailable);
+            }
+            Ok(FlightState::Hovering)
+        }
+        FlightAction::StopHovering => {
+            if current != FlightState::Hovering {
+                return Err(invalid());
+            }
+            Ok(FlightState::Flying)
+        }
+        FlightAction::Fall => {
+            if altitude_ft <= 0 || !matches!(current, FlightState::Flying | FlightState::Hovering) {
+                return Err(invalid());
+            }
+            Ok(FlightState::Falling)
+        }
+        FlightAction::Land => {
+            if altitude_ft != 0
+                || !matches!(
+                    current,
+                    FlightState::Flying | FlightState::Hovering | FlightState::Falling
+                )
+            {
+                return Err(invalid());
+            }
+            Ok(FlightState::Grounded)
+        }
+    }
+}
+
+/// A rejected flight or fall value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlightError {
+    MissingRuleset,
+    UnknownRuleset {
+        ruleset: String,
+    },
+    InvalidHeight {
+        height_ft: i32,
+    },
+    UnknownColumn {
+        x: i32,
+        y: i32,
+    },
+    InvalidAltitude {
+        altitude_ft: i32,
+    },
+    StartBelowFloor {
+        start_ft: i32,
+        floor_ft: i32,
+    },
+    LandingAboveStart {
+        start_ft: i32,
+        surface_ft: i32,
+    },
+    EmbeddedInSolid {
+        surface_id: String,
+        start_ft: i32,
+    },
+    InvalidSpan {
+        surface_id: String,
+        bottom_ft: i32,
+        top_ft: i32,
+    },
+    InvalidTransition {
+        from: FlightState,
+        action: FlightAction,
+    },
+    HoverUnavailable,
+    NoFlySpeed,
+}
+
+impl fmt::Display for FlightError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingRuleset => f.write_str("ruleset is missing; expected 2014 or 2024"),
+            Self::UnknownRuleset { ruleset } => {
+                write!(f, "ruleset `{ruleset}` is not one of 2014/2024")
+            }
+            Self::InvalidHeight { height_ft } => write!(
+                f,
+                "height {height_ft} ft is outside 1..={MAX_VOLUME_HEIGHT_FT} ft"
+            ),
+            Self::UnknownColumn { x, y } => write!(f, "no fall column at ({x}, {y})"),
+            Self::InvalidAltitude { altitude_ft } => write!(
+                f,
+                "altitude {altitude_ft} ft is outside 0..={MAX_ALTITUDE_FT} ft"
+            ),
+            Self::StartBelowFloor { start_ft, floor_ft } => {
+                write!(f, "start {start_ft} ft is below the floor {floor_ft} ft")
+            }
+            Self::LandingAboveStart {
+                start_ft,
+                surface_ft,
+            } => write!(
+                f,
+                "landing surface {surface_ft} ft is above the start {start_ft} ft"
+            ),
+            Self::EmbeddedInSolid {
+                surface_id,
+                start_ft,
+            } => write!(f, "start {start_ft} ft is inside solid `{surface_id}`"),
+            Self::InvalidSpan {
+                surface_id,
+                bottom_ft,
+                top_ft,
+            } => write!(
+                f,
+                "solid `{surface_id}` has invalid bounds {bottom_ft}..{top_ft} ft"
+            ),
+            Self::InvalidTransition { from, action } => {
+                write!(f, "cannot {} from {from:?}", action.as_str())
+            }
+            Self::HoverUnavailable => f.write_str("this creature cannot hover"),
+            Self::NoFlySpeed => f.write_str("this creature has no Fly Speed"),
+        }
+    }
+}
+
+impl std::error::Error for FlightError {}
+
+/// Explicit height defaults used when a creature has no stored height. The
+/// values mirror [`Volume::for_size`]; Tiny's 2.5 ft is rounded up to 3 ft
+/// because the P1 volume stores whole feet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeightProfile {
+    pub tiny_ft: i32,
+    pub small_ft: i32,
+    pub medium_ft: i32,
+    pub large_ft: i32,
+    pub huge_ft: i32,
+    pub gargantuan_ft: i32,
+    pub unknown_ft: i32,
+}
+
+impl Default for HeightProfile {
+    fn default() -> Self {
+        Self {
+            tiny_ft: 3,
+            small_ft: 5,
+            medium_ft: 5,
+            large_ft: 10,
+            huge_ft: 15,
+            gargantuan_ft: 20,
+            unknown_ft: 5,
+        }
+    }
+}
+
+impl HeightProfile {
+    /// Resolve an explicit height or a profile default. The returned source is
+    /// the audit trail: callers can distinguish a real height from a default.
+    pub fn resolve(
+        &self,
+        size: Size,
+        explicit: Option<i32>,
+    ) -> Result<ResolvedHeight, FlightError> {
+        if let Some(height_ft) = explicit {
+            if !(1..=MAX_VOLUME_HEIGHT_FT).contains(&height_ft) {
+                return Err(FlightError::InvalidHeight { height_ft });
+            }
+            return Ok(ResolvedHeight {
+                height_ft,
+                source: HeightSource::Explicit,
+            });
+        }
+        let (height_ft, source) = match size {
+            Size::Tiny => (self.tiny_ft, HeightSource::SizeDefault(Size::Tiny)),
+            Size::Small => (self.small_ft, HeightSource::SizeDefault(Size::Small)),
+            Size::Medium => (self.medium_ft, HeightSource::SizeDefault(Size::Medium)),
+            Size::Large => (self.large_ft, HeightSource::SizeDefault(Size::Large)),
+            Size::Huge => (self.huge_ft, HeightSource::SizeDefault(Size::Huge)),
+            Size::Gargantuan => (
+                self.gargantuan_ft,
+                HeightSource::SizeDefault(Size::Gargantuan),
+            ),
+            Size::Unknown => (self.unknown_ft, HeightSource::UnknownSizeDefault),
+        };
+        if !(1..=MAX_VOLUME_HEIGHT_FT).contains(&height_ft) {
+            return Err(FlightError::InvalidHeight { height_ft });
+        }
+        Ok(ResolvedHeight { height_ft, source })
+    }
+}
+
+/// Where a resolved height came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeightSource {
+    Explicit,
+    SizeDefault(Size),
+    UnknownSizeDefault,
+}
+
+/// A height plus its provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedHeight {
+    pub height_ft: i32,
+    pub source: HeightSource,
+}
+
+/// Ability used by a fall-related check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FallAbility {
+    Strength,
+    Dexterity,
+}
+
+impl FallAbility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Strength => "strength",
+            Self::Dexterity => "dexterity",
+        }
+    }
+}
+
+/// Skill used by a fall-related check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FallSkill {
+    Athletics,
+    Acrobatics,
+}
+
+impl FallSkill {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Athletics => "athletics",
+            Self::Acrobatics => "acrobatics",
+        }
+    }
+}
+
+/// One ability/skill check attached to a fall result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FallCheck {
+    pub ability: FallAbility,
+    pub skill: FallSkill,
+    pub dc: i32,
+}
+
+/// R-09's short-fall check. The matrix calls R-09 a table ruling; its DC 10
+/// check is a house rule, not book RAW, so it is marked as such.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LandingCheck {
+    pub rule_kind: FallRuleKind,
+    pub source: &'static str,
+    pub check: FallCheck,
+    pub max_fall_distance_ft: i32,
+}
+
+impl LandingCheck {
+    /// Matrix V-06 / `rulings.md` R-09. The DC 10 check is a HOUSE rule; the
+    /// damaging fall itself is RAW.
+    pub fn r09() -> Self {
+        Self {
+            rule_kind: FallRuleKind::HouseRule,
+            source: "rulings.md R-09",
+            check: FallCheck {
+                ability: FallAbility::Dexterity,
+                skill: FallSkill::Acrobatics,
+                dc: R09_LANDING_DC,
+            },
+            max_fall_distance_ft: R09_LANDING_MAX_FALL_FT,
+        }
+    }
+}
+
+/// 2024 falling-into-liquid reaction. 2014 has no equivalent in the SRD text
+/// used by the matrix, so the resolver never offers it for a 2014 profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiquidLanding {
+    pub rule_kind: FallRuleKind,
+    pub source: &'static str,
+    pub checks: Vec<FallCheck>,
+    pub success_halves_damage: bool,
+}
+
+impl LiquidLanding {
+    /// Matrix V-05: 2024 only; 2014 has no equivalent in the SRD text used by
+    /// the frozen matrix.
+    pub fn for_2024() -> Self {
+        Self {
+            rule_kind: FallRuleKind::Raw,
+            source: "SPATIAL-RULES-MATRIX V-05",
+            checks: vec![
+                FallCheck {
+                    ability: FallAbility::Strength,
+                    skill: FallSkill::Athletics,
+                    dc: LIQUID_LANDING_DC,
+                },
+                FallCheck {
+                    ability: FallAbility::Dexterity,
+                    skill: FallSkill::Acrobatics,
+                    dc: LIQUID_LANDING_DC,
+                },
+            ],
+            success_halves_damage: true,
+        }
+    }
+}
+
+/// Fall damage expression and its rule provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FallDamage {
+    pub dice: u32,
+    pub sides: u32,
+    pub flat: i32,
+    pub damage_type: &'static str,
+    pub capped: bool,
+    pub rule_kind: FallRuleKind,
+}
+
+impl FallDamage {
+    /// One die per 10 feet, floor division, capped at 20 dice. A 15-ft fall is
+    /// 1d6 and a 5-ft fall is 0 dice. Matrix V-04 (RAW).
+    pub fn for_distance(fall_distance_ft: i32) -> Self {
+        let raw = (fall_distance_ft.max(0) / FALL_FEET_PER_DIE).max(0) as u32;
+        Self {
+            dice: raw.min(MAX_FALL_DICE),
+            sides: FALL_DIE_FACES,
+            flat: 0,
+            damage_type: FALL_DAMAGE_TYPE,
+            capped: raw > MAX_FALL_DICE,
+            rule_kind: FallRuleKind::Raw,
+        }
+    }
+
+    pub fn expression(&self) -> String {
+        if self.dice == 0 && self.flat == 0 {
+            return "0".to_string();
+        }
+        let mut expression = if self.dice == 0 {
+            String::new()
+        } else {
+            format!("{}d{}", self.dice, self.sides)
+        };
+        if self.flat > 0 {
+            if !expression.is_empty() {
+                expression.push('+');
+            }
+            expression.push_str(&self.flat.to_string());
+        } else if self.flat < 0 {
+            expression.push_str(&self.flat.to_string());
+        }
+        if expression.is_empty() {
+            "0".to_string()
+        } else {
+            expression
+        }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.dice == 0 && self.flat == 0
+    }
+}
+
+/// What kind of surface ended a fall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FallSurfaceKind {
+    Ground,
+    Platform,
+    Terrain,
+    Ceiling,
+    Liquid,
+}
+
+impl FallSurfaceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ground => "ground",
+            Self::Platform => "platform",
+            Self::Terrain => "terrain",
+            Self::Ceiling => "ceiling",
+            Self::Liquid => "liquid",
+        }
+    }
+
+    fn is_solid(self) -> bool {
+        !matches!(self, Self::Ground | Self::Liquid)
+    }
+}
+
+/// A solid horizontal surface inside one fall column. Bounds are absolute feet;
+/// the top is the landing elevation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerticalSpan {
+    pub id: String,
+    pub bottom_ft: i32,
+    pub top_ft: i32,
+    pub kind: FallSurfaceKind,
+}
+
+impl VerticalSpan {
+    pub fn new(
+        id: impl Into<String>,
+        bottom_ft: i32,
+        top_ft: i32,
+        kind: FallSurfaceKind,
+    ) -> Result<Self, FlightError> {
+        let id = id.into();
+        if id.trim().is_empty() || bottom_ft >= top_ft {
+            return Err(FlightError::InvalidSpan {
+                surface_id: id,
+                bottom_ft,
+                top_ft,
+            });
+        }
+        Ok(Self {
+            id,
+            bottom_ft,
+            top_ft,
+            kind,
+        })
+    }
+
+    pub fn platform(id: impl Into<String>, top_ft: i32) -> Result<Self, FlightError> {
+        Self::new(
+            id,
+            top_ft.saturating_sub(1),
+            top_ft,
+            FallSurfaceKind::Platform,
+        )
+    }
+
+    pub fn ceiling(id: impl Into<String>, bottom_ft: i32) -> Result<Self, FlightError> {
+        Self::new(
+            id,
+            bottom_ft,
+            bottom_ft.saturating_add(1),
+            FallSurfaceKind::Ceiling,
+        )
+    }
+
+    pub fn terrain(
+        id: impl Into<String>,
+        bottom_ft: i32,
+        top_ft: i32,
+    ) -> Result<Self, FlightError> {
+        Self::new(id, bottom_ft, top_ft, FallSurfaceKind::Terrain)
+    }
+}
+
+/// One vertical column: a floor plus any solid spans above it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallColumn {
+    pub floor_ft: i32,
+    pub floor_kind: FallSurfaceKind,
+    pub spans: Vec<VerticalSpan>,
+}
+
+impl FallColumn {
+    pub fn new(floor_ft: i32) -> Self {
+        Self {
+            floor_ft,
+            floor_kind: FallSurfaceKind::Ground,
+            spans: Vec::new(),
+        }
+    }
+
+    pub fn liquid(floor_ft: i32) -> Self {
+        Self {
+            floor_ft,
+            floor_kind: FallSurfaceKind::Liquid,
+            spans: Vec::new(),
+        }
+    }
+
+    pub fn with_span(mut self, span: VerticalSpan) -> Self {
+        self.spans.push(span);
+        self.sort_spans();
+        self
+    }
+
+    pub fn with_platform(mut self, id: impl Into<String>, top_ft: i32) -> Self {
+        self.spans.push(VerticalSpan {
+            id: id.into(),
+            bottom_ft: top_ft.saturating_sub(1),
+            top_ft,
+            kind: FallSurfaceKind::Platform,
+        });
+        self.sort_spans();
+        self
+    }
+
+    pub fn with_ceiling(mut self, id: impl Into<String>, bottom_ft: i32) -> Self {
+        self.spans.push(VerticalSpan {
+            id: id.into(),
+            bottom_ft,
+            top_ft: bottom_ft.saturating_add(1),
+            kind: FallSurfaceKind::Ceiling,
+        });
+        self.sort_spans();
+        self
+    }
+
+    fn sort_spans(&mut self) {
+        self.spans.sort_by(|left, right| {
+            left.top_ft
+                .cmp(&right.top_ft)
+                .then(left.bottom_ft.cmp(&right.bottom_ft))
+                .then(left.id.as_str().cmp(right.id.as_str()))
+        });
+    }
+}
+
+/// A sparse vertical map: one column per occupied grid cell. Columns outside
+/// the map are explicit errors, never an implicit floor.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FallMap {
+    columns: BTreeMap<(i32, i32), FallColumn>,
+}
+
+impl FallMap {
+    pub fn flat(width: i32, height: i32, floor_ft: i32) -> Self {
+        assert!(
+            width > 0 && height > 0 && width <= MAX_GRID_COORD && height <= MAX_GRID_COORD,
+            "fall map dimensions must be within 1..=MAX_GRID_COORD"
+        );
+        let mut columns = BTreeMap::new();
+        for y in 0..height {
+            for x in 0..width {
+                columns.insert((x, y), FallColumn::new(floor_ft));
+            }
+        }
+        Self { columns }
+    }
+
+    pub fn with_column(mut self, x: i32, y: i32, column: FallColumn) -> Self {
+        self.columns.insert((x, y), column);
+        self
+    }
+
+    pub fn column(&self, x: i32, y: i32) -> Option<&FallColumn> {
+        self.columns.get(&(x, y))
+    }
+
+    pub fn floor_at(&self, x: i32, y: i32) -> Option<i32> {
+        self.column(x, y).map(|column| column.floor_ft)
+    }
+
+    pub fn add_span(&mut self, x: i32, y: i32, span: VerticalSpan) -> Result<(), FlightError> {
+        if span.id.trim().is_empty() || span.bottom_ft >= span.top_ft {
+            return Err(FlightError::InvalidSpan {
+                surface_id: span.id,
+                bottom_ft: span.bottom_ft,
+                top_ft: span.top_ft,
+            });
+        }
+        let column = self
+            .columns
+            .get_mut(&(x, y))
+            .ok_or(FlightError::UnknownColumn { x, y })?;
+        column.spans.push(span);
+        column.sort_spans();
+        Ok(())
+    }
+
+    pub fn add_terrain(&mut self, volume: &TerrainVolume) -> Result<(), FlightError> {
+        for dy in 0..volume.footprint.depth {
+            for dx in 0..volume.footprint.width {
+                let x = volume.cell.x.saturating_add(dx as i32);
+                let y = volume.cell.y.saturating_add(dy as i32);
+                if self.column(x, y).is_none() {
+                    continue;
+                }
+                let span = VerticalSpan {
+                    id: volume.id.clone(),
+                    bottom_ft: volume.cell.z,
+                    top_ft: volume.cell.z.saturating_add(volume.height_ft),
+                    kind: FallSurfaceKind::Terrain,
+                };
+                self.add_span(x, y, span)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn clear_terrain(&mut self) {
+        for column in self.columns.values_mut() {
+            column
+                .spans
+                .retain(|span| span.kind != FallSurfaceKind::Terrain);
+        }
+    }
+
+    /// Replace every ceiling span with a ceiling `height_ft` above each floor.
+    /// `None` leaves the scene-provided ceilings untouched.
+    pub fn set_default_ceiling(&mut self, height_ft: Option<i32>) -> Result<(), FlightError> {
+        let Some(height_ft) = height_ft else {
+            return Ok(());
+        };
+        if !(1..=MAX_VOLUME_HEIGHT_FT).contains(&height_ft) {
+            return Err(FlightError::InvalidHeight { height_ft });
+        }
+        for ((x, y), column) in self.columns.iter_mut() {
+            column
+                .spans
+                .retain(|span| span.kind != FallSurfaceKind::Ceiling);
+            let bottom = column.floor_ft.saturating_add(height_ft);
+            column.spans.push(VerticalSpan {
+                id: format!("ceiling:{x},{y}"),
+                bottom_ft: bottom,
+                top_ft: bottom.saturating_add(1),
+                kind: FallSurfaceKind::Ceiling,
+            });
+            column.sort_spans();
+        }
+        Ok(())
+    }
+
+    /// Build a vertical map from a grid scene. Open cells get a column; walls
+    /// get none so a fall into a wall is an explicit error. `cell_height_ft`
+    /// is read as a ceiling above the cell floor.
+    pub fn from_scene(scene: &Scene) -> Option<Self> {
+        if scene.mode != SceneMode::Grid {
+            return None;
+        }
+        let grid = GridMap::parse(scene)?;
+        let mut columns = BTreeMap::new();
+        for y in 0..grid.height {
+            for x in 0..grid.width {
+                if grid.is_wall(x, y) {
+                    continue;
+                }
+                let cell = grid.cell_at(x, y)?;
+                let floor_ft = cell.elevation.unwrap_or(0);
+                let mut column = FallColumn::new(floor_ft);
+                if let Some(height) = scene.cell_height_ft {
+                    if !(1..=MAX_VOLUME_HEIGHT_FT).contains(&height) {
+                        return None;
+                    }
+                    let bottom = floor_ft.saturating_add(height);
+                    column.spans.push(VerticalSpan {
+                        id: format!("ceiling:{x},{y}"),
+                        bottom_ft: bottom,
+                        top_ft: bottom.saturating_add(1),
+                        kind: FallSurfaceKind::Ceiling,
+                    });
+                    column.sort_spans();
+                }
+                columns.insert((x, y), column);
+            }
+        }
+        let mut map = Self { columns };
+        for volume in &scene.terrain_volumes {
+            if map.add_terrain(volume).is_err() {
+                return None;
+            }
+        }
+        Some(map)
+    }
+}
+
+/// The surface a fall ended on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallLanding {
+    pub cell: CellPos,
+    pub surface_id: String,
+    pub surface_kind: FallSurfaceKind,
+    pub elevation_ft: i32,
+    pub height_above_floor_ft: i32,
+}
+
+/// A solid surface hit during the fall, for DM log explanation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallCollision {
+    pub surface_id: String,
+    pub surface_kind: FallSurfaceKind,
+    pub top_ft: i32,
+}
+
+/// Why the fall happened. P5 supplies the trigger context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FallCause {
+    #[default]
+    Unspecified,
+    Jump,
+    Forced,
+    Triggered(FallReason),
+}
+
+impl FallCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::Jump => "jump",
+            Self::Forced => "forced",
+            Self::Triggered(reason) => reason.as_str(),
+        }
+    }
+}
+
+/// Landing condition after a fall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LandingCondition {
+    Standing,
+    LandedFlat,
+}
+
+/// Which rule produced the landing condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LandingRule {
+    RawFall,
+    HouseRuleR09Avoided,
+    NoDamage,
+}
+
+/// Landing condition plus its rule provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LandingOutcome {
+    pub condition: LandingCondition,
+    pub rule: LandingRule,
+    pub explain: Vec<Explain>,
+}
+
+/// A fully calculated fall, before the engine rolls damage or applies a
+/// condition. Damage dice and the R-09 check are deterministic here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallResolution {
+    pub cause: FallCause,
+    pub start_cell: CellPos,
+    pub start_floor_ft: i32,
+    pub start_elevation_ft: i32,
+    pub landing: FallLanding,
+    pub fall_distance_ft: i32,
+    pub damage: FallDamage,
+    pub body_height: ResolvedHeight,
+    pub raw_flat_on_damage: bool,
+    pub landing_check: Option<LandingCheck>,
+    pub liquid_landing: Option<LiquidLanding>,
+    pub collisions: Vec<FallCollision>,
+    pub explain: Vec<Explain>,
+}
+
+impl FallResolution {
+    /// RAW: a fall that deals no damage leaves the creature standing. The
+    /// short-fall R-09 check is a house rule and only changes an otherwise
+    /// flat landing.
+    pub fn landing_outcome(
+        &self,
+        damage_taken: i32,
+        landing_check_total: Option<i32>,
+    ) -> LandingOutcome {
+        if !self.raw_flat_on_damage || damage_taken <= 0 {
+            return LandingOutcome {
+                condition: LandingCondition::Standing,
+                rule: LandingRule::NoDamage,
+                explain: vec![Explain::new(
+                    "landing-no-damage",
+                    "the fall dealt no damage, so RAW leaves the creature standing",
+                )],
+            };
+        }
+        if let Some(landing_check) = &self.landing_check {
+            if landing_check_total.is_some_and(|total| total >= landing_check.check.dc) {
+                return LandingOutcome {
+                    condition: LandingCondition::Standing,
+                    rule: LandingRule::HouseRuleR09Avoided,
+                    explain: vec![Explain::new(
+                        "landing-r09-house",
+                        format!(
+                            "{} {} check met DC {} (house rule, {})",
+                            landing_check.check.ability.as_str(),
+                            landing_check.check.skill.as_str(),
+                            landing_check.check.dc,
+                            landing_check.source
+                        ),
+                    )],
+                };
+            }
+        }
+        LandingOutcome {
+            condition: LandingCondition::LandedFlat,
+            rule: LandingRule::RawFall,
+            explain: vec![Explain::new(
+                "landing-raw-flat",
+                "RAW: a damaging fall ends with the creature knocked flat",
+            )],
+        }
+    }
+
+    /// Whether a successful 2024 liquid-landing reaction halves the damage.
+    pub fn liquid_halves_damage(&self, check_total: Option<i32>) -> bool {
+        let Some(liquid) = &self.liquid_landing else {
+            return false;
+        };
+        if !liquid.success_halves_damage {
+            return false;
+        }
+        let Some(total) = check_total else {
+            return false;
+        };
+        liquid.checks.iter().any(|check| total >= check.dc)
+    }
+}
+
+/// A fall request. `from.z` and the map are absolute elevations; the landing
+/// cell may differ from the start cell for forced movement off a ledge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallRequest {
+    pub from: CellPos,
+    pub landing_cell: (i32, i32),
+    pub body_height: ResolvedHeight,
+    pub cause: FallCause,
+}
+
+impl FallRequest {
+    pub fn new(from: CellPos, body_height: ResolvedHeight, cause: FallCause) -> Self {
+        Self {
+            from,
+            landing_cell: (from.x, from.y),
+            body_height,
+            cause,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LandingSurface {
+    id: String,
+    kind: FallSurfaceKind,
+    elevation_ft: i32,
+}
+
+/// One hit from a solid surface during vertical movement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CeilingHit {
+    pub surface_id: String,
+    pub bottom_ft: i32,
+    pub max_elevation_ft: i32,
+}
+
+/// Result of an explicit vertical move.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerticalMove {
+    pub from: SpatialPose,
+    pub requested_elevation_ft: i32,
+    pub allowed_elevation_ft: i32,
+    pub moved_ft: i32,
+    pub cost_ft: i32,
+    pub ceiling: Option<CeilingHit>,
+    pub blocked: bool,
+    pub explain: Vec<Explain>,
+}
+
+/// Stateless fall and vertical-move resolver over one [`FallMap`].
+pub struct FallResolver<'a> {
+    map: &'a FallMap,
+    rules: FlightRules,
+}
+
+impl<'a> FallResolver<'a> {
+    pub fn new(map: &'a FallMap, rules: FlightRules) -> Self {
+        Self { map, rules }
+    }
+
+    pub fn rules(&self) -> FlightRules {
+        self.rules
+    }
+
+    pub fn resolve(&self, request: &FallRequest) -> Result<FallResolution, FlightError> {
+        if !(0..=MAX_ALTITUDE_FT).contains(&request.from.z) {
+            return Err(FlightError::InvalidAltitude {
+                altitude_ft: request.from.z,
+            });
+        }
+        let start_column =
+            self.map
+                .column(request.from.x, request.from.y)
+                .ok_or(FlightError::UnknownColumn {
+                    x: request.from.x,
+                    y: request.from.y,
+                })?;
+        if request.from.z < start_column.floor_ft {
+            return Err(FlightError::StartBelowFloor {
+                start_ft: request.from.z,
+                floor_ft: start_column.floor_ft,
+            });
+        }
+        ensure_not_embedded(start_column, request.from.z)?;
+
+        let landing_column = self
+            .map
+            .column(request.landing_cell.0, request.landing_cell.1)
+            .ok_or(FlightError::UnknownColumn {
+                x: request.landing_cell.0,
+                y: request.landing_cell.1,
+            })?;
+        if request.from.z < landing_column.floor_ft {
+            return Err(FlightError::LandingAboveStart {
+                start_ft: request.from.z,
+                surface_ft: landing_column.floor_ft,
+            });
+        }
+        let surface = landing_surface(landing_column, request.from.z)?;
+        if surface.elevation_ft > request.from.z {
+            return Err(FlightError::LandingAboveStart {
+                start_ft: request.from.z,
+                surface_ft: surface.elevation_ft,
+            });
+        }
+        let fall_distance_ft = request.from.z - surface.elevation_ft;
+        let damage = FallDamage::for_distance(fall_distance_ft);
+        let raw_flat_on_damage = damage.dice > 0;
+        let landing_check = if raw_flat_on_damage && fall_distance_ft <= R09_LANDING_MAX_FALL_FT {
+            Some(LandingCheck::r09())
+        } else {
+            None
+        };
+        let landing = FallLanding {
+            cell: CellPos {
+                x: request.landing_cell.0,
+                y: request.landing_cell.1,
+                z: surface.elevation_ft,
+            },
+            surface_id: surface.id.clone(),
+            surface_kind: surface.kind,
+            elevation_ft: surface.elevation_ft,
+            height_above_floor_ft: surface.elevation_ft - landing_column.floor_ft,
+        };
+        let liquid_landing = if self.rules.falling_into_liquid
+            && landing.surface_kind == FallSurfaceKind::Liquid
+            && fall_distance_ft > 0
+        {
+            Some(LiquidLanding::for_2024())
+        } else {
+            None
+        };
+        let mut collisions = Vec::new();
+        if landing.surface_kind.is_solid() {
+            collisions.push(FallCollision {
+                surface_id: landing.surface_id.clone(),
+                surface_kind: landing.surface_kind,
+                top_ft: landing.elevation_ft,
+            });
+        }
+        let mut explain = vec![
+            Explain::new("fall-cause", request.cause.as_str()),
+            Explain::new(
+                "fall-start",
+                format!(
+                    "({}, {}, {}) ft; floor {} ft",
+                    request.from.x, request.from.y, request.from.z, start_column.floor_ft
+                ),
+            ),
+            Explain::new(
+                "fall-landing",
+                format!(
+                    "{} `{}` at {} ft",
+                    landing.surface_kind.as_str(),
+                    landing.surface_id,
+                    landing.elevation_ft
+                ),
+            ),
+            Explain::new(
+                "fall-distance",
+                format!("{fall_distance_ft} ft ({})", damage.expression()),
+            ),
+            Explain::new(
+                "fall-damage-rule",
+                format!("{} fall damage", damage.rule_kind.as_str()),
+            ),
+        ];
+        if let Some(check) = &landing_check {
+            explain.push(Explain::new(
+                "fall-landing-check",
+                format!(
+                    "{} {} DC {} ({}, max {} ft)",
+                    check.check.ability.as_str(),
+                    check.check.skill.as_str(),
+                    check.check.dc,
+                    check.rule_kind.as_str(),
+                    check.max_fall_distance_ft
+                ),
+            ));
+        }
+        if let Some(liquid) = &liquid_landing {
+            explain.push(Explain::new(
+                "fall-liquid-rule",
+                format!(
+                    "liquid landing reaction DC {}, {} rule",
+                    LIQUID_LANDING_DC,
+                    liquid.rule_kind.as_str()
+                ),
+            ));
+        }
+        if let Some(collision) = collisions.first() {
+            explain.push(Explain::new(
+                "fall-collision",
+                format!(
+                    "the fall stopped on {} `{}`",
+                    collision.surface_kind.as_str(),
+                    collision.surface_id
+                ),
+            ));
+        }
+        Ok(FallResolution {
+            cause: request.cause,
+            start_cell: request.from,
+            start_floor_ft: start_column.floor_ft,
+            start_elevation_ft: request.from.z,
+            landing,
+            fall_distance_ft,
+            damage,
+            body_height: request.body_height,
+            raw_flat_on_damage,
+            landing_check,
+            liquid_landing,
+            collisions,
+            explain,
+        })
+    }
+
+    pub fn resolve_from(
+        &self,
+        from: &SpatialPose,
+        body_height: ResolvedHeight,
+        cause: FallCause,
+    ) -> Result<FallResolution, FlightError> {
+        self.resolve(&FallRequest {
+            from: from.cell,
+            landing_cell: (from.cell.x, from.cell.y),
+            body_height,
+            cause,
+        })
+    }
+
+    pub fn resolve_into(
+        &self,
+        from: &SpatialPose,
+        landing_cell: (i32, i32),
+        body_height: ResolvedHeight,
+        cause: FallCause,
+    ) -> Result<FallResolution, FlightError> {
+        self.resolve(&FallRequest {
+            from: from.cell,
+            landing_cell,
+            body_height,
+            cause,
+        })
+    }
+
+    /// Move along the vertical axis with a fly speed. Upward movement stops
+    /// below the next solid ceiling; downward movement stops on the highest
+    /// solid surface below. `from.cell.z` and `to_elevation_ft` are absolute.
+    pub fn vertical_move(
+        &self,
+        from: &SpatialPose,
+        to_elevation_ft: i32,
+        body_height: ResolvedHeight,
+        capability: &FlightCapability,
+        flight: FlightState,
+    ) -> Result<VerticalMove, FlightError> {
+        if to_elevation_ft > MAX_ALTITUDE_FT {
+            return Err(FlightError::InvalidAltitude {
+                altitude_ft: to_elevation_ft,
+            });
+        }
+        if !(0..=MAX_ALTITUDE_FT).contains(&from.cell.z) {
+            return Err(FlightError::InvalidAltitude {
+                altitude_ft: from.cell.z,
+            });
+        }
+        let column =
+            self.map
+                .column(from.cell.x, from.cell.y)
+                .ok_or(FlightError::UnknownColumn {
+                    x: from.cell.x,
+                    y: from.cell.y,
+                })?;
+        if from.cell.z < column.floor_ft {
+            return Err(FlightError::StartBelowFloor {
+                start_ft: from.cell.z,
+                floor_ft: column.floor_ft,
+            });
+        }
+        ensure_not_embedded(column, from.cell.z)?;
+        if !matches!(flight, FlightState::Flying | FlightState::Hovering) {
+            return Err(FlightError::InvalidTransition {
+                from: flight,
+                action: FlightAction::Fly,
+            });
+        }
+        if !capability.can_fly() {
+            return Err(FlightError::NoFlySpeed);
+        }
+
+        let surface = landing_surface(column, from.cell.z)?;
+        let mut allowed = to_elevation_ft;
+        let mut blocked = false;
+        let mut explain = vec![
+            Explain::new(
+                "vertical-request",
+                format!("{} ft -> {} ft", from.cell.z, to_elevation_ft),
+            ),
+            Explain::new(
+                "vertical-surface",
+                format!(
+                    "{} `{}` at {} ft",
+                    surface.kind.as_str(),
+                    surface.id,
+                    surface.elevation_ft
+                ),
+            ),
+        ];
+        if allowed < surface.elevation_ft {
+            allowed = surface.elevation_ft;
+            blocked = true;
+            explain.push(Explain::new(
+                "vertical-solid-below",
+                format!("stopped on `{}`", surface.id),
+            ));
+        }
+        let next_ceiling = column
+            .spans
+            .iter()
+            .filter(|span| span.bottom_ft > from.cell.z)
+            .min_by(|left, right| {
+                left.bottom_ft
+                    .cmp(&right.bottom_ft)
+                    .then(left.id.as_str().cmp(right.id.as_str()))
+            });
+        let mut ceiling = None;
+        if let Some(span) = next_ceiling {
+            let max_elevation = span.bottom_ft.saturating_sub(body_height.height_ft);
+            if allowed > max_elevation {
+                allowed = max_elevation.max(from.cell.z);
+                blocked = true;
+                ceiling = Some(CeilingHit {
+                    surface_id: span.id.clone(),
+                    bottom_ft: span.bottom_ft,
+                    max_elevation_ft: max_elevation,
+                });
+                explain.push(Explain::new(
+                    "vertical-ceiling",
+                    format!(
+                        "`{}` bottom {} ft allows at most {} ft for a {} ft body",
+                        span.id, span.bottom_ft, max_elevation, body_height.height_ft
+                    ),
+                ));
+            }
+        }
+        let moved_ft = allowed - from.cell.z;
+        Ok(VerticalMove {
+            from: *from,
+            requested_elevation_ft: to_elevation_ft,
+            allowed_elevation_ft: allowed,
+            moved_ft,
+            cost_ft: moved_ft.abs(),
+            ceiling,
+            blocked,
+            explain,
+        })
+    }
+}
+
+fn ensure_not_embedded(column: &FallColumn, start_ft: i32) -> Result<(), FlightError> {
+    for span in &column.spans {
+        if span.bottom_ft <= start_ft && start_ft < span.top_ft {
+            return Err(FlightError::EmbeddedInSolid {
+                surface_id: span.id.clone(),
+                start_ft,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn landing_surface(column: &FallColumn, start_ft: i32) -> Result<LandingSurface, FlightError> {
+    if start_ft < column.floor_ft {
+        return Err(FlightError::StartBelowFloor {
+            start_ft,
+            floor_ft: column.floor_ft,
+        });
+    }
+    ensure_not_embedded(column, start_ft)?;
+    let floor = LandingSurface {
+        id: "floor".to_string(),
+        kind: column.floor_kind,
+        elevation_ft: column.floor_ft,
+    };
+    if start_ft == column.floor_ft {
+        return Ok(floor);
+    }
+    let mut best: Option<&VerticalSpan> = None;
+    for span in &column.spans {
+        if span.top_ft > start_ft || span.top_ft < column.floor_ft {
+            continue;
+        }
+        let replace = best.is_none_or(|current| {
+            span.top_ft > current.top_ft
+                || (span.top_ft == current.top_ft && span.id.as_str() < current.id.as_str())
+        });
+        if replace {
+            best = Some(span);
+        }
+    }
+    match best {
+        Some(span) if span.top_ft > column.floor_ft => Ok(LandingSurface {
+            id: span.id.clone(),
+            kind: span.kind,
+            elevation_ft: span.top_ft,
+        }),
+        _ => Ok(floor),
+    }
 }
