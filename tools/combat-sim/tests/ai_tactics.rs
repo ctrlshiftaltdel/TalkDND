@@ -17,8 +17,7 @@ use combat_sim::ai::{
 use combat_sim::content::schema::{AiAssignment, AiParams, AiTargeting, ConditionDef, Cover};
 use combat_sim::content::{ContentRegistry, ContentSource, ContentSources};
 use combat_sim::dice;
-use combat_sim::space::Position;
-use combat_sim::state::{ActiveCondition, AddSpec, CombatantState, EncounterState, NewEncounter};
+use combat_sim::state::{ActiveCondition, AddSpec, EncounterState, NewEncounter};
 
 fn fixture(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -35,11 +34,7 @@ fn registry() -> ContentRegistry {
     .expect("engine fixture campaign should load")
 }
 
-fn encounter_state(
-    encounter: &str,
-    party: &[&str],
-    adds: &[(&str, &str, u32)],
-) -> EncounterState {
+fn encounter_state(encounter: &str, party: &[&str], adds: &[(&str, &str, u32)]) -> EncounterState {
     let options = NewEncounter {
         encounter: encounter.to_string(),
         party: party.iter().map(|name| name.to_string()).collect(),
@@ -105,25 +100,6 @@ fn grid_scene(rows: &[&str]) -> serde_json::Value {
     })
 }
 
-fn zone_scene() -> serde_json::Value {
-    json!({
-        "id": "tactics-zones",
-        "name": "Tactics Zones",
-        "mode": "zones",
-        "light": "bright",
-        "zones": [
-            {"id": "alpha"},
-            {"id": "beta"},
-            {"id": "gamma"}
-        ],
-        "edges": [
-            {"a": "alpha", "b": "beta", "distance": 5},
-            {"a": "alpha", "b": "gamma", "distance": 30},
-            {"a": "beta", "b": "gamma", "distance": 30}
-        ]
-    })
-}
-
 fn objective_scene() -> serde_json::Value {
     json!({
         "id": "tactics-objective",
@@ -172,9 +148,7 @@ fn objective_scene() -> serde_json::Value {
 fn candidate_target(candidate: &CandidateEvaluation) -> Option<&str> {
     match &candidate.kind {
         CandidateKind::Action { target, .. } => target.as_deref(),
-        CandidateKind::Move { .. } | CandidateKind::Interact { .. } | CandidateKind::Wait => {
-            None
-        }
+        CandidateKind::Move { .. } | CandidateKind::Interact { .. } | CandidateKind::Wait => None,
     }
 }
 
@@ -216,10 +190,6 @@ fn trigger_enabled(state: &EncounterState, id: &str) -> bool {
     state.trigger_enabled(&EncounterState::trigger_key(index, &scene.triggers[index]))
 }
 
-fn combatant(state: &EncounterState, name: &str) -> &CombatantState {
-    &state.combatants[index(state, name)]
-}
-
 #[test]
 fn utility_terms_have_explicit_weights() {
     let terms = UtilityTerms {
@@ -255,19 +225,18 @@ fn utility_terms_have_explicit_weights() {
 
 #[test]
 fn preview_separates_profile_candidates_and_legality() {
-    let mut state = encounter_state("ai-fight", &["ai-avaricious"], &[("ai-dummy", "alpha", 1)]);
+    let mut state = encounter_state("ai-fight", &["ai-avaricious"], &[]);
     begin(&mut state, "Avaricious X");
     let ai = Ai::prepare_with(&state, AiStrategy::Utility);
     let plan = ai.preview_turn(&state).expect("utility plan");
 
     assert_eq!(plan.actor, index(&state, "Avaricious X"));
-    assert_eq!(plan.profile.targeting, AiTargeting::Nearest);
+    assert_eq!(plan.profile.target.targeting, AiTargeting::Nearest);
     assert_eq!(plan.profile.role, BehaviourRole::Striker);
     assert!(plan
         .rejected
         .iter()
-        .any(|rejected| rejected.action_id == "ai-costly"
-            && rejected.reason.contains("resource")));
+        .any(|rejected| rejected.action_id == "ai-costly" && rejected.reason.contains("resource")));
     let selected = plan.selected().expect("a candidate should be selected");
     assert!(matches!(selected.kind, CandidateKind::Action { .. }));
     assert_eq!(candidate_action(selected), Some("ai-cantrip"));
@@ -275,28 +244,20 @@ fn preview_separates_profile_candidates_and_legality() {
 
 #[test]
 fn target_profile_prefers_lowest_hp_when_configured() {
-    let mut state = encounter_state(
-        "ai-fight",
-        &["ai-ranger"],
-        &[("ai-dummy", "alpha", 1), ("ai-brute", "beta", 1)],
-    );
+    let mut state = encounter_state("ai-fight", &["ai-ranger"], &[("ai-brute", "beta", 1)]);
     let dummy = index(&state, "Dummy X");
     state.combatants[dummy].hp = 7;
     begin(&mut state, "Ranger X");
     let ai = Ai::prepare_with(&state, AiStrategy::Utility);
     let plan = ai.preview_turn(&state).expect("utility plan");
-    assert_eq!(plan.profile.targeting, AiTargeting::LowestHp);
+    assert_eq!(plan.profile.target.targeting, AiTargeting::LowestHp);
     let selected = plan.selected().expect("candidate");
     assert_eq!(candidate_target(selected), Some("Dummy X"));
 }
 
 #[test]
 fn candidate_generation_skips_dormant_dead_and_unaware_targets() {
-    let mut state = encounter_state(
-        "ai-fight",
-        &["ai-striker"],
-        &[("ai-dummy", "alpha", 1), ("ai-brute", "beta", 1)],
-    );
+    let mut state = encounter_state("ai-fight", &["ai-striker"], &[("ai-brute", "beta", 1)]);
     begin(&mut state, "Striker X");
     let ai = Ai::prepare_with(&state, AiStrategy::Utility);
 
@@ -331,11 +292,7 @@ fn candidate_generation_skips_dormant_dead_and_unaware_targets() {
 
 #[test]
 fn fixed_seed_and_preview_order_are_deterministic() {
-    let mut state = encounter_state(
-        "ai-fight",
-        &["ai-ranger"],
-        &[("ai-dummy", "beta", 1), ("ai-brute", "gamma", 1)],
-    );
+    let mut state = encounter_state("ai-fight", &["ai-ranger"], &[("ai-brute", "gamma", 1)]);
     begin(&mut state, "Ranger X");
     let ai = Ai::prepare_with(&state, AiStrategy::Utility);
     let first = ai.preview_turn(&state).expect("plan");
@@ -348,23 +305,23 @@ fn fixed_seed_and_preview_order_are_deterministic() {
     };
     assert_eq!(describe(&first), describe(&second));
 
-    let mut legacy_state = state.clone();
-    let mut utility_state = state.clone();
-    let legacy = Ai::prepare(&legacy_state);
-    let utility = Ai::prepare_with(&utility_state, AiStrategy::Utility);
-    let mut legacy_rng = dice::seeded_rng(77);
-    let mut utility_rng = dice::seeded_rng(77);
-    let mut legacy_log = Vec::new();
-    let mut utility_log = Vec::new();
-    legacy
-        .take_turn(&mut legacy_state, &mut legacy_rng, &mut legacy_log)
-        .expect("legacy turn");
-    utility
-        .take_turn(&mut utility_state, &mut utility_rng, &mut utility_log)
-        .expect("utility turn");
+    let mut first_state = state.clone();
+    let mut second_state = state.clone();
+    let first_ai = Ai::prepare_with(&first_state, AiStrategy::Utility);
+    let second_ai = Ai::prepare_with(&second_state, AiStrategy::Utility);
+    let mut first_rng = dice::seeded_rng(77);
+    let mut second_rng = dice::seeded_rng(77);
+    let mut first_log = Vec::new();
+    let mut second_log = Vec::new();
+    first_ai
+        .take_turn(&mut first_state, &mut first_rng, &mut first_log)
+        .expect("first turn");
+    second_ai
+        .take_turn(&mut second_state, &mut second_rng, &mut second_log)
+        .expect("second turn");
     assert_eq!(
-        legacy_log, utility_log,
-        "same seed and same baseline action should produce the same turn"
+        first_log, second_log,
+        "same seed and same state should produce the same turn"
     );
 }
 
@@ -373,6 +330,8 @@ fn hold_point_does_not_chase_beyond_leash() {
     let mut state = encounter_state("ai-fight", &["ai-striker"], &[("ai-sentry", "beta", 1)]);
     let striker = index(&state, "Striker X");
     state.combatants[striker].set_zone("gamma");
+    let dummy = index(&state, "Dummy X");
+    state.combatants[dummy].set_zone("alpha");
     begin(&mut state, "Sentry X");
     let ai = Ai::prepare_with(&state, AiStrategy::Utility);
     let plan = ai.preview_turn(&state).expect("plan");
@@ -384,8 +343,7 @@ fn hold_point_does_not_chase_beyond_leash() {
 
     let mut rng = dice::seeded_rng(1);
     let mut log = Vec::new();
-    ai.take_turn(&mut state, &mut rng, &mut log)
-        .expect("turn");
+    ai.take_turn(&mut state, &mut rng, &mut log).expect("turn");
     assert_eq!(state.combatants[index(&state, "Sentry X")].zone, "beta");
     assert!(!log.iter().any(|line| line.contains("Sword Test")));
 }
@@ -418,16 +376,27 @@ fn retreat_uses_disengage_and_flee_zone() {
     }));
     assert!(plan.candidates.iter().any(|candidate| {
         candidate_action(candidate) == Some("ai-disengage")
-            && matches!(&candidate.kind, CandidateKind::Action { role: combat_sim::content::schema::AiRole::Defense, .. })
+            && matches!(
+                &candidate.kind,
+                CandidateKind::Action {
+                    role: combat_sim::content::schema::AiRole::Defense,
+                    ..
+                }
+            )
     }));
 
     let mut rng = dice::seeded_rng(3);
     let mut log = Vec::new();
-    ai.take_turn(&mut state, &mut rng, &mut log)
-        .expect("turn");
+    ai.take_turn(&mut state, &mut rng, &mut log).expect("turn");
     assert_eq!(state.combatants[ranger].zone, "gamma", "{log:?}");
-    assert!(log.iter().any(|line| line.contains("Disengage Test")), "{log:?}");
-    assert!(!log.iter().any(|line| line.contains("opportunity attack")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("Disengage Test")),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter().any(|line| line.contains("opportunity attack")),
+        "{log:?}"
+    );
 }
 
 #[test]
@@ -449,23 +418,27 @@ fn heal_downed_ally_scores_rescue() {
 
     let mut rng = dice::seeded_rng(4);
     let mut log = Vec::new();
-    ai.take_turn(&mut state, &mut rng, &mut log)
-        .expect("turn");
+    ai.take_turn(&mut state, &mut rng, &mut log).expect("turn");
     assert!(log.iter().any(|line| line.contains("Heal Test")), "{log:?}");
     assert!(state.combatants[striker].hp > 0);
 }
 
 #[test]
 fn resource_conservation_keeps_the_limited_resource() {
-    let mut state = encounter_state("ai-fight", &["ai-avaricious"], &[("ai-dummy", "alpha", 1)]);
+    let mut state = encounter_state("ai-fight", &["ai-avaricious"], &[]);
     begin(&mut state, "Avaricious X");
     let ai = Ai::prepare_with(&state, AiStrategy::Utility);
     let mut rng = dice::seeded_rng(5);
     let mut log = Vec::new();
-    ai.take_turn(&mut state, &mut rng, &mut log)
-        .expect("turn");
-    assert!(log.iter().any(|line| line.contains("Cantrip Test")), "{log:?}");
-    assert!(!log.iter().any(|line| line.contains("Costly Test")), "{log:?}");
+    ai.take_turn(&mut state, &mut rng, &mut log).expect("turn");
+    assert!(
+        log.iter().any(|line| line.contains("Cantrip Test")),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter().any(|line| line.contains("Costly Test")),
+        "{log:?}"
+    );
     let focus = state.combatants[index(&state, "Avaricious X")]
         .resources
         .get("focus")
@@ -499,15 +472,14 @@ fn escort_profile_holds_with_ally_and_supports() {
     assert_eq!(plan.profile.role, BehaviourRole::Escort);
     let mut rng = dice::seeded_rng(6);
     let mut log = Vec::new();
-    ai.take_turn(&mut state, &mut rng, &mut log)
-        .expect("turn");
+    ai.take_turn(&mut state, &mut rng, &mut log).expect("turn");
     assert_eq!(state.combatants[healer].zone, "beta");
     assert!(log.iter().any(|line| line.contains("Heal Test")), "{log:?}");
 }
 
 #[test]
 fn cover_candidate_moves_into_cover() {
-    let mut state = encounter_state("ai-fight", &["ai-ranger"], &[("ai-dummy", "beta", 1)]);
+    let mut state = encounter_state("ai-fight", &["ai-ranger"], &[]);
     install_scene(
         &mut state,
         grid_scene(&[
@@ -535,8 +507,7 @@ fn cover_candidate_moves_into_cover() {
     ));
     let mut rng = dice::seeded_rng(7);
     let mut log = Vec::new();
-    ai.take_turn(&mut state, &mut rng, &mut log)
-        .expect("turn");
+    ai.take_turn(&mut state, &mut rng, &mut log).expect("turn");
     let cell = state.combatants[ranger].cell().expect("grid cell");
     let scene = state.scene.as_ref().expect("scene");
     let grid = combat_sim::space::GridMap::parse(scene).expect("grid");
@@ -546,12 +517,13 @@ fn cover_candidate_moves_into_cover() {
 
 #[test]
 fn stop_objective_interacts_with_configured_object() {
-    let mut state = encounter_state("ai-fight", &["ai-striker"], &[("ai-dummy", "gamma", 1)]);
+    let mut state = encounter_state("ai-fight", &["ai-striker"], &[]);
     install_scene(&mut state, objective_scene());
-    set_cell(&mut state, "Striker X", 0, 0);
-    begin(&mut state, "Striker X");
     let striker = index(&state, "Striker X");
-    state.combatants[striker].speed_left = 0;
+    state.combatants[striker].set_zone("alpha");
+    let dummy = index(&state, "Dummy X");
+    state.combatants[dummy].set_zone("gamma");
+    begin(&mut state, "Striker X");
     let ai = Ai::prepare_with(&state, AiStrategy::Utility);
     let plan = ai.preview_turn(&state).expect("plan");
     let selected = plan.selected().expect("candidate");
@@ -559,24 +531,27 @@ fn stop_objective_interacts_with_configured_object() {
         &selected.kind,
         CandidateKind::Interact { object_id, .. } if object_id == "gate-lever"
     ));
-    assert!(plan
-        .rejected
-        .iter()
-        .any(|rejected| rejected.action_id == "manual-notes"
-            && rejected.reason.contains("manual")));
+    assert!(
+        plan.rejected
+            .iter()
+            .any(|rejected| rejected.action_id == "manual-notes"
+                && rejected.reason.contains("manual"))
+    );
     assert!(trigger_enabled(&state, "gate"));
 
     let mut rng = dice::seeded_rng(8);
     let mut log = Vec::new();
-    ai.take_turn(&mut state, &mut rng, &mut log)
-        .expect("turn");
-    assert!(log.iter().any(|line| line.contains("Gate Lever")), "{log:?}");
+    ai.take_turn(&mut state, &mut rng, &mut log).expect("turn");
+    assert!(
+        log.iter().any(|line| line.contains("Gate Lever")),
+        "{log:?}"
+    );
     assert!(!trigger_enabled(&state, "gate"), "{log:?}");
 }
 
 #[test]
 fn movement_candidates_are_capped_on_a_large_grid() {
-    let mut state = encounter_state("ai-fight", &["ai-ranger"], &[("ai-dummy", "beta", 1)]);
+    let mut state = encounter_state("ai-fight", &["ai-ranger"], &[]);
     let mut rows = Vec::new();
     rows.push("###############".to_string());
     for _ in 0..13 {
@@ -598,11 +573,7 @@ fn movement_candidates_are_capped_on_a_large_grid() {
 
 #[test]
 fn execution_revalidates_before_acting() {
-    let mut state = encounter_state(
-        "ai-fight",
-        &["ai-striker"],
-        &[("ai-dummy", "alpha", 1), ("ai-brute", "beta", 1)],
-    );
+    let mut state = encounter_state("ai-fight", &["ai-striker"], &[("ai-brute", "beta", 1)]);
     begin(&mut state, "Striker X");
     let ai = Ai::prepare_with(&state, AiStrategy::Utility);
     let plan = ai.preview_turn(&state).expect("plan");
@@ -632,15 +603,28 @@ fn execution_revalidates_before_acting() {
 }
 
 #[test]
+fn utility_strategy_completes_a_synthetic_encounter() {
+    let state = encounter_state("ai-fight", &["ai-striker"], &[]);
+    let ai = Ai::prepare_with(&state, AiStrategy::Utility);
+    let mut rng = dice::seeded_rng(31);
+    let mut log = Vec::new();
+    let outcome = combat_sim::sim::play(state, &ai, &mut rng, 20, &mut log)
+        .expect("utility-driven encounter should not error");
+    assert!(outcome.rounds >= 1);
+    assert!(outcome.outcome.is_some() || outcome.timed_out, "{log:?}");
+}
+
+#[test]
 fn quantitative_comparison_reports_improvement_and_parity() {
     // Objective completion: utility should use the configured interaction while
     // the legacy heuristic walks toward the enemy instead.
-    let mut objective_state =
-        encounter_state("ai-fight", &["ai-striker"], &[("ai-dummy", "gamma", 1)]);
+    let mut objective_state = encounter_state("ai-fight", &["ai-striker"], &[]);
     install_scene(&mut objective_state, objective_scene());
-    begin(&mut objective_state, "Striker X");
     let striker = index(&objective_state, "Striker X");
-    objective_state.combatants[striker].speed_left = 0;
+    objective_state.combatants[striker].set_zone("alpha");
+    let dummy = index(&objective_state, "Dummy X");
+    objective_state.combatants[dummy].set_zone("gamma");
+    begin(&mut objective_state, "Striker X");
 
     let mut legacy_objective = objective_state.clone();
     let mut utility_objective = objective_state.clone();
