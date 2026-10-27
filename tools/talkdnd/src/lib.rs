@@ -16,6 +16,7 @@ pub mod entity;
 pub mod graph;
 pub mod handout;
 pub mod identify;
+pub mod knowledge;
 pub mod known;
 pub mod library;
 pub mod memory;
@@ -239,6 +240,11 @@ enum Cmd {
     /// What the players currently know (facts, handouts, identified names,
     /// met original content, party, chapter/location)
     Known,
+    /// Read-only knowledge API: search, get, cite, context, related
+    Knowledge {
+        #[command(subcommand)]
+        cmd: knowledge::Cmd,
+    },
     /// Record the current scene/location and print `known`
     Scene { name: Vec<String> },
     /// Secret terms for the spoiler guard (DM only, stored in the save)
@@ -700,6 +706,7 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         | Cmd::Integrity { .. }
         | Cmd::Options { .. }
         | Cmd::Data { .. }
+        | Cmd::Knowledge { .. }
         | Cmd::Library { .. } => None,
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
     };
@@ -813,6 +820,10 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             for l in known::lines(&s, false) {
                 println!("{l}");
             }
+        }
+        Cmd::Knowledge { cmd } => {
+            let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            knowledge::run(&root, &s, cmd)?;
         }
         Cmd::Scene { name } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;

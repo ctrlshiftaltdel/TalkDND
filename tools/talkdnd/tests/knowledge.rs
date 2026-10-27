@@ -109,6 +109,10 @@ fn fixture(tag: &str) -> PathBuf {
         &save.join("secret-terms.yaml"),
         "version: 1\nterms:\n  - {term: TOP-SECRET-MANUAL, chapter: 1, note: synthetic, added: \"2030-01-01 10:00\"}\n  - {term: TOP-SECRET-MEMORY, chapter: 1, note: synthetic, added: \"2030-01-01 10:00\"}\n",
     );
+    write(
+        &save.join("handouts.yaml"),
+        "shown:\n  - {id: h-player, caption: \"Synthetic Player Map\", file: \"Saves/2030-01-01-01/handouts/h-player.webp\", date: \"2030-01-01 10:00\"}\n",
+    );
     write(&save.join("dm-secrets.md"), "- term: TOP-SECRET-DMSECRET\n");
     write(&save.join("dm-plan.md"), "- term: TOP-SECRET-PLAN\n");
 
@@ -154,7 +158,11 @@ fn fixture(tag: &str) -> PathBuf {
     );
     write(
         &root.join("Rules/2014/player-book/index/structured.json"),
-        &structured("player-book", "Player Book.pdf", &[("Synthetic Book Section", 7)]),
+        &structured(
+            "player-book",
+            "Player Book.pdf",
+            &[("Synthetic Book Section", 7)],
+        ),
     );
 
     // Adventure index: one current heading, one future heading, one DM-only
@@ -169,9 +177,23 @@ fn fixture(tag: &str) -> PathBuf {
     );
     write(
         &root.join("Adventures/test-adventure/index/structured.json"),
-        &format!(
-            "{{\n  \"version\": 1,\n  \"book\": \"test-adventure\",\n  \"source\": {{\"path\": \"Test Book.pdf\"}},\n  \"headings\": [\n    {{\"level\":2,\"title\":\"Chapter 1: The Inn\",\"page\":1,\"anchor\":\"p1\"}},\n    {{\"level\":2,\"title\":\"Chapter 9: TOP-SECRET-FUTURE\",\"page\":2,\"anchor\":\"p2\"}},\n    {{\"level\":2,\"title\":\"DM Notes\",\"page\":3,\"anchor\":\"p3\"}},\n    {{\"level\":2,\"title\":\"Synthetic Adventure Room\",\"page\":4,\"anchor\":\"p4\"}}\n  ],\n  \"chapters\": [],\n  \"maps\": [],\n  \"figures\": [],\n  \"statblocks\": [],\n  \"low_quality_pages\": []\n}}\n"
-        ),
+        r#"{
+  "version": 1,
+  "book": "test-adventure",
+  "source": {"path": "Test Book.pdf"},
+  "headings": [
+    {"level":2,"title":"Chapter 1: The Inn","page":1,"anchor":"p1"},
+    {"level":2,"title":"Chapter 9: TOP-SECRET-FUTURE","page":2,"anchor":"p2"},
+    {"level":2,"title":"DM Notes","page":3,"anchor":"p3"},
+    {"level":2,"title":"Synthetic Adventure Room","page":4,"anchor":"p4"}
+  ],
+  "chapters": [],
+  "maps": [],
+  "figures": [],
+  "statblocks": [],
+  "low_quality_pages": []
+}
+"#,
     );
     write(
         &root.join("Adventures/test-adventure/index/handouts.yaml"),
@@ -190,13 +212,6 @@ fn joined(entries: &[Entry]) -> String {
         .map(|e| format!("{} {} {} {}", e.id, e.authority, e.title, e.excerpt))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn find<'a>(entries: &'a [Entry], id: &str) -> &'a Entry {
-    entries
-        .iter()
-        .find(|e| e.id == id)
-        .unwrap_or_else(|| panic!("missing {id} in {:?}", ids(entries)))
 }
 
 fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
@@ -270,10 +285,7 @@ fn search_limits_are_deterministic_and_capped() {
     let save = save(&root);
     fs::create_dir_all(save.join("Sessions")).unwrap();
     fs::create_dir_all(save.join("combat")).unwrap();
-    write(
-        &save.join("Sessions/2030-01-01-session-01.md"),
-        "# bulk\n",
-    );
+    write(&save.join("Sessions/2030-01-01-session-01.md"), "# bulk\n");
     write(
         &save.join("combat/campaign.yaml"),
         "party: [hero]\nruleset: \"5e-srd\"\n",
@@ -302,7 +314,11 @@ fn search_limits_are_deterministic_and_capped() {
     assert!(search(&root, &save, "Bulk", Scope::All, 1001, false).is_err());
 
     let lines = context(&root, &save, "E-001").unwrap();
-    assert!(lines.len() < 100, "context must stay bounded: {}", lines.len());
+    assert!(
+        lines.len() < 100,
+        "context must stay bounded: {}",
+        lines.len()
+    );
     assert!(lines.iter().any(|l| l.contains("已知")), "{lines:?}");
 }
 
@@ -334,7 +350,7 @@ fn get_returns_one_entry_and_fails_closed() {
     assert!(!dm.known);
 
     // Corrupt ledgers fail closed, not panic.
-    write(&save.join("entities.yaml"), "::: not yaml\n");
+    write(&save.join("entities.yaml"), "version: 1\nentities: [oops\n");
     assert!(search(&root, &save, "Synthetic", Scope::All, 20, false).is_err());
     assert!(get(&root, &save, "save:entity:E-001", false).is_err());
 }
@@ -415,7 +431,10 @@ fn hidden_filtering_never_leaks_secret_terms() {
         "TOP-SECRET-FUTURE",
         "TOP-SECRET-HANDOUT",
     ] {
-        assert!(text.contains(wanted), "include-hidden missed {wanted}: {text}");
+        assert!(
+            text.contains(wanted),
+            "include-hidden missed {wanted}: {text}"
+        );
     }
     // `dm-secrets.md`, `dm-plan.md` and manual secret terms stay out even in
     // the DM view.
@@ -425,7 +444,10 @@ fn hidden_filtering_never_leaks_secret_terms() {
         "TOP-SECRET-MANUAL",
         "TOP-SECRET-MEMORY",
     ] {
-        assert!(!text.contains(forbidden), "DM view leaked {forbidden}: {text}");
+        assert!(
+            !text.contains(forbidden),
+            "DM view leaked {forbidden}: {text}"
+        );
     }
     for e in all.iter().filter(|e| {
         [
@@ -450,6 +472,22 @@ fn hidden_filtering_never_leaks_secret_terms() {
     assert!(dm.excerpt.contains("TOP-SECRET-HIDDEN"), "{}", dm.excerpt);
     // `dm-secrets.md` is not a source and has no id.
     assert!(get(&root, &save, "save:secret:0", true).is_err());
+    // The context view applies the same boundary.
+    for key in ["E-005", "E-006"] {
+        let text = context(&root, &save, key).unwrap().join("\n");
+        for forbidden in [
+            "TOP-SECRET-DMSECRET",
+            "TOP-SECRET-MANUAL",
+            "TOP-SECRET-MEMORY",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "context leaked {forbidden}: {text}"
+            );
+        }
+    }
+    assert!(context(&root, &save, "TOP-SECRET-DMSECRET").is_err());
+    assert!(context(&root, &save, "E-003").is_err());
 }
 
 #[test]
@@ -469,9 +507,13 @@ fn context_is_ordered_and_marks_sources() {
     let known = pos("已知");
     let relations = pos("关系");
     let rules = pos("规则");
-    assert!(scene < party && party < known && known < relations && relations < rules, "{text}");
+    assert!(
+        scene < party && party < known && known < relations && relations < rules,
+        "{text}"
+    );
     assert!(text.contains("宴会厅"), "{text}");
     assert!(text.contains("Hero"), "{text}");
+    assert!(text.contains("Synthetic Player Map"), "{text}");
     assert!(text.contains("来源："), "{text}");
     assert!(text.contains("R-001"), "{text}");
     assert!(text.contains("R-01"), "{text}");
@@ -511,10 +553,7 @@ fn related_follows_relations_and_shared_references() {
     ] {
         assert!(text.contains(wanted), "depth 1 missing {wanted}: {text}");
     }
-    assert_eq!(
-        one,
-        related(&root, &save, "save:entity:E-001", 1).unwrap()
-    );
+    assert_eq!(one, related(&root, &save, "save:entity:E-001", 1).unwrap());
     let two = related(&root, &save, "save:entity:E-001", 2).unwrap();
     assert!(two.len() >= one.len(), "depth 2 must not shrink");
     assert!(two.iter().all(|e| e.id != "save:entity:E-001"));
@@ -522,6 +561,23 @@ fn related_follows_relations_and_shared_references() {
     assert!(related(&root, &save, "save:entity:E-001", 0).is_err());
     assert!(related(&root, &save, "save:entity:E-003", 1).is_err());
     assert!(related(&root, &save, "save:entity:E-999", 1).is_err());
+    // A memory/reveal seed follows its explicit reference tags.
+    for seed in ["save:memory:M-001", "save:reveal:1"] {
+        let text = joined(&related(&root, &save, seed, 1).unwrap());
+        assert!(text.contains("save:entity:E-001"), "{seed}: {text}");
+    }
+    assert!(search(&root, &save, "   ", Scope::All, 20, false).is_err());
+    assert!(cite(&root, &save, "adventure:test-adventure:handout-h-dm").is_err());
+    assert!(search(
+        &root,
+        &save,
+        "no-such-synthetic-term",
+        Scope::All,
+        20,
+        false
+    )
+    .unwrap()
+    .is_empty());
 }
 
 #[test]
@@ -544,12 +600,41 @@ fn cli_smoke_is_registered_and_read_only() {
         .env("TALKDND_COMBAT_SIM", root.join("no-such-combat-sim"))
         .output()
         .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout).to_string()
-        + &String::from_utf8_lossy(&out.stderr);
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{text}");
     assert!(text.contains("id:"), "{text}");
     assert!(text.contains("authority:"), "{text}");
     assert!(!text.contains(&root.display().to_string()), "{text}");
+    for (args, wanted) in [
+        (vec!["knowledge", "get", "save:entity:E-001"], "id:"),
+        (
+            vec!["knowledge", "cite", "ruling:common:R-01"],
+            "Rules/rulings.md",
+        ),
+        (vec!["knowledge", "context", "E-001"], "当前场景"),
+        (
+            vec!["knowledge", "related", "save:entity:E-001"],
+            "authority:",
+        ),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_talkdnd"))
+            .arg("--root")
+            .arg(&root)
+            .args(&args)
+            .env("TALKDND_NO_PDF2MD", "1")
+            .env("TALKDND_COMBAT_SIM", root.join("no-such-combat-sim"))
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{args:?}: {text}");
+        assert!(text.contains(wanted), "{args:?}: {text}");
+        assert!(
+            !text.contains(&root.display().to_string()),
+            "{args:?}: {text}"
+        );
+    }
     assert_eq!(before, snapshot(&root), "knowledge must not write");
 
     let help = Command::new(env!("CARGO_BIN_EXE_talkdnd"))
