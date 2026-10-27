@@ -12,7 +12,7 @@
 - 支持 5.5e 与 5e 两套规则，玩家可选 **5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD**，一档一版；SRD 只用该 edition 的 SRD 层，FULL 在 SRD 层之后加载已解锁的完整书内容包。
 - 把玩家自备的规则书、冒险书、个人存档和 DM 秘密留在本机；仓库只收程序、原创文档、SRD 5.1 / 5.2.1 内容包和 SRD 派生的战斗数据。
 - 用 `tools/talkdnd` 把开局、建卡、同伴、存档点、信息边界和完整性检查做成可复用的 DM 助手，而不是把规则散落在提示词里。
-- 为 DM Agent 提供只读知识 API：稳定 id、固定来源类别、默认玩家已知过滤，把 SRD、玩家书索引、冒险、存档、原创与桌上裁定放在同一组 `search/get/cite/context/related` 后面；不新增持久化索引、不改存档 schema、不联网。
+- 为 DM Agent 提供只读知识 API：稳定 id、固定来源类别、默认玩家已知过滤，把 SRD、玩家书索引、冒险、存档、原创与桌上裁定放在同一组 `search/get/cite/context/related` 后面；秘密过滤与 `guard` 同源且只读，不新增持久化索引或秘密缓存、不改存档 schema、不联网。
 - 自动化开关按存档保存：固定类别 + `manual / assisted / auto` 级别，存档默认可被场景/遭遇按 id 覆盖，有效顺序为遭遇 > 场景 > 存档默认；玩家选择与反应永不自动，接近上限先警告。
 - 把产品决策写进 `docs/PROJECT-CHARTER.md` 的 Decision Log，后续任务按同一份契约推进，不因会话更替而漂移。
 - 在 per-save 的偏离范围内允许 DM 原创内容，并用 DM-only 台账控制类型、稀有度和章节预算。

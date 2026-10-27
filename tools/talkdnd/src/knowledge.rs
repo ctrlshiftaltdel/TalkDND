@@ -255,10 +255,10 @@ pub fn get(root: &Path, save: &Path, id: &str, include_hidden: bool) -> Result<E
     let index = Index::build(root, save)?;
     let r = index
         .by_id(id)
-        .ok_or_else(|| anyhow!("未知的知识 id `{id}`；先用 `talkdnd knowledge search` 找到条目"))?;
+        .ok_or_else(|| unknown_id_error(&index, id))?;
     if r.blocked {
         bail!(
-            "`{id}` 含未揭示的秘密词，不能输出；先用 `talkdnd reveal add` 记录揭示，再检查 `talkdnd secret list`"
+            "该条目含未揭示的秘密词，不能输出；先用 `talkdnd reveal add` 记录揭示，再检查 `talkdnd secret list`"
         );
     }
     if r.entry.visibility != "player" && !include_hidden {
@@ -276,9 +276,9 @@ pub fn cite(root: &Path, save: &Path, id: &str) -> Result<String> {
     let index = Index::build(root, save)?;
     let r = index
         .by_id(id)
-        .ok_or_else(|| anyhow!("未知的知识 id `{id}`；先用 `talkdnd knowledge search` 找到条目"))?;
+        .ok_or_else(|| unknown_id_error(&index, id))?;
     if r.blocked || r.entry.visibility != "player" {
-        bail!("`{id}` 是 DM 内容或含未揭示秘密词；cite 只引用玩家可见条目");
+        bail!("该条目是 DM 内容或含未揭示秘密词；cite 只引用玩家可见条目");
     }
     Ok(r.entry.citation.clone())
 }
@@ -383,9 +383,9 @@ pub fn related(root: &Path, save: &Path, id: &str, depth: u8) -> Result<Vec<Entr
     let index = Index::build(root, save)?;
     let seed = index
         .by_id(id)
-        .ok_or_else(|| anyhow!("未知的知识 id `{id}`；先用 `talkdnd knowledge search` 找到条目"))?;
+        .ok_or_else(|| unknown_id_error(&index, id))?;
     if seed.blocked || seed.entry.visibility != "player" {
-        bail!("`{id}` 是 DM 内容或含未揭示秘密词；related 只展开玩家可见条目");
+        bail!("该条目是 DM 内容或含未揭示秘密词；related 只展开玩家可见条目");
     }
     let session = entity::current_session(save).unwrap_or_default();
     let entities = load_entities(root, save)?;
@@ -445,6 +445,8 @@ pub fn related(root: &Path, save: &Path, id: &str, depth: u8) -> Result<Vec<Entr
 struct Index {
     entries: Vec<RawEntry>,
     by_id: BTreeMap<String, usize>,
+    /// The same read-only term set used by `guard`, kept for generic errors.
+    terms: Vec<secret::Term>,
 }
 
 impl Index {
@@ -474,7 +476,8 @@ impl Index {
         if all || scope == Scope::Adventure {
             b.add_adventure()?;
         }
-        b.apply_secret_filter()?;
+        let terms = secret_terms(root, save)?;
+        b.apply_secret_filter(&terms)?;
         let mut entries: Vec<RawEntry> = b.map.into_values().collect();
         entries.sort_by(|a, b| {
             (authority_rank(&a.entry.authority), a.entry.id.as_str())
@@ -485,11 +488,30 @@ impl Index {
             .enumerate()
             .map(|(i, e)| (e.entry.id.clone(), i))
             .collect();
-        Ok(Self { entries, by_id })
+        Ok(Self {
+            entries,
+            by_id,
+            terms,
+        })
     }
 
     fn by_id(&self, id: &str) -> Option<&RawEntry> {
         self.by_id.get(id).map(|i| &self.entries[*i])
+    }
+
+    fn is_secret(&self, text: &str) -> bool {
+        let hay = text.to_lowercase();
+        self.terms
+            .iter()
+            .any(|t| contains_term(&hay, &t.term.to_lowercase()))
+    }
+}
+
+fn unknown_id_error(index: &Index, id: &str) -> anyhow::Error {
+    if index.is_secret(id) {
+        anyhow!("未知或不可输出的知识 id；先用 `talkdnd knowledge search` 找到条目")
+    } else {
+        anyhow!("未知的知识 id `{id}`；先用 `talkdnd knowledge search` 找到条目")
     }
 }
 
@@ -669,7 +691,11 @@ impl<'a> Builder<'a> {
 
         let relations = load_relations(root, save)?;
         for r in &relations.relations {
-            let visibility = if r.dm_only { "dm" } else { "player" };
+            let visibility = if r.dm_only || relation_has_dm_endpoint(&entities, r) {
+                "dm"
+            } else {
+                "player"
+            };
             let from = entity::display(&entities, &r.from);
             let to = entity::display(&entities, &r.to);
             let mut body = format!("{} {} → {}；自 {}", r.kind, from, to, r.since_session);
@@ -973,6 +999,7 @@ impl<'a> Builder<'a> {
         };
         let dirs = library::adventure_indexes(root, &slug);
         let multi = dirs.len() > 1;
+        let has_track = adventure::current_track_index(save).is_some();
         for dir in dirs {
             let Some(idx) = read_structured(root, &dir)? else {
                 continue;
@@ -1002,7 +1029,9 @@ impl<'a> Builder<'a> {
                     let anchor = format!("{part}{}", unique_anchor(&base, &mut used));
                     let section = sections.and_then(|s| find_section(s, &item.title));
                     let hidden = if let Some(s) = section {
-                        adventure::dm_only(s) || adventure::ahead_of_progress(save, s).is_some()
+                        adventure::dm_only(s)
+                            || adventure::ahead_of_progress(save, s).is_some()
+                            || future_without_track(has_track, s)
                     } else {
                         // A structured index without the matching body still
                         // respects DM-only / chapter markers in the title.
@@ -1017,6 +1046,7 @@ impl<'a> Builder<'a> {
                         };
                         adventure::dm_only(&pseudo)
                             || adventure::ahead_of_progress(save, &pseudo).is_some()
+                            || future_without_track(has_track, &pseudo)
                     };
                     let visibility = if hidden { "dm" } else { "player" };
                     let body = body_for(
@@ -1092,23 +1122,60 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    fn apply_secret_filter(&mut self) -> Result<()> {
-        let terms = secret_terms(self.root, self.save)?;
+    fn apply_secret_filter(&mut self, terms: &[secret::Term]) -> Result<()> {
         if terms.is_empty() {
             return Ok(());
         }
         for r in self.map.values_mut() {
-            if terms.iter().any(|t| contains_term(&r.secret_text, t)) {
-                r.blocked = true;
-                r.entry.visibility = "dm".into();
-                r.entry.known = false;
+            let matching: Vec<&secret::Term> = terms
+                .iter()
+                .filter(|t| contains_term(&r.secret_text, &t.term.to_lowercase()))
+                .collect();
+            if matching.is_empty() {
+                continue;
             }
+            // A structurally DM-only entry may keep its own secret term in the
+            // DM view (a future chapter's heading, an original's hidden face).
+            // Any cross-entry match still blocks the entry, even with
+            // --include-hidden.
+            if r.entry.visibility == "dm" && matching.iter().all(|t| intrinsic_secret(&r.entry, t))
+            {
+                continue;
+            }
+            r.blocked = true;
+            r.entry.visibility = "dm".into();
+            r.entry.known = false;
         }
         Ok(())
     }
 }
 
+fn intrinsic_secret(entry: &Entry, term: &secret::Term) -> bool {
+    if entry.authority == "original" {
+        if let Some(id) = entry.id.strip_prefix("original:") {
+            return term.source.starts_with("原创 ") && term.source.contains(id);
+        }
+    }
+    if entry.authority == "adventure" {
+        if let Some(heading) = term.source.strip_prefix("冒险书：") {
+            return adventure::normalize_for_search(heading)
+                == adventure::normalize_for_search(&entry.title);
+        }
+    }
+    false
+}
+
 // --------------------------------------------------------------- source IO
+
+fn is_dm_entity(entities: &entity::Ledger, id: &str) -> bool {
+    entities.entities.iter().any(|e| e.id == id && e.dm_only)
+}
+
+/// A relation is hidden when either endpoint entity is DM-only, even if the
+/// relation row itself lacks `dm_only: true`.
+fn relation_has_dm_endpoint(entities: &entity::Ledger, r: &graph::Relation) -> bool {
+    is_dm_entity(entities, &r.from) || is_dm_entity(entities, &r.to)
+}
 
 fn load_entities(root: &Path, save: &Path) -> Result<entity::Ledger> {
     entity::load(save).map_err(|e| {
@@ -1281,6 +1348,45 @@ fn find_section<'a>(
     sections
         .iter()
         .find(|s| adventure::normalize_for_search(&s.heading) == q)
+}
+
+/// Without any progress track there is no "current chapter" anchor. Be
+/// conservative: numbered chapters/parts after the first are future content.
+fn future_without_track(has_track: bool, section: &adventure::Section) -> bool {
+    if has_track {
+        return false;
+    }
+    let number = chapter_number(&section.heading)
+        .or_else(|| section.path.iter().find_map(|h| chapter_number(h)));
+    number.is_some_and(|n| n > 1)
+}
+
+fn chapter_number(heading: &str) -> Option<usize> {
+    let lower = heading.to_lowercase();
+    let rest = lower
+        .strip_prefix("chapter")
+        .or_else(|| lower.strip_prefix("part"))
+        .map(str::trim_start);
+    if let Some(rest) = rest {
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(n) = digits.parse::<usize>() {
+            return Some(n);
+        }
+    }
+    if let Some(i) = heading.find('第') {
+        let rest = heading[i + '第'.len_utf8()..].trim_start();
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(n) = digits.parse::<usize>() {
+            return Some(n);
+        }
+    }
+    let digits: String = heading.chars().take_while(char::is_ascii_digit).collect();
+    if !digits.is_empty() && heading[digits.len()..].starts_with(['.', '、', ' ']) {
+        if let Ok(n) = digits.parse::<usize>() {
+            return Some(n);
+        }
+    }
+    None
 }
 
 fn body_for(
@@ -1536,7 +1642,7 @@ fn relation_lines(root: &Path, save: &Path, focus: Option<&entity::Entity>) -> R
     let session = entity::current_session(save).unwrap_or_default();
     let mut out = Vec::new();
     for r in &ledger.relations {
-        if r.dm_only || !graph::active_at(r, &session) {
+        if r.dm_only || relation_has_dm_endpoint(&entities, r) || !graph::active_at(r, &session) {
             continue;
         }
         if let Some(f) = focus {
@@ -1630,7 +1736,7 @@ fn neighbors(
             names.extend(e.aliases.iter().cloned());
         }
         for r in &relations.relations {
-            if r.dm_only || !graph::active_at(r, session) {
+            if r.dm_only || relation_has_dm_endpoint(entities, r) || !graph::active_at(r, session) {
                 continue;
             }
             if r.from != id && r.to != id {
@@ -1668,8 +1774,10 @@ fn neighbors(
         names.push(node.entry.title.clone());
     } else if let Some(id) = node_id.strip_prefix("save:relation:") {
         if let Some(r) = relations.relations.iter().find(|r| r.id == id) {
-            out.push((format!("save:entity:{}", r.from), format!("relation {id}")));
-            out.push((format!("save:entity:{}", r.to), format!("relation {id}")));
+            if !relation_has_dm_endpoint(entities, r) {
+                out.push((format!("save:entity:{}", r.from), format!("relation {id}")));
+                out.push((format!("save:entity:{}", r.to), format!("relation {id}")));
+            }
         }
     } else if node_id.starts_with("save:memory:") || node_id.starts_with("save:reveal:") {
         for (kind, id) in reference_tags(&node.body) {
@@ -1711,22 +1819,12 @@ fn neighbors(
 
 // ------------------------------------------------------------------ secret
 
-fn secret_terms(root: &Path, save: &Path) -> Result<Vec<String>> {
-    let mut terms: BTreeSet<String> = BTreeSet::new();
-    for file in ["dm-secrets.md", original::PLAN_FILE] {
-        let path = save.join(file);
-        match fs::read_to_string(&path) {
-            Ok(text) => {
-                for term in secret::parse_marked_terms(&text) {
-                    terms.insert(term.trim().to_lowercase());
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(anyhow!("无法读取 {}：{e}", save_rel(root, save, file))),
-        }
-    }
-    let path = save.join(secret::FILE);
-    match fs::read_to_string(&path) {
+fn secret_terms(root: &Path, save: &Path) -> Result<Vec<secret::Term>> {
+    // Keep the fail-closed validation of the manual ledger and the two DM
+    // notes files. `collect_uncached` itself treats an unreadable source as
+    // empty, which is fine for missing files but not for corrupt JSON/YAML.
+    let manual_path = save.join(secret::FILE);
+    match fs::read_to_string(&manual_path) {
         Ok(text) => {
             let manual: secret::Manual = serde_norway::from_str(&text)
                 .map_err(|e| anyhow!("{} 损坏：{e}", save_rel(root, save, secret::FILE)))?;
@@ -1737,9 +1835,6 @@ fn secret_terms(root: &Path, save: &Path) -> Result<Vec<String>> {
                     manual.version
                 );
             }
-            for t in manual.terms {
-                terms.insert(t.term.trim().to_lowercase());
-            }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
@@ -1749,15 +1844,27 @@ fn secret_terms(root: &Path, save: &Path) -> Result<Vec<String>> {
             ))
         }
     }
-    Ok(terms
+    for file in ["dm-secrets.md", original::PLAN_FILE] {
+        let path = save.join(file);
+        if path.is_file() {
+            fs::read_to_string(&path)
+                .map_err(|e| anyhow!("无法读取 {}：{e}", save_rel(root, save, file)))?;
+        }
+    }
+    // Same read-only collection as `guard`: dm-secrets, dm-plan, manual
+    // terms, original hidden faces, adventure future/DM-only sections. This
+    // function never calls `secret::collect`, so no cache file is written.
+    Ok(secret::collect_uncached(save, root)
         .into_iter()
-        .filter(|t| t.chars().count() >= 2 && !reveal::is_revealed(save, t))
+        .filter(|t| t.term.trim().chars().count() >= 2)
         .collect())
 }
 
-fn hits_secret(text: &str, terms: &[String]) -> bool {
+fn hits_secret(text: &str, terms: &[secret::Term]) -> bool {
     let hay = text.to_lowercase();
-    terms.iter().any(|t| contains_term(&hay, t))
+    terms
+        .iter()
+        .any(|t| contains_term(&hay, &t.term.to_lowercase()))
 }
 
 /// The same matching rule as `talkdnd guard`: English terms need word

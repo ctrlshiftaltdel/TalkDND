@@ -70,13 +70,13 @@ talkdnd knowledge related <id> [--depth 1|2]
 
 - `reveals.yaml` 的事实永远按玩家已知处理。
 - `memory.yaml` 只有 `source: player-confirmed` 默认可见；`import` / `manual` 是 DM 内容。
-- `entities.yaml` 的 `dm_only` 实体、`relations.yaml` 的 `dm_only` 关系默认隐藏。
+- `entities.yaml` 的 `dm_only` 实体、`relations.yaml` 的 `dm_only` 关系默认隐藏。关系的任一端实体是 `dm_only` 时，整条关系也按 DM 内容隐藏，即使关系行本身没有 `dm_only`。
 - `original.yaml` 中未揭示的 `hidden` 条目默认隐藏；揭示后用 `reveal add --original O-xxx` 自动转为玩家可见。
-- 冒险索引中超出当前进度或标为 DM-only 的小节默认隐藏；玩家可见资料图才默认出现。
-- `dm-secrets.md`、`dm-plan.md` 和手动 `secret-terms.yaml` 的词条只用于**过滤**，永不作为知识条目输出。
-- 命中未揭示秘密词的条目即使加 `--include-hidden` 也不会输出；先 `talkdnd reveal add` 记录揭示。
+- 冒险索引中超出当前进度或标为 DM-only 的小节默认隐藏；没有 `progress.yaml` / 自定义 track 时，带 `Chapter` / `Part` / `第 N 章` 且 N > 1 的章节按未来内容隐藏。当前章节、前言和玩家可见资料图仍可见。
+- 秘密词过滤与 `guard` 使用同一组**只读**来源：`dm-secrets.md`、`dm-plan.md`、手动 `secret-terms.yaml`、未揭示的 `original.hidden`，以及超出进度/DM-only 冒险小节的标题和专名。它只读这些来源，不写 `secret-terms.cache.json`。
+- 来自其他条目的未揭示秘密词命中项即使加 `--include-hidden` 也不会输出；DM-only 条目自带的隐藏面/未来章节本身可以在 DM 视图查看，但仍标 `dm`。先 `talkdnd reveal add` 记录揭示后，词才会从过滤中消失。
 
-`--include-hidden` 只扩大 save / adventure / original 的 DM 视图，结果标 `visibility: dm`、`known: false`。它**不会**输出 `dm-secrets.md` 的内容，也不会把秘密词命中项放出来。
+`--include-hidden` 只扩大 save / adventure / original 的 DM 视图，结果标 `visibility: dm`、`known: false`。它**不会**输出 `dm-secrets.md` 的内容；跨条目命中秘密词的条目仍会拒绝。
 
 ## context 顺序
 
@@ -118,7 +118,7 @@ talkdnd knowledge related <id> [--depth 1|2]
 
 ## 只读保证
 
-`knowledge` 不进入 `lib.rs` 的 integrity 跟踪分支，不写 `integrity.yaml`、不写 `secret-terms.cache.json`、不建立持久化索引。秘密词过滤直接读取 `dm-secrets.md` / `dm-plan.md` / `secret-terms.yaml` 并只保留词条用于匹配，词条本身不进入输出。
+`knowledge` 不进入 `lib.rs` 的 integrity 跟踪分支，不写 `integrity.yaml`、不写 `secret-terms.cache.json`、不建立持久化索引。秘密词过滤复用 `guard` 的只读 `collect_uncached` 路径（dm-secrets、dm-plan、手动词条、未揭示原创隐藏面、未来/DM-only 冒险专名），不调用会写缓存的 `collect`；词条本身不进入输出。
 
 ## 测试
 

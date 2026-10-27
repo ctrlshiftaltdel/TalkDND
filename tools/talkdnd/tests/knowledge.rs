@@ -491,6 +491,139 @@ fn hidden_filtering_never_leaks_secret_terms() {
 }
 
 #[test]
+fn relation_endpoint_visibility_uses_both_entities() {
+    let root = fixture("relation-endpoint");
+    let save = save(&root);
+    // R-002 itself is player-visible, but its target E-003 is dm_only.
+    write(
+        &save.join("relations.yaml"),
+        "version: 1\nrelations:\n  - {id: R-001, type: ally, from: E-001, to: E-002, since_session: 2030-01-01-session-01.md, source: synthetic, note: synthetic relation}\n  - {id: R-002, type: enemy, from: E-001, to: E-003, since_session: 2030-01-01-session-01.md, source: synthetic, note: \"points at TOP-SECRET-ENTITY\"}\n",
+    );
+    let default = search(&root, &save, "TOP-SECRET-ENTITY", Scope::All, 100, false).unwrap();
+    assert!(
+        !joined(&default).contains("TOP-SECRET-ENTITY"),
+        "default search leaked the dm_only endpoint: {:?}",
+        ids(&default)
+    );
+    let context_text = context(&root, &save, "E-001").unwrap().join("\n");
+    assert!(
+        !context_text.contains("TOP-SECRET-ENTITY"),
+        "context leaked the dm_only endpoint: {context_text}"
+    );
+    let related_text = joined(&related(&root, &save, "save:entity:E-001", 1).unwrap());
+    assert!(
+        !related_text.contains("TOP-SECRET-ENTITY")
+            && !related_text.contains("save:relation:R-002"),
+        "related leaked the dm_only endpoint: {related_text}"
+    );
+
+    let all = search(&root, &save, "TOP-SECRET-ENTITY", Scope::All, 100, true).unwrap();
+    let relation = all
+        .iter()
+        .find(|e| e.id == "save:relation:R-002")
+        .unwrap_or_else(|| panic!("missing hidden relation: {:?}", ids(&all)));
+    assert_eq!(relation.visibility, "dm");
+    assert!(!relation.known);
+}
+
+#[test]
+fn future_chapter_without_progress_is_hidden_by_default() {
+    let root = fixture("future-no-progress");
+    let save = save(&root);
+    fs::remove_file(save.join("progress.yaml")).unwrap();
+    // Remove every secret/DM marker from the future heading so only the
+    // progress gate can hide it.
+    for path in [
+        root.join("Adventures/test-adventure/index/Test Book.pages.md"),
+        root.join("Adventures/test-adventure/index/structured.json"),
+    ] {
+        let text = fs::read_to_string(&path).unwrap();
+        write(&path, &text.replace("TOP-SECRET-FUTURE", "The Future Gate"));
+    }
+    let default = search(&root, &save, "Future Gate", Scope::Adventure, 20, false).unwrap();
+    assert!(
+        default.is_empty(),
+        "future chapter visible without progress: {:?}",
+        ids(&default)
+    );
+    // The first chapter / front matter stays visible.
+    let current = search(&root, &save, "The Inn", Scope::Adventure, 20, false).unwrap();
+    assert!(
+        current
+            .iter()
+            .any(|e| e.id == "adventure:test-adventure:p1"),
+        "current chapter was hidden: {:?}",
+        ids(&current)
+    );
+    let all = search(&root, &save, "Future Gate", Scope::Adventure, 20, true).unwrap();
+    let entry = all
+        .iter()
+        .find(|e| e.id == "adventure:test-adventure:p2")
+        .unwrap_or_else(|| panic!("missing future chapter: {:?}", ids(&all)));
+    assert_eq!(entry.visibility, "dm");
+    assert!(!entry.known);
+    assert!(joined(&all).contains("The Future Gate"));
+}
+
+#[test]
+fn hidden_original_text_in_a_visible_relation_is_never_output() {
+    let root = fixture("hidden-original-note");
+    let save = save(&root);
+    write(
+        &save.join("relations.yaml"),
+        "version: 1\nrelations:\n  - {id: R-001, type: ally, from: E-001, to: E-002, since_session: 2030-01-01-session-01.md, source: synthetic, note: \"TOP-SECRET-HIDDEN\"}\n",
+    );
+    let secret = "TOP-SECRET-HIDDEN";
+    let default = search(&root, &save, secret, Scope::All, 100, false).unwrap();
+    assert!(
+        default.is_empty(),
+        "default search leaked: {:?}",
+        ids(&default)
+    );
+    let dm = search(&root, &save, secret, Scope::All, 100, true).unwrap();
+    assert!(
+        !dm.iter().any(|e| e.id == "save:relation:R-001"),
+        "include-hidden returned the visible relation note: {:?}",
+        ids(&dm)
+    );
+    assert!(
+        dm.iter()
+            .all(|e| e.visibility == "dm" || !e.excerpt.contains(secret)),
+        "a player-visible entry leaked the hidden text: {:?}",
+        ids(&dm)
+    );
+    // The hidden original itself is legitimate DM content; the leak is the
+    // player-visible relation note that quotes it.
+    assert!(dm.iter().any(|e| e.id == "original:O-002"));
+    assert!(get(&root, &save, "save:relation:R-001", true).is_err());
+    assert!(cite(&root, &save, "save:relation:R-001").is_err());
+    let context_text = context(&root, &save, "E-001").unwrap().join("\n");
+    assert!(
+        !context_text.contains(secret),
+        "context leaked: {context_text}"
+    );
+    let related_text = joined(&related(&root, &save, "save:entity:E-001", 1).unwrap());
+    assert!(
+        !related_text.contains(secret),
+        "related leaked: {related_text}"
+    );
+}
+
+#[test]
+fn secret_bearing_ids_are_not_echoed() {
+    let root = fixture("secret-id-echo");
+    let save = save(&root);
+    let secret = "TOP-SECRET-DMSECRET";
+    for err in [
+        get(&root, &save, secret, false).unwrap_err().to_string(),
+        cite(&root, &save, secret).unwrap_err().to_string(),
+        related(&root, &save, secret, 1).unwrap_err().to_string(),
+    ] {
+        assert!(!err.contains(secret), "error echoed the secret id: {err}");
+    }
+}
+
+#[test]
 fn context_is_ordered_and_marks_sources() {
     let root = fixture("context");
     let save = save(&root);
@@ -639,6 +772,9 @@ fn cli_smoke_is_registered_and_read_only() {
     for args in [
         vec!["knowledge", "search", "TOP-SECRET-DMSECRET"],
         vec!["knowledge", "context", "TOP-SECRET-DMSECRET"],
+        vec!["knowledge", "get", "TOP-SECRET-DMSECRET"],
+        vec!["knowledge", "cite", "TOP-SECRET-DMSECRET"],
+        vec!["knowledge", "related", "TOP-SECRET-DMSECRET"],
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_talkdnd"))
             .arg("--root")
@@ -654,7 +790,7 @@ fn cli_smoke_is_registered_and_read_only() {
             !text.contains("TOP-SECRET-DMSECRET"),
             "{args:?} echoed the secret: {text}"
         );
-        if args[1] == "context" {
+        if args[1] != "search" {
             assert!(!out.status.success(), "{args:?}: {text}");
         }
     }

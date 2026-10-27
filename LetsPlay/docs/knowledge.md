@@ -55,10 +55,10 @@ $T adventure index build --book "<书名>"
 默认输出已经过滤：
 
 - `known` 是玩家已知；`visibility: player` 才能直接用于叙述和选项。
-- `dm_only` 实体/关系、`import`/`manual` 记忆、未揭示的原创隐藏面、超出进度的冒险小节、DM-only 资料图默认不出现。
-- `dm-secrets.md`、`dm-plan.md` 和手动秘密词永远不会作为结果输出；命中秘密词的条目也不会出现。
+- `dm_only` 实体/关系、`import`/`manual` 记忆、未揭示的原创隐藏面、超出进度的冒险小节、DM-only 资料图默认不出现。关系的任一端实体是 `dm_only` 时，整条关系也按 DM 内容隐藏；没有 `progress.yaml` / 自定义 track 时，`Chapter` / `Part` / `第 N 章` 且 N > 1 的章节按未来内容隐藏。
+- 秘密过滤来源与 `guard` 相同且只读：`dm-secrets.md`、`dm-plan.md`、手动秘密词、未揭示原创隐藏面、未来/DM-only 冒险专名。它不写 `secret-terms.cache.json`；来自其他条目的命中项不会输出。DM-only 条目自带的隐藏面/未来章节可在 DM 视图查看，但仍标 `dm`。
 
-`--include-hidden` 只给 DM 自己看，结果会标 `visibility: dm`、`known: false`。它仍然不会输出 `dm-secrets.md` 的内容。**不要把 DM 视图直接贴给玩家，也不要用它写选项。**
+`--include-hidden` 只给 DM 自己看，结果会标 `visibility: dm`、`known: false`。它仍然不会输出 `dm-secrets.md` 的内容，也不会把跨条目的秘密词命中项放出来。**不要把 DM 视图直接贴给玩家，也不要用它写选项。**
 
 ## context 的五段
 

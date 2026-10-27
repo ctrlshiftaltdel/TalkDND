@@ -373,7 +373,7 @@ pub fn proper_nouns(text: &str) -> Vec<String> {
     out
 }
 
-fn collect_uncached(save_dir: &Path, root: &Path) -> Vec<Term> {
+pub(crate) fn collect_uncached(save_dir: &Path, root: &Path) -> Vec<Term> {
     let mut map: BTreeMap<String, Term> = BTreeMap::new();
     let mut put = |term: &str, source: &str| {
         // Markdown emphasis left over from conversion (`_Wharf_`, `**X**`).
