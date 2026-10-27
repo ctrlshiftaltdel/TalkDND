@@ -335,7 +335,7 @@ fn matrix_height_changes_melee_reach() {
 /// 10-ft obstacle blocks line of sight and cannot be shot through.
 #[test]
 fn matrix_cover_and_line_of_sight() {
-    let low = {
+    {
         let mut state = state_with(
             registry("2024"),
             vec![
@@ -375,8 +375,7 @@ fn matrix_cover_and_line_of_sight() {
             log.iter().any(|line| line.contains("half cover")),
             "the unified cover query should report half cover: {log:?}"
         );
-    };
-    let _ = low;
+    }
 
     let mut tall = state_with(
         registry("2024"),
