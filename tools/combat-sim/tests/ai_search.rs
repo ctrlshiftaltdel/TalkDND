@@ -13,7 +13,7 @@ use serde_json::json;
 use combat_sim::ai::{
     self, Ai, AiStrategy, CandidateKind, SearchConfig, SearchFallbackReason, SearchPlanner,
 };
-use combat_sim::content::schema::{AbilityEntry, AbilityRef, ConditionDef};
+use combat_sim::content::schema::{AbilityAi, AbilityEntry, AbilityRef, AiRole, ConditionDef};
 use combat_sim::content::{ContentRegistry, ContentSource, ContentSources};
 use combat_sim::dice::{self, DiceRng};
 use combat_sim::state::{ActiveCondition, AddSpec, EncounterState, NewEncounter};
@@ -102,7 +102,8 @@ fn objective_scene() -> serde_json::Value {
         "zones": [
             {"id": "alpha"},
             {"id": "beta"},
-            {"id": "gamma"}
+            {"id": "gamma"},
+            {"id": "delta"}
         ],
         "edges": [
             {"a": "alpha", "b": "beta", "distance": 5},
@@ -145,20 +146,16 @@ fn trigger_enabled(state: &EncounterState, id: &str) -> bool {
         .iter()
         .position(|trigger| trigger.id.as_deref() == Some(id))
         .expect("trigger exists");
-    state.trigger_enabled(&EncounterState::trigger_key(position, &scene.triggers[position]))
+    state.trigger_enabled(&EncounterState::trigger_key(
+        position,
+        &scene.triggers[position],
+    ))
 }
 
 fn candidate_target(candidate: &ai::CandidateEvaluation) -> Option<&str> {
     match &candidate.kind {
         CandidateKind::Action { target, .. } => target.as_deref(),
         CandidateKind::Move { .. } | CandidateKind::Interact { .. } | CandidateKind::Wait => None,
-    }
-}
-
-fn candidate_action(candidate: &ai::CandidateEvaluation) -> Option<&str> {
-    match &candidate.kind {
-        CandidateKind::Action { action_id, .. } => Some(action_id.as_str()),
-        _ => None,
     }
 }
 
@@ -214,6 +211,9 @@ fn search_is_opt_in_and_defaults_are_shallow() {
     let search = Ai::prepare_with_search(&state, SearchConfig::default());
     assert_eq!(search.strategy(), AiStrategy::Search);
     assert_eq!(search.search_config(), Some(&SearchConfig::default()));
+    let explicit = Ai::prepare_with(&state, AiStrategy::Search);
+    assert_eq!(explicit.strategy(), AiStrategy::Search);
+    assert_eq!(explicit.search_config(), Some(&SearchConfig::default()));
 
     let defaults = SearchConfig::default();
     assert_eq!(defaults.max_depth, 2, "default is shallow: two plies");
@@ -233,7 +233,8 @@ fn search_uses_an_isolated_clone_and_never_consumes_real_dice() {
     // A zero movement budget leaves only the attack and the zero-value wait, so
     // utility and search must execute the same root action. Any extra real
     // dice would then show up as a different roll count or log.
-    state.combatants[index(&state, "Striker X")].speed_left = 0;
+    let actor = index(&state, "Striker X");
+    state.combatants[actor].speed_left = 0;
     let _ = enemy;
 
     let ai = Ai::prepare_with_search(&state, SearchConfig::default());
@@ -268,8 +269,16 @@ fn search_uses_an_isolated_clone_and_never_consumes_real_dice() {
         utility_rng.rolls, search_rng.rolls,
         "search must not consume the real action RNG"
     );
+    let search_execution: Vec<&String> = search_log
+        .iter()
+        .filter(|line| !line.starts_with("search planner"))
+        .collect();
+    let utility_execution: Vec<&String> = utility_log
+        .iter()
+        .filter(|line| !line.starts_with("search planner"))
+        .collect();
     assert_eq!(
-        utility_log, search_log,
+        utility_execution, search_execution,
         "the real execution must see the same dice stream"
     );
     assert_eq!(
@@ -335,7 +344,10 @@ fn node_budget_terminates_with_a_structured_fallback() {
     })
     .plan(&ai, &state);
 
-    assert_eq!(decision.fallback, Some(SearchFallbackReason::BudgetExhausted));
+    assert_eq!(
+        decision.fallback,
+        Some(SearchFallbackReason::BudgetExhausted)
+    );
     assert!(decision.plan.is_none());
     assert!(decision.stats.nodes <= 1);
     assert!(decision.stats.reproducible_eq(&decision.stats));
@@ -346,6 +358,29 @@ fn node_budget_terminates_with_a_structured_fallback() {
     })
     .plan(&ai, &state);
     assert_eq!(no_time.fallback, Some(SearchFallbackReason::TimeLimit));
+
+    // Execution-level fallback: the turn must still happen through the
+    // utility planner (and never through a half-complete search ranking).
+    let fallback_ai = Ai::prepare_with_search(
+        &state,
+        SearchConfig {
+            node_budget: 1,
+            samples_per_candidate: 1,
+            ..SearchConfig::default()
+        },
+    );
+    let mut fallback_state = state.clone();
+    let mut rng = dice::seeded_rng(44);
+    let mut log = Vec::new();
+    fallback_ai
+        .take_turn(&mut fallback_state, &mut rng, &mut log)
+        .expect("budget fallback turn");
+    assert!(
+        log.iter()
+            .any(|line| line.contains("using utility fallback")),
+        "{log:?}"
+    );
+    assert!(fallback_state.combatants[index(&fallback_state, "Striker X")].action_used);
 }
 
 #[test]
@@ -379,7 +414,7 @@ fn duplicate_states_are_pruned_and_counted() {
     );
     assert!(
         decision.stats.nodes
-            < decision.stats.root_candidates_available * 10,
+            < u32::try_from(decision.stats.root_candidates_available * 10).unwrap_or(u32::MAX),
         "deduplication must keep the tree bounded"
     );
 }
@@ -426,6 +461,24 @@ fn unsupported_effects_fall_back_with_a_reason() {
     let mut state = encounter_state("zone-empty", &["adept-a"], &[("ai-brute", "beta", 1)]);
     let actor = index(&state, "Adept A");
     {
+        // `toggle-trap` has no AI role in the fixture; give it one so the
+        // utility planner reaches the unsupported-effect rejection instead of
+        // rejecting it for "no valuation".
+        let mut content = (*state.content).clone();
+        let mut ability = content
+            .abilities
+            .get("toggle-trap")
+            .expect("toggle-trap fixture ability")
+            .clone();
+        ability.ai = Some(AbilityAi {
+            role: AiRole::Damage,
+        });
+        content.abilities.insert(
+            "toggle-trap".to_string(),
+            ability,
+            ContentSource::new("synthetic-search-test", None),
+        );
+        state.content = Arc::new(content);
         let creature = Arc::make_mut(&mut state.combatants[actor].creature);
         creature.attacks = Some(Vec::new());
         creature.actions = Some(vec![AbilityEntry::Ref(AbilityRef {
@@ -497,6 +550,11 @@ fn utility_versus_search_comparison_reports_quality_time_nodes_and_fallbacks() {
     install_scene(&mut state, objective_scene());
     let striker = index(&state, "Striker X");
     state.combatants[striker].set_zone("alpha");
+    // Keep the opponent active but unable to reach the lever zone. This keeps
+    // the quality comparison about objective completion; the hostile-response
+    // path is covered by `search_models_probability_samples_and_opponent_responses`.
+    let dummy = index(&state, "Dummy X");
+    state.combatants[dummy].set_zone("delta");
     begin_duel(&mut state, "Striker X", "Dummy X");
 
     let utility_ai = Ai::prepare_with(&state, AiStrategy::Utility);
@@ -554,7 +612,10 @@ fn utility_versus_search_comparison_reports_quality_time_nodes_and_fallbacks() {
     assert_eq!(candidate_label(search_selected), "search-lever");
     assert!(search.stats.nodes > 0);
     assert!(search.stats.nodes <= search.stats.node_budget);
-    assert!(fallback_rate <= 0.10, "unexpected fallback rate: {fallback_rate}");
+    assert!(
+        fallback_rate <= 0.10,
+        "unexpected fallback rate: {fallback_rate}"
+    );
 }
 
 #[test]
@@ -587,13 +648,30 @@ fn search_never_enables_a_hidden_ai_priority_and_stays_observable() {
 }
 
 #[test]
+fn search_strategy_completes_a_synthetic_encounter() {
+    let state = encounter_state("zone-empty", &["ai-striker"], &[("ai-brute", "beta", 1)]);
+    let ai = Ai::prepare_with_search(&state, SearchConfig::default());
+    let mut rng = dice::seeded_rng(31);
+    let mut log = Vec::new();
+    let outcome = combat_sim::sim::play(state, &ai, &mut rng, 20, &mut log)
+        .expect("search-driven encounter should not error");
+    assert!(outcome.rounds >= 1);
+    assert!(outcome.outcome.is_some() || outcome.timed_out, "{log:?}");
+}
+
+#[test]
 fn utility_melee_parity_is_reported_not_claimed_as_a_win_rate() {
     let mut state = encounter_state("zone-empty", &["ai-striker"], &[("ai-brute", "beta", 1)]);
     begin_duel(&mut state, "Striker X", "Brute X");
-    state.combatants[index(&state, "Striker X")].speed_left = 0;
+    let actor = index(&state, "Striker X");
+    state.combatants[actor].speed_left = 0;
 
     let utility_ai = Ai::prepare_with(&state, AiStrategy::Utility);
     let search_ai = Ai::prepare_with_search(&state, SearchConfig::default());
+    let started = std::time::Instant::now();
+    let preview = SearchPlanner::new(SearchConfig::default()).plan(&search_ai, &state);
+    let search_wall = started.elapsed();
+    assert!(preview.fallback.is_none(), "{:?}", preview.fallback);
     let mut utility_state = state.clone();
     let mut search_state = state.clone();
     let mut utility_rng = dice::seeded_rng(77);
@@ -610,7 +688,13 @@ fn utility_melee_parity_is_reported_not_claimed_as_a_win_rate() {
     let utility_damage = 30 - utility_state.combatants[index(&utility_state, "Brute X")].hp;
     let search_damage = 30 - search_state.combatants[index(&search_state, "Brute X")].hp;
     println!(
-        "P7 melee parity: utility_damage={utility_damage} search_damage={search_damage}"
+        "P7 melee parity: utility_damage={utility_damage} search_damage={search_damage} \
+         search_wall_us={} nodes={} roots={} opponent_responses={} fallback={:?}",
+        search_wall.as_micros(),
+        preview.stats.nodes,
+        preview.stats.root_candidates_evaluated,
+        preview.stats.opponent_responses_evaluated,
+        preview.fallback
     );
     assert_eq!(
         utility_damage, search_damage,
