@@ -181,6 +181,9 @@ fn content_key(root: &Path, save: &Path, bin: &Path, manifest: &Path) -> String 
     ];
     let mut files = Vec::new();
     collect_files(&root.join("Rules/combat"), false, &mut files);
+    // Full packs are content sources too: a replaced/removed pack must
+    // invalidate the cached content check.
+    collect_files(&root.join(crate::library::FULL_PACK_DIR), false, &mut files);
     collect_files(&save.join("Characters"), true, &mut files);
     collect_files(&save.join("NPCs"), true, &mut files);
     for dir in adventure_dirs(save) {
@@ -514,6 +517,29 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         )],
     };
     timing.mark("library_tidy");
+    // Identify the player's full books from converted front matter, then load
+    // only the matching full packs. Missing/ambiguous books keep SRD-only.
+    let mut early_warnings = Vec::new();
+    let books_scanned = match crate::library::scan_and_register(root) {
+        Ok(_) => true,
+        Err(e) => {
+            early_warnings.push(format!(
+                "书库识别失败：{e:#}（完整书内容包未更新；SRD 仍可用）"
+            ));
+            false
+        }
+    };
+    timing.mark("library_scan");
+    let mut packs_synced = false;
+    if books_scanned {
+        match crate::library::sync_campaign_packs(root, save) {
+            Ok(_) => packs_synced = true,
+            Err(e) => early_warnings.push(format!(
+                "完整书内容包同步失败：{e:#}（本次保持原有内容源；SRD 仍可用）"
+            )),
+        }
+    }
+    timing.mark("full_packs");
     let (ok, check) = content_check(root, save);
     timing.mark("content_check");
     let pdf = if opts.pdf2md {
@@ -530,7 +556,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
     let update_notes = crate::update::sync_installed_files(root)?;
     timing.mark("sync_installed_files");
     let log = save::latest_log(save);
-    let mut warnings = Vec::new();
+    let mut warnings = early_warnings;
     let mut d = String::new();
     d += &format!("# 接档摘要：{slot}\n\n");
     d += &format!(
@@ -555,6 +581,12 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
         }
     );
     d += &rules_source_line(root, &rs);
+    let pack_digest = if packs_synced {
+        crate::library::pack_digest_line(root, save)
+    } else {
+        "未知（完整书内容包未同步，保持原有内容源；SRD 仍可用）".to_string()
+    };
+    d += &format!("- 完整书内容包：{pack_digest}\n");
     timing.mark("rules_source_line");
     if !ok {
         warnings.push("content check 未通过：战斗前修好，或战斗手动结算".to_string());

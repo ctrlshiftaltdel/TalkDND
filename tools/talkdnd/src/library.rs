@@ -26,7 +26,7 @@
 //! only files it removes are the redundant page-less reader editions that
 //! pdf2md derived from the paged Markdown.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,26 +58,1074 @@ pub struct BookRecord {
     /// unchanged front matter. Never a PDF hash.
     #[serde(default)]
     pub stamp: String,
-    /// Player-selectable candidates when the scan is ambiguous (`2014-phb`).
+    /// Player-selectable candidates when the scan is ambiguous (`full-2014-phb`).
     #[serde(default)]
     pub candidates: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BookStatus {
     Identified,
     Ambiguous,
+    #[default]
     Unknown,
     SrdOnly,
     MissingIndex,
 }
 
+/// How many PDF pages are read for the content signature. Front matter holds
+/// the title page, copyright year and table of contents in the core books.
+const FRONT_PAGES: u32 = 16;
+/// Hard cap on bytes read from a converted book (front matter only).
+const FRONT_BYTES: usize = 2 * 1024 * 1024;
+const BOOKS_FILE: &str = ".talkdnd/books.yaml";
+const BOOKS_VERSION: u32 = 1;
+
+/// A short, player-facing name. Never a book's text.
+pub fn book_label(kind: &str) -> &'static str {
+    match kind {
+        "phb" => "Player's Handbook",
+        "dmg" => "Dungeon Master's Guide",
+        "mm" => "Monster Manual",
+        _ => "未知书型",
+    }
+}
+
+pub fn book_kind(value: &str) -> Option<&'static str> {
+    let mut v = String::new();
+    for c in value.trim().to_lowercase().chars() {
+        if matches!(c, '\'' | '\u{2019}') {
+            continue;
+        }
+        if c.is_ascii_alphanumeric() {
+            v.push(c);
+        } else if !v.ends_with('-') {
+            v.push('-');
+        }
+    }
+    let v = v.trim_matches('-');
+    if v == "phb" || v == "players-handbook" || v == "player-handbook" {
+        Some("phb")
+    } else if v == "dmg" || v == "dungeon-masters-guide" || v == "dungeon-master-guide" {
+        Some("dmg")
+    } else if v == "mm" || v == "monster-manual" {
+        Some("mm")
+    } else {
+        None
+    }
+}
+
+/// A pdf2md page marker's page number (`<a id="p12"></a>`,
+/// `<!-- PDF p.12 -->`).
+fn page_marker_number(line: &str) -> Option<u32> {
+    let t = line.trim();
+    let num = |s: &str| {
+        (!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+            .then(|| s.parse::<u32>().ok())
+            .flatten()
+    };
+    if let Some(rest) = t
+        .strip_prefix("<a id=\"p")
+        .and_then(|r| r.strip_suffix("\"></a>"))
+    {
+        return num(rest);
+    }
+    if let Some(rest) = t
+        .strip_prefix("<!-- PDF p.")
+        .and_then(|r| r.strip_suffix(" -->"))
+    {
+        return num(rest);
+    }
+    None
+}
+
+/// Is this line a pdf2md page marker (`<a id="p12"></a>` / `<!-- PDF p.12 -->`)?
+pub fn is_page_marker(line: &str) -> bool {
+    page_marker_number(line).is_some()
+}
+
+/// Front matter read for identification: page-weighted text and title-level
+/// headings. It is dropped after classification and never written anywhere.
+#[derive(Debug, Default)]
+struct FrontMatter {
+    pages: Vec<(u32, String)>,
+    headings: Vec<String>,
+}
+
+fn front_headings(dir: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(dir.join("index.json")) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in v["headings"].as_array().into_iter().flatten() {
+        if let Some(t) = item["text"].as_str() {
+            if !t.trim().is_empty() {
+                out.push(t.to_string());
+            }
+        }
+    }
+    for item in v["chapters"].as_array().into_iter().flatten() {
+        if let Some(t) = item["title"].as_str() {
+            if !t.trim().is_empty() {
+                out.push(t.to_string());
+            }
+        }
+    }
+    for item in v["intake"]["toc"].as_array().into_iter().flatten() {
+        if let Some(t) = item["title"].as_str() {
+            if !t.trim().is_empty() {
+                out.push(t.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Read only the first [`FRONT_PAGES`] pages (or [`FRONT_BYTES`]) of a
+/// converted book. No PDF is opened and no hash is computed.
+fn front_matter(dir: &Path) -> Result<Option<FrontMatter>> {
+    let Some(path) = paged_markdown(dir) else {
+        return Ok(None);
+    };
+    let file =
+        fs::File::open(&path).with_context(|| format!("read converted book {}", path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut pages: Vec<(u32, String)> = Vec::new();
+    let mut current = 1u32;
+    let mut page_text = String::new();
+    let mut bytes = 0usize;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = std::io::BufRead::read_line(&mut reader, &mut line)?;
+        if n == 0 {
+            break;
+        }
+        bytes += n;
+        if let Some(page) = page_marker_number(&line) {
+            if !page_text.trim().is_empty() {
+                pages.push((current, std::mem::take(&mut page_text)));
+            }
+            current = page;
+            if page > FRONT_PAGES {
+                break;
+            }
+            continue;
+        }
+        if current <= FRONT_PAGES {
+            page_text.push_str(&line);
+        }
+        if bytes >= FRONT_BYTES {
+            break;
+        }
+    }
+    if !page_text.trim().is_empty() {
+        pages.push((current, page_text));
+    }
+    pages.retain(|(page, _)| *page <= FRONT_PAGES);
+    Ok(Some(FrontMatter {
+        pages,
+        headings: front_headings(dir),
+    }))
+}
+
+/// lowercase, apostrophes removed, every other run of non-alphanumerics
+/// collapsed to one space. `Player's Handbook` -> `players handbook`.
+fn normalize_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut space = true;
+    for ch in text.chars() {
+        if matches!(ch, '\'' | '\u{2019}' | '`' | '\u{00b4}') {
+            continue;
+        }
+        if ch.is_alphanumeric() {
+            for c in ch.to_lowercase() {
+                out.push(c);
+            }
+            space = false;
+        } else if !space {
+            out.push(' ');
+            space = true;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn page_weight(page: u32) -> i32 {
+    match page {
+        1 => 20,
+        2 => 16,
+        3 => 12,
+        4 => 10,
+        5..=8 => 5,
+        _ => 2,
+    }
+}
+
+fn title_hits(text: &str, pattern: &str) -> bool {
+    let compact = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
+    text.contains(pattern) || compact(text).contains(&compact(pattern))
+}
+
+/// Content features only: title phrases, copyright/publication year and
+/// title-level headings. Folder and file names are never passed in.
+#[derive(Debug, Default)]
+struct Signals {
+    books: [i32; 3],
+    editions: [i32; 2],
+    srd: i32,
+}
+
+fn signals(front: &FrontMatter) -> Signals {
+    let mut s = Signals::default();
+    for (page, text) in &front.pages {
+        let norm = normalize_text(text);
+        let weight = page_weight(*page);
+        for (i, patterns) in [
+            &["players handbook", "player handbook"][..],
+            &["dungeon masters guide", "dungeon master guide"][..],
+            &["monster manual"][..],
+        ]
+        .iter()
+        .enumerate()
+        {
+            if patterns.iter().any(|p| title_hits(&norm, p)) {
+                s.books[i] += weight;
+            }
+        }
+        if *page <= 4 && title_hits(&norm, "system reference document") {
+            s.srd += weight;
+        }
+        for token in norm.split_whitespace() {
+            if token == "2014" {
+                s.editions[0] += weight;
+            } else if token == "2024" || token == "2025" {
+                s.editions[1] += weight;
+            }
+        }
+    }
+    for heading in &front.headings {
+        let norm = normalize_text(heading);
+        for (i, patterns) in [
+            &["players handbook", "player handbook"][..],
+            &["dungeon masters guide", "dungeon master guide"][..],
+            &["monster manual"][..],
+        ]
+        .iter()
+        .enumerate()
+        {
+            if patterns.iter().any(|p| title_hits(&norm, p)) {
+                s.books[i] += 1;
+            }
+        }
+    }
+    s
+}
+
+fn book_ids() -> [&'static str; 3] {
+    BOOK_KINDS
+}
+
+fn candidates(editions: &[&str], books: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in editions {
+        for b in books {
+            out.push(format!("full-{e}-{b}"));
+        }
+    }
+    out
+}
+
+/// Classify a book from its content signature. The rule is deliberately
+/// conservative: a missing/conflicting signal yields `Ambiguous`/`Unknown`,
+/// never a guess.
+fn classify(
+    front: &FrontMatter,
+) -> (
+    BookStatus,
+    Option<String>,
+    Option<String>,
+    Vec<String>,
+    String,
+) {
+    let s = signals(front);
+    let top = s
+        .books
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, score)| **score)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let top_score = s.books[top];
+    let second_score = s
+        .books
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != top)
+        .map(|(_, score)| *score)
+        .max()
+        .unwrap_or(0);
+    let book_choice = (top_score >= 18 && top_score >= second_score + 8).then_some(book_ids()[top]);
+
+    let (e0, e1) = (s.editions[0], s.editions[1]);
+    let edition_choice = if e0 >= 12 && e0 >= e1 + 8 {
+        Some(EDITIONS[0])
+    } else if e1 >= 12 && e1 >= e0 + 8 {
+        Some(EDITIONS[1])
+    } else {
+        None
+    };
+
+    let matched_books: Vec<&str> = s
+        .books
+        .iter()
+        .enumerate()
+        .filter(|(_, score)| **score > 0)
+        .map(|(i, _)| book_ids()[i])
+        .collect();
+    let matched_editions: Vec<&str> = s
+        .editions
+        .iter()
+        .enumerate()
+        .filter(|(_, score)| **score > 0)
+        .map(|(i, _)| EDITIONS[i])
+        .collect();
+
+    if s.srd >= 18 && s.srd > top_score {
+        return (
+            BookStatus::SrdOnly,
+            None,
+            None,
+            Vec::new(),
+            format!(
+                "pages={}, title=system-reference-document",
+                front.pages.len()
+            ),
+        );
+    }
+
+    let page_count = front
+        .pages
+        .iter()
+        .map(|(page, _)| *page)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let evidence = format!(
+        "pages={page_count}, title={}, year={}",
+        if matched_books.is_empty() {
+            "none".to_string()
+        } else {
+            matched_books.join(",")
+        },
+        if matched_editions.is_empty() {
+            "none".to_string()
+        } else {
+            matched_editions.join(",")
+        }
+    );
+
+    match (book_choice, edition_choice) {
+        (Some(book), Some(edition)) => (
+            BookStatus::Identified,
+            Some(edition.to_string()),
+            Some(book.to_string()),
+            Vec::new(),
+            evidence,
+        ),
+        (Some(book), None) => {
+            let editions = if matched_editions.is_empty() {
+                EDITIONS.to_vec()
+            } else {
+                matched_editions
+            };
+            (
+                BookStatus::Ambiguous,
+                None,
+                Some(book.to_string()),
+                candidates(&editions, &[book]),
+                evidence,
+            )
+        }
+        (None, Some(edition)) => {
+            let books = if matched_books.is_empty() {
+                book_ids().to_vec()
+            } else {
+                matched_books
+            };
+            (
+                BookStatus::Ambiguous,
+                Some(edition.to_string()),
+                None,
+                candidates(&[edition], &books),
+                evidence,
+            )
+        }
+        (None, None) => {
+            let editions = if matched_editions.is_empty() {
+                EDITIONS.to_vec()
+            } else {
+                matched_editions
+            };
+            let books = if matched_books.is_empty() {
+                book_ids().to_vec()
+            } else {
+                matched_books
+            };
+            (
+                BookStatus::Unknown,
+                None,
+                None,
+                candidates(&editions, &books),
+                evidence,
+            )
+        }
+    }
+}
+
+fn index_stamp(dir: &Path) -> String {
+    let Some(p) = paged_markdown(dir) else {
+        return String::new();
+    };
+    let meta = fs::metadata(&p);
+    let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let mtime = meta
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{mtime}:{len}")
+}
+
+fn has_pdf(folder: &Path) -> bool {
+    sorted_entries(folder).into_iter().any(|p| is_pdf(&p))
+}
+
 /// Scan `Rules/2014/` and `Rules/2024/` and identify each converted book from
 /// its first pages. The folder and file names are never used as evidence.
-pub fn scan_books(_root: &Path) -> Result<Vec<BookRecord>> {
-    Ok(Vec::new())
+pub fn scan_books(root: &Path) -> Result<Vec<BookRecord>> {
+    let mut out = Vec::new();
+    for layer in EDITIONS {
+        let category = root.join("Rules").join(layer);
+        for folder in book_folders(&category) {
+            let indexes = book_indexes(&folder);
+            let pdf = has_pdf(&folder);
+            if indexes.is_empty() {
+                if pdf {
+                    out.push(BookRecord {
+                        edition: None,
+                        book: None,
+                        status: BookStatus::MissingIndex,
+                        source: rel_dir(root, &folder),
+                        method: "content".into(),
+                        evidence: "pdf_without_index".into(),
+                        stamp: String::new(),
+                        candidates: Vec::new(),
+                    });
+                }
+                continue;
+            }
+            if !pdf {
+                for dir in indexes {
+                    out.push(BookRecord {
+                        edition: None,
+                        book: None,
+                        status: BookStatus::MissingIndex,
+                        source: rel_dir(root, &dir),
+                        method: "content".into(),
+                        evidence: "index_without_pdf".into(),
+                        stamp: index_stamp(&dir),
+                        candidates: Vec::new(),
+                    });
+                }
+                continue;
+            }
+            for dir in indexes {
+                let source = rel_dir(root, &dir);
+                let stamp = index_stamp(&dir);
+                let front = match front_matter(&dir) {
+                    Ok(Some(f)) if !f.pages.is_empty() => f,
+                    Ok(_) => {
+                        out.push(BookRecord {
+                            edition: None,
+                            book: None,
+                            status: BookStatus::MissingIndex,
+                            source,
+                            method: "content".into(),
+                            evidence: "no_paged_markdown".into(),
+                            stamp,
+                            candidates: Vec::new(),
+                        });
+                        continue;
+                    }
+                    Err(_) => {
+                        out.push(BookRecord {
+                            edition: None,
+                            book: None,
+                            status: BookStatus::Unknown,
+                            source,
+                            method: "content".into(),
+                            evidence: "unreadable_front_matter".into(),
+                            stamp,
+                            candidates: Vec::new(),
+                        });
+                        continue;
+                    }
+                };
+                let (status, edition, book, candidates, evidence) = classify(&front);
+                out.push(BookRecord {
+                    edition,
+                    book,
+                    status,
+                    source,
+                    method: "content".into(),
+                    evidence,
+                    stamp,
+                    candidates,
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.source.cmp(&b.source));
+    Ok(out)
 }
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct BookRegistry {
+    #[serde(default = "books_version")]
+    version: u32,
+    #[serde(default)]
+    books: Vec<BookRecord>,
+}
+
+fn books_version() -> u32 {
+    BOOKS_VERSION
+}
+
+/// The last scan's records (audit: source, method, evidence, pack state).
+pub fn load_books(root: &Path) -> Vec<BookRecord> {
+    fs::read_to_string(root.join(BOOKS_FILE))
+        .ok()
+        .and_then(|t| serde_norway::from_str::<BookRegistry>(&t).ok())
+        .map(|r| r.books)
+        .unwrap_or_default()
+}
+
+fn save_books(root: &Path, books: &[BookRecord]) -> Result<()> {
+    let text = format!(
+        "# TalkDND book identification (local, never commit). Contents are book\n# type/edition/status only; never book text or absolute paths.\n{}",
+        serde_norway::to_string(&BookRegistry {
+            version: BOOKS_VERSION,
+            books: books.to_vec(),
+        })?
+    );
+    combat_sim::fsutil::atomic_write(root.join(BOOKS_FILE), text.as_bytes())
+}
+
+/// Scan and register, keeping a player's manual choice while the converted
+/// source is unchanged. Idempotent: an unchanged scan writes nothing.
+pub fn scan_and_register(root: &Path) -> Result<Vec<BookRecord>> {
+    let old = load_books(root);
+    let mut fresh = scan_books(root)?;
+    for record in &mut fresh {
+        if matches!(record.status, BookStatus::Ambiguous | BookStatus::Unknown) {
+            if let Some(manual) = old.iter().find(|o| {
+                o.method == "manual"
+                    && o.source == record.source
+                    && !o.stamp.is_empty()
+                    && o.stamp == record.stamp
+            }) {
+                *record = manual.clone();
+            }
+        }
+    }
+    if old != fresh {
+        save_books(root, &fresh)?;
+    }
+    Ok(fresh)
+}
+
+/// Record the player's explicit choice for an ambiguous/unknown converted
+/// book. The source stamp is kept, so a later reconversion asks again.
+pub fn choose_book(root: &Path, query: &str, edition: &str, kind: &str) -> Result<BookRecord> {
+    if !EDITIONS.contains(&edition) {
+        bail!("无效的规则版本「{edition}」；可选 {}", EDITIONS.join(" / "));
+    }
+    let kind = book_kind(kind)
+        .ok_or_else(|| anyhow::anyhow!("无效的书型「{kind}」；可选 {}", BOOK_KINDS.join(" / ")))?;
+    let mut records = scan_and_register(root)?;
+    let needle = query.trim().trim_end_matches('/');
+    if needle.is_empty() {
+        bail!("请指定要识别的书：书库文件夹或 library scan 显示的 source");
+    }
+    let hits: Vec<usize> = records
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            let source = r.source.trim_end_matches('/');
+            source == needle
+                || source.ends_with(&format!("/{needle}"))
+                || source.contains(&format!("/{needle}/"))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if hits.is_empty() {
+        bail!(
+            "没有找到「{query}」的转换索引；先运行 `talkdnd library scan`（目标：{edition} {}）",
+            book_label(kind)
+        );
+    }
+    if hits.len() > 1 {
+        let sources: Vec<String> = hits.iter().map(|i| records[*i].source.clone()).collect();
+        bail!(
+            "「{query}」对应多份索引：{}；请用 library scan 显示的完整 source（目标：{edition} {}）",
+            sources.join("、"),
+            book_label(kind)
+        );
+    }
+    let i = hits[0];
+    if records[i].status == BookStatus::SrdOnly {
+        bail!("{} 是 SRD 索引，不能当作完整书解锁", records[i].source);
+    }
+    if records[i].status == BookStatus::MissingIndex {
+        bail!(
+            "{} 缺少 PDF 或转换索引，不能手动解锁；先放入 PDF 并按 pdf2md 转换",
+            records[i].source
+        );
+    }
+    records[i].edition = Some(edition.to_string());
+    records[i].book = Some(kind.to_string());
+    records[i].status = BookStatus::Identified;
+    records[i].method = "manual".into();
+    records[i].evidence = "manual_choice".into();
+    records[i].candidates.clear();
+    let chosen = records[i].clone();
+    save_books(root, &records)?;
+    Ok(chosen)
+}
+
+// ------------------------------------------------------------ full packs
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackState {
+    Unlocked,
+    MissingBook,
+    MissingPack,
+    WrongEdition,
+    Ambiguous,
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackStatus {
+    /// `full-<edition>-<book>`.
+    pub id: String,
+    pub edition: String,
+    pub book: String,
+    pub state: PackState,
+    /// Player-facing reason. Names the missing book/edition; never book text.
+    pub detail: String,
+    /// Pack file relative to the play root, when one was found.
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackHeaderFile {
+    pack: PackHeaderMeta,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackHeaderMeta {
+    id: String,
+    #[serde(default)]
+    edition: String,
+    #[serde(default)]
+    distribution: combat_sim::content::Distribution,
+    #[serde(default)]
+    schema_version: u32,
+}
+
+fn pack_suffix(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.ends_with(".pack.json") || n.ends_with(".pack.yaml") || n.ends_with(".pack.yml")
+}
+
+fn pack_stem(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    for suffix in [".pack.json", ".pack.yaml", ".pack.yml"] {
+        if lower.ends_with(suffix) {
+            return name[..name.len() - suffix.len()].to_string();
+        }
+    }
+    name.to_string()
+}
+
+fn walk_pack_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    for p in sorted_entries(dir) {
+        if p.is_dir() {
+            walk_pack_files(&p, out);
+        } else if p.is_file() && pack_suffix(&name_of(&p)) {
+            out.push(p);
+        }
+    }
+}
+
+fn read_pack_header(path: &Path) -> Result<PackHeaderMeta> {
+    let text = fs::read_to_string(path).with_context(|| format!("read pack {}", path.display()))?;
+    let header = if name_of(path).to_ascii_lowercase().ends_with(".json") {
+        serde_json::from_str::<PackHeaderFile>(&text)
+            .with_context(|| format!("parse pack {}", path.display()))?
+    } else {
+        serde_norway::from_str::<PackHeaderFile>(&text)
+            .with_context(|| format!("parse pack {}", path.display()))?
+    };
+    Ok(header.pack)
+}
+
+fn pack_value(path: &Path) -> Result<serde_json::Value> {
+    let text = fs::read_to_string(path).with_context(|| format!("read pack {}", path.display()))?;
+    if name_of(path).to_ascii_lowercase().ends_with(".json") {
+        serde_json::from_str(&text).with_context(|| format!("parse pack {}", path.display()))
+    } else {
+        let value: serde_norway::Value = serde_norway::from_str(&text)
+            .with_context(|| format!("parse pack {}", path.display()))?;
+        serde_json::to_value(value).context("convert pack YAML to JSON")
+    }
+}
+
+fn pack_statuses(root: &Path) -> Vec<PackStatus> {
+    let records = load_books(root);
+    let mut files = Vec::new();
+    walk_pack_files(&root.join(FULL_PACK_DIR), &mut files);
+    files.sort();
+    let mut by_id: std::collections::BTreeMap<String, Vec<PathBuf>> = Default::default();
+    for path in files {
+        if let Ok(header) = read_pack_header(&path) {
+            by_id.entry(header.id).or_default().push(path);
+        } else {
+            // Keep an unreadable pack visible under its file name so the
+            // player can fix it; it can never unlock by name.
+            by_id
+                .entry(pack_stem(&name_of(&path)))
+                .or_default()
+                .push(path);
+        }
+    }
+
+    let mut out = Vec::new();
+    for edition in EDITIONS {
+        for book in BOOK_KINDS {
+            let id = format!("full-{edition}-{book}");
+            let label = book_label(book);
+            let found = by_id.get(&id);
+            let mut status = PackStatus {
+                id: id.clone(),
+                edition: edition.to_string(),
+                book: book.to_string(),
+                state: PackState::MissingBook,
+                detail: String::new(),
+                file: None,
+            };
+            if let Some(paths) = found {
+                status.file = paths.first().map(|p| rel(root, p));
+                if paths.len() > 1 {
+                    status.state = PackState::Invalid;
+                    status.detail =
+                        format!("重复的内容包 id（{} 个文件）；只保留一个", paths.len());
+                    out.push(status);
+                    continue;
+                }
+                let path = &paths[0];
+                match read_pack_header(path) {
+                    Ok(header) => {
+                        if header.id != id
+                            || header.edition != edition
+                            || header.distribution != combat_sim::content::Distribution::Full
+                            || header.schema_version != combat_sim::content::pack::SCHEMA_VERSION
+                        {
+                            status.state = PackState::Invalid;
+                            status.detail = format!(
+                                "内容包不是有效的 {edition} 完整书（id={}，edition={}，distribution={}，schema={}）",
+                                header.id,
+                                if header.edition.is_empty() {
+                                    "missing"
+                                } else {
+                                    &header.edition
+                                },
+                                header.distribution.as_str(),
+                                header.schema_version
+                            );
+                            out.push(status);
+                            continue;
+                        }
+                        let valid = pack_value(path)
+                            .and_then(|v| combat_sim::content::ContentPack::from_value(&v))
+                            .map(|_| ());
+                        if let Err(e) = valid {
+                            status.state = PackState::Invalid;
+                            status.detail = format!("内容包校验失败：{e}");
+                            out.push(status);
+                            continue;
+                        }
+                    }
+                    Err(_) => {
+                        status.state = PackState::Invalid;
+                        status.detail = format!("内容包读不了：{}（应为 {id}）", rel(root, path));
+                        out.push(status);
+                        continue;
+                    }
+                }
+            }
+
+            let identified = records.iter().any(|r| {
+                r.status == BookStatus::Identified
+                    && r.edition.as_deref() == Some(edition)
+                    && r.book.as_deref() == Some(book)
+            });
+            if identified {
+                if status.file.is_some() {
+                    status.state = PackState::Unlocked;
+                    status.detail = format!("{edition} {label}");
+                } else {
+                    status.state = PackState::MissingPack;
+                    status.detail = format!(
+                        "已识别 {edition} {label}，但缺少完整书内容包（放到 {FULL_PACK_DIR}/{id}.pack.json）"
+                    );
+                }
+                out.push(status);
+                continue;
+            }
+
+            let other_editions: Vec<&str> = records
+                .iter()
+                .filter(|r| {
+                    r.status == BookStatus::Identified
+                        && r.book.as_deref() == Some(book)
+                        && r.edition.as_deref() != Some(edition)
+                })
+                .filter_map(|r| r.edition.as_deref())
+                .collect();
+            let ambiguous: Vec<&BookRecord> = records
+                .iter()
+                .filter(|r| {
+                    r.status != BookStatus::Identified && r.candidates.iter().any(|c| c == &id)
+                })
+                .collect();
+            if !other_editions.is_empty() {
+                status.state = PackState::WrongEdition;
+                status.detail = format!(
+                    "只有 {} 的 {label}；{id} 需要 {edition} 版（运行 `talkdnd library scan` 查看）",
+                    other_editions.join("、")
+                );
+            } else if !ambiguous.is_empty() {
+                status.state = PackState::Ambiguous;
+                let sources: Vec<&str> = ambiguous.iter().map(|r| r.source.as_str()).collect();
+                status.detail = format!(
+                    "识别不确定（{}）；运行 `talkdnd library choose <书> --edition {edition} --kind {book}`",
+                    sources.join("、")
+                );
+            } else {
+                status.state = PackState::MissingBook;
+                let missing_index = records.iter().any(|r| r.status == BookStatus::MissingIndex);
+                status.detail = if missing_index {
+                    format!(
+                        "缺少 {edition} {label} 的已识别 PDF（有的 PDF 还没有转换索引；运行 `talkdnd library scan`）"
+                    )
+                } else {
+                    format!(
+                        "缺少 {edition} {label} 的已识别 PDF（Rules/{edition}/；运行 `talkdnd library scan`）"
+                    )
+                };
+            }
+            out.push(status);
+        }
+    }
+    out
+}
+
+/// Status of the six expected full packs: unlocked, missing book/edition,
+/// missing pack, ambiguous, or invalid. SRD packs are always available and
+/// are not listed here.
+pub fn pack_status(root: &Path) -> Vec<PackStatus> {
+    pack_statuses(root)
+}
+
+/// Rewrite the save's `library:` list so it contains exactly the full packs
+/// unlocked for its ruleset, plus every unmanaged entry it already had.
+/// Removed packs drop back to SRD-only; unmatched packs are never added.
+pub fn sync_campaign_packs(root: &Path, save: &Path) -> Result<Vec<String>> {
+    let rs = crate::save::ruleset(save);
+    let statuses = pack_status(root);
+    let mut loaded = Vec::new();
+    let mut files = Vec::new();
+    for status in &statuses {
+        if status.edition == rs && status.state == PackState::Unlocked {
+            if let Some(file) = &status.file {
+                loaded.push(format!("{} {}", status.edition, book_label(&status.book)));
+                files.push(root.join(file));
+            }
+        }
+    }
+    let manifest = save.join("combat/campaign.yaml");
+    let text = fs::read_to_string(&manifest).unwrap_or_default();
+    if text.is_empty() {
+        return Ok(loaded);
+    }
+    let base = manifest.parent().unwrap_or(save);
+    let mut entries = Vec::new();
+    let mut replaced = false;
+    let mut out = String::with_capacity(text.len() + 64);
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if !replaced && trimmed.starts_with("library:") {
+            replaced = true;
+            let indent = &line[..line.len() - trimmed.len()];
+            let rest = trimmed["library:".len()..].to_string();
+            let (value, comment) = match rest.find('#') {
+                Some(i) => (
+                    rest[..i].to_string(),
+                    Some(rest[i..].trim_end().to_string()),
+                ),
+                None => (rest, None),
+            };
+            for entry in parse_yaml_list(&value) {
+                if !managed_pack_entry(&entry) {
+                    entries.push(entry);
+                }
+            }
+            for file in &files {
+                entries.push(relative_from(base, file));
+            }
+            let mut new_line = format!("{indent}library: [{}]", entries.join(", "));
+            if let Some(c) = comment {
+                new_line.push(' ');
+                new_line.push_str(&c);
+            }
+            out.push_str(&new_line);
+            if line.ends_with('\n') {
+                out.push('\n');
+            }
+        } else {
+            out.push_str(line);
+        }
+    }
+    if replaced && out != text {
+        combat_sim::fsutil::atomic_write(&manifest, out.as_bytes())?;
+    }
+    Ok(loaded)
+}
+
+fn parse_yaml_list(value: &str) -> Vec<String> {
+    value
+        .trim()
+        .trim_matches(['[', ']'])
+        .split(',')
+        .map(|s| s.trim().trim_matches(['"', '\'']).to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Entries this command manages: a `full-*` pack under `Rules/packs/`.
+/// Other pack entries (SRD/local) are the player's and must survive a sync.
+fn managed_pack_entry(entry: &str) -> bool {
+    let norm = entry.replace('\\', "/");
+    if !norm.contains("Rules/packs/") {
+        return false;
+    }
+    let base = norm.rsplit('/').next().unwrap_or("");
+    pack_stem(base).starts_with("full-")
+}
+
+/// `base` to `target`, both under the play root, with `/` separators.
+fn relative_from(base: &Path, target: &Path) -> String {
+    let from: Vec<std::path::Component> = base.components().collect();
+    let to: Vec<std::path::Component> = target.components().collect();
+    let common = from
+        .iter()
+        .zip(to.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut parts: Vec<String> = Vec::new();
+    for _ in common..from.len() {
+        parts.push("..".into());
+    }
+    for c in &to[common..] {
+        parts.push(c.as_os_str().to_string_lossy().to_string());
+    }
+    if parts.is_empty() {
+        ".".into()
+    } else {
+        parts.join("/")
+    }
+}
+
+/// A one-line digest: which full packs the save loads, or exactly which book
+/// or pack is missing. Never book prose.
+pub fn pack_digest_line(root: &Path, save: &Path) -> String {
+    let rs = crate::save::ruleset(save);
+    let statuses = pack_status(root);
+    let loaded: Vec<&PackStatus> = statuses
+        .iter()
+        .filter(|s| s.edition == rs && s.state == PackState::Unlocked)
+        .collect();
+    if !loaded.is_empty() {
+        return format!(
+            "已解锁 {}（SRD 始终可用）",
+            loaded
+                .iter()
+                .map(|s| format!("{} {}", s.edition, book_label(&s.book)))
+                .collect::<Vec<_>>()
+                .join("、")
+        );
+    }
+    let ambiguous = statuses
+        .iter()
+        .filter(|s| s.edition == rs && s.state == PackState::Ambiguous)
+        .count();
+    let missing: Vec<&PackStatus> = statuses
+        .iter()
+        .filter(|s| s.edition == rs && s.state == PackState::MissingPack)
+        .collect();
+    let invalid: Vec<&PackStatus> = statuses
+        .iter()
+        .filter(|s| s.edition == rs && s.state == PackState::Invalid)
+        .collect();
+    if ambiguous > 0 {
+        format!("仅 SRD（{ambiguous} 本书无法确定；运行 `talkdnd library scan` 选择）")
+    } else if !missing.is_empty() {
+        format!(
+            "仅 SRD（已识别 {}，但缺少 {}；运行 `talkdnd library packs`）",
+            missing
+                .iter()
+                .map(|s| format!("{} {}", s.edition, book_label(&s.book)))
+                .collect::<Vec<_>>()
+                .join("、"),
+            missing
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>()
+                .join("、")
+        )
+    } else if !invalid.is_empty() {
+        format!(
+            "仅 SRD（内容包无效：{}；运行 `talkdnd library packs`）",
+            invalid
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>()
+                .join("、")
+        )
+    } else {
+        "仅 SRD（未识别到匹配的完整书 PDF；运行 `talkdnd library scan`）".into()
+    }
+}
+
 /// Program data under `Rules/` that is not a book.
 pub const RULES_PROGRAM_DIRS: [&str; 3] = ["chargen", "combat", "defaults"];
 /// Book-folder content that is not a book file.
@@ -200,25 +1248,6 @@ pub fn paged_markdown(d: &Path) -> Option<PathBuf> {
     }
     let reader = d.join(format!("{stem}.md"));
     reader.is_file().then_some(reader)
-}
-
-/// Is this line a pdf2md page marker (`<a id="p12"></a>` / `<!-- PDF p.12 -->`)?
-pub fn is_page_marker(line: &str) -> bool {
-    let t = line.trim();
-    let num = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    if let Some(rest) = t
-        .strip_prefix("<a id=\"p")
-        .and_then(|r| r.strip_suffix("\"></a>"))
-    {
-        return num(rest);
-    }
-    if let Some(rest) = t
-        .strip_prefix("<!-- PDF p.")
-        .and_then(|r| r.strip_suffix(" -->"))
-    {
-        return num(rest);
-    }
-    false
 }
 
 /// Paged Markdown without the page markers (what the reader edition used to
@@ -1180,6 +2209,15 @@ mod tests {
             ),
         );
         write(&d.join("pages/p0001-0001.md"), "x");
+    }
+
+    #[test]
+    fn book_kind_accepts_ids_and_titles() {
+        assert_eq!(book_kind("phb"), Some("phb"));
+        assert_eq!(book_kind("Player's Handbook"), Some("phb"));
+        assert_eq!(book_kind("Dungeon Master's Guide"), Some("dmg"));
+        assert_eq!(book_kind("Monster Manual"), Some("mm"));
+        assert_eq!(book_kind("campaign guide"), None);
     }
 
     #[test]
