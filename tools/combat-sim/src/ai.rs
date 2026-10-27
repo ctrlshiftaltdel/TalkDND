@@ -3103,8 +3103,15 @@ pub mod tactics {
                 condition.concentration.hash(&mut hasher);
                 // Duration/pose details are lightweight advisory key material;
                 // a collision can only skip a duplicate evaluation, never
-                // bypass the final engine legality check.
-                format!("{:?}", condition.duration).hash(&mut hasher);
+                // bypass the final engine legality check. Only format `Some`
+                // values so the common case stays allocation-free.
+                match &condition.duration {
+                    None => 0u8.hash(&mut hasher),
+                    Some(duration) => {
+                        1u8.hash(&mut hasher);
+                        format!("{duration:?}").hash(&mut hasher);
+                    }
+                }
             }
             for (name, resource) in &combatant.resources {
                 name.hash(&mut hasher);
@@ -3114,9 +3121,31 @@ pub mod tactics {
                 key.hash(&mut hasher);
                 round.hash(&mut hasher);
             }
-            format!("{:?}", combatant.pose).hash(&mut hasher);
-            format!("{:?}", combatant.vertical).hash(&mut hasher);
-            format!("{:?}", combatant.footprint).hash(&mut hasher);
+            for (flag, value) in [
+                (0u8, combatant.pose.as_ref().map(|pose| format!("{pose:?}"))),
+                (
+                    1u8,
+                    combatant
+                        .vertical
+                        .as_ref()
+                        .map(|vertical| format!("{vertical:?}")),
+                ),
+                (
+                    2u8,
+                    combatant
+                        .footprint
+                        .as_ref()
+                        .map(|footprint| format!("{footprint:?}")),
+                ),
+            ] {
+                match value {
+                    None => flag.hash(&mut hasher),
+                    Some(value) => {
+                        flag.hash(&mut hasher);
+                        value.hash(&mut hasher);
+                    }
+                }
+            }
         }
         for (name, concentration) in &state.concentration {
             name.hash(&mut hasher);
