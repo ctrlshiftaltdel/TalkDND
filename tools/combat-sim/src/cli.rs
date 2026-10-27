@@ -382,6 +382,11 @@ pub enum ContentCommand {
     Show { id: String },
     /// Validate references, expressions and TODO notes.
     Check,
+    /// List, show or verify loaded content packs.
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
     /// Convert SRD 5.1 JSON (5e-database) into library YAML.
     ImportSrd {
         /// `5e-SRD-Monsters.json`.
@@ -397,6 +402,16 @@ pub enum ContentCommand {
         #[arg(long = "skip-ids-from", value_name = "DIR")]
         skip_ids_from: Vec<PathBuf>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PackCommand {
+    /// List loaded packs and their metadata.
+    List,
+    /// Print one pack's metadata as JSON.
+    Show { id: String },
+    /// Verify loaded packs and run the content check.
+    Verify,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1153,6 +1168,68 @@ fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> 
                     "content check failed with {} error(s)",
                     report.error_count()
                 );
+            }
+            Ok(())
+        }
+        ContentCommand::Pack { command } => {
+            let registry = load_content(sources)?;
+            match command {
+                PackCommand::List => {
+                    if registry.packs.is_empty() {
+                        println!("no content packs loaded");
+                    } else {
+                        for (id, meta) in &registry.packs {
+                            println!(
+                                "{}\t{}\t{}\t{}\t{}",
+                                id,
+                                meta.edition,
+                                meta.distribution.as_str(),
+                                meta.source.as_deref().unwrap_or("(none)"),
+                                meta.content_hash.as_deref().unwrap_or("(none)")
+                            );
+                        }
+                    }
+                }
+                PackCommand::Show { id } => {
+                    let meta = registry
+                        .packs
+                        .get(&id)
+                        .ok_or_else(|| anyhow!("no content pack with id `{id}`"))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(meta)
+                            .context("failed to serialize content pack metadata")?
+                    );
+                }
+                PackCommand::Verify => {
+                    if registry.packs.is_empty() {
+                        println!("no content packs loaded");
+                    } else {
+                        for (id, meta) in &registry.packs {
+                            println!(
+                                "{id}: verified (edition {}, distribution {}, hash {})",
+                                meta.edition,
+                                meta.distribution.as_str(),
+                                meta.content_hash.as_deref().unwrap_or("(none)")
+                            );
+                        }
+                    }
+                    let report = content::check(&registry);
+                    for issue in &report.issues {
+                        println!("{issue}");
+                    }
+                    println!(
+                        "content pack verify: {} error(s), {} warning(s)",
+                        report.error_count(),
+                        report.warning_count()
+                    );
+                    if report.has_errors() {
+                        bail!(
+                            "content pack verify failed with {} error(s)",
+                            report.error_count()
+                        );
+                    }
+                }
             }
             Ok(())
         }

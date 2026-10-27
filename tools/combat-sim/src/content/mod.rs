@@ -8,6 +8,7 @@
 pub mod check;
 pub mod expr;
 pub mod loader;
+pub mod pack;
 pub mod schema;
 
 pub use check::{check, CheckReport, Issue, Severity};
@@ -16,3 +17,4 @@ pub use loader::{
     AnyItem, ContentRegistry, ContentSource, ContentSources, ItemKind, ItemStore, ResolvedAbility,
     ShownItem, Sourced,
 };
+pub use pack::{ContentPack, Distribution, PackEntry, PackImage, PackIndex, PackMeta};

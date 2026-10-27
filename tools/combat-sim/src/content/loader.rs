@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use super::pack::{ContentPack, PackMeta};
 use super::schema::{
     Ability, AbilityEntry, AiTemplate, CampaignManifest, ConditionDef, ContentFile, Creature,
     Encounter, ExprValue, MasteryDef, Rules, Scene,
@@ -182,6 +183,10 @@ pub struct ContentRegistry {
     pub scenes: ItemStore<Scene>,
     #[serde(default)]
     pub encounters: ItemStore<Encounter>,
+    /// Metadata for content packs loaded from this registry. Old state files
+    /// without this field load with an empty map.
+    #[serde(default)]
+    pub packs: BTreeMap<String, PackMeta>,
     #[serde(default)]
     pub rules: Rules,
     /// Active rules edition (`2014` or `2024`).
@@ -806,6 +811,11 @@ fn apply_document(
     source: &ContentSource,
     registry: &mut ContentRegistry,
 ) -> Result<()> {
+    if super::pack::looks_like_pack(value) {
+        let pack = ContentPack::from_value(value).map_err(|error| anyhow!("{source}: {error}"))?;
+        apply_pack(pack, source, registry)?;
+        return Ok(());
+    }
     let object = value
         .as_object()
         .ok_or_else(|| anyhow!("top-level content must be a map"))?;
@@ -819,6 +829,23 @@ fn apply_document(
     }
     let item = parse_single_item(value)?;
     registry.insert_item(item, source);
+    Ok(())
+}
+
+fn apply_pack(
+    pack: ContentPack,
+    source: &ContentSource,
+    registry: &mut ContentRegistry,
+) -> Result<()> {
+    let meta = pack.pack.clone();
+    if registry.packs.contains_key(&meta.id) {
+        bail!(
+            "{source}: duplicate content pack id `{}` (already loaded)",
+            meta.id
+        );
+    }
+    registry.packs.insert(meta.id.clone(), meta);
+    apply_container(pack.content, source, registry);
     Ok(())
 }
 
