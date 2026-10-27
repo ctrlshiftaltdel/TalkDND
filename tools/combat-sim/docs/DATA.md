@@ -70,9 +70,11 @@ is a possible follow-up if that becomes noticeable in play.
 ### Known gaps
 
 - 2024 rules text: upstream has no `Rules` / `Rule-Sections` dataset for the
-  2024 SRD, so the 2024 rules chapters are not in a pack yet.
-- Class prose: 5e-database classes carry mechanics, level tables and feature
-  text but no class introduction; only the mechanics are imported.
+  2024 SRD. It is covered by the prose pack below (extracted from the local
+  pdf2md output, not from 5e-database).
+- Class prose: neither 5e-database nor the SRD PDFs contain class
+  introductions; both editions go straight to Class Features / Core Traits.
+  Nothing is invented.
 - Reference vocabularies (skills, languages, proficiencies, damage types, magic
   schools, weapon properties) stay inside the structured `data` fields; they
   are not separate entities.
@@ -80,3 +82,48 @@ is a possible follow-up if that becomes noticeable in play.
   kept and the magic-item copy is skipped (reported by the CLI as a gap).
 - Monsters keep automation for plain attacks/multiattack; special abilities,
   legendary actions and complex riders stay in the statblock text.
+
+## SRD 5.2.1 rules prose
+
+The 2024 rules chapters are not in 5e-database, so they are extracted from the
+local pdf2md conversion of the player-supplied SRD PDF:
+
+- Source: `LetsPlay/Rules/2024/srd-cc-v5-2-1/index/` — pdf2md 0.6.0, PDF
+  `SRD_CC_v5.2.1.pdf`, sha256
+  `8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87`,
+  364 pages. The pdf2md output stays local and gitignored.
+- Output: `LetsPlay/Rules/combat/2024/srd/srd-5.2.1-rules-prose.pack.json`
+  (`distribution: srd`, CC-BY-4.0), 213 entities, about 340 KB.
+
+```bash
+cargo run --manifest-path tools/combat-sim/Cargo.toml -- content import-srd-prose \
+  --edition 2024 \
+  --index LetsPlay/Rules/2024/srd-cc-v5-2-1/index \
+  --out LetsPlay/Rules/combat/2024/srd
+```
+
+| Chapter | Pages | Sections |
+|---|---:|---:|
+| Playing the Game | 5–18 | 61 |
+| Character Creation | 19–27 | 23 |
+| Rules Glossary | 176–191 | 104 |
+| Gameplay Toolbox | 192–203 | 40 |
+
+The generator finds chapter ranges from `index.json` (no hard-coded pages),
+splits on level-2/3 headings, merges repeated headings that continue on the
+next page, and skips headings whose body is shorter than 20 characters. The
+current run merged 9 repeated headings and skipped 6 short ones. Text is kept
+verbatim (including Markdown tables); no image is embedded.
+
+The pack only adds narrative rules text. Structured mechanics stay in the
+5e-database packs, so the two sources are complementary.
+
+Known limits:
+
+- Extraction follows the pdf2md heading structure; if a heading is missed by
+  the converter, that section is missing from the pack (the chapter/section
+  counts above are the audit trail).
+- Running headers and page footers are kept when the converter keeps them;
+  they are not rewritten.
+- The SRD has no class introductions (checked in both editions), so no class
+  prose entity exists.
