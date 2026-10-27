@@ -226,6 +226,8 @@ fn scenarios() -> Vec<Scenario> {
 struct RunMetrics {
     turns: u32,
     action_turns: u32,
+    party_turns: u32,
+    party_action_turns: u32,
     errors: u32,
     error_text: Vec<String>,
     rounds: u32,
@@ -238,6 +240,8 @@ struct RunMetrics {
     resource_max: i32,
     search_fallbacks: u32,
     utility_fallbacks: u32,
+    party_search_fallbacks: u32,
+    party_utility_fallbacks: u32,
     nodes: u64,
     latencies_us: Vec<u64>,
 }
@@ -257,6 +261,8 @@ struct Aggregate {
     runs: u32,
     turns: u32,
     action_turns: u32,
+    party_turns: u32,
+    party_action_turns: u32,
     errors: u32,
     wins: u32,
     draws: u32,
@@ -268,15 +274,36 @@ struct Aggregate {
     resource_max: i64,
     search_fallbacks: u32,
     utility_fallbacks: u32,
+    party_search_fallbacks: u32,
+    party_utility_fallbacks: u32,
     nodes: u64,
     latencies_us: Vec<u64>,
 }
 
 impl Aggregate {
+    fn party_legal_action_rate(&self) -> f64 {
+        if self.party_turns == 0 {
+            0.0
+        } else {
+            f64::from(self.party_action_turns) / f64::from(self.party_turns)
+        }
+    }
+
+    fn party_fallback_rate(&self) -> f64 {
+        if self.party_turns == 0 {
+            0.0
+        } else {
+            f64::from(self.party_search_fallbacks + self.party_utility_fallbacks)
+                / f64::from(self.party_turns)
+        }
+    }
+
     fn record(&mut self, metrics: &RunMetrics) {
         self.runs += 1;
         self.turns += metrics.turns;
         self.action_turns += metrics.action_turns;
+        self.party_turns += metrics.party_turns;
+        self.party_action_turns += metrics.party_action_turns;
         self.errors += metrics.errors;
         self.wins += u32::from(metrics.party_win);
         self.draws += u32::from(metrics.draw);
@@ -288,6 +315,8 @@ impl Aggregate {
         self.resource_max += i64::from(metrics.resource_max);
         self.search_fallbacks += metrics.search_fallbacks;
         self.utility_fallbacks += metrics.utility_fallbacks;
+        self.party_search_fallbacks += metrics.party_search_fallbacks;
+        self.party_utility_fallbacks += metrics.party_utility_fallbacks;
         self.nodes += metrics.nodes;
         self.latencies_us.extend_from_slice(&metrics.latencies_us);
     }
@@ -363,6 +392,9 @@ struct Snapshot {
     speed_left: i32,
     action_used: bool,
     bonus_action_used: bool,
+    conditions: Vec<String>,
+    resources: BTreeMap<String, (i32, i32)>,
+    triggers: BTreeMap<String, (bool, bool)>,
 }
 
 fn snapshot(state: &EncounterState, actor: usize) -> Snapshot {
@@ -374,6 +406,21 @@ fn snapshot(state: &EncounterState, actor: usize) -> Snapshot {
         speed_left: combatant.speed_left,
         action_used: combatant.action_used,
         bonus_action_used: combatant.bonus_action_used,
+        conditions: combatant
+            .conditions
+            .iter()
+            .map(|condition| condition.condition.clone())
+            .collect(),
+        resources: combatant
+            .resources
+            .iter()
+            .map(|(id, resource)| (id.clone(), (resource.current, resource.max)))
+            .collect(),
+        triggers: state
+            .triggers
+            .iter()
+            .map(|(id, trigger)| (id.clone(), (trigger.fired, trigger.enabled)))
+            .collect(),
     }
 }
 
@@ -414,10 +461,7 @@ fn fallback_lines(lines: &[String]) -> (u32, u32) {
     let mut search = 0;
     let mut utility = 0;
     for line in lines {
-        if line.contains("search planner fallback")
-            || line.contains("search planner failed")
-            || line.contains("search planner found no executable candidate")
-        {
+        if line.contains("search planner fallback") || line.contains("search planner failed") {
             search += 1;
         }
         if line.contains("using heuristic fallback") || line.contains("tactical plan failed") {
@@ -461,6 +505,7 @@ fn run_one(
         if state.combatants.get(actor).is_none() {
             break;
         }
+        let actor_is_party = state.combatants[actor].side.as_str() == "party";
         let before = snapshot(&state, actor);
         let before_log = log.len();
         let started = Instant::now();
@@ -468,14 +513,24 @@ fn run_one(
         let elapsed = started.elapsed();
         metrics.latencies_us.push(elapsed.as_micros() as u64);
         metrics.turns += 1;
+        if actor_is_party {
+            metrics.party_turns += 1;
+        }
         let after = snapshot(&state, actor);
         if action_happened(&before, &after) {
             metrics.action_turns += 1;
+            if actor_is_party {
+                metrics.party_action_turns += 1;
+            }
         }
         let turn_lines = &log[before_log..];
         let (search, utility) = fallback_lines(turn_lines);
         metrics.search_fallbacks += search;
         metrics.utility_fallbacks += utility;
+        if actor_is_party {
+            metrics.party_search_fallbacks += search;
+            metrics.party_utility_fallbacks += utility;
+        }
         for line in turn_lines {
             if let Some(nodes) = parse_search_nodes(line) {
                 metrics.nodes += nodes;
@@ -650,15 +705,18 @@ fn quality_benchmark_prints_environment_and_metrics() {
         for scenario in &scenarios {
             let result = &results[scenario.key];
             println!(
-                "strategy={} scenario={} runs={} legal_action_rate={:.3} fallback_rate={:.3} \
+                "strategy={} scenario={} runs={} legal_action_rate={:.3} party_legal_action_rate={:.3} \
+                 fallback_rate={:.3} party_fallback_rate={:.3} \
                  wins={} draws={} timeouts={} objectives={} avg_rounds={:.2} avg_party_hp={:.2} \
                  resource_ratio={:.3} p50_us={} p95_us={} search_fallbacks={} utility_fallbacks={} \
-                 nodes={}",
+                 party_search_fallbacks={} party_utility_fallbacks={} nodes={}",
                 strategy.label(),
                 scenario.key,
                 result.runs,
                 result.legal_action_rate(),
+                result.party_legal_action_rate(),
                 result.fallback_rate(),
+                result.party_fallback_rate(),
                 result.wins,
                 result.draws,
                 result.timeouts,
@@ -670,6 +728,8 @@ fn quality_benchmark_prints_environment_and_metrics() {
                 result.p95_us(),
                 result.search_fallbacks,
                 result.utility_fallbacks,
+                result.party_search_fallbacks,
+                result.party_utility_fallbacks,
                 result.nodes
             );
             assert_eq!(result.errors, 0, "{} {}", scenario.key, strategy.label());
