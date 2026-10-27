@@ -2,7 +2,7 @@
 
 战役无关的规则数据，供 combat-sim 读取。字段说明在引擎的开发文档里，不在本目录。
 
-引擎读取存档清单 `campaign.yaml` 里的 `ruleset`（`2014` 或 `2024`，缺省 `2024`），先加载 `common/`，再加载对应版本目录，另一版本目录忽略。
+引擎读取存档清单 `campaign.yaml` 里的 `ruleset`（四个值之一，旧 `2014` / `2024` 仍可读）。`*-srd` 按原顺序加载整个 edition 层（`common/` + `2014/` 或 `2024/`），另一 edition 目录忽略。`*-full` 先加载 SRD base（`common/` + `<edition>/srd/` + `<edition>/**/srd-*` 覆盖，如 `2024/monsters/srd-spatial.yaml`），再加载已解锁的 `full-<edition>-*` pack，最后加载 `<edition>/` 下其余手写/overlay 文件；冒险/角色覆盖在这些库之后加载。FULL 缺包时失败关闭，不静默回退 SRD。
 
 | 目录 | 内容 |
 |------|------|
