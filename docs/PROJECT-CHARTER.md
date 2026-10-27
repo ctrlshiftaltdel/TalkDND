@@ -32,6 +32,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 - Record product decisions in this charter so later tasks do not drift from them.
 - Let the DM leave a published adventure only within a per-save, creation-locked deviation scope and ratio, with every original element registered in a DM-only ledger.
 - Resume a campaign across sessions with a recoverable state history (checkpoints and structured diffs), stable entity and relation memory, optional in-world time, and fast local navigation of the player's own books, all inside the existing save and under the same privacy and spoiler discipline.
+- Resolve spatial rules through one kernel: reach uses the target's volume, line of sight and cover use the same blocker volumes, areas intersect target volumes, movement is stepwise, and flight/falls are explicit engine commands with edition-specific triggers.
 
 ## Non-goals
 
@@ -131,6 +132,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - Release automation builds the three prebuilt targets named in this charter.
 - Full-book packs build from the owner's local pdf2md indexes, validate as `distribution: full`, and are published as separate release assets without entering Git, the LetsPlay archive or CI logs.
 - A pull request that changes scope, goals, tech stack, rules support, or a user decision also updates this charter in that same pull request.
+- A grid encounter that explicitly carries P1 spatial state resolves reach, line of sight, cover, areas, stepwise movement, opportunity threats and flight/falls through the unified kernel; a save without those fields keeps the legacy 2D result.
 - As of v1.0.0, a session interrupted mid-play can be resumed from the last good checkpoint, and the structured diff since the previous session is available without rereading the whole log.
 
 ## Architecture decisions
@@ -155,6 +157,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 - Tool proficiency checks read proficiency only from the structured `Saves/<slot>/sheets/<id>.yaml` `tools` list, never from Markdown prose or the tool name. The checked ability is a mandatory explicit `--ability`; an unproficient or unknown but well-formed tool still rolls with only the ability modifier (plus explicit extras) and is marked not proficient, and the proficiency bonus comes from the combat block's `prof` (derived from `level` when absent).
 - Mid-encounter reinforcement is `combat-sim add`, never a rebuild. New combatants join awake and enter the live initiative order by total (higher totals first, ties after the combatants already in the order); one inserted at or before the current turn position does not act in the running round (the turn cursor shifts so the current actor and round progress are preserved), while one inserted after it acts later in the same round. Existing combatants' HP, resources, conditions, action counters, positions, initiative and the encounter log are only ever appended to, party-side additions sync through the existing party-state write-back, and the write goes through the normal state-save path so the integrity baseline advances only on success.
 - Secret protection stays literal. `secret scan` is read-only and reports marker coverage as counts and line numbers, never file content; `secret import` reads only DM-reviewed explicit terms, defaults to a dry-run preview, and writes only on an explicit `--apply` after deduplication and format validation; `talkdnd start` warns when `dm-secrets.md` has content but zero recognized markers. There is no semantic spoiler detection: unmarked narrative is never auto-imported, and the guard's matching strategy (case-insensitive English word boundaries, Chinese substrings) is unchanged.
+- Spatial rules have one kernel. A save with explicit P1 spatial fields (a pose, vertical state, `SpatialState`, `cell_height_ft` or terrain) resolves reach, line of sight, cover, areas and movement through `space.rs`; a save without them keeps the legacy 2D queries. `GridCell.height_ft` is a solid obstacle above the cell floor and `cell_height_ft` is a ceiling above the local floor. `combat-sim fly` owns altitude changes and `combat-sim fall` owns R-09 and liquid check rolling; losing flight support through a condition drops the creature. Liquid landing is only used when a caller supplies a `FallMap` with a liquid column, because the grid scene has no water flag.
 
 ## Open decisions
 
@@ -167,6 +170,16 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-28 — Unified spatial rules in the engine and CLI (TASK-0090, P5)
+
+The owner's spatial roadmap reaches user-visible play. P1–P4 added additive types, geometry, movement and flight/fall seams; P5 wires them into the existing turn commands without changing `Position`, the save schema or the AI layer. A save that explicitly carries P1 spatial state (a combatant `pose`/`vertical`, an encounter `SpatialState`, `Scene.cell_height_ft` or terrain volumes) now resolves attacks, abilities and movement through one kernel: footprint-aware reach, blocker-volume line of sight and cover, area cells intersected with target volumes, stepwise P3 movement (including forced pushes that spend no Speed and provoke no opportunity attack), 3D opportunity threats and boundary-only zone triggers. A save without those fields keeps the legacy 2D results, which the regression tests pin.
+
+User-visible additions are `combat-sim fly <who> <height>` and `combat-sim fall <who>`. `fly` moves the vertical axis, stops below a ceiling and keeps `SpatialPose.cell.z` (absolute elevation) in sync with `VerticalState.altitude_ft` (height above the local floor). `fall` applies P4 damage and landing, rolls the R-09 DC 10 Acrobatics house-rule check for damaging falls of 10 ft or less, and rolls the 2024 liquid-landing reaction when a caller-supplied `FallMap` has a liquid column. A grid scene has no water flag, so the CLI never invents liquid from scene data. Losing flight support through a condition (for example 2014 `stunned` with `speed_zero`, or 2024 Incapacitated) now drops the creature immediately; the shared 2014 `stunned` data gained the missing `speed_zero` flag, and a 2024 flyer still falls through Incapacitated.
+
+`GridCell.height_ft` is now a solid vertical obstacle above the cell floor: it blocks ground movement and line of sight when tall, gives cover when low, and forms a landing surface in `FallMap`; `cell_height_ft` remains a ceiling above the local floor. Movement is validated before any state change and re-checked before every step, so a blocked route, a stopped reaction or a killed mover can never teleport to the goal. Opportunity attacks use 3D reach, and an observer's reaction is consumed once per round. Enter-area scene triggers fire on a zone boundary, not on every cell.
+
+No schema field, dependency, crate version or save migration is added. Known limits, recorded rather than hidden: `deprived_of_movement` / `held_aloft_by_magic` remain low-level `FlightSubject` inputs because no engine/content flag expresses them; scene-derived falls never carry liquid; and `interact` uses the object's zone as its reach proxy because scene objects have no cell coordinate. Alternatives considered: rewriting `Position` into a 3D enum (rejected — P1 is additive and old saves must load unchanged), adding a scene water flag or new condition flags (rejected — schema is frozen for P5; follow-ups need their own task), and auto-detecting height obstacles in the legacy router (rejected — legacy saves must keep their results).
 
 ### 2026-10-27 — Four player-visible rulesets (TASK-0107)
 
