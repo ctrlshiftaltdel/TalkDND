@@ -8,6 +8,8 @@ TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D
 - 每一步都写进存档日志，下次可以从存档点接着玩；
 - 战斗由 **combat-sim** 结算（命中、伤害、状态、专注、移动、借机攻击……）。
 
+当前发布：**v1.2.0**（2026-10-27）。本版新增四规则集、可选完整书内容包与空间规则 P1–P5；默认战斗 AI 仍是 legacy，详见 `CHANGELOG.md` 的 v1.2.0 小节。
+
 要玩：留在本目录。本目录的 `AGENTS.md` 是 DM 手册。开发与改代码在仓库根，不在这里。
 
 ## 你需要准备什么
@@ -24,6 +26,8 @@ TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D
 | 5e SRD | `ruleset: "5e-srd"` | SRD 5.1 全量内容包 | 只用内置 SRD；`Rules/2014/` 可选 |
 
 放入 SRD PDF 是可选的：`bin/talkdnd start` 会为它建立 pdf2md 索引，DM 在缺图、地图或原文不清时回退查看。**FULL 必须在对应 edition 至少解锁一本完整书**（PHB/DMG/MM，PDF 放进 `Rules/2014/` 或 `Rules/2024/` 的书文件夹，构建好的内容包放进 `Rules/packs/`）；缺书、未解锁或内容包损坏时 `start` 与 `content check` 会失败并指出缺什么，不会静默退回 SRD。`*-srd` 永不加载完整书内容包。旧存档里的 `ruleset: "2014"` / `"2024"` 仍可读取，分别按 `5e-srd` / `5.5e-srd` 处理，并在下一次写 manifest 时迁移。每个存档只用一套规则，DM 不会混用 5e 与 5.5e。
+
+完整书 pack 是**单独的发布资产**（`talkdnd-full-packs-<标签>.tar.gz`），不在普通游戏包内；托管 CI 不构建、不上传，由项目所有者另行提供。需要完整书内容时，把它解压到 `Rules/packs/`，把你自己的匹配 PDF 放进 `Rules/<edition>/` 的书文件夹，再运行 `bin/talkdnd library scan` 解锁；若提示歧义，按输出用 `bin/talkdnd library choose ...` 指定书型。只用 SRD 的玩家不需要任何额外步骤。
 
 ### 2. 准备冒险书
 
@@ -181,6 +185,8 @@ $CS roll 1d20+5 --adv --dc 15
 
 两个 edition 的差异由数据决定：`Rules/combat/common/` 是通用部分，`Rules/combat/2014/`、`Rules/combat/2024/` 是各 edition 特有的内容。`srd/` 与 `srd-*` 覆盖属于 SRD 层；FULL 先加载 SRD 层，再加载已解锁的完整书内容包，最后加载 `<edition>/` 下其余手写内容与冒险/战役覆盖。引擎读存档清单里的 `ruleset` 自动选择。
 
+战斗 AI 默认沿用原有 legacy heuristic。v1.2 的战术效用规划器与有界搜索只作为库 API 显式 opt-in；质量基准在合成团队战看到回退，所以没有改默认，玩家不需要设置。
+
 ## 更新到新版本
 
 直接覆盖解压即可，不需要手动替换任何文件：
@@ -192,9 +198,13 @@ $CS roll 1d20+5 --adv --dc 15
    - 检查存档结构版本（`Saves/<存档>/save-meta.yaml`），旧了就先把整个存档备份到 `Saves/_backups/`，再迁移到新结构，写进会话日志并更新完整性清单；
    - 书籍导入数据（`Rules/chargen/local/`）的导入器版本过旧时重新导入；
    - 缺少的默认规则裁定从 `Rules/defaults/` 复制到 `Rules/`，已有的不动（默认版有更新时摘要会提示合并）；
-   - 把新版已删除、你没改过的旧程序文件移到 `.talkdnd/obsolete/`。
+   - 把新版已删除、你没改过的旧程序文件移到 `.talkdnd/obsolete/`；
+   - 把旧存档的 `ruleset: "2014"` / `"2024"` 分别迁移为 `5e-srd` / `5.5e-srd`（只改这一行，保留其他字段与注释）；
+   - 原先使用完整书内容的存档需要把 `ruleset` 重选为 `5e-full` / `5.5e-full`，并解锁对应完整书 pack。
 
-发布包里**没有**任何用户数据：存档（只有 `Saves/README.md`）、规则书和冒险书（只有 README）、本地导入、`fixes/`、资料图登记表、你自己的规则裁定都不会被覆盖，打包时会自动检查。确认迁移没问题后，`Saves/_backups/` 里的备份可以自行删除。每个版本改了什么见仓库里的 `CHANGELOG.md`。
+完整书 pack 不在普通发布包内。需要时，从项目所有者另行提供的 `talkdnd-full-packs-<标签>.tar.gz` 解压到 `Rules/packs/`，把匹配 PDF 放进 `Rules/<edition>/` 后用 `bin/talkdnd library scan` 解锁；没有它也能用 5e SRD / 5.5e SRD 完整游玩。
+
+发布包里**没有**任何用户数据：存档（只有 `Saves/README.md`）、规则书和冒险书（只有 README）、本地导入、`fixes/`、资料图登记表、你自己的规则裁定都不会被覆盖，打包时会自动检查。确认迁移没问题后，`Saves/_backups/` 里的备份可以自行删除。每个版本改了什么见仓库里的 `CHANGELOG.md`；v1.2.0 的已知限制（AI 默认策略、完整书识别、空间数据覆盖）也在那里。
 
 ## 版权与许可
 

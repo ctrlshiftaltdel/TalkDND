@@ -4,6 +4,50 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v1.2.0 — 2026-10-27
+
+### 新功能
+
+- **完整书内容包构建与发布打包**（TASK-0102，PR #203）：`combat-sim content pack build --edition <2014|2024> --book <phb|dmg|mm> --index <pdf2md-index> --out <dir>` 从本地 pdf2md 索引构建 `distribution: full` 的完整书 pack（规则章节、页码、章节结构与图片索引），`content pack release` 校验目录并生成确定性的 full-packs 清单。完整书 pack 是**可选发布资产**，不进入普通游戏包；托管 CI 不构建、不上传，由项目所有者从本地索引构建后另行上传。
+- **完整书识别与解锁**（TASK-0103，PR #207）：`talkdnd library scan` 依据 pdf2md 前 16 页内容识别玩家自备 PHB/DMG/MM 的版次与书型，`talkdnd library choose` 处理歧义；FULL 存档只加载与已识别书匹配的 pack，缺包、未解锁或坏包会明确失败并指出缺什么，不会静默退回 SRD。识别按内容而非文件名或 PDF hash，程序不复制、上传或打印书正文。
+- **四规则集**（TASK-0107，PR #209）：每个存档可选 **5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD**（`5.5e-full` / `5e-full` / `5.5e-srd` / `5e-srd`）。`*-srd` 只加载该 edition 的 SRD 层；`*-full` 在 SRD 层之上加载已解锁的完整书 pack。旧值 `2014` / `2024` 继续可读并自动迁移为 `5e-srd` / `5.5e-srd`。
+- **空间规则 P1–P5**（TASK-0086～0090，PR #204、#206、#208、#210、#211）：新增 additive 空间类型与存档状态、体积感知几何查询、footprint 感知移动边与 A* 寻路、飞行/垂直移动/坠落结算，并把统一空间内核接入引擎与 CLI（`combat-sim fly`、`combat-sim fall`）。显式带空间字段的存档走新内核；没有这些字段的旧存档继续得到原有 2D 结果。存档 schema 不变。
+- **真实空间内容数据**（TASK-0094，PR #205）：为 2014 补入 7 个 hover、21 个 burrow 与 81 个结构化 AoE（sphere/cube/cylinder/cone/line），为 2024 补入 38 个 SRD 生物的 hover/burrow 覆盖与 6 个形状示例；缺口按 `docs/DATA.md` 记录。
+- **战术 AI P6–P8（opt-in）**（TASK-0091/0092/0093，PR #212、#214、#215）：新增可解释的效用规划器与有界搜索规划器，搜索默认 2 层、top-K 8、384 节点、100 ms 软上限 / 300 ms 硬上限，并带效用→legacy 回退。**默认战斗 AI 仍是 legacy**：P8 质量门在合成基准上看到目标完成率改善（8/8 对 0/8），但团队战胜率回退（1/8 对 7/8），因此 Utility/Search 仅作为库 API 显式 opt-in，未改 CLI 默认。
+- **搜索性能探测**（TASK-0095，PR #213）：记录搜索预算、节点数与耗时基线，后续 P7/P8 采用 1–2 层有界搜索而不是 MCTS。
+- **AgentOrch 1.6.3**（TASK-0109，Issue #200，PR #201）：开发协作套件更新到 1.6.3，并完成 HD-10 冲突合并；内部流程变更，无玩家可见行为变化。
+
+### 变更
+
+- **规则集选择成为玩家选项**：`talkdnd new` / `start` 与错误提示改用四个玩家可选项；`2014` / `2024` 只作为 edition 标签与旧值保留。
+- **FULL 是严格模式**：FULL 存档没有任何已解锁的对应 edition 完整书 pack 时，`start` 与 `content check` 失败并给出补 PDF/pack 的步骤，不回退 SRD。
+- **默认 AI 不变**：CLI 与 `Ai::prepare` 继续使用 legacy heuristic；Utility/Search 只通过 `Ai::prepare_with(...)` / `prepare_with_search(...)` 显式启用。
+- **发布资产拆分**：普通 `talkdnd-letsplay-*` 包仍只含程序、文档和 SRD 内容；完整书 pack 单独发布，托管 CI 不构建也不上传。
+
+### 修复
+
+- **战术 AI 撤退失败回退 legacy**（PR #212）：显式启用 Utility 时，撤退候选若无法执行会回到 legacy 路径，不会卡住回合。
+- **书识别歧义不猜测**（PR #207）：内容同时匹配多本书或信号不足时不解锁任何 pack，必须由玩家用 `library choose` 明确选择；SRD 来源永不视为完整书。
+- 本版没有其他玩家可见缺陷修复；新增边界均按 fail-closed 处理。
+
+### 更新说明 / 迁移
+
+- **覆盖式更新**：下载 1.2.0 发布包，把包内 `TalkDND/LetsPlay/` 的内容覆盖到现有游戏文件夹，覆盖同名文件；存档目录原样保留。不要用旧包整个替换。
+- **规则集迁移**：存档 schema 仍为 8，无结构迁移；旧 `ruleset: "2014"` / `"2024"` 在下一次写 manifest 时分别迁移为 `5e-srd` / `5.5e-srd`，只改 `ruleset` 行并保留其他字段与注释。原先依赖完整书内容的旧档需要把 `ruleset` 重选为 `5e-full` / `5.5e-full`，并解锁对应 edition 的 full pack。
+- **完整书 pack 是可选资产**：普通发布包不含 PHB/DMG/MM 内容，托管 CI 不构建也不上传 full pack。需要完整书内容时，把所有者另行提供的 full pack 解压到 `Rules/packs/`，把你自己的匹配 PDF 放进 `Rules/<edition>/` 的书文件夹，再运行 `bin/talkdnd library scan`（识别流程见 `tools/talkdnd/docs/BOOKS.md`）。只用 SRD 的玩家不需要任何额外步骤。
+- **AI 无需设置**：默认仍是 legacy；Utility/Search 是库级 opt-in，不改变现有命令与存档。
+- `pdf2md` 仍为 0.6.0；不需要重转已有书。
+- 行为基线是 main `abc006b2a949423c751a723efc86cd8105eba8c2`（PR #215 合并后）。该提交上 combat-sim 390、talkdnd 310、talkdnd-dev 45、AgentOrch 套件 676 个测试通过，`validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 退出码 0。发布提交只改三个 crate 的版本号与锁文件、本更新日志、章程和 `LetsPlay/README.md`，不含源码、测试或 CI 行为变更。
+- 本任务不创建或推送 tag；合并后由 Master 在 main 上打 `v1.2.0` 并触发 release workflow。
+
+### 已知限制
+
+- **AI 默认仍是 legacy**：P8 的合成基准不能证明 Utility/Search 在真实内容上不回归；在团队战中 Utility 1/8、Search 1/8，而 legacy 7/8。未来若要改默认，需先在真实或非木桩遭遇中满足质量门（目标完成率不降、团队胜率/终局 HP 不低于 legacy、party-only fallback ≤ 10%、P95 ≤ 300 ms 等）。
+- **完整书解锁依赖本地 PDF**：只有提供匹配 PDF 并通过内容识别后才解锁；歧义或未知内容需要 `library choose`。识别不校验 PDF hash，不同扫描件也可识别。
+- **完整书 pack 不在普通包内**：托管 CI 不构建、不上传；没有 pack 时 5e SRD / 5.5e SRD 仍可完整游玩，FULL 会 fail closed。
+- **空间数据仍有缺口**：2014 的 wall 类 line 法术尚未映射；`AreaSpec` 的 cylinder 只有半径没有高度；2024 完整怪物包尚未用新生成器重生成；真实 SRD 的 shape/hover/burrow 覆盖不代表每个生物或法术都已覆盖。
+- **空间与 AI 基准使用合成数据**：10 个空间回归与 3 个 AI 场景是通用 fixture，不是真实战役胜率或全量 SRD 覆盖证明。
+
 ## v1.1.0 — 2026-10-27
 
 ### 新功能
