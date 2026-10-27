@@ -88,9 +88,9 @@
   - 错：“北墙左边第二扇门有警报。” 对：“草图只标了北墙有两扇门，警报装在哪扇你们不确定。”
 - 关键节点（进新场景、给关键选项、说重要情报前）跑 `$T guard "<选项列表>"`。命中就改写，不要争辩或删词了事。
 
-## 骰子显示（开 / 关）
+## 骰子显示与自动化（开 / 关）
 
-`$T settings` 查看，`$T settings dice on|off` 切换；默认**开**，局中可改，每次改动写会话日志。`$T start` 会显示当前设置。
+`$T settings` 查看，`$T settings dice on|off` 切换；默认**开**，局中可改，每次改动写会话日志。`$T start` 会显示当前设置。自动化开关用 `$T settings automation` 查看/修改（遭遇 > 场景 > 存档默认；玩家选择与反应永不 auto），详见 `docs/automation.md`。
 
 - **开**：把完整算式给玩家，如 `潜行：1d20(14)+7=21 vs DC 12 PASS`；说明用途，不解释隐藏 DC 的来历。
 - **关**：只叙述结果，如“你贴着墙摸过去，守卫没有回头。” 不报骰值、DC、修正、HP 数字；暗骰失败说“没发现异常”。
@@ -135,7 +135,7 @@
 |------|------|
 | `docs/option-writing.md` | 选项写法、已知信息边界、三个正误示例 |
 | `docs/anti-spoiler.md` | 防剧透分层、`known`/`guard`/`adventure section`/原创隐藏面 |
-| `docs/dice.md` | 掷骰语法、配方、骰子显示开关与两种叙述风格 |
+| `docs/dice.md` | 掷骰语法、配方、骰子显示开关与两种叙述风格；自动化开关见 `docs/automation.md` |
 | `docs/chargen.md` | 建卡每一步、战斗风格/背景/装备、本地规则书数据、同伴生成 |
 | `docs/character-data.md` | 角色卡数据源、`char` 命令、与 combat-sim/校验的关系 |
 | `docs/combat.md` | combat-sim 命令与坑、`--player` 名称遮蔽、规则数据分层 |

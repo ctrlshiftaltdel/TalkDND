@@ -115,7 +115,7 @@ fn defaults_follow_the_charter_and_show_their_source() {
     // Bare `settings` keeps the dice line and adds the automation summary.
     let out = ok(&r, &["settings"]);
     assert!(out.contains("骰子显示：开"), "{out}");
-    assert!(out.contains("自动化") && out.contains("resolution"), "{out}");
+    assert!(out.contains("自动化") && out.contains("结算 auto"), "{out}");
 
     // Every level is a fixed, documented value.
     for level in ["manual", "assisted", "auto"] {
@@ -135,7 +135,29 @@ fn defaults_follow_the_charter_and_show_their_source() {
     let out = ok(&r, &["settings", "dice", "off"]);
     assert!(out.contains("骰子显示：关"), "{out}");
     let out = ok(&r, &["settings"]);
-    assert!(out.contains("骰子显示：关") && out.contains("npc"), "{out}");
+    assert!(
+        out.contains("骰子显示：关") && out.contains("NPC 对话 auto"),
+        "{out}"
+    );
+
+    // Resetting a save default restores the charter default.
+    let out = ok(
+        &r,
+        &[
+            "settings",
+            "automation",
+            "reset",
+            "npc",
+            "--reason",
+            "back to the charter default",
+        ],
+    );
+    assert!(out.contains("auto → 章程默认"), "{out}");
+    let out = ok(&r, &["settings", "automation", "show"]);
+    assert!(
+        out.contains("npc（NPC 对话）：assisted — 来源：存档默认"),
+        "{out}"
+    );
     let _ = fs::remove_dir_all(&r);
 }
 
@@ -158,7 +180,10 @@ fn precedence_is_encounter_then_scene_then_save_default() {
             "players want to speak for the NPCs",
         ],
     );
-    assert!(out.contains("场景 crypt-entry") && out.contains("未覆盖 → manual"), "{out}");
+    assert!(
+        out.contains("场景 crypt-entry") && out.contains("未覆盖 → manual"),
+        "{out}"
+    );
     ok(
         &r,
         &[
@@ -193,10 +218,22 @@ fn precedence_is_encounter_then_scene_then_save_default() {
         &r,
         &["settings", "automation", "show", "--scene", "crypt-entry"],
     );
-    assert!(out.contains("npc（NPC 对话）：manual — 来源：场景 crypt-entry"), "{out}");
-    assert!(out.contains("near_limit（接近上限）：auto — 来源：场景 crypt-entry"), "{out}");
-    assert!(out.contains("combat（战斗流程）：auto — 来源：存档默认"), "{out}");
-    assert!(out.contains("reaction（玩家反应）：assisted — 来源：存档默认"), "{out}");
+    assert!(
+        out.contains("npc（NPC 对话）：manual — 来源：场景 crypt-entry"),
+        "{out}"
+    );
+    assert!(
+        out.contains("near_limit（接近上限）：auto — 来源：场景 crypt-entry"),
+        "{out}"
+    );
+    assert!(
+        out.contains("combat（战斗流程）：auto — 来源：存档默认"),
+        "{out}"
+    );
+    assert!(
+        out.contains("reaction（玩家反应）：assisted — 来源：存档默认"),
+        "{out}"
+    );
 
     // Encounter + its scene: encounter > scene > save default, per category.
     let out = ok(
@@ -209,19 +246,31 @@ fn precedence_is_encounter_then_scene_then_save_default() {
             "goblin-ambush",
         ],
     );
-    assert!(out.contains("combat（战斗流程）：assisted — 来源：遭遇 goblin-ambush"), "{out}");
-    assert!(out.contains("npc（NPC 对话）：manual — 来源：场景 crypt-entry"), "{out}");
-    assert!(out.contains("resolution（结算）：auto — 来源：存档默认"), "{out}");
+    assert!(
+        out.contains("combat（战斗流程）：assisted — 来源：遭遇 goblin-ambush"),
+        "{out}"
+    );
+    assert!(
+        out.contains("npc（NPC 对话）：manual — 来源：场景 crypt-entry"),
+        "{out}"
+    );
+    assert!(
+        out.contains("resolution（结算）：auto — 来源：存档默认"),
+        "{out}"
+    );
 
     // The audit line records old value, new value, scope and reason.
     let log = latest_log(&save);
-    assert!(log.contains("自动化 npc（场景 crypt-entry）：未覆盖 → manual"), "{log}");
     assert!(
-        log.contains("players want to speak for the NPCs"),
+        log.contains("自动化 npc（场景 crypt-entry）：未覆盖 → manual"),
         "{log}"
     );
+    assert!(log.contains("players want to speak for the NPCs"), "{log}");
     assert!(log.contains("自动化 combat（遭遇 goblin-ambush）"), "{log}");
-    assert!(log.contains("自动化 near_limit（场景 crypt-entry）"), "{log}");
+    assert!(
+        log.contains("自动化 near_limit（场景 crypt-entry）"),
+        "{log}"
+    );
 
     // Reset one override: the value falls back to the save default.
     let out = ok(
@@ -242,7 +291,10 @@ fn precedence_is_encounter_then_scene_then_save_default() {
         &r,
         &["settings", "automation", "show", "--scene", "crypt-entry"],
     );
-    assert!(out.contains("npc（NPC 对话）：assisted — 来源：存档默认"), "{out}");
+    assert!(
+        out.contains("npc（NPC 对话）：assisted — 来源：存档默认"),
+        "{out}"
+    );
 
     // Reset all encounter overrides.
     let out = ok(
@@ -269,7 +321,10 @@ fn precedence_is_encounter_then_scene_then_save_default() {
             "goblin-ambush",
         ],
     );
-    assert!(out.contains("combat（战斗流程）：auto — 来源：存档默认"), "{out}");
+    assert!(
+        out.contains("combat（战斗流程）：auto — 来源：存档默认"),
+        "{out}"
+    );
     let _ = fs::remove_dir_all(&r);
 }
 
@@ -292,7 +347,10 @@ fn the_current_scene_label_is_a_known_scene_id() {
         ],
     );
     let out = ok(&r, &["settings", "automation", "show", "--scene", "tavern"]);
-    assert!(out.contains("npc（NPC 对话）：manual — 来源：场景 tavern"), "{out}");
+    assert!(
+        out.contains("npc（NPC 对话）：manual — 来源：场景 tavern"),
+        "{out}"
+    );
     let _ = fs::remove_dir_all(&r);
 }
 
@@ -403,7 +461,13 @@ fn illegal_values_and_unknown_ids_are_rejected_without_writing() {
     let (good, out) = run(
         &r,
         &[
-            "settings", "automation", "set", "npc", "manual", "--reason", "  ",
+            "settings",
+            "automation",
+            "set",
+            "npc",
+            "manual",
+            "--reason",
+            "  ",
         ],
     );
     assert!(!good && out.contains("--reason"), "{out}");
@@ -413,19 +477,16 @@ fn illegal_values_and_unknown_ids_are_rejected_without_writing() {
     // Unknown reset scope value.
     let (good, out) = run(
         &r,
-        &[
-            "settings",
-            "automation",
-            "reset",
-            "tone",
-            "--reason",
-            "r",
-        ],
+        &["settings", "automation", "reset", "tone", "--reason", "r"],
     );
     assert!(!good && out.contains("自动化类别只能是"), "{out}");
 
     assert_eq!(meta(&save), before, "failed commands must not write");
-    assert_eq!(latest_log(&save), log_before, "failed commands must not log");
+    assert_eq!(
+        latest_log(&save),
+        log_before,
+        "failed commands must not log"
+    );
     let _ = fs::remove_dir_all(&r);
 }
 
@@ -445,19 +506,25 @@ fn hand_edited_automation_fails_closed() {
     let (okay, out) = run(&r, &["settings", "automation", "show"]);
     assert!(!okay && out.contains("manual、assisted、auto"), "{out}");
 
-    let bad = good.replace("automation:\n", "automation:\n  mystery: 1\n");
+    let bad = good.replace("    encounters: {}", "    mystery: 1\n    encounters: {}");
     fs::write(save.join("save-meta.yaml"), &bad).unwrap();
     let (okay, out) = run(&r, &["settings", "automation", "show"]);
-    assert!(!okay && out.to_lowercase().contains("unknown field"), "{out}");
+    assert!(
+        !okay && out.to_lowercase().contains("unknown field"),
+        "{out}"
+    );
 
     // A duplicate scene id in the YAML mapping is refused, not silently last-wins.
     let bad = good.replace(
-        "  encounters:",
-        "  scenes:\n    crypt-entry:\n      npc: manual\n    crypt-entry:\n      npc: auto\n  encounters:",
+        "    scenes: {}",
+        "    scenes:\n      crypt-entry:\n        npc: manual\n      crypt-entry:\n        npc: auto",
     );
     fs::write(save.join("save-meta.yaml"), &bad).unwrap();
     let (okay, out) = run(&r, &["settings", "automation", "show"]);
-    assert!(!okay && out.contains("重复"), "{out}");
+    assert!(
+        !okay && (out.contains("重复") || out.to_lowercase().contains("duplicate")),
+        "{out}"
+    );
 
     // Restoring the original file makes the save usable again.
     fs::write(save.join("save-meta.yaml"), &good).unwrap();
@@ -470,10 +537,24 @@ fn migration_8_to_9_backs_up_logs_and_keeps_old_saves_equivalent() {
     let (r, save) = new_save("migrate");
     let old_meta = "# old save\nschema: 8\ntool: 1.2.0\ndeviation: {scope: 1, ratio: 10}\nsettings:\n  dice_display: false\n  style:\n    narration: short\n    detail: high\n    pace: fast\n    npc_voice: neutral\n    options: none\nmigrations: []\n";
     fs::write(save.join("save-meta.yaml"), old_meta).unwrap();
+    // The schema-8 file is deliberately hand-written for the fixture; make it
+    // the integrity baseline so the migration, not the fixture, is under test.
+    ok(
+        &r,
+        &[
+            "integrity",
+            "accept",
+            "--reason",
+            "test fixture: schema 8 baseline",
+        ],
+    );
 
     // A schema-8 save without automation still behaves like the charter defaults.
     let before = ok(&r, &["settings", "automation", "show"]);
-    assert!(before.contains("npc（NPC 对话）：assisted — 来源：存档默认"), "{before}");
+    assert!(
+        before.contains("npc（NPC 对话）：assisted — 来源：存档默认"),
+        "{before}"
+    );
     assert!(meta(&save).contains("schema: 8"));
 
     let dry = ok(&r, &["migrate", "--dry-run"]);
@@ -492,7 +573,10 @@ fn migration_8_to_9_backs_up_logs_and_keeps_old_saves_equivalent() {
     assert!(text.contains("narration: short"), "{text}");
     assert!(text.contains("npc_voice: neutral"), "{text}");
     // The automation defaults arrive explicitly.
-    assert!(text.contains("automation:") && text.contains("near_limit: assisted"), "{text}");
+    assert!(
+        text.contains("automation:") && text.contains("near_limit: assisted"),
+        "{text}"
+    );
     assert!(
         text.contains("from: 8") && text.contains("to: 9"),
         "8->9 migration recorded: {text}"
@@ -525,7 +609,10 @@ fn migration_8_to_9_backs_up_logs_and_keeps_old_saves_equivalent() {
             .filter(|l| l.contains("来源：存档默认"))
             .count()
     );
-    assert!(after.contains("npc（NPC 对话）：assisted — 来源：存档默认"), "{after}");
+    assert!(
+        after.contains("npc（NPC 对话）：assisted — 来源：存档默认"),
+        "{after}"
+    );
 
     // Integrity stays clean and a second run changes nothing.
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
@@ -572,11 +659,7 @@ fn start_digest_shows_the_effective_automation_summary() {
             "players narrate this scene",
         ],
     );
-    fs::write(
-        save.join("progress.yaml"),
-        "xp: {}\nscene: crypt-entry\n",
-    )
-    .unwrap();
+    fs::write(save.join("progress.yaml"), "xp: {}\nscene: Crypt Entry\n").unwrap();
 
     let out = ok(&r, &["start"]);
     assert!(out.contains("- 自动化："), "{out}");

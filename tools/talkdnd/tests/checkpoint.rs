@@ -87,20 +87,20 @@ fn restore(save: &Path, id: &str, yes: bool) -> anyhow::Result<()> {
     )
 }
 
-/// A checkpoint taken at schema 6 while the save is already back at 8, so
+/// A checkpoint taken at schema 6 while the save is already back at 9, so
 /// restore commits the old save-meta and then owes a normal migration.
 fn older_schema_checkpoint(save: &Path) -> String {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 8", "schema: 6"),
+        meta.replace("schema: 9", "schema: 6"),
     )
     .unwrap();
     let id = snapshot(save, None);
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 6", "schema: 8"),
+        meta.replace("schema: 6", "schema: 9"),
     )
     .unwrap();
     id
@@ -488,23 +488,23 @@ fn restore_of_an_older_schema_runs_the_normal_migration() {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 8", "schema: 6"),
+        meta.replace("schema: 9", "schema: 6"),
     )
     .unwrap();
     let id = snapshot(&save, None);
     let m = checkpoint::manifest(&save, &id).unwrap();
     assert_eq!(m.schema, 6);
-    // The save moves on to schema 8 after the snapshot.
+    // The save moves on to schema 9 after the snapshot.
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 6", "schema: 8"),
+        meta.replace("schema: 6", "schema: 9"),
     )
     .unwrap();
     restore(&save, &id, true).unwrap();
     // Restore first, then the normal migration: the save is current again.
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
-    assert!(meta.contains("schema: 8"), "{meta}");
+    assert!(meta.contains("schema: 9"), "{meta}");
     assert!(
         meta.contains("from: 6"),
         "migration must be recorded: {meta}"
@@ -520,7 +520,7 @@ fn restore_of_an_older_schema_runs_the_normal_migration() {
     );
     let log = fs::read_to_string(save.join("Sessions/2030-01-02-session-00-setup.md")).unwrap();
     assert!(log.contains("恢复检查点"), "{log}");
-    assert!(log.contains("schema 6→8"), "{log}");
+    assert!(log.contains("schema 6→9"), "{log}");
     let _ = fs::remove_dir_all(&root);
 }
 

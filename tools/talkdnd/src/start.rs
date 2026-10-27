@@ -587,6 +587,7 @@ pub fn digest(root: &Path, save: &Path, opts: &Options) -> Result<String> {
             "只叙述结果，不报骰值/DC/修正；`talkdnd log rolls` 可查"
         }
     );
+    d += &format!("- 自动化：{}\n", crate::settings::automation_digest(save)?);
     d += &rules_source_line(root, &rs);
     let pack_digest = crate::library::pack_digest_line(root, save)?;
     d += &format!("- 完整书内容包：{pack_digest}\n");

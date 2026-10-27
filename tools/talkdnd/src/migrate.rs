@@ -11,10 +11,13 @@
 //! `Rules/<edition>/<slug>/`, converted index in `index/`; see
 //! [`crate::library`]), 8 = per-save DM style settings (`settings.style`:
 //! narration, detail, pace, npc_voice, options; see [`Style`] and
-//! `LetsPlay/docs/narration.md`). `talkdnd start` and `talkdnd migrate` back the
-//! whole save up into `Saves/_backups/` before writing, then run the
-//! migrations in order. A save from a newer talkdnd is refused: this binary
-//! cannot know its format.
+//! `LetsPlay/docs/narration.md`), 9 = per-save automation switches
+//! (`settings.automation`: fixed categories with `manual` / `assisted` /
+//! `auto` levels, save defaults plus scene and encounter overrides; see
+//! [`Automation`] and `tools/talkdnd/docs/AUTOMATION.md`). `talkdnd start` and
+//! `talkdnd migrate` back the whole save up into `Saves/_backups/` before
+//! writing, then run the migrations in order. A save from a newer talkdnd is
+//! refused: this binary cannot know its format.
 //!
 //! Migrations only update the integrity manifest for files that were clean
 //! before; a file the DM had already hand-edited stays flagged.
@@ -27,12 +30,13 @@ use anyhow::{bail, Context, Result};
 use combat_sim::fsutil::atomic_write;
 use combat_sim::party::PartyState;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "save-meta.yaml";
-pub const CURRENT_SCHEMA: u32 = 8;
+pub const CURRENT_SCHEMA: u32 = 9;
 pub const BACKUP_DIR: &str = "_backups";
 
 /// How far this save may deviate from the published adventure.
@@ -127,6 +131,11 @@ pub struct Settings {
     /// feedback ever changes it, never automatic inference.
     #[serde(default)]
     pub style: Style,
+    /// Per-save automation switches (schema 9; see [`Automation`]). Older
+    /// saves migrate to the charter defaults with the usual backup; unknown
+    /// categories, levels or fields are refused when the save loads.
+    #[serde(default)]
+    pub automation: Automation,
 }
 
 fn dice_on() -> bool {
@@ -190,11 +199,340 @@ impl Style {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Automation switches (schema 9)
+// ---------------------------------------------------------------------------
+
+/// The three fixed automation levels, weakest first: `manual`, `assisted`,
+/// `auto`. `auto` performs the action without asking; `assisted` pauses and
+/// asks or warns; `manual` waits for an explicit request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Level {
+    Manual,
+    Assisted,
+    Auto,
+}
+
+pub const LEVELS: [&str; 3] = ["manual", "assisted", "auto"];
+
+impl Level {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Assisted => "assisted",
+            Self::Auto => "auto",
+        }
+    }
+
+    pub fn zh(self) -> &'static str {
+        match self {
+            Self::Manual => "手动",
+            Self::Assisted => "辅助",
+            Self::Auto => "自动",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "manual" => Ok(Self::Manual),
+            "assisted" => Ok(Self::Assisted),
+            "auto" => Ok(Self::Auto),
+            other => bail!("自动化级别只能是 manual、assisted、auto（收到 `{other}`）；存档未改动"),
+        }
+    }
+}
+
+impl fmt::Display for Level {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Level {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Level::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// One fixed, documented automation category. The default follows the
+/// charter's automation principles: no-choice resolution defaults to `auto`,
+/// player choices and reactions default to `assisted` and may never be `auto`,
+/// and near-limit conditions warn instead of resolving silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutomationCategory {
+    pub name: &'static str,
+    pub zh: &'static str,
+    pub default: Level,
+    /// Player-owned decisions: `auto` is refused for this category.
+    pub player_owned: bool,
+    pub note: &'static str,
+}
+
+pub const AUTOMATION_CATEGORIES: [AutomationCategory; 6] = [
+    AutomationCategory {
+        name: "resolution",
+        zh: "结算",
+        default: Level::Auto,
+        player_owned: false,
+        note: "检定、伤害、HP/资源记账等没有玩家选择的结算",
+    },
+    AutomationCategory {
+        name: "combat",
+        zh: "战斗流程",
+        default: Level::Auto,
+        player_owned: false,
+        note: "先攻、怪物回合、条件与移动等战斗流程",
+    },
+    AutomationCategory {
+        name: "npc",
+        zh: "NPC 对话",
+        default: Level::Assisted,
+        player_owned: false,
+        note: "NPC 的台词、语气与临场反应，DM 演绎后可被玩家打断",
+    },
+    AutomationCategory {
+        name: "player_choice",
+        zh: "玩家选择",
+        default: Level::Assisted,
+        player_owned: true,
+        note: "属于玩家角色的决定与选项，只能询问或手动，不能自动代做",
+    },
+    AutomationCategory {
+        name: "reaction",
+        zh: "玩家反应",
+        default: Level::Assisted,
+        player_owned: true,
+        note: "护盾术、幸运、激励、借机攻击等玩家反应，只能询问或手动",
+    },
+    AutomationCategory {
+        name: "near_limit",
+        zh: "接近上限",
+        default: Level::Assisted,
+        player_owned: false,
+        note: "HP 见底、法术位/资源将尽、力竭或负重接近上限时先警告",
+    },
+];
+
+pub fn automation_category(name: &str) -> Option<&'static AutomationCategory> {
+    AUTOMATION_CATEGORIES.iter().find(|c| c.name == name)
+}
+
+fn automation_version() -> u32 {
+    1
+}
+
+/// Per-save automation settings: one save-wide default per category plus
+/// optional partial overrides keyed by scene id and encounter id. Effective
+/// resolution order is encounter > scene > save default.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Automation {
+    /// On-disk schema of this block. Only version 1 is understood.
+    #[serde(default = "automation_version")]
+    pub version: u32,
+    /// Save-wide default level per category. Missing categories fall back to
+    /// [`AutomationCategory::default`]; unknown categories and levels fail.
+    #[serde(default, deserialize_with = "de_level_map")]
+    pub default: BTreeMap<String, Level>,
+    /// Scene overrides, keyed by scene id. Each map holds only the categories
+    /// it overrides.
+    #[serde(default, deserialize_with = "de_override_map")]
+    pub scenes: BTreeMap<String, BTreeMap<String, Level>>,
+    /// Encounter overrides, keyed by encounter id, with the same shape.
+    #[serde(default, deserialize_with = "de_override_map")]
+    pub encounters: BTreeMap<String, BTreeMap<String, Level>>,
+}
+
+impl Default for Automation {
+    fn default() -> Self {
+        let mut automation = Self {
+            version: 1,
+            default: BTreeMap::new(),
+            scenes: BTreeMap::new(),
+            encounters: BTreeMap::new(),
+        };
+        automation.fill_defaults();
+        automation
+    }
+}
+
+impl Automation {
+    /// Write the charter default for every category that has no explicit
+    /// save default yet. Existing values and overrides are preserved.
+    pub fn fill_defaults(&mut self) {
+        for category in AUTOMATION_CATEGORIES {
+            self.default
+                .entry(category.name.to_string())
+                .or_insert(category.default);
+        }
+    }
+
+    pub fn default_level(&self, category: &str) -> Level {
+        self.default
+            .get(category)
+            .copied()
+            .or_else(|| automation_category(category).map(|c| c.default))
+            .unwrap_or(Level::Assisted)
+    }
+
+    /// Validate a block read from disk or built by the CLI. Unknown
+    /// categories, unknown levels, illegal ids, empty override maps and
+    /// `auto` on player-owned categories are refused with an actionable
+    /// error; nothing is silently dropped.
+    pub fn check(&self) -> Result<()> {
+        if self.version != 1 {
+            bail!(
+                "automation.version 只能是 1（收到 {}）；请更新 talkdnd 后再打开这个存档",
+                self.version
+            );
+        }
+        check_levels("存档默认", &self.default, false)?;
+        for (id, levels) in &self.scenes {
+            check_id("场景", id)?;
+            if levels.is_empty() {
+                bail!("场景 `{id}` 的自动化覆盖为空；请删除这个覆盖或写入至少一个类别");
+            }
+            check_levels(&format!("场景 {id}"), levels, true)?;
+        }
+        for (id, levels) in &self.encounters {
+            check_id("遭遇", id)?;
+            if levels.is_empty() {
+                bail!("遭遇 `{id}` 的自动化覆盖为空；请删除这个覆盖或写入至少一个类别");
+            }
+            check_levels(&format!("遭遇 {id}"), levels, true)?;
+        }
+        Ok(())
+    }
+}
+
+fn check_levels(scope: &str, levels: &BTreeMap<String, Level>, allow_partial: bool) -> Result<()> {
+    for (name, level) in levels {
+        let Some(category) = automation_category(name) else {
+            bail!(
+                "自动化类别只能是 {}（收到 `{name}`，位置：{scope}）；存档未改动",
+                AUTOMATION_CATEGORIES
+                    .iter()
+                    .map(|c| c.name)
+                    .collect::<Vec<_>>()
+                    .join("、")
+            );
+        };
+        if category.player_owned && *level == Level::Auto {
+            bail!(
+                "{} 不能设为 auto：玩家选择/反应绝不能自动代做（可用 assisted 或 manual）；存档未改动",
+                category.name
+            );
+        }
+    }
+    if !allow_partial && levels.is_empty() {
+        // An explicitly empty save-default map is not a valid document: every
+        // category has a charter default, and migration writes them all.
+        bail!("automation.default 不能为空；请运行 `talkdnd migrate` 或写入六个类别");
+    }
+    Ok(())
+}
+
+pub(crate) fn check_id(kind: &str, id: &str) -> Result<()> {
+    let trimmed = id.trim();
+    let valid_len = (1..=80).contains(&trimmed.chars().count());
+    let valid_chars = trimmed
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !valid_len || !valid_chars || trimmed == "." || trimmed == ".." {
+        bail!("{kind} id 只能是 1-80 个字母、数字、-、_ 或 .（收到 `{id}`）；存档未改动");
+    }
+    Ok(())
+}
+
+fn de_level_map<'de, D>(deserializer: D) -> Result<BTreeMap<String, Level>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct LevelMapVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for LevelMapVisitor {
+        type Value = BTreeMap<String, Level>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a mapping of automation category to manual/assisted/auto")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let mut out = BTreeMap::new();
+            while let Some((name, level)) = map.next_entry::<String, Level>()? {
+                if out.insert(name.clone(), level).is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "自动化类别 `{name}` 重复；存档未改动"
+                    )));
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_map(LevelMapVisitor)
+}
+
+#[derive(Default)]
+struct LevelMap(BTreeMap<String, Level>);
+
+impl<'de> Deserialize<'de> for LevelMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        de_level_map(deserializer).map(Self)
+    }
+}
+
+fn de_override_map<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, BTreeMap<String, Level>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OverrideVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for OverrideVisitor {
+        type Value = BTreeMap<String, BTreeMap<String, Level>>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a mapping of scene/encounter id to category levels")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let mut out = BTreeMap::new();
+            while let Some((id, levels)) = map.next_entry::<String, LevelMap>()? {
+                if out.insert(id.clone(), levels.0).is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "自动化覆盖 id `{id}` 重复；存档未改动"
+                    )));
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_map(OverrideVisitor)
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             dice_display: true,
             style: Style::default(),
+            automation: Automation::default(),
         }
     }
 }
@@ -235,6 +573,10 @@ pub fn load(save: &Path) -> Result<Option<SaveMeta>> {
             CURRENT_SCHEMA
         );
     }
+    meta.settings
+        .automation
+        .check()
+        .with_context(|| format!("invalid {}", p.display()))?;
     Ok(Some(meta))
 }
 
@@ -274,6 +616,8 @@ pub fn init_with_deviation(save: &Path, deviation: &Deviation) -> Result<()> {
 }
 
 pub(crate) fn write_meta(save: &Path, meta: &SaveMeta) -> Result<()> {
+    // Fail closed on any programmatic write too, not only on serde load.
+    meta.settings.automation.check()?;
     let text = format!(
         "# TalkDND save schema metadata (written by talkdnd; do not edit).\n# Backups from migrations live in Saves/_backups/.\n{}",
         serde_norway::to_string(meta)?
@@ -295,6 +639,8 @@ pub struct Report {
     pub settings_default: bool,
     /// 7→8: the old save had no style; the narration defaults are written.
     pub style_default: bool,
+    /// 8→9: the old save had no automation switches; charter defaults are written.
+    pub automation_default: bool,
     /// 5→6: companion sheets moved from NPCs/ to Characters/ ("old → new").
     pub companions: Vec<String>,
     /// 5→6: sheets/<id>.yaml files that got a `controller:` field ("id=controller").
@@ -338,6 +684,12 @@ impl Report {
                     "会写入桌面风格：{}（旧存档没有设置过；`talkdnd settings style show` 查看）",
                     Style::default().describe()
                 ));
+            }
+            if self.automation_default {
+                v.push(
+                    "会写入自动化设置：按章程默认（结算/战斗流程 auto，NPC/玩家选择/反应/接近上限 assisted；`talkdnd settings automation` 查看）"
+                        .into(),
+                );
             }
             if !self.companions.is_empty() {
                 v.push(format!(
@@ -384,6 +736,12 @@ impl Report {
                 "桌面风格：默认已写入（{}；`talkdnd settings style set <字段> <值> --reason <原因>` 修改）",
                 Style::default().describe()
             ));
+        }
+        if self.automation_default {
+            v.push(
+                "自动化设置：章程默认已写入（结算/战斗流程 auto，NPC/玩家选择/反应/接近上限 assisted；`talkdnd settings automation` 查看与修改）"
+                    .into(),
+            );
         }
         if !self.companions.is_empty() {
             v.push(format!(
@@ -432,6 +790,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         deviation_default: from < 4,
         settings_default: from < 5,
         style_default: from < 8,
+        automation_default: from < 9,
         ..Default::default()
     };
     if dry_run {
@@ -558,6 +917,17 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             backup: backup.clone(),
         });
     }
+    if from < 9 {
+        // Write every charter default explicitly; a partial block that was
+        // already present keeps its values and gets the missing categories.
+        meta.settings.automation.fill_defaults();
+        meta.migrations.push(Migration {
+            from: from.max(8),
+            to: 9,
+            date: date.clone(),
+            backup: backup.clone(),
+        });
+    }
     write_meta(save, &meta)?;
 
     let deviation_note = if from < 4 {
@@ -575,6 +945,11 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     } else {
         ""
     };
+    let automation_note = if from < 9 {
+        "；自动化设置默认（结算/战斗流程 auto，其余 assisted）"
+    } else {
+        ""
+    };
     let companion_note = if report.companions.is_empty() {
         String::new()
     } else {
@@ -586,7 +961,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         format!("；书本路径改到一书一文件夹：{}", report.books.join("，"))
     };
     let text = format!(
-        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{style_note}{companion_note}{books_note}",
+        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{style_note}{automation_note}{companion_note}{books_note}",
         chrono::Local::now().format("%H:%M")
     );
     if let Some(log) = save::latest_log(save) {
@@ -1111,11 +1486,11 @@ mod tests {
         let root = root("v1");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (1, 8));
+        assert_eq!((report.from, report.to), (1, 9));
         assert!(report.deviation_default);
         assert_eq!(report.sheets, vec!["hero".to_string()]);
         assert!(charsheet::path(&save, "hero").is_file());
-        assert_eq!(meta(&save).schema, 8);
+        assert_eq!(meta(&save).schema, 9);
         assert_eq!(meta(&save).deviation.scope, 0);
         assert_eq!(meta(&save).deviation.ratio, None);
         assert!(meta(&save)
@@ -1141,7 +1516,7 @@ mod tests {
         assert!(!backups[0].join("_backups").exists());
 
         let log = fs::read_to_string(save.join("Sessions/2030-01-01-session-00.md")).unwrap();
-        assert!(log.contains("存档结构迁移 schema 1→8"), "{log}");
+        assert!(log.contains("存档结构迁移 schema 1→9"), "{log}");
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
 
@@ -1165,7 +1540,7 @@ mod tests {
         let root = root("dry");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, true).unwrap();
-        assert_eq!((report.from, report.to), (1, 8));
+        assert_eq!((report.from, report.to), (1, 9));
         assert!(report.dry_run && report.sheets == vec!["hero".to_string()]);
         assert!(!path(&save).is_file());
         assert!(!charsheet::path(&save, "hero").is_file());
@@ -1194,8 +1569,8 @@ mod tests {
         fs::write(save.join("progress.yaml"), edited).unwrap();
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (2, 8));
-        assert!(meta(&save).schema == 8);
+        assert_eq!((report.from, report.to), (2, 9));
+        assert!(meta(&save).schema == 9);
         let changes = combat_sim::integrity::changes(&save).unwrap();
         assert!(
             changes
@@ -1288,20 +1663,20 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (3, 8));
+        assert_eq!((report.from, report.to), (3, 9));
         assert!(report.deviation_default);
         assert!(report
             .lines()
             .iter()
             .any(|l| l.contains("scope 0") && l.contains("偏离度")));
         let m = meta(&save);
-        assert_eq!(m.schema, 8);
+        assert_eq!(m.schema, 9);
         assert_eq!(m.deviation.scope, 0);
         assert_eq!(m.deviation.ratio, None);
         assert!(m.migrations.iter().any(|x| x.from == 3 && x.to == 4));
         assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
         let log = fs::read_to_string(save.join("Sessions/2030-04-05-session-00.md")).unwrap();
-        assert!(log.contains("schema 3→8"), "{log}");
+        assert!(log.contains("schema 3→9"), "{log}");
         assert!(log.contains("scope 0"), "{log}");
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
             .unwrap()
@@ -1353,12 +1728,12 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (4, 8));
+        assert_eq!((report.from, report.to), (4, 9));
         assert!(!report.deviation_default);
         assert!(report.settings_default);
         assert!(report.style_default);
         let m = meta(&save);
-        assert_eq!(m.schema, 8);
+        assert_eq!(m.schema, 9);
         assert_eq!(m.deviation.scope, 2);
         assert_eq!(m.deviation.ratio, Some(15));
         assert!(m.settings.dice_display);
@@ -1367,10 +1742,12 @@ mod tests {
         assert!(m.migrations.iter().any(|x| x.from == 5 && x.to == 6));
         assert!(m.migrations.iter().any(|x| x.from == 6 && x.to == 7));
         assert!(m.migrations.iter().any(|x| x.from == 7 && x.to == 8));
-        assert_eq!(m.migrations.len(), 4);
+        assert!(m.migrations.iter().any(|x| x.from == 8 && x.to == 9));
+        assert_eq!(m.migrations.len(), 5);
+        assert_eq!(m.settings.automation, Automation::default());
         let log = fs::read_to_string(save.join("Sessions/2030-04-06-session-00.md")).unwrap();
         assert!(
-            log.contains("schema 4→8") && log.contains("骰子显示默认开"),
+            log.contains("schema 4→9") && log.contains("骰子显示默认开"),
             "{log}"
         );
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
@@ -1455,13 +1832,13 @@ mod tests {
         let kel_before = fs::read_to_string(save.join("NPCs/Kel-Stone.md")).unwrap();
 
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (5, 8));
+        assert_eq!((dry.from, dry.to), (5, 9));
         assert_eq!(dry.companions.len(), 3, "{:?}", dry.companions);
         assert!(save.join("NPCs/Kel-Stone.md").is_file());
         assert!(!root.join("Saves").join(BACKUP_DIR).exists());
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (5, 8));
+        assert_eq!((report.from, report.to), (5, 9));
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         for f in ["Kel-Stone.md", "mo.md", "_party.md"] {
             assert!(save.join("Characters").join(f).is_file(), "{f}");
@@ -1492,7 +1869,7 @@ mod tests {
         // The structured file still loads and resolves.
         let cf: charsheet::CharFile = serde_norway::from_str(&sheet).unwrap();
         assert_eq!(cf.controller(), charsheet::DM);
-        assert_eq!(meta(&save).schema, 8);
+        assert_eq!(meta(&save).schema, 9);
         assert!(meta(&save)
             .migrations
             .iter()
@@ -1506,7 +1883,7 @@ mod tests {
         assert!(backups[0].join("NPCs/Kel-Stone.md").is_file());
         let log = fs::read_to_string(save.join("Sessions/2030-05-01-session-00.md")).unwrap();
         assert!(
-            log.contains("schema 5→8") && log.contains("Characters/Kel-Stone.md"),
+            log.contains("schema 5→9") && log.contains("Characters/Kel-Stone.md"),
             "{log}"
         );
 
@@ -1578,7 +1955,7 @@ mod tests {
         )
         .unwrap();
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (6, 8));
+        assert_eq!((dry.from, dry.to), (6, 9));
         assert_eq!(dry.books, vec!["dm-plan.md".to_string()]);
         let report = ensure(&save, &root, false).unwrap();
         assert_eq!(report.books, vec!["dm-plan.md".to_string()]);
@@ -1593,7 +1970,7 @@ mod tests {
         assert!(fs::read_to_string(save.join("combat/campaign.yaml"))
             .unwrap()
             .contains("Adventures/keys-from-the-golden-vault/combat"));
-        assert_eq!(meta(&save).schema, 8);
+        assert_eq!(meta(&save).schema, 9);
         assert!(meta(&save)
             .migrations
             .iter()
@@ -1637,25 +2014,28 @@ mod tests {
         let save = v7_save(&root, "2030-06-01-01");
 
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (7, 8));
+        assert_eq!((dry.from, dry.to), (7, 9));
         assert!(dry.style_default);
         assert!(!path(&save).is_file() || meta(&save).schema == 7);
         assert!(!root.join("Saves").join(BACKUP_DIR).exists());
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (7, 8));
+        assert_eq!((report.from, report.to), (7, 9));
         assert!(report.style_default);
         assert!(report
             .backup
             .as_deref()
             .is_some_and(|b| b.starts_with("Saves/_backups/")));
         let m = meta(&save);
-        assert_eq!(m.schema, 8);
+        assert_eq!(m.schema, 9);
         // The rest of settings is untouched by the schema bump.
         assert!(!m.settings.dice_display);
         // The style fields arrive with the contract defaults.
         assert_eq!(m.settings.style, Style::default());
+        // The automation categories arrive with the charter defaults.
+        assert_eq!(m.settings.automation, Automation::default());
         assert!(m.migrations.iter().any(|x| x.from == 7 && x.to == 8));
+        assert!(m.migrations.iter().any(|x| x.from == 8 && x.to == 9));
         assert!(
             report
                 .lines()
@@ -1677,9 +2057,10 @@ mod tests {
 
         // The backup path and the style default are written to the log.
         let log = fs::read_to_string(save.join("Sessions/2030-06-01-session-00.md")).unwrap();
-        assert!(log.contains("schema 7→8"), "{log}");
+        assert!(log.contains("schema 7→9"), "{log}");
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(log.contains("桌面风格默认"), "{log}");
+        assert!(log.contains("自动化设置默认"), "{log}");
         assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
 
         // Idempotent: a second run changes nothing.
@@ -1697,7 +2078,7 @@ mod tests {
         let root = root("failwrite");
         let save = v7_save(&root, "2030-06-02-01");
         // A read-only save folder makes the atomic write of save-meta.yaml
-        // fail; nothing else in a 7→8 migration writes inside the save.
+        // fail; nothing else in a 7→9 migration writes inside the save.
         fs::set_permissions(&save, fs::Permissions::from_mode(0o555)).unwrap();
         let err = ensure(&save, &root, false).unwrap_err();
         fs::set_permissions(&save, fs::Permissions::from_mode(0o755)).unwrap();
@@ -1708,8 +2089,46 @@ mod tests {
         assert_eq!(meta(&save).settings.style, Style::default());
         // And the old save is still usable: the retry migrates normally.
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (7, 8));
-        assert_eq!(meta(&save).schema, 8);
+        assert_eq!((report.from, report.to), (7, 9));
+        assert_eq!(meta(&save).schema, 9);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_v8_to_v9_write_leaves_old_meta_and_the_backup() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = root("failwrite8");
+        let save = root.join("Saves/2030-06-03-01");
+        fs::create_dir_all(save.join("Sessions")).unwrap();
+        fs::write(save.join("Sessions/s.md"), "# log\n").unwrap();
+        fs::write(
+            save.join("save-meta.yaml"),
+            "schema: 8\ntool: 1.2.0\ndeviation: {scope: 0, ratio: null}\nsettings:\n  dice_display: false\n  style:\n    narration: short\n    detail: standard\n    pace: standard\n    npc_voice: distinct\n    options: 2-4\nmigrations: []\n",
+        )
+        .unwrap();
+        fs::set_permissions(&save, fs::Permissions::from_mode(0o555)).unwrap();
+        let err = ensure(&save, &root, false).unwrap_err();
+        fs::set_permissions(&save, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(err.to_string().contains("save-meta.yaml"), "{err}");
+        // The save-meta write never landed, so the schema-8 file and its
+        // dice/style settings still load; the pre-migration backup exists.
+        let m = meta(&save);
+        assert_eq!(m.schema, 8);
+        assert!(!m.settings.dice_display);
+        assert_eq!(m.settings.style.narration, "short");
+        assert_eq!(m.settings.automation, Automation::default());
+        let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1, "{backups:?}");
+        let backup_meta = fs::read_to_string(backups[0].join("save-meta.yaml")).unwrap();
+        assert!(backup_meta.contains("schema: 8"), "{backup_meta}");
+        // Retry on the repaired save completes the migration.
+        let report = ensure(&save, &root, false).unwrap();
+        assert_eq!((report.from, report.to), (8, 9));
+        assert_eq!(meta(&save).schema, 9);
         let _ = fs::remove_dir_all(&root);
     }
 
