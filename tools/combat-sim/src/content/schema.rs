@@ -16,6 +16,8 @@ use std::path::PathBuf;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::space::{AreaShape, SpatialProfile, TerrainVolume};
+
 // ---------------------------------------------------------------------------
 // Shared value types
 // ---------------------------------------------------------------------------
@@ -463,6 +465,10 @@ pub struct Rules {
     /// How `init --surprised` works (edition-dependent).
     #[serde(default)]
     pub surprise: Option<SurpriseRule>,
+    /// Optional spatial profile override for this ruleset. When absent, the
+    /// ruleset default from [`SpatialProfile::for_ruleset`] applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_profile: Option<SpatialProfile>,
 }
 
 /// Surprise handling. 2024: initiative with disadvantage. 2014: normal
@@ -502,6 +508,9 @@ impl Rules {
         }
         if other.surprise.is_some() {
             self.surprise = other.surprise;
+        }
+        if other.spatial_profile.is_some() {
+            self.spatial_profile = other.spatial_profile;
         }
     }
 }
@@ -743,6 +752,20 @@ pub struct Speed {
     pub fly: i32,
     #[serde(default)]
     pub swim: i32,
+    /// Whether this creature can hover (keeps altitude without spending speed).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hover: bool,
+    /// Burrow speed in feet; 0 means no burrow speed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub burrow: i32,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_zero(value: &i32) -> bool {
+    *value == 0
 }
 
 fn default_walk_speed() -> i32 {
@@ -756,6 +779,8 @@ impl Default for Speed {
             climb: 0,
             fly: 0,
             swim: 0,
+            hover: false,
+            burrow: 0,
         }
     }
 }
@@ -882,6 +907,12 @@ pub enum TargetSide {
 #[serde(deny_unknown_fields)]
 pub struct AreaSpec {
     pub radius: i32,
+    /// Optional shape. `None` keeps the legacy radius/sphere meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<AreaShape>,
+    /// Optional line/width dimension in feet for shapes that need one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_ft: Option<i32>,
 }
 
 /// A limited-use cost such as one spell slot.
@@ -1828,6 +1859,15 @@ pub struct Scene {
     pub triggers: Vec<SceneTrigger>,
     #[serde(default)]
     pub grid: Option<Grid>,
+    /// Default ceiling/terrain height for grid cells, in feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_height_ft: Option<i32>,
+    /// Solid terrain blocks anchored on the grid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terrain_volumes: Vec<TerrainVolume>,
+    /// Scene-level spatial rules override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_profile: Option<SpatialProfile>,
     #[serde(default)]
     pub notes: Option<String>,
     #[serde(default)]
@@ -2067,6 +2107,9 @@ pub struct GridCell {
     pub elevation: Option<i32>,
     #[serde(default)]
     pub zone: Option<String>,
+    /// Height of the obstacle in this cell, in feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_ft: Option<i32>,
 }
 
 // ---------------------------------------------------------------------------
