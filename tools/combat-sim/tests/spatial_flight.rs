@@ -1284,7 +1284,7 @@ fn legacy_grid_scene_stays_legacy_until_spatial_state_is_present() {
 // AC-8: real TASK-0094 hover/burrow data reaches the capability seam
 // ---------------------------------------------------------------------------
 //
-// The 2014 data lives in the hand-maintained `srd-monsters.yaml`; the generated
+// The 2014 real data lives in the tracked `srd-monsters.yaml`; the generated
 // `.pack.json` is a separate artifact and is not used as the source of truth
 // here. Loading the real 2014 fixture registry matches the #178 test and keeps
 // this test independent of pack regeneration.
