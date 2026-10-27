@@ -283,7 +283,22 @@ fn spatial_query_enabled(state: &EncounterState) -> bool {
 
 fn spatial_body_for(state: &EncounterState, index: usize) -> Option<SpatialBody> {
     let combatant = state.combatants.get(index)?;
-    let pose = combatant.spatial_pose()?;
+    let mut pose = combatant.spatial_pose()?;
+    // A pre-P1 combatant has no explicit pose. `spatial_pose` derives z=0;
+    // add the scene floor so an elevated cell is not treated as ground level.
+    if combatant.pose.is_none() {
+        if let Some(cell) = state
+            .scene
+            .as_deref()
+            .and_then(GridMap::parse)
+            .and_then(|grid| {
+                grid.cell_at(pose.cell.x, pose.cell.y)
+                    .map(|cell| cell.elevation.unwrap_or(0))
+            })
+        {
+            pose.cell.z = cell.saturating_add(combatant.vertical_state().altitude_ft);
+        }
+    }
     let height = HeightProfile::default()
         .resolve(combatant.creature.size(), None)
         .ok()?
@@ -453,9 +468,11 @@ fn spatial_pose_for_position(state: &EncounterState, position: &Position) -> Opt
             if let Some(pose) = state
                 .combatants
                 .iter()
-                .filter(|combatant| !combatant.dormant && !combatant.is_dead())
-                .find(|combatant| combatant.cell() == Some([*x, *y]))
-                .and_then(CombatantState::spatial_pose)
+                .enumerate()
+                .filter(|(_, combatant)| !combatant.dormant && !combatant.is_dead())
+                .find(|(_, combatant)| combatant.cell() == Some([*x, *y]))
+                .and_then(|(index, _)| spatial_body_for(state, index))
+                .map(|body| body.pose)
             {
                 return Some(pose);
             }
@@ -2963,8 +2980,12 @@ fn resolve_attack_inner(
         (attacker_position.as_ref(), target_position.as_ref());
     let spatial = spatial_query_enabled(state);
     let distance = if spatial {
-        spatial_body_distance(state, attacker, target)
-            .ok_or_else(|| anyhow!("no spatial body for the combatants"))?
+        match spatial_body_distance(state, attacker, target) {
+            Some(distance) => distance,
+            None => space
+                .distance(attacker_position, target_position)
+                .ok_or_else(|| anyhow!("no path between the combatants"))?,
+        }
     } else {
         space
             .distance(attacker_position, target_position)
@@ -6505,6 +6526,12 @@ fn spatial_movement_map(
     plane_z: i32,
     flying: bool,
 ) -> Result<MovementMap> {
+    let wall_height = state
+        .scene
+        .as_deref()
+        .and_then(|scene| scene.cell_height_ft)
+        .unwrap_or(10)
+        .max(1);
     let mut cells = Vec::with_capacity((grid.width * grid.height) as usize);
     for y in 0..grid.height {
         for x in 0..grid.width {
@@ -6514,9 +6541,18 @@ fn spatial_movement_map(
             let floor = cell.elevation.unwrap_or(0);
             let mut movement = MovementCell::open();
             movement.elevation_ft = if flying { plane_z } else { floor };
-            movement.difficult = cell.difficult;
-            if cell.wall {
+            movement.difficult = cell.difficult && !flying;
+            if flying && floor > plane_z {
+                // A flyer cannot pass through a floor above its feet.
                 movement.blocked = true;
+            }
+            if cell.wall {
+                // A wall is solid up to its own height; a flyer above that
+                // height passes over it.
+                let top = floor.saturating_add(cell.height_ft.unwrap_or(wall_height));
+                if plane_z < top {
+                    movement.blocked = true;
+                }
             } else if let Some(height) = cell.height_ft {
                 // The obstacle occupies `floor..floor+height`; feet at or
                 // above its top pass over it.
@@ -7456,7 +7492,31 @@ pub fn fly(
     let current = state.combatants[index].vertical_state();
     let capability = FlightCapability::from_speed(&state.combatants[index].creature.speed());
     let name = state.combatants[index].name.clone();
+    let height = HeightProfile::default()
+        .resolve(state.combatants[index].creature.size(), None)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let rules = FlightRules::try_for_ruleset(Some(&state.content.ruleset))
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let airborne = matches!(current.flight, FlightState::Flying | FlightState::Hovering);
+    // A grounded creature may already stand on a platform or terrain volume.
+    let current_surface = pose.cell.z.max(floor);
+    let start = SpatialPose {
+        cell: CellPos {
+            x: pose.cell.x,
+            y: pose.cell.y,
+            z: current_surface,
+        },
+        ..pose
+    };
     if altitude_ft == 0 {
+        let landing_z = if airborne {
+            FallResolver::new(&map, rules)
+                .vertical_move(&start, floor, height, &capability, current.flight)
+                .map_err(|error| anyhow!(error.to_string()))?
+                .allowed_elevation_ft
+        } else {
+            current_surface
+        };
         let mut vertical = current;
         vertical.flight = FlightState::Grounded;
         vertical.altitude_ft = 0;
@@ -7468,52 +7528,27 @@ pub fn fly(
             cell: CellPos {
                 x: pose.cell.x,
                 y: pose.cell.y,
-                z: floor,
+                z: landing_z,
             },
             ..pose
         });
-        log.log(format_args!("{name} lands at {} ft", floor));
+        log.log(format_args!("{name} lands at {landing_z} ft"));
         return Ok(());
     }
-    let airborne = matches!(current.flight, FlightState::Flying | FlightState::Hovering);
-    let start_z = if airborne {
-        pose.cell.z.max(floor.saturating_add(current.altitude_ft))
-    } else {
-        floor
-    };
-    let start = SpatialPose {
-        cell: CellPos {
-            x: pose.cell.x,
-            y: pose.cell.y,
-            z: start_z,
-        },
-        ..pose
-    };
     let action = if airborne {
         crate::space::FlightAction::Fly
     } else {
         crate::space::FlightAction::TakeOff
     };
-    let next_flight = crate::space::transition_flight(
-        current.flight,
-        action,
-        &capability,
-        start_z.saturating_sub(floor),
-    )
-    .map_err(|error| anyhow!(error.to_string()))?;
-    let height = HeightProfile::default()
-        .resolve(state.combatants[index].creature.size(), None)
-        .map_err(|error| anyhow!(error.to_string()))?;
-    let rules = FlightRules::try_for_ruleset(Some(&state.content.ruleset))
-        .map_err(|error| anyhow!(error.to_string()))?;
+    let next_flight =
+        crate::space::transition_flight(current.flight, action, &capability, current.altitude_ft)
+            .map_err(|error| anyhow!(error.to_string()))?;
+    // An airborne creature's command altitude is above the map floor; a
+    // ground take-off starts from the surface it stands on.
+    let base = if airborne { floor } else { current_surface };
+    let target = base.saturating_add(altitude_ft);
     let movement = FallResolver::new(&map, rules)
-        .vertical_move(
-            &start,
-            floor.saturating_add(altitude_ft),
-            height,
-            &capability,
-            next_flight,
-        )
+        .vertical_move(&start, target, height, &capability, next_flight)
         .map_err(|error| anyhow!(error.to_string()))?;
     if movement.blocked {
         if let Some(ceiling) = &movement.ceiling {
@@ -7528,9 +7563,10 @@ pub fn fly(
             ));
         }
     }
+    let reference = if airborne { floor } else { current_surface };
     let mut vertical = current;
     vertical.flight = next_flight;
-    vertical.altitude_ft = (movement.allowed_elevation_ft - floor).max(0);
+    vertical.altitude_ft = (movement.allowed_elevation_ft - reference).max(0);
     vertical
         .validate()
         .map_err(|error| anyhow!(error.to_string()))?;

@@ -856,6 +856,55 @@ fn fly_updates_pose_and_vertical_state_and_stops_at_the_ceiling() {
     assert_eq!(state.combatants[0].pose.expect("pose").cell.z, 0);
 }
 
+/// A creature standing on a terrain platform takes off from the platform and
+/// lands back on it; `fly 0` must not drop through the platform to the map
+/// floor.
+#[test]
+fn fly_takes_off_from_and_lands_on_a_platform() {
+    let scene = scene_with(
+        &[".."],
+        json!({".": {"elevation": 0}}),
+        json!({"terrain_volumes": [{
+            "id": "platform",
+            "cell": {"x": 0, "y": 0, "z": 10},
+            "footprint": {"width": 1, "depth": 1},
+            "height_ft": 1
+        }]}),
+    );
+    let mut platform_stander = combatant(
+        "Flyer",
+        creature("synthetic-flyer", Size::Medium, 30, false, no_attacks()),
+        "party",
+        0,
+        0,
+        0,
+        FlightState::Grounded,
+        (1, 1),
+        &[],
+    );
+    platform_stander.pose.as_mut().expect("pose").cell.z = 11;
+    let mut state = state_with(registry("2024"), vec![platform_stander], scene, spatial());
+    let mut log = Vec::new();
+    engine::fly(&mut state, "Flyer", 10, &mut log).expect("take off from the platform");
+    assert_eq!(state.combatants[0].pose.expect("pose").cell.z, 21);
+    assert_eq!(
+        state.combatants[0].vertical.expect("vertical").altitude_ft,
+        10
+    );
+
+    let mut log = Vec::new();
+    engine::fly(&mut state, "Flyer", 0, &mut log).expect("land");
+    assert_eq!(
+        state.combatants[0].vertical.expect("vertical").flight,
+        FlightState::Grounded
+    );
+    assert_eq!(
+        state.combatants[0].pose.expect("pose").cell.z,
+        11,
+        "the platform is the landing surface"
+    );
+}
+
 /// `fall_with_checks` rolls R-09 for short falls and applies P4 damage and
 /// landing state; a 20-ft drop is outside R-09 and rolls only damage.
 #[test]
