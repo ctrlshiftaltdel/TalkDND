@@ -34,6 +34,50 @@ use std::path::{Path, PathBuf};
 pub const INDEX_DIR: &str = "index";
 pub const LEGACY_INDEX_DIR: &str = ".md";
 pub const EDITIONS: [&str; 2] = ["2014", "2024"];
+/// The three full rulebooks the v1.2 full packs cover.
+pub const BOOK_KINDS: [&str; 3] = ["phb", "dmg", "mm"];
+/// Full-book pack files the player dropped here (`full-<edition>-<book>`).
+pub const FULL_PACK_DIR: &str = "Rules/packs";
+
+/// One book found under `Rules/<edition>/`, identified from its converted
+/// front matter. The record never contains book text or an absolute path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookRecord {
+    #[serde(default)]
+    pub edition: Option<String>,
+    #[serde(default)]
+    pub book: Option<String>,
+    pub status: BookStatus,
+    /// Index folder or book folder, relative to the play root, `/`-separated.
+    pub source: String,
+    /// `content` or `manual` (the player chose after an ambiguous scan).
+    pub method: String,
+    /// Short reason with counts/features only; never book prose.
+    pub evidence: String,
+    /// mtime+length of the converted Markdown, used only to avoid re-reading
+    /// unchanged front matter. Never a PDF hash.
+    #[serde(default)]
+    pub stamp: String,
+    /// Player-selectable candidates when the scan is ambiguous (`2014-phb`).
+    #[serde(default)]
+    pub candidates: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BookStatus {
+    Identified,
+    Ambiguous,
+    Unknown,
+    SrdOnly,
+    MissingIndex,
+}
+
+/// Scan `Rules/2014/` and `Rules/2024/` and identify each converted book from
+/// its first pages. The folder and file names are never used as evidence.
+pub fn scan_books(_root: &Path) -> Result<Vec<BookRecord>> {
+    Ok(Vec::new())
+}
 /// Program data under `Rules/` that is not a book.
 pub const RULES_PROGRAM_DIRS: [&str; 3] = ["chargen", "combat", "defaults"];
 /// Book-folder content that is not a book file.
