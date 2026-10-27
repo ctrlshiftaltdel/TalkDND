@@ -29,9 +29,24 @@ use crate::state::EncounterState;
 const DEFAULT_RESOURCE_THRESHOLD: f64 = 1.2;
 const NEGATIVE: f64 = -1.0e9;
 
+/// Which decision procedure a caller opts into.
+///
+/// The legacy heuristic remains the default until P8 (quality gate) decides
+/// whether the utility planner can become the default. Keeping the switch in
+/// `ai.rs` lets benchmarks compare both without touching the save schema.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AiStrategy {
+    /// The pre-P6 heuristic. This is also the execution-failure fallback.
+    #[default]
+    LegacyHeuristic,
+    /// Structured candidate generation and utility scoring.
+    Utility,
+}
+
 /// Prepared AI plans for every combatant of one encounter template.
 pub struct Ai {
     plans: Vec<CombatantPlan>,
+    strategy: AiStrategy,
 }
 
 #[derive(Clone)]
@@ -192,13 +207,23 @@ enum TargetChoice {
 impl Ai {
     /// Builds one plan per combatant from the encounter template.
     pub fn prepare(state: &EncounterState) -> Self {
+        Self::prepare_with(state, AiStrategy::LegacyHeuristic)
+    }
+
+    /// Builds plans and selects the decision procedure explicitly.
+    pub fn prepare_with(state: &EncounterState, strategy: AiStrategy) -> Self {
         let plans = state
             .combatants
             .iter()
             .enumerate()
             .map(|(index, _)| build_plan(state, index))
             .collect();
-        Self { plans }
+        Self { plans, strategy }
+    }
+
+    /// The strategy this prepared AI uses.
+    pub fn strategy(&self) -> AiStrategy {
+        self.strategy
     }
 
     /// Plays the current combatant's turn through the generic engine.
@@ -236,6 +261,26 @@ impl Ai {
             }
         }
         let plan = &self.plans[actor];
+        if self.strategy == AiStrategy::Utility {
+            match tactics::take_utility_turn(self, state, actor, plan, rng, log) {
+                Ok(true) => {
+                    state.combatants[actor].opening_used = true;
+                    return Ok(());
+                }
+                Ok(false) => {
+                    log.log(format_args!(
+                        "tactical planner found no executable candidate for {}; using heuristic fallback",
+                        state.combatants[actor].name
+                    ));
+                }
+                Err(error) => {
+                    log.log(format_args!(
+                        "tactical plan failed for {}: {error:#}; falling back to heuristic",
+                        state.combatants[actor].name
+                    ));
+                }
+            }
+        }
         let hp_pct = hp_percent(&state.combatants[actor]);
         let flee_below = plan.params.flee_below_pct.unwrap_or(0);
         if flee_below > 0 && hp_pct <= flee_below {
@@ -570,16 +615,17 @@ impl Ai {
         action.raw_damage + 1.0e-9 >= threshold * plan.best_at_will_damage
     }
 
-    fn score_action(
+    /// Raw, role-adjusted-free outcome of one action against one target.
+    ///
+    /// This is shared by the legacy score and the utility terms so both use
+    /// the same damage/heal/control estimates.
+    fn action_outcome(
         &self,
         state: &EncounterState,
         actor: usize,
         action: &PlannedAction,
         target: usize,
-    ) -> f64 {
-        if action.role == AiRole::Heal || action.role == AiRole::SelfHeal {
-            return 0.0;
-        }
+    ) -> Score {
         let mut score = match &action.kind {
             PlannedKind::Attack(attack) => {
                 let forecast = if engine::combatant_has_modifier_sources(state, actor)
@@ -641,6 +687,20 @@ impl Ai {
                 score.control *= count as f64;
             }
         }
+        score
+    }
+
+    fn score_action(
+        &self,
+        state: &EncounterState,
+        actor: usize,
+        action: &PlannedAction,
+        target: usize,
+    ) -> f64 {
+        if action.role == AiRole::Heal || action.role == AiRole::SelfHeal {
+            return 0.0;
+        }
+        let mut score = self.action_outcome(state, actor, action, target);
         match action.role {
             AiRole::Damage => {
                 score.damage += score.control * 0.35;
@@ -1978,4 +2038,2126 @@ fn best_option(
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// P6 tactical utility planner
+// ---------------------------------------------------------------------------
+//
+// The planner is deliberately opt-in (`AiStrategy::Utility`). `Ai::prepare`
+// keeps the legacy heuristic as the default and the legacy code stays the
+// fallback when a utility candidate cannot be executed. Everything below is
+// private except the structures the tests and P7 need to inspect.
+
+pub use tactics::{
+    BehaviourProfile, BehaviourRole, CandidateEvaluation, CandidateKind, MovePurpose,
+    RejectedCandidate, TacticalPlan, TargetProfile, UtilityTerms, UtilityWeights,
+    MAX_MOVEMENT_CANDIDATES,
+};
+
+pub mod tactics {
+    use crate::content::schema::{
+        Activation, AiRole, AiTargeting, AttackKind, ConditionFlag, Cover, Effect, Interact,
+        RangePreference, SceneMode, TargetSide, TargetType,
+    };
+    use crate::dice::DiceRng;
+    use crate::engine::{self, LogSink};
+    use crate::space::{GridMap, Position, Space};
+    use crate::state::EncounterState;
+
+    use anyhow::{bail, Result};
+
+    use super::{
+        affordable, distance, hp_percent, option_for_basic_action, zone_position, Ai,
+        CombatantPlan, PlanEffect, PlannedAction, PlannedKind,
+    };
+    use crate::content::schema::BasicAction;
+
+    /// Hard cap on distinct movement waypoints generated in one turn.
+    ///
+    /// The planner never asks the geometry kernel for "all reachable cells": it
+    /// builds a small set of tactical anchors (guard/flee/objective zones,
+    /// target/ally rings, cover neighbours) and keeps the first
+    /// `MAX_MOVEMENT_CANDIDATES` legal ones in deterministic order.
+    pub const MAX_MOVEMENT_CANDIDATES: usize = 8;
+
+    const MAX_CANDIDATES: usize = 128;
+    const MAX_REJECTED: usize = 64;
+    const RESCUE_MULTIPLIER: f64 = 2.5;
+
+    /// Explicit strategy weights. P6 keeps these in code on purpose: the task
+    /// forbids `content/schema.rs` changes, so a data-driven policy is a later
+    /// task. No creature/class/spell name appears here.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct UtilityWeights {
+        pub expected_damage: f64,
+        pub ally_risk_reduction: f64,
+        pub healing: f64,
+        pub control: f64,
+        pub objective_progress: f64,
+        pub resource_opportunity_cost: f64,
+        pub cover_positioning: f64,
+        pub cooperation: f64,
+        pub retreat_alert_cost: f64,
+        pub behaviour_consistency: f64,
+        pub movement_cost: f64,
+    }
+
+    impl UtilityWeights {
+        pub const DEFAULT: Self = Self {
+            expected_damage: 1.0,
+            ally_risk_reduction: 1.4,
+            healing: 1.2,
+            control: 2.2,
+            objective_progress: 6.0,
+            resource_opportunity_cost: 1.5,
+            cover_positioning: 2.0,
+            cooperation: 1.2,
+            retreat_alert_cost: 1.5,
+            behaviour_consistency: 1.0,
+            movement_cost: 0.05,
+        };
+    }
+
+    impl Default for UtilityWeights {
+        fn default() -> Self {
+            Self::DEFAULT
+        }
+    }
+
+    /// One candidate's utility decomposition. Positive terms add value; cost
+    /// terms are subtracted by [`Self::score`].
+    #[derive(Debug, Clone, Copy, Default, PartialEq)]
+    pub struct UtilityTerms {
+        pub expected_damage: f64,
+        pub ally_risk_reduction: f64,
+        pub healing: f64,
+        pub control: f64,
+        pub objective_progress: f64,
+        pub resource_opportunity_cost: f64,
+        pub cover_positioning: f64,
+        pub cooperation: f64,
+        pub retreat_alert_cost: f64,
+        pub behaviour_consistency: f64,
+        pub movement_cost: f64,
+    }
+
+    impl UtilityTerms {
+        pub fn score(&self, weights: &UtilityWeights) -> f64 {
+            weights.expected_damage * self.expected_damage
+                + weights.ally_risk_reduction * self.ally_risk_reduction
+                + weights.healing * self.healing
+                + weights.control * self.control
+                + weights.objective_progress * self.objective_progress
+                - weights.resource_opportunity_cost * self.resource_opportunity_cost
+                + weights.cover_positioning * self.cover_positioning
+                + weights.cooperation * self.cooperation
+                - weights.retreat_alert_cost * self.retreat_alert_cost
+                + weights.behaviour_consistency * self.behaviour_consistency
+                - weights.movement_cost * self.movement_cost
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum BehaviourRole {
+        Guardian,
+        Escort,
+        Retreat,
+        Support,
+        Controller,
+        Skirmisher,
+        Striker,
+    }
+
+    impl BehaviourRole {
+        pub fn as_str(self) -> &'static str {
+            match self {
+                Self::Guardian => "guardian",
+                Self::Escort => "escort",
+                Self::Retreat => "retreat",
+                Self::Support => "support",
+                Self::Controller => "controller",
+                Self::Skirmisher => "skirmisher",
+                Self::Striker => "striker",
+            }
+        }
+    }
+
+    /// Targeting policy separated from the behaviour role.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct TargetProfile {
+        pub targeting: AiTargeting,
+        pub avoid_conditions: Vec<String>,
+        pub attack_downed: bool,
+    }
+
+    /// Read-only description of what this combatant is trying to do.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct BehaviourProfile {
+        pub role: BehaviourRole,
+        pub target: TargetProfile,
+        pub guard_zone: Option<String>,
+        pub flee_zone: Option<String>,
+        pub leash: Option<i32>,
+        pub range_preference: Option<RangePreference>,
+        pub heal_ally_below_pct: Option<i32>,
+        pub heal_downed: bool,
+        pub self_heal_below_pct: Option<i32>,
+        pub flee_below_pct: Option<i32>,
+        pub resource_threshold: f64,
+        pub opening: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MovePurpose {
+        HoldPoint,
+        Approach,
+        Cover,
+        Escort,
+        Objective,
+        Retreat,
+        Reposition,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum CandidateKind {
+        Action {
+            action_id: String,
+            target: Option<String>,
+            role: AiRole,
+            approach: Option<Position>,
+        },
+        Move {
+            purpose: MovePurpose,
+            to: Position,
+        },
+        Interact {
+            object_id: String,
+            approach: Option<Position>,
+        },
+        Wait,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct RejectedCandidate {
+        pub action_id: String,
+        pub target: Option<String>,
+        pub reason: String,
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Waypoint {
+        position: Position,
+        cost: i32,
+        purpose: MovePurpose,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct CandidateEvaluation {
+        pub kind: CandidateKind,
+        pub terms: UtilityTerms,
+        pub score: f64,
+        action_index: Option<usize>,
+        target_index: Option<usize>,
+        option: Option<usize>,
+        waypoint: Option<Waypoint>,
+        multiattack: bool,
+    }
+
+    impl CandidateEvaluation {
+        fn sort_key(&self) -> String {
+            match &self.kind {
+                CandidateKind::Action {
+                    action_id,
+                    target,
+                    role,
+                    approach,
+                } => format!(
+                    "0:{action_id}:{role:?}:{}:{}",
+                    target.as_deref().unwrap_or(""),
+                    position_key(approach.as_ref())
+                ),
+                CandidateKind::Move { purpose, to } => {
+                    format!("1:{purpose:?}:{}", position_key(Some(to)))
+                }
+                CandidateKind::Interact {
+                    object_id,
+                    approach,
+                } => format!("2:{object_id}:{}", position_key(approach.as_ref())),
+                CandidateKind::Wait => "9:wait".to_string(),
+            }
+        }
+    }
+
+    fn position_key(position: Option<&Position>) -> String {
+        match position {
+            Some(Position::Cell { x, y }) => format!("cell:{x},{y}"),
+            Some(Position::Zone { zone }) => format!("zone:{zone}"),
+            None => "here".to_string(),
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct TacticalPlan {
+        pub actor: usize,
+        pub profile: BehaviourProfile,
+        pub candidates: Vec<CandidateEvaluation>,
+        pub rejected: Vec<RejectedCandidate>,
+        pub selected_index: Option<usize>,
+    }
+
+    impl TacticalPlan {
+        pub fn selected(&self) -> Option<&CandidateEvaluation> {
+            self.selected_index
+                .and_then(|index| self.candidates.get(index))
+        }
+
+        /// Number of distinct movement destinations referenced by candidates.
+        /// This is the value bounded by [`MAX_MOVEMENT_CANDIDATES`].
+        pub fn movement_waypoint_count(&self) -> usize {
+            let mut positions: Vec<Position> = Vec::new();
+            for candidate in &self.candidates {
+                if let Some(waypoint) = &candidate.waypoint {
+                    if !positions.contains(&waypoint.position) {
+                        positions.push(waypoint.position.clone());
+                    }
+                }
+            }
+            positions.len()
+        }
+    }
+
+    impl Ai {
+        /// Plans the current turn without mutating state or consuming dice.
+        pub fn preview_turn(&self, state: &EncounterState) -> Option<TacticalPlan> {
+            let actor = state.current_index()?;
+            let plan = self.plans.get(actor)?;
+            if !can_act(state, actor) {
+                return None;
+            }
+            Some(Planner::new(self, state, actor, plan).build())
+        }
+
+        /// Executes the best still-legal candidate from a previously built
+        /// plan. Candidates are re-validated against the current state before
+        /// every engine call.
+        pub fn execute_tactical_plan(
+            &self,
+            state: &mut EncounterState,
+            plan: &TacticalPlan,
+            rng: &mut dyn DiceRng,
+            log: &mut dyn LogSink,
+        ) -> Result<bool> {
+            if plan.actor >= self.plans.len() {
+                return Ok(false);
+            }
+            let candidates: Vec<CandidateEvaluation> = plan.candidates.clone();
+            execute_candidates(self, state, plan.actor, &candidates, rng, log)
+        }
+    }
+
+    pub(super) fn take_utility_turn(
+        ai: &Ai,
+        state: &mut EncounterState,
+        actor: usize,
+        plan: &CombatantPlan,
+        rng: &mut dyn DiceRng,
+        log: &mut dyn LogSink,
+    ) -> Result<bool> {
+        let profile = build_profile(state, actor, plan);
+        let fleeing = profile.flee_below_pct.is_some_and(|threshold| {
+            threshold > 0 && hp_percent(&state.combatants[actor]) <= threshold
+        });
+
+        if fleeing {
+            let preview = Planner::new(ai, state, actor, plan).build();
+            let (defense, movement): (Vec<CandidateEvaluation>, Vec<CandidateEvaluation>) = preview
+                .candidates
+                .into_iter()
+                .filter(is_retreat_candidate)
+                .partition(is_defense_candidate);
+            // Disengage/Dash first so the retreat path does not eat an
+            // opportunity attack; then the movement candidate. Return whether
+            // either phase actually executed so a fully failed retreat still
+            // reaches the legacy fallback.
+            let defense_ok = execute_candidates(ai, state, actor, &defense, rng, log)?;
+            let movement_ok = execute_candidates(ai, state, actor, &movement, rng, log)?;
+            return Ok(defense_ok || movement_ok);
+        }
+
+        // Bonus-action support/defence first; this keeps the legacy economy
+        // (self-heal, disengage) without a second, hidden planner.
+        if !state.combatants[actor].bonus_action_used {
+            let preview = Planner::new(ai, state, actor, plan).build();
+            let bonus: Vec<CandidateEvaluation> = preview
+                .candidates
+                .into_iter()
+                .filter(|candidate| is_bonus_support(ai, state, actor, candidate))
+                .collect();
+            if !bonus.is_empty() {
+                let _ = execute_candidates(ai, state, actor, &bonus, rng, log)?;
+            }
+        }
+
+        let preview = Planner::new(ai, state, actor, plan).build();
+        execute_candidates(ai, state, actor, &preview.candidates, rng, log)
+    }
+
+    fn is_retreat_candidate(candidate: &CandidateEvaluation) -> bool {
+        match &candidate.kind {
+            CandidateKind::Move {
+                purpose: MovePurpose::Retreat,
+                ..
+            } => true,
+            CandidateKind::Action { role, .. } => *role == AiRole::Defense,
+            _ => false,
+        }
+    }
+
+    fn is_defense_candidate(candidate: &CandidateEvaluation) -> bool {
+        matches!(
+            &candidate.kind,
+            CandidateKind::Action {
+                role: AiRole::Defense,
+                ..
+            }
+        )
+    }
+
+    fn defense_option(action: &PlannedAction) -> Option<usize> {
+        if action.role != AiRole::Defense {
+            return None;
+        }
+        option_for_basic_action(action, BasicAction::Disengage)
+            .or_else(|| option_for_basic_action(action, BasicAction::Dash))
+    }
+
+    fn is_bonus_support(
+        ai: &Ai,
+        state: &EncounterState,
+        actor: usize,
+        candidate: &CandidateEvaluation,
+    ) -> bool {
+        let Some(index) = candidate.action_index else {
+            return false;
+        };
+        let Some(action) = ai.plans[actor].actions.get(index) else {
+            return false;
+        };
+        if action.role == AiRole::Defense && !is_threatened(state, actor) {
+            return false;
+        }
+        action.activation == Activation::Bonus
+            && matches!(
+                action.role,
+                AiRole::SelfHeal | AiRole::Defense | AiRole::Buff
+            )
+            && candidate.score > 0.0
+    }
+
+    fn is_threatened(state: &EncounterState, actor: usize) -> bool {
+        hp_percent(&state.combatants[actor]) < 60
+            || state.space().is_some_and(|space| {
+                state
+                    .combatants
+                    .iter()
+                    .enumerate()
+                    .any(|(index, combatant)| {
+                        index != actor
+                            && combatant.side != state.combatants[actor].side
+                            && !combatant.dormant
+                            && !combatant.is_dead()
+                            && !is_unaware(state, index)
+                            && combatant.hp > 0
+                            && space
+                                .distance(
+                                    &state.combatants[actor].position(),
+                                    &combatant.position(),
+                                )
+                                .is_some_and(|distance| distance <= 5)
+                    })
+            })
+    }
+
+    fn can_act(state: &EncounterState, actor: usize) -> bool {
+        let combatant = &state.combatants[actor];
+        !combatant.dormant
+            && !combatant.is_dead()
+            && combatant.hp > 0
+            && !combatant.is_dying()
+            && !engine::has_condition_flag(state, actor, ConditionFlag::Incapacitated)
+    }
+
+    /// Builds the behaviour/target profile for one actor.
+    fn build_profile(
+        state: &EncounterState,
+        actor: usize,
+        plan: &CombatantPlan,
+    ) -> BehaviourProfile {
+        let params = &plan.params;
+        let guard_zone = params.guard_zone.clone();
+        let fleeing = params.flee_below_pct.is_some_and(|threshold| {
+            threshold > 0 && hp_percent(&state.combatants[actor]) <= threshold
+        });
+        let ally_in_guard = guard_zone.as_deref().is_some_and(|zone| {
+            state
+                .combatants
+                .iter()
+                .enumerate()
+                .any(|(index, combatant)| {
+                    index != actor
+                        && combatant.side == state.combatants[actor].side
+                        && !combatant.is_dead()
+                        && combatant.zone == zone
+                })
+        });
+        let healing =
+            params.heal_ally_below_pct.unwrap_or(0) > 0 || params.heal_downed.unwrap_or(false);
+        let controller = plan
+            .actions
+            .iter()
+            .any(|action| action.role == AiRole::Control);
+        let skirmisher = plan
+            .actions
+            .iter()
+            .any(|action| action.role == AiRole::Defense)
+            || params.range_pref == Some(RangePreference::Ranged);
+        let role = if fleeing {
+            BehaviourRole::Retreat
+        } else if guard_zone.is_some() && ally_in_guard {
+            BehaviourRole::Escort
+        } else if guard_zone.is_some() {
+            BehaviourRole::Guardian
+        } else if healing {
+            BehaviourRole::Support
+        } else if controller {
+            BehaviourRole::Controller
+        } else if skirmisher {
+            BehaviourRole::Skirmisher
+        } else {
+            BehaviourRole::Striker
+        };
+        BehaviourProfile {
+            role,
+            target: TargetProfile {
+                targeting: params.targeting.unwrap_or(AiTargeting::Nearest),
+                avoid_conditions: params.avoid_targets_with.clone().unwrap_or_default(),
+                attack_downed: params.attack_downed.unwrap_or(false),
+            },
+            guard_zone,
+            flee_zone: params.flee_zone.clone(),
+            leash: params.leash,
+            range_preference: params.range_pref,
+            heal_ally_below_pct: params.heal_ally_below_pct,
+            heal_downed: params.heal_downed.unwrap_or(false),
+            self_heal_below_pct: params.self_heal_below_pct,
+            flee_below_pct: params.flee_below_pct,
+            resource_threshold: params
+                .resource_threshold
+                .unwrap_or(super::DEFAULT_RESOURCE_THRESHOLD),
+            opening: params.opening.clone().unwrap_or_default(),
+        }
+    }
+
+    struct Planner<'a> {
+        ai: &'a Ai,
+        state: &'a EncounterState,
+        actor: usize,
+        plan: &'a CombatantPlan,
+        profile: BehaviourProfile,
+        weights: UtilityWeights,
+        waypoints: Vec<Waypoint>,
+        candidates: Vec<CandidateEvaluation>,
+        rejected: Vec<RejectedCandidate>,
+    }
+
+    impl<'a> Planner<'a> {
+        fn new(
+            ai: &'a Ai,
+            state: &'a EncounterState,
+            actor: usize,
+            plan: &'a CombatantPlan,
+        ) -> Self {
+            Self {
+                ai,
+                state,
+                actor,
+                plan,
+                profile: build_profile(state, actor, plan),
+                weights: UtilityWeights::DEFAULT,
+                waypoints: Vec::new(),
+                candidates: Vec::new(),
+                rejected: Vec::new(),
+            }
+        }
+
+        fn build(mut self) -> TacticalPlan {
+            self.collect_waypoints();
+            self.generate_actions();
+            self.generate_multiattack();
+            self.generate_interactions();
+            self.generate_moves();
+            self.generate_wait();
+            self.candidates.sort_by(|left, right| {
+                right
+                    .score
+                    .total_cmp(&left.score)
+                    .then_with(|| left.sort_key().cmp(&right.sort_key()))
+            });
+            let selected_index = self.candidates.iter().position(|candidate| {
+                candidate.score > 0.0 || candidate.kind == CandidateKind::Wait
+            });
+            TacticalPlan {
+                actor: self.actor,
+                profile: self.profile,
+                candidates: self.candidates,
+                rejected: self.rejected,
+                selected_index,
+            }
+        }
+
+        fn fleeing(&self) -> bool {
+            self.profile.flee_below_pct.is_some_and(|threshold| {
+                threshold > 0 && hp_percent(&self.state.combatants[self.actor]) <= threshold
+            })
+        }
+
+        fn current_position(&self) -> Position {
+            self.state.combatants[self.actor].position()
+        }
+
+        fn blocked_positions(&self) -> Vec<Position> {
+            self.state
+                .combatants
+                .iter()
+                .enumerate()
+                .filter(|(index, combatant)| *index != self.actor && !combatant.is_dead())
+                .map(|(_, combatant)| combatant.position())
+                .collect()
+        }
+
+        fn observable_enemies(&self) -> Vec<usize> {
+            (0..self.state.combatants.len())
+                .filter(|&index| {
+                    index != self.actor
+                        && self.state.combatants[index].side
+                            != self.state.combatants[self.actor].side
+                        && !self.state.combatants[index].dormant
+                        && !self.state.combatants[index].is_dead()
+                        && (self.state.combatants[index].hp > 0
+                            || (self.profile.target.attack_downed && self.plan.monster))
+                        && !is_unaware(self.state, index)
+                })
+                .collect()
+        }
+
+        fn observable_allies(&self) -> Vec<usize> {
+            (0..self.state.combatants.len())
+                .filter(|&index| {
+                    index != self.actor
+                        && self.state.combatants[index].side
+                            == self.state.combatants[self.actor].side
+                        && !self.state.combatants[index].dormant
+                        && !self.state.combatants[index].is_dead()
+                })
+                .collect()
+        }
+
+        fn collect_waypoints(&mut self) {
+            let Some(space) = self.state.space() else {
+                return;
+            };
+            let start = self.current_position();
+            let blocked = self.blocked_positions();
+            let budget = self.state.combatants[self.actor].speed_left;
+            let mut anchors: Vec<(Position, MovePurpose)> =
+                vec![(start.clone(), MovePurpose::Reposition)];
+
+            if let Some(zone) = self.profile.guard_zone.as_deref() {
+                if let Some(position) = zone_position(&space, zone) {
+                    anchors.push((position, MovePurpose::HoldPoint));
+                }
+            }
+            if self.fleeing() {
+                if let Some(position) = self
+                    .profile
+                    .flee_zone
+                    .as_deref()
+                    .and_then(|zone| zone_position(&space, zone))
+                {
+                    anchors.push((position, MovePurpose::Retreat));
+                } else if let Some(position) = self.away_position(&space, &start, &blocked, budget)
+                {
+                    anchors.push((position, MovePurpose::Retreat));
+                }
+            }
+
+            for object in self.objective_objects() {
+                if let Some(position) = zone_position(&space, &object.zone) {
+                    anchors.push((position, MovePurpose::Objective));
+                }
+            }
+
+            if let Some(position) = self.cover_position(&space, &start) {
+                anchors.push((position, MovePurpose::Cover));
+            }
+
+            let enemies = self.observable_enemies();
+            for &enemy in enemies.iter().take(3) {
+                let position = self.state.combatants[enemy].position();
+                for anchor in neighbour_positions(&space, &position) {
+                    anchors.push((anchor, MovePurpose::Approach));
+                }
+            }
+            if let Some(&enemy) = enemies.first() {
+                let target = self.state.combatants[enemy].position();
+                if let Some(position) = toward_position(&space, &start, &target, budget) {
+                    anchors.push((position, MovePurpose::Approach));
+                }
+            }
+
+            for &ally in self.observable_allies().iter().take(2) {
+                let position = self.state.combatants[ally].position();
+                for anchor in neighbour_positions(&space, &position) {
+                    anchors.push((anchor, MovePurpose::Escort));
+                }
+            }
+
+            let mut seen: Vec<Position> = Vec::new();
+            for (position, purpose) in anchors {
+                if self.waypoints.len() >= MAX_MOVEMENT_CANDIDATES {
+                    break;
+                }
+                if seen.contains(&position) {
+                    continue;
+                }
+                seen.push(position.clone());
+                let Some(cost) = space.route_cost(&start, &position, &blocked) else {
+                    continue;
+                };
+                if cost > budget {
+                    continue;
+                }
+                self.waypoints.push(Waypoint {
+                    position,
+                    cost,
+                    purpose,
+                });
+            }
+        }
+
+        fn away_position(
+            &self,
+            space: &crate::space::SpaceView<'_>,
+            start: &Position,
+            blocked: &[Position],
+            budget: i32,
+        ) -> Option<Position> {
+            let enemy = self
+                .observable_enemies()
+                .into_iter()
+                .min_by_key(|&index| distance(Some(space), self.state, self.actor, index))?;
+            let enemy_position = self.state.combatants[enemy].position();
+            match (start, enemy_position) {
+                (Position::Zone { zone }, _) => {
+                    let scene = self.state.scene.as_deref()?;
+                    scene
+                        .zones
+                        .iter()
+                        .filter(|candidate| candidate.id != *zone)
+                        .filter_map(|candidate| {
+                            let position = Position::Zone {
+                                zone: candidate.id.clone(),
+                            };
+                            space
+                                .distance(start, &position)
+                                .map(|distance| (distance, position))
+                        })
+                        .max_by_key(|(distance, _)| *distance)
+                        .map(|(_, position)| position)
+                }
+                (Position::Cell { x, y }, Position::Cell { x: ex, y: ey }) => {
+                    let steps = (budget / 5).max(1);
+                    let dx = (x - ex).signum();
+                    let dy = (y - ey).signum();
+                    let destination = Position::cell(x + dx * steps, y + dy * steps);
+                    space.route_cost(start, &destination, blocked)?;
+                    Some(destination)
+                }
+                _ => None,
+            }
+        }
+
+        fn cover_position(
+            &self,
+            space: &crate::space::SpaceView<'_>,
+            start: &Position,
+        ) -> Option<Position> {
+            let (x, y) = start.cell_coords()?;
+            let scene = self.state.scene.as_deref()?;
+            let grid = GridMap::parse(scene)?;
+            for (dx, dy) in NEIGHBOURS {
+                let (nx, ny) = (x + dx, y + dy);
+                let Some(cell) = grid.cell_at(nx, ny) else {
+                    continue;
+                };
+                if cell.cover != Cover::None {
+                    let position = Position::cell(nx, ny);
+                    if space
+                        .route_cost(start, &position, &self.blocked_positions())
+                        .is_some()
+                    {
+                        return Some(position);
+                    }
+                }
+            }
+            None
+        }
+
+        fn objective_objects(&self) -> Vec<crate::content::schema::SceneObject> {
+            self.state
+                .scene
+                .as_deref()
+                .map(|scene| {
+                    scene
+                        .objects
+                        .iter()
+                        .filter(|object| object.interact.as_ref().is_some_and(has_objective_effect))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
+        fn generate_actions(&mut self) {
+            for (index, action) in self.plan.actions.iter().enumerate() {
+                if self.candidates.len() >= MAX_CANDIDATES {
+                    break;
+                }
+                if matches!(
+                    action.activation,
+                    Activation::Passive | Activation::Reaction
+                ) {
+                    continue;
+                }
+                if action.role == AiRole::None {
+                    self.reject(
+                        &action.id,
+                        None,
+                        "unsupported AI role (no valuation)".to_string(),
+                    );
+                    continue;
+                }
+                if let Some(reason) = unsupported_effects(action) {
+                    self.reject(&action.id, None, format!("unsupported effect: {reason}"));
+                    continue;
+                }
+                let targets = self.targets_for(action);
+                if targets.is_empty() {
+                    self.reject(
+                        &action.id,
+                        None,
+                        "no observable target for this action".to_string(),
+                    );
+                    continue;
+                }
+                for target in targets {
+                    if self.candidates.len() >= MAX_CANDIDATES {
+                        break;
+                    }
+                    if !self.target_allowed(action, target) {
+                        continue;
+                    }
+                    self.add_action_candidate(index, action, target);
+                }
+            }
+        }
+
+        fn generate_multiattack(&mut self) {
+            if self.plan.multiattack.is_empty() || self.candidates.len() >= MAX_CANDIDATES {
+                return;
+            }
+            let enemies = self.observable_enemies();
+            for target in enemies {
+                if self.candidates.len() >= MAX_CANDIDATES {
+                    break;
+                }
+                if let Some(reason) = self.multiattack_rejection(target) {
+                    self.reject("multiattack", Some(self.name(target)), reason);
+                    continue;
+                }
+                let terms = self.multiattack_terms(target, None);
+                if terms.score(&self.weights) <= 0.0 {
+                    continue;
+                }
+                self.candidates.push(CandidateEvaluation {
+                    kind: CandidateKind::Action {
+                        action_id: "multiattack".to_string(),
+                        target: Some(self.name(target)),
+                        role: AiRole::Damage,
+                        approach: None,
+                    },
+                    terms,
+                    score: terms.score(&self.weights),
+                    action_index: None,
+                    target_index: Some(target),
+                    option: None,
+                    waypoint: None,
+                    multiattack: true,
+                });
+            }
+        }
+
+        fn generate_interactions(&mut self) {
+            let Some(scene) = self.state.scene.as_deref() else {
+                return;
+            };
+            let space = self.state.space();
+            for object in &scene.objects {
+                if self.candidates.len() >= MAX_CANDIDATES {
+                    break;
+                }
+                let Some(interact) = object.interact.as_ref() else {
+                    if object.manual.is_some() {
+                        self.reject(
+                            &object.id,
+                            None,
+                            "manual scene interaction is not valued".to_string(),
+                        );
+                    }
+                    continue;
+                };
+                if !has_objective_effect(interact) {
+                    self.reject(
+                        &object.id,
+                        None,
+                        "interaction has no valued objective effect".to_string(),
+                    );
+                    continue;
+                }
+                let mut waypoint = None;
+                let mut legal = match &space {
+                    Some(space) => same_zone(self.state, space, self.actor, object.zone.as_str()),
+                    None => true,
+                };
+                if !legal {
+                    if let Some(space) = space.as_ref() {
+                        waypoint = self
+                            .waypoints
+                            .iter()
+                            .find(|waypoint| {
+                                zone_of_position(space, &waypoint.position).as_deref()
+                                    == Some(object.zone.as_str())
+                            })
+                            .cloned();
+                        legal = waypoint.is_some();
+                    }
+                }
+                if !legal {
+                    self.reject(
+                        &object.id,
+                        None,
+                        format!("no reachable approach to object zone `{}`", object.zone),
+                    );
+                    continue;
+                }
+                let urgency = self.objective_urgency(&object.zone);
+                let mut terms = UtilityTerms {
+                    objective_progress: 1.0 + urgency,
+                    behaviour_consistency: 0.8,
+                    ..UtilityTerms::default()
+                };
+                if let Some(waypoint) = &waypoint {
+                    terms.movement_cost = f64::from(waypoint.cost.max(0)) / 5.0;
+                }
+                let kind = CandidateKind::Interact {
+                    object_id: object.id.clone(),
+                    approach: waypoint.as_ref().map(|waypoint| waypoint.position.clone()),
+                };
+                self.candidates.push(CandidateEvaluation {
+                    kind,
+                    terms,
+                    score: terms.score(&self.weights),
+                    action_index: None,
+                    target_index: None,
+                    option: None,
+                    waypoint,
+                    multiattack: false,
+                });
+            }
+        }
+
+        fn generate_moves(&mut self) {
+            let Some(space) = self.state.space() else {
+                return;
+            };
+            let start = self.current_position();
+            let current_cover = cover_value(self.state, &space, &start, self.actor);
+            let current_threat = self.threat_at(&space, &start);
+            for waypoint in self.waypoints.clone() {
+                if self.candidates.len() >= MAX_CANDIDATES {
+                    break;
+                }
+                if waypoint.cost == 0 && waypoint.purpose == MovePurpose::Reposition {
+                    continue;
+                }
+                let cover = cover_value(self.state, &space, &waypoint.position, self.actor);
+                let threat = self.threat_at(&space, &waypoint.position);
+                let retreat = waypoint.purpose == MovePurpose::Retreat;
+                let terms = UtilityTerms {
+                    objective_progress: match waypoint.purpose {
+                        MovePurpose::HoldPoint => 0.8,
+                        MovePurpose::Retreat => 1.0,
+                        MovePurpose::Objective => 0.7,
+                        MovePurpose::Escort => 0.6,
+                        MovePurpose::Cover => 0.4,
+                        MovePurpose::Approach => 0.3,
+                        MovePurpose::Reposition => 0.1,
+                    },
+                    cover_positioning: (cover - current_cover).clamp(-3.0, 3.0),
+                    cooperation: self.ally_support_value(&space, &waypoint.position),
+                    ally_risk_reduction: if retreat {
+                        (current_threat - threat).max(0.0)
+                    } else {
+                        0.0
+                    },
+                    retreat_alert_cost: if retreat {
+                        self.retreat_alert_cost(&space, &waypoint.position)
+                    } else {
+                        0.0
+                    },
+                    behaviour_consistency: self.move_consistency(&waypoint),
+                    movement_cost: f64::from(waypoint.cost.max(0)) / 5.0,
+                    ..UtilityTerms::default()
+                };
+                let kind = CandidateKind::Move {
+                    purpose: waypoint.purpose,
+                    to: waypoint.position.clone(),
+                };
+                self.candidates.push(CandidateEvaluation {
+                    kind,
+                    terms,
+                    score: terms.score(&self.weights),
+                    action_index: None,
+                    target_index: None,
+                    option: None,
+                    waypoint: Some(waypoint),
+                    multiattack: false,
+                });
+            }
+        }
+
+        fn generate_wait(&mut self) {
+            let holding = self.profile.guard_zone.as_deref().is_some_and(|zone| {
+                self.current_position().zone_id() == Some(zone)
+                    && self.nearest_observable_enemy_distance()
+                        > self.profile.leash.unwrap_or(i32::MAX)
+            });
+            let terms = UtilityTerms {
+                objective_progress: if holding { 0.8 } else { 0.0 },
+                behaviour_consistency: if holding { 1.0 } else { 0.0 },
+                ..UtilityTerms::default()
+            };
+            self.candidates.push(CandidateEvaluation {
+                kind: CandidateKind::Wait,
+                terms,
+                score: terms.score(&self.weights),
+                action_index: None,
+                target_index: None,
+                option: None,
+                waypoint: None,
+                multiattack: false,
+            });
+        }
+
+        fn targets_for(&self, action: &PlannedAction) -> Vec<usize> {
+            if action.target_type == TargetType::SelfTarget || action.role == AiRole::SelfHeal {
+                return vec![self.actor];
+            }
+            let allies = if action.role == AiRole::Heal
+                || action.role == AiRole::Buff
+                || action.role == AiRole::Defense
+                || action.target_side == Some(TargetSide::Ally)
+            {
+                self.support_targets(action)
+            } else {
+                Vec::new()
+            };
+            let enemies = if action.target_side == Some(TargetSide::Ally) {
+                Vec::new()
+            } else {
+                self.observable_enemies()
+            };
+            match action.target_type {
+                TargetType::Zone => {
+                    if action.target_side == Some(TargetSide::Ally) {
+                        allies
+                    } else {
+                        enemies
+                    }
+                }
+                TargetType::Creature | TargetType::SelfTarget => {
+                    let mut targets = if action.role == AiRole::Heal
+                        || action.role == AiRole::Buff
+                        || action.role == AiRole::Defense
+                    {
+                        allies
+                    } else {
+                        enemies
+                    };
+                    if matches!(action.role, AiRole::Buff | AiRole::Defense)
+                        && action.target_side == Some(TargetSide::Ally)
+                        && !targets.contains(&self.actor)
+                    {
+                        targets.push(self.actor);
+                    }
+                    targets
+                }
+            }
+        }
+
+        fn support_targets(&self, action: &PlannedAction) -> Vec<usize> {
+            let allies = self.observable_allies();
+            if action.role == AiRole::Heal {
+                return allies
+                    .into_iter()
+                    .filter(|&index| {
+                        let hp = self.state.combatants[index].hp;
+                        if hp <= 0 {
+                            self.profile.heal_downed
+                        } else {
+                            let threshold = self.profile.heal_ally_below_pct.unwrap_or(100);
+                            hp_percent(&self.state.combatants[index]) <= threshold
+                        }
+                    })
+                    .collect();
+            }
+            allies
+        }
+
+        fn target_allowed(&self, action: &PlannedAction, target: usize) -> bool {
+            if target == self.actor {
+                return true;
+            }
+            if action.role == AiRole::Heal {
+                let hp = self.state.combatants[target].hp;
+                if hp <= 0 && !self.profile.heal_downed {
+                    return false;
+                }
+            }
+            true
+        }
+
+        fn add_action_candidate(
+            &mut self,
+            action_index: usize,
+            action: &PlannedAction,
+            target: usize,
+        ) {
+            let start = self.current_position();
+            if let Err(reason) = self.action_precondition(action) {
+                self.reject(&action.id, Some(self.name(target)), reason);
+                return;
+            }
+            if self.action_legal_at(action, target, &start) {
+                let terms = self.action_terms(action, target, None);
+                let score = terms.score(&self.weights);
+                if score > 0.0 {
+                    self.candidates.push(CandidateEvaluation {
+                        kind: CandidateKind::Action {
+                            action_id: action.id.clone(),
+                            target: Some(self.name(target)),
+                            role: action.role,
+                            approach: None,
+                        },
+                        terms,
+                        score,
+                        action_index: Some(action_index),
+                        target_index: Some(target),
+                        option: defense_option(action),
+                        waypoint: None,
+                        multiattack: false,
+                    });
+                }
+                return;
+            }
+            let mut approaches: Vec<Waypoint> = Vec::new();
+            for waypoint in self.waypoints.iter() {
+                if waypoint.position == start {
+                    continue;
+                }
+                if self.action_legal_at(action, target, &waypoint.position) {
+                    approaches.push(waypoint.clone());
+                }
+                if approaches.len() >= 2 {
+                    break;
+                }
+            }
+            if approaches.is_empty() {
+                self.reject(
+                    &action.id,
+                    Some(self.name(target)),
+                    self.action_rejection(action, target, &start),
+                );
+                return;
+            }
+            for waypoint in approaches {
+                let terms = self.action_terms(action, target, Some(&waypoint));
+                let score = terms.score(&self.weights);
+                if score <= 0.0 {
+                    continue;
+                }
+                self.candidates.push(CandidateEvaluation {
+                    kind: CandidateKind::Action {
+                        action_id: action.id.clone(),
+                        target: Some(self.name(target)),
+                        role: action.role,
+                        approach: Some(waypoint.position.clone()),
+                    },
+                    terms,
+                    score,
+                    action_index: Some(action_index),
+                    target_index: Some(target),
+                    option: defense_option(action),
+                    waypoint: Some(waypoint),
+                    multiattack: false,
+                });
+            }
+        }
+
+        fn action_precondition(&self, action: &PlannedAction) -> std::result::Result<(), String> {
+            action_precondition(self.state, self.actor, self.plan, action)
+        }
+
+        fn action_legal_at(&self, action: &PlannedAction, target: usize, from: &Position) -> bool {
+            action_legal_at_state(self.state, action, self.actor, Some(target), from)
+        }
+
+        fn action_rejection(
+            &self,
+            action: &PlannedAction,
+            target: usize,
+            from: &Position,
+        ) -> String {
+            if !affordable(self.state, self.actor, action) {
+                return "resource not affordable".to_string();
+            }
+            if !self.ai.resource_allows(self.state, self.plan, action) {
+                return "resource threshold".to_string();
+            }
+            let to = self.state.combatants[target].position();
+            if let Some(space) = self.state.space() {
+                if let Some(feet) = space.distance(from, &to) {
+                    if action.target_type != TargetType::Zone
+                        && space.cover(from, &to) == Cover::Total
+                    {
+                        return "total cover".to_string();
+                    }
+                    let limit = action
+                        .attack_range
+                        .map(|[_, long]| long)
+                        .or(action.range)
+                        .unwrap_or(action.reach);
+                    if feet > limit {
+                        return "out of range".to_string();
+                    }
+                }
+            }
+            "no legal approach".to_string()
+        }
+
+        fn action_terms(
+            &self,
+            action: &PlannedAction,
+            target: usize,
+            waypoint: Option<&Waypoint>,
+        ) -> UtilityTerms {
+            let mut terms = Self::terms_for_outcome(
+                self.ai,
+                self.state,
+                self.actor,
+                action,
+                target,
+                self.profile.target.targeting,
+                &self.profile,
+                waypoint,
+                self.current_position(),
+            );
+            if action.role == AiRole::Defense && self.nearest_observable_enemy_distance() <= 5 {
+                terms.ally_risk_reduction += 1.0;
+            }
+            terms
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn terms_for_outcome(
+            ai: &Ai,
+            state: &EncounterState,
+            actor: usize,
+            action: &PlannedAction,
+            target: usize,
+            targeting: AiTargeting,
+            profile: &BehaviourProfile,
+            waypoint: Option<&Waypoint>,
+            current: Position,
+        ) -> UtilityTerms {
+            let outcome = ai.action_outcome(state, actor, action, target);
+            let target_combatant = &state.combatants[target];
+            let threat = ai.plans.get(target).map(|plan| plan.threat).unwrap_or(1.0);
+            let hostile = target_combatant.side != state.combatants[actor].side;
+            let hp = target_combatant.hp.max(0) + target_combatant.temp_hp.max(0);
+            let expected_damage = if hostile {
+                outcome.damage.max(0.0).min(f64::from(hp.max(1)))
+            } else {
+                0.0
+            };
+            let healing = if outcome.heal > 0.0 {
+                let rescue = if target_combatant.hp <= 0 {
+                    RESCUE_MULTIPLIER
+                } else {
+                    1.0
+                };
+                outcome.heal.max(0.0) * rescue
+            } else {
+                0.0
+            };
+            let control = if hostile {
+                outcome.control.max(0.0) * (1.0 + threat)
+            } else {
+                0.0
+            };
+            let mut ally_risk_reduction = outcome.defense.max(0.0) + outcome.buff.max(0.0);
+            if action.role == AiRole::Control {
+                ally_risk_reduction += control * 0.2;
+            }
+            let resource_opportunity_cost = action
+                .cost
+                .as_ref()
+                .map(|cost| {
+                    let remaining = state.combatants[actor]
+                        .resources
+                        .get(&cost.resource)
+                        .map(|resource| resource.current.max(1))
+                        .unwrap_or(1);
+                    f64::from(cost.amount) * (1.0 + 1.0 / f64::from(remaining))
+                })
+                .unwrap_or(0.0);
+            let current_cover = state
+                .space()
+                .as_ref()
+                .map(|space| cover_value(state, space, &current, actor))
+                .unwrap_or(0.0);
+            let cover_positioning = waypoint
+                .map(|waypoint| {
+                    state
+                        .space()
+                        .as_ref()
+                        .map(|space| {
+                            (cover_value(state, space, &waypoint.position, actor) - current_cover)
+                                .clamp(-3.0, 3.0)
+                        })
+                        .unwrap_or(0.0)
+                })
+                .unwrap_or(0.0);
+            let cooperation = if hostile {
+                allies_near(state, actor, target) as f64 * 0.2
+            } else {
+                1.0 + (1.0 - hp_percent(target_combatant) as f64 / 100.0)
+            };
+            let consistency =
+                action_consistency(state, actor, action, target, targeting, profile, waypoint);
+            let movement_cost = waypoint
+                .map(|waypoint| f64::from(waypoint.cost.max(0)) / 5.0)
+                .unwrap_or(0.0);
+            UtilityTerms {
+                expected_damage,
+                ally_risk_reduction,
+                healing,
+                control,
+                objective_progress: 0.0,
+                resource_opportunity_cost,
+                cover_positioning,
+                cooperation,
+                retreat_alert_cost: 0.0,
+                behaviour_consistency: consistency,
+                movement_cost,
+            }
+        }
+
+        fn multiattack_rejection(&self, target: usize) -> Option<String> {
+            for action in &self.plan.multiattack {
+                if !self.action_legal_at(action, target, &self.current_position()) {
+                    return Some("multiattack entry out of range or blocked".to_string());
+                }
+                if !affordable(self.state, self.actor, action) {
+                    return Some("multiattack entry not affordable".to_string());
+                }
+            }
+            None
+        }
+
+        fn multiattack_terms(&self, target: usize, waypoint: Option<&Waypoint>) -> UtilityTerms {
+            let mut total = UtilityTerms::default();
+            for action in &self.plan.multiattack {
+                let terms = Self::terms_for_outcome(
+                    self.ai,
+                    self.state,
+                    self.actor,
+                    action,
+                    target,
+                    self.profile.target.targeting,
+                    &self.profile,
+                    waypoint,
+                    self.current_position(),
+                );
+                total.expected_damage += terms.expected_damage;
+                total.ally_risk_reduction += terms.ally_risk_reduction;
+                total.healing += terms.healing;
+                total.control += terms.control;
+                total.cooperation += terms.cooperation;
+                total.behaviour_consistency += terms.behaviour_consistency;
+                total.movement_cost = total.movement_cost.max(terms.movement_cost);
+            }
+            total
+        }
+
+        fn nearest_observable_enemy_distance(&self) -> i32 {
+            let space = self.state.space();
+            self.observable_enemies()
+                .into_iter()
+                .filter_map(|enemy| distance(space.as_ref(), self.state, self.actor, enemy).into())
+                .min()
+                .unwrap_or(9999)
+        }
+
+        fn threat_at(&self, space: &crate::space::SpaceView<'_>, at: &Position) -> f64 {
+            self.observable_enemies()
+                .into_iter()
+                .map(|enemy| {
+                    let position = self.state.combatants[enemy].position();
+                    let distance = space.distance(at, &position).unwrap_or(9999);
+                    let threat = self
+                        .ai
+                        .plans
+                        .get(enemy)
+                        .map(|plan| plan.threat)
+                        .unwrap_or(1.0);
+                    threat / (1.0 + f64::from(distance) / 5.0)
+                })
+                .sum()
+        }
+
+        fn ally_support_value(&self, space: &crate::space::SpaceView<'_>, at: &Position) -> f64 {
+            self.observable_allies()
+                .into_iter()
+                .map(|ally| {
+                    let position = self.state.combatants[ally].position();
+                    let distance = space.distance(at, &position).unwrap_or(9999);
+                    let mut value = (3.0 - f64::from(distance) / 10.0).max(0.0);
+                    if self.state.combatants[ally].hp <= 0 && distance <= 5 {
+                        value += 2.0;
+                    }
+                    value
+                })
+                .sum()
+        }
+
+        fn retreat_alert_cost(&self, space: &crate::space::SpaceView<'_>, at: &Position) -> f64 {
+            let adjacent = self
+                .observable_enemies()
+                .into_iter()
+                .filter(|&enemy| {
+                    space
+                        .distance(at, &self.state.combatants[enemy].position())
+                        .is_some_and(|distance| distance <= 5)
+                })
+                .count() as f64;
+            let guard_penalty =
+                self.profile
+                    .guard_zone
+                    .as_deref()
+                    .is_some_and(|zone| at.zone_id() != Some(zone)) as i32 as f64;
+            adjacent * 0.5 + guard_penalty
+        }
+
+        fn move_consistency(&self, waypoint: &Waypoint) -> f64 {
+            let mut value = 0.0;
+            if let Some(zone) = self.profile.guard_zone.as_deref() {
+                if waypoint.position.zone_id() == Some(zone) {
+                    value += 0.8;
+                }
+            }
+            if let Some(zone) = self.profile.flee_zone.as_deref() {
+                if waypoint.purpose == MovePurpose::Retreat
+                    && waypoint.position.zone_id() == Some(zone)
+                {
+                    value += 0.8;
+                }
+            }
+            value
+        }
+
+        fn objective_urgency(&self, object_zone: &str) -> f64 {
+            let Some(space) = self.state.space() else {
+                return 0.0;
+            };
+            let Some(object_position) = zone_position(&space, object_zone) else {
+                return 0.0;
+            };
+            let actor_distance = space
+                .distance(&self.current_position(), &object_position)
+                .unwrap_or(9999);
+            let enemy_distance = self
+                .observable_enemies()
+                .into_iter()
+                .filter_map(|enemy| {
+                    space.distance(&self.state.combatants[enemy].position(), &object_position)
+                })
+                .min()
+                .unwrap_or(9999);
+            if enemy_distance < actor_distance {
+                0.5
+            } else {
+                0.0
+            }
+        }
+
+        fn name(&self, index: usize) -> String {
+            self.state.combatants[index].name.clone()
+        }
+
+        fn reject(&mut self, action_id: &str, target: Option<String>, reason: String) {
+            if self.rejected.len() >= MAX_REJECTED {
+                return;
+            }
+            self.rejected.push(RejectedCandidate {
+                action_id: action_id.to_string(),
+                target,
+                reason,
+            });
+        }
+    }
+
+    fn execute_candidates(
+        ai: &Ai,
+        state: &mut EncounterState,
+        actor: usize,
+        candidates: &[CandidateEvaluation],
+        rng: &mut dyn DiceRng,
+        log: &mut dyn LogSink,
+    ) -> Result<bool> {
+        for candidate in candidates {
+            if candidate.score <= 0.0 && candidate.kind != CandidateKind::Wait {
+                continue;
+            }
+            if candidate.kind == CandidateKind::Wait {
+                return Ok(true);
+            }
+            match validate_candidate(ai, state, actor, candidate) {
+                Ok(()) => {}
+                Err(reason) => {
+                    log.log(format_args!(
+                        "tactical candidate skipped ({}): {reason}",
+                        candidate.kind_label()
+                    ));
+                    continue;
+                }
+            }
+            match execute_candidate(ai, state, actor, candidate, rng, log) {
+                Ok(()) => return Ok(true),
+                Err(error) => {
+                    log.log(format_args!(
+                        "tactical candidate failed ({}): {error:#}; trying next",
+                        candidate.kind_label()
+                    ));
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    impl CandidateEvaluation {
+        fn kind_label(&self) -> String {
+            match &self.kind {
+                CandidateKind::Action { action_id, .. } => action_id.clone(),
+                CandidateKind::Move { purpose, .. } => format!("{purpose:?}"),
+                CandidateKind::Interact { object_id, .. } => object_id.clone(),
+                CandidateKind::Wait => "wait".to_string(),
+            }
+        }
+    }
+
+    fn validate_candidate(
+        ai: &Ai,
+        state: &EncounterState,
+        actor: usize,
+        candidate: &CandidateEvaluation,
+    ) -> std::result::Result<(), String> {
+        let plan = ai.plans.get(actor).ok_or("actor has no plan")?;
+        match &candidate.kind {
+            CandidateKind::Action { .. } => {
+                if let Some(index) = candidate.action_index {
+                    let action = plan.actions.get(index).ok_or("action no longer exists")?;
+                    action_precondition(state, actor, plan, action)?;
+                    if !target_still_legal(state, actor, action, candidate.target_index) {
+                        return Err("target is no longer observable/legal".to_string());
+                    }
+                    if let Some(waypoint) = &candidate.waypoint {
+                        if !movement_legal(state, actor, &waypoint.position) {
+                            return Err("approach path is no longer legal".to_string());
+                        }
+                        if !action_legal_at_state(
+                            state,
+                            action,
+                            actor,
+                            candidate.target_index,
+                            &waypoint.position,
+                        ) {
+                            return Err("action is no longer legal at the waypoint".to_string());
+                        }
+                    } else if !action_legal_at_state(
+                        state,
+                        action,
+                        actor,
+                        candidate.target_index,
+                        &state.combatants[actor].position(),
+                    ) {
+                        return Err("action is no longer legal".to_string());
+                    }
+                } else if candidate.multiattack {
+                    if state.combatants[actor].action_used {
+                        return Err("action already used".to_string());
+                    }
+                    for action in &plan.multiattack {
+                        if !action_legal_at_state(
+                            state,
+                            action,
+                            actor,
+                            candidate.target_index,
+                            &state.combatants[actor].position(),
+                        ) {
+                            return Err("multiattack entry is no longer legal".to_string());
+                        }
+                        if !affordable(state, actor, action) {
+                            return Err("multiattack entry is no longer affordable".to_string());
+                        }
+                    }
+                }
+                Ok(())
+            }
+            CandidateKind::Move { to, .. } => {
+                if movement_legal(state, actor, to) {
+                    Ok(())
+                } else {
+                    Err("movement is no longer legal".to_string())
+                }
+            }
+            CandidateKind::Interact { object_id, .. } => {
+                if let Some(waypoint) = &candidate.waypoint {
+                    if !movement_legal(state, actor, &waypoint.position) {
+                        return Err("interaction approach is no longer legal".to_string());
+                    }
+                }
+                if interaction_legal(state, actor, object_id) {
+                    Ok(())
+                } else {
+                    Err("scene object is no longer reachable".to_string())
+                }
+            }
+            CandidateKind::Wait => Ok(()),
+        }
+    }
+
+    fn action_precondition(
+        state: &EncounterState,
+        actor: usize,
+        plan: &CombatantPlan,
+        action: &PlannedAction,
+    ) -> std::result::Result<(), String> {
+        match action.activation {
+            Activation::Action if state.combatants[actor].action_used => {
+                return Err("action already used".to_string())
+            }
+            Activation::Bonus if state.combatants[actor].bonus_action_used => {
+                return Err("bonus action already used".to_string())
+            }
+            _ => {}
+        }
+        if !affordable(state, actor, action) {
+            return Err("resource not affordable".to_string());
+        }
+        if action.cost.is_some() && action.role == AiRole::Damage && plan.best_at_will_damage > 0.0
+        {
+            let threshold = plan
+                .params
+                .resource_threshold
+                .unwrap_or(super::DEFAULT_RESOURCE_THRESHOLD);
+            if action.raw_damage + 1.0e-9 < threshold * plan.best_at_will_damage {
+                return Err("resource threshold".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn target_still_legal(
+        state: &EncounterState,
+        actor: usize,
+        action: &PlannedAction,
+        target: Option<usize>,
+    ) -> bool {
+        let Some(target) = target else {
+            return true;
+        };
+        if target == actor || action.target_type == TargetType::SelfTarget {
+            return true;
+        }
+        let combatant = &state.combatants[target];
+        if combatant.dormant || combatant.is_dead() {
+            return false;
+        }
+        if action.role == AiRole::Heal && combatant.hp <= 0 {
+            // `heal_downed` is a profile gate applied during generation; a
+            // target that went down after planning is still a valid rescue.
+            return true;
+        }
+        if combatant.hp <= 0 {
+            return false;
+        }
+        true
+    }
+
+    fn action_legal_at_state(
+        state: &EncounterState,
+        action: &PlannedAction,
+        actor: usize,
+        target: Option<usize>,
+        from: &Position,
+    ) -> bool {
+        let Some(target) = target else {
+            return true;
+        };
+        if target == actor || action.target_type == TargetType::SelfTarget {
+            return true;
+        }
+        let to = state.combatants[target].position();
+        if let Some(space) = state.space() {
+            let Some(feet) = space.distance(from, &to) else {
+                return false;
+            };
+            let in_range = match action.attack_kind {
+                Some(AttackKind::Melee) => space.can_reach(from, &to, action.reach),
+                Some(AttackKind::Ranged) => {
+                    action.attack_range.is_some_and(|[_, long]| feet <= long)
+                }
+                Some(AttackKind::MeleeOrRanged) => {
+                    space.can_reach(from, &to, action.reach)
+                        || action.attack_range.is_some_and(|[_, long]| feet <= long)
+                }
+                None => action.range.is_none_or(|range| range <= 0 || feet <= range),
+            };
+            if !in_range {
+                return false;
+            }
+            if action.target_type != TargetType::Zone
+                && space.cover(from, &to) == Cover::Total
+                && !action_ignores_cover(action)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn execute_candidate(
+        ai: &Ai,
+        state: &mut EncounterState,
+        actor: usize,
+        candidate: &CandidateEvaluation,
+        rng: &mut dyn DiceRng,
+        log: &mut dyn LogSink,
+    ) -> Result<()> {
+        if let Some(waypoint) = &candidate.waypoint {
+            move_to(state, actor, &waypoint.position, rng, log)?;
+        }
+        match &candidate.kind {
+            CandidateKind::Action { .. } => {
+                if candidate.multiattack {
+                    let target = candidate
+                        .target_index
+                        .ok_or_else(|| anyhow::anyhow!("multiattack candidate has no target"))?;
+                    return engine::attack_at(
+                        state,
+                        actor,
+                        target,
+                        "",
+                        &engine::AttackOptions {
+                            multi: true,
+                            ..engine::AttackOptions::default()
+                        },
+                        rng,
+                        log,
+                    );
+                }
+                let index = candidate
+                    .action_index
+                    .ok_or_else(|| anyhow::anyhow!("action candidate has no action"))?;
+                let plan = &ai.plans[actor];
+                let action = &plan.actions[index];
+                let target = candidate
+                    .target_index
+                    .ok_or_else(|| anyhow::anyhow!("action candidate has no target"))?;
+                if !action_legal_at_state(
+                    state,
+                    action,
+                    actor,
+                    Some(target),
+                    &state.combatants[actor].position(),
+                ) {
+                    bail!("`{}` is no longer legal at this position", action.id);
+                }
+                ai.execute(state, actor, action, target, candidate.option, rng, log)
+            }
+            CandidateKind::Move { to, .. } => move_to(state, actor, to, rng, log),
+            CandidateKind::Interact { object_id, .. } => {
+                if !interaction_legal(state, actor, object_id) {
+                    bail!("scene object `{object_id}` is no longer reachable");
+                }
+                let name = state.combatants[actor].name.clone();
+                engine::interact(state, &name, object_id, None, rng, log)
+            }
+            CandidateKind::Wait => Ok(()),
+        }
+    }
+
+    fn move_to(
+        state: &mut EncounterState,
+        actor: usize,
+        position: &Position,
+        rng: &mut dyn DiceRng,
+        log: &mut dyn LogSink,
+    ) -> Result<()> {
+        let target = match position {
+            Position::Cell { x, y } => engine::MoveTarget::Cell(*x, *y),
+            Position::Zone { zone } => engine::MoveTarget::Zone(zone.clone()),
+        };
+        engine::move_to_at(state, actor, &target, false, rng, log)
+    }
+
+    fn movement_legal(state: &EncounterState, actor: usize, position: &Position) -> bool {
+        let Some(space) = state.space() else {
+            return true;
+        };
+        let start = state.combatants[actor].position();
+        let blocked: Vec<Position> = state
+            .combatants
+            .iter()
+            .enumerate()
+            .filter(|(index, combatant)| *index != actor && !combatant.is_dead())
+            .map(|(_, combatant)| combatant.position())
+            .collect();
+        space
+            .route_cost(&start, position, &blocked)
+            .is_some_and(|cost| cost <= state.combatants[actor].speed_left)
+    }
+
+    fn interaction_legal(state: &EncounterState, actor: usize, object_id: &str) -> bool {
+        let Some(scene) = state.scene.as_deref() else {
+            return false;
+        };
+        let Some(object) = scene
+            .objects
+            .iter()
+            .find(|object| object.id.eq_ignore_ascii_case(object_id))
+        else {
+            return false;
+        };
+        if object.interact.is_none() {
+            return false;
+        }
+        if scene.mode == SceneMode::Grid {
+            let actor_zone = state
+                .space()
+                .and_then(|space| space.zone_of(&state.combatants[actor].position()));
+            if actor_zone.as_deref() != Some(object.zone.as_str()) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn action_ignores_cover(action: &PlannedAction) -> bool {
+        action.effects.iter().any(|effect| match effect {
+            PlanEffect::Save { ignore_cover, .. } => *ignore_cover,
+            _ => false,
+        })
+    }
+
+    fn has_objective_effect(interact: &Interact) -> bool {
+        fn effects_have(effects: &[Effect]) -> bool {
+            effects.iter().any(|effect| match effect {
+                Effect::ToggleTrigger(_) | Effect::Activate(_) => true,
+                Effect::Choice(options) => options.iter().any(|option| effects_have(option)),
+                _ => false,
+            })
+        }
+        if let Some(effects) = &interact.effects {
+            if effects_have(effects) {
+                return true;
+            }
+        }
+        if let Some(effects) = &interact.on_success {
+            if effects_have(effects) {
+                return true;
+            }
+        }
+        if let Some(effects) = &interact.on_fail {
+            if effects_have(effects) {
+                return true;
+            }
+        }
+        interact
+            .options
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .any(|option| {
+                option.effects.as_deref().is_some_and(effects_have)
+                    || option.on_success.as_deref().is_some_and(effects_have)
+                    || option.on_fail.as_deref().is_some_and(effects_have)
+            })
+    }
+
+    fn unsupported_effects(action: &PlannedAction) -> Option<String> {
+        struct Support {
+            supported: bool,
+            unsupported: Vec<&'static str>,
+        }
+        fn walk(effects: &[Effect], support: &mut Support) {
+            for effect in effects {
+                match effect {
+                    Effect::Attack(effect) => {
+                        support.supported = true;
+                        walk(&effect.on_hit, support);
+                        walk(&effect.on_miss, support);
+                    }
+                    Effect::Save(effect) => {
+                        support.supported = true;
+                        walk(&effect.on_fail, support);
+                        walk(&effect.on_success, support);
+                    }
+                    Effect::Damage(_) | Effect::Heal(_) | Effect::ApplyCondition(_) => {
+                        support.supported = true;
+                    }
+                    Effect::BasicAction(_) => support.supported = true,
+                    Effect::Choice(options) => {
+                        for option in options {
+                            walk(option, support);
+                        }
+                    }
+                    Effect::RemoveCondition(_) => support.unsupported.push("remove_condition"),
+                    Effect::ForcedMove(_) => support.unsupported.push("forced_move"),
+                    Effect::Use(_) => support.unsupported.push("use"),
+                    Effect::Activate(_) => support.unsupported.push("activate"),
+                    Effect::Check(_) => support.unsupported.push("check"),
+                    Effect::Note(_) => support.unsupported.push("note"),
+                    Effect::ToggleTrigger(_) => support.unsupported.push("toggle_trigger"),
+                }
+            }
+        }
+        let mut support = Support {
+            supported: matches!(action.kind, PlannedKind::Attack(_)),
+            unsupported: Vec::new(),
+        };
+        match &action.kind {
+            PlannedKind::Attack(attack) => {
+                walk(&attack.on_hit, &mut support);
+            }
+            PlannedKind::Ability(ability) => walk(&ability.ability.effects, &mut support),
+        }
+        if !support.supported {
+            return Some(if support.unsupported.is_empty() {
+                "no valued effect".to_string()
+            } else {
+                support.unsupported.join(", ")
+            });
+        }
+        None
+    }
+
+    fn action_consistency(
+        state: &EncounterState,
+        actor: usize,
+        action: &PlannedAction,
+        target: usize,
+        targeting: AiTargeting,
+        profile: &BehaviourProfile,
+        waypoint: Option<&Waypoint>,
+    ) -> f64 {
+        let mut value = target_preference(state, actor, target, targeting);
+        if let Some(preference) = profile.range_preference {
+            let ranged = action
+                .attack_kind
+                .is_some_and(|kind| kind != AttackKind::Melee)
+                || (action.attack_kind.is_none() && action.range.is_some_and(|range| range > 5));
+            value += match preference {
+                RangePreference::Melee if !ranged => 0.5,
+                RangePreference::Melee => -0.5,
+                RangePreference::Ranged if ranged => 0.5,
+                RangePreference::Ranged => -0.5,
+                RangePreference::Any => 0.0,
+            };
+        }
+        if profile.opening.iter().any(|id| id == &action.id) {
+            value += 2.0;
+        }
+        if profile.heal_downed && action.role == AiRole::Heal && state.combatants[target].hp <= 0 {
+            value += 2.0;
+        }
+        if profile
+            .target
+            .avoid_conditions
+            .iter()
+            .any(|condition| state.combatants[target].has_condition(&state.content, condition))
+        {
+            value -= 4.0;
+        }
+        if let Some(waypoint) = waypoint {
+            if let Some(zone) = profile.guard_zone.as_deref() {
+                if waypoint.position.zone_id() != Some(zone) {
+                    value -= 3.0;
+                }
+            }
+        }
+        value
+    }
+
+    fn target_preference(
+        state: &EncounterState,
+        actor: usize,
+        target: usize,
+        targeting: AiTargeting,
+    ) -> f64 {
+        let space = state.space();
+        let distance = distance(space.as_ref(), state, actor, target);
+        match targeting {
+            AiTargeting::Nearest => 1.0 / (1.0 + f64::from(distance) / 5.0),
+            AiTargeting::LowestHp => 1.0 - f64::from(hp_percent(&state.combatants[target])) / 100.0,
+            AiTargeting::HighestDamage => 0.5,
+            AiTargeting::Random => 0.5,
+        }
+    }
+
+    fn cover_value(
+        state: &EncounterState,
+        space: &crate::space::SpaceView<'_>,
+        at: &Position,
+        actor: usize,
+    ) -> f64 {
+        (0..state.combatants.len())
+            .filter(|&index| {
+                state.combatants[index].side != state.combatants[actor].side
+                    && !state.combatants[index].dormant
+                    && !state.combatants[index].is_dead()
+                    && state.combatants[index].hp > 0
+            })
+            .map(
+                |index| match space.cover(&state.combatants[index].position(), at) {
+                    Cover::None => 0.0,
+                    Cover::Half => 1.0,
+                    Cover::ThreeQuarters => 2.0,
+                    Cover::Total => 3.0,
+                },
+            )
+            .fold(0.0, f64::max)
+    }
+
+    fn allies_near(state: &EncounterState, actor: usize, target: usize) -> usize {
+        state
+            .combatants
+            .iter()
+            .enumerate()
+            .filter(|(index, combatant)| {
+                *index != actor
+                    && combatant.side == state.combatants[actor].side
+                    && !combatant.dormant
+                    && !combatant.is_dead()
+                    && distance(state.space().as_ref(), state, *index, target) <= 5
+            })
+            .count()
+    }
+
+    fn is_unaware(state: &EncounterState, index: usize) -> bool {
+        state.combatants[index].conditions.iter().any(|active| {
+            state
+                .content
+                .conditions
+                .get(&active.condition)
+                .is_some_and(|definition| definition.flags.contains(&ConditionFlag::Unaware))
+        })
+    }
+
+    fn neighbour_positions(
+        space: &crate::space::SpaceView<'_>,
+        position: &Position,
+    ) -> Vec<Position> {
+        if let Some((x, y)) = position.cell_coords() {
+            NEIGHBOURS
+                .iter()
+                .map(|(dx, dy)| Position::cell(x + dx, y + dy))
+                .filter(|position| space.contains(position))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn toward_position(
+        space: &crate::space::SpaceView<'_>,
+        from: &Position,
+        to: &Position,
+        budget: i32,
+    ) -> Option<Position> {
+        let (x, y) = from.cell_coords()?;
+        let (tx, ty) = to.cell_coords()?;
+        let steps = (budget / 5).max(1);
+        let dx = (tx - x).signum();
+        let dy = (ty - y).signum();
+        let distance = (tx - x).abs().max((ty - y).abs());
+        let step = steps.min(distance);
+        let position = Position::cell(x + dx * step, y + dy * step);
+        space.contains(&position).then_some(position)
+    }
+
+    fn zone_of_position(
+        space: &crate::space::SpaceView<'_>,
+        position: &Position,
+    ) -> Option<String> {
+        match position {
+            Position::Zone { zone } => Some(zone.clone()),
+            Position::Cell { .. } => space.zone_of(position),
+        }
+    }
+
+    fn same_zone(
+        state: &EncounterState,
+        space: &crate::space::SpaceView<'_>,
+        actor: usize,
+        zone: &str,
+    ) -> bool {
+        space
+            .zone_of(&state.combatants[actor].position())
+            .as_deref()
+            == Some(zone)
+    }
+
+    const NEIGHBOURS: [(i32, i32); 8] = [
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+        (-1, 0),
+        (1, 0),
+        (-1, 1),
+        (0, 1),
+        (1, 1),
+    ];
 }
