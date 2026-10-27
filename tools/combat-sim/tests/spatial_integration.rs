@@ -13,7 +13,10 @@
 //! - Phase 4 (CLI/legacy): old saves keep the legacy result.
 
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use combat_sim::content::schema::{ConditionFlag, Creature, Scene, Size};
 use combat_sim::content::{ContentRegistry, ContentSources};
@@ -38,13 +41,7 @@ fn registry(ruleset: &str) -> ContentRegistry {
     .unwrap_or_else(|error| panic!("real {ruleset} registry should load: {error}"))
 }
 
-fn creature(
-    id: &str,
-    size: Size,
-    fly: i32,
-    hover: bool,
-    attacks: serde_json::Value,
-) -> Creature {
+fn creature(id: &str, size: Size, fly: i32, hover: bool, attacks: serde_json::Value) -> Creature {
     serde_json::from_value(json!({
         "id": id,
         "name": id,
@@ -86,6 +83,7 @@ fn no_attacks() -> serde_json::Value {
     json!([])
 }
 
+#[allow(clippy::too_many_arguments)]
 fn combatant(
     name: &str,
     creature: Creature,
@@ -118,6 +116,21 @@ fn combatant(
         "conditions": conditions
     }))
     .expect("synthetic combatant")
+}
+
+/// A truly pre-P1 combatant: no pose, no vertical state, no footprint.
+fn legacy_combatant(name: &str, creature: Creature, side: &str, x: i32, y: i32) -> CombatantState {
+    serde_json::from_value(json!({
+        "creature": creature,
+        "name": name,
+        "side": side,
+        "max_hp": 30,
+        "hp": 30,
+        "zone": "open",
+        "pos": {"kind": "cell", "x": x, "y": y},
+        "speed_left": 30
+    }))
+    .expect("legacy combatant")
 }
 
 fn grounded(name: &str, creature: Creature, side: &str, x: i32, y: i32) -> CombatantState {
@@ -164,7 +177,11 @@ fn grid_scene(rows: &[&str], legend: serde_json::Value) -> serde_json::Value {
     })
 }
 
-fn scene_with(rows: &[&str], legend: serde_json::Value, extra: serde_json::Value) -> serde_json::Value {
+fn scene_with(
+    rows: &[&str],
+    legend: serde_json::Value,
+    extra: serde_json::Value,
+) -> serde_json::Value {
     let mut scene = grid_scene(rows, legend);
     if let (Some(scene), Some(extra)) = (scene.as_object_mut(), extra.as_object()) {
         for (key, value) in extra {
@@ -308,7 +325,10 @@ fn audit_grid_cell_height_is_a_vertical_obstacle() {
                 0,
             ),
         ],
-        grid_scene(&[".p."], json!({".": {"elevation": 0}, "p": {"height_ft": 10}})),
+        grid_scene(
+            &[".p."],
+            json!({".": {"elevation": 0}, "p": {"height_ft": 10}}),
+        ),
         spatial(),
     );
     let mut tall = tall;
@@ -324,8 +344,7 @@ fn audit_grid_cell_height_is_a_vertical_obstacle() {
     )
     .expect_err("a 10-ft obstacle blocks the line of sight");
     assert!(
-        error.to_string().contains("line of sight")
-            || error.to_string().contains("total cover"),
+        error.to_string().contains("line of sight") || error.to_string().contains("total cover"),
         "{error}"
     );
 
@@ -347,7 +366,10 @@ fn audit_grid_cell_height_is_a_vertical_obstacle() {
                 0,
             ),
         ],
-        grid_scene(&[".w."], json!({".": {"elevation": 0}, "w": {"height_ft": 3}})),
+        grid_scene(
+            &[".w."],
+            json!({".": {"elevation": 0}, "w": {"height_ft": 3}}),
+        ),
         spatial(),
     );
     let mut low = low;
@@ -400,7 +422,10 @@ fn audit_cell_height_is_a_ceiling_above_the_local_floor() {
     // P4 stores a ceiling span as `bottom..bottom+1`; landing uses the span
     // top, so a 20-ft ceiling over a 10-ft floor is the surface at 31 ft.
     assert_eq!(fall.landing.elevation_ft, 31);
-    assert_eq!(fall.landing.surface_kind, combat_sim::space::FallSurfaceKind::Ceiling);
+    assert_eq!(
+        fall.landing.surface_kind,
+        combat_sim::space::FallSurfaceKind::Ceiling
+    );
     assert_eq!(fall.fall_distance_ft, 9);
 }
 
@@ -743,6 +768,147 @@ fn area_effects_use_target_volumes() {
     );
 }
 
+/// A 2014 flying creature that is stunned now falls (the shared condition data
+/// gained `speed_zero`). A 2024 flyer falls through Incapacitated instead.
+#[test]
+fn condition_stunned_drops_a_flyer_in_both_editions() {
+    for (ruleset, reason) in [("2014", "speed_zero"), ("2024", "incapacitated")] {
+        let mut state = state_with(
+            registry(ruleset),
+            vec![combatant(
+                "Flyer",
+                creature("synthetic-flyer", Size::Medium, 30, false, no_attacks()),
+                "party",
+                0,
+                0,
+                20,
+                FlightState::Flying,
+                (1, 1),
+                &[],
+            )],
+            grid_scene(&["...."], json!({".": {"elevation": 0}})),
+            spatial(),
+        );
+        let mut log = Vec::new();
+        engine::add_condition(
+            &mut state,
+            "Flyer",
+            "stunned",
+            &AddConditionOptions::default(),
+            &mut ScriptedRng::new(&[10, 3, 4]),
+            &mut log,
+        )
+        .expect("stunned applies");
+        assert!(
+            log.iter()
+                .any(|line| line.contains("loses flight support") && line.contains(reason)),
+            "{ruleset}: {log:?}"
+        );
+        let vertical = state.combatants[0].vertical.expect("vertical state");
+        assert_eq!(vertical.flight, FlightState::Grounded, "{ruleset}");
+        assert_eq!(vertical.altitude_ft, 0, "{ruleset}");
+        assert_eq!(
+            state.combatants[0].pose.expect("pose").cell.z,
+            0,
+            "{ruleset}: absolute elevation returns to the floor"
+        );
+    }
+}
+
+/// `fly` keeps absolute pose elevation and relative altitude in sync, and a
+/// ceiling stops the climb at the body-height limit.
+#[test]
+fn fly_updates_pose_and_vertical_state_and_stops_at_the_ceiling() {
+    let mut state = state_with(
+        registry("2024"),
+        vec![grounded(
+            "Flyer",
+            creature("synthetic-flyer", Size::Medium, 30, false, no_attacks()),
+            "party",
+            0,
+            0,
+        )],
+        scene_with(
+            &["...."],
+            json!({".": {"elevation": 0}}),
+            json!({"cell_height_ft": 15}),
+        ),
+        spatial(),
+    );
+    let mut log = Vec::new();
+    engine::fly(&mut state, "Flyer", 30, &mut log).expect("take off");
+    let pose = state.combatants[0].pose.expect("pose");
+    let vertical = state.combatants[0].vertical.expect("vertical");
+    assert_eq!(vertical.flight, FlightState::Flying);
+    assert_eq!(vertical.altitude_ft, 10, "15-ft ceiling minus a 5-ft body");
+    assert_eq!(pose.cell.z, 10);
+    assert!(
+        log.iter().any(|line| line.contains("stops below ceiling")),
+        "{log:?}"
+    );
+
+    let mut log = Vec::new();
+    engine::fly(&mut state, "Flyer", 0, &mut log).expect("land");
+    assert_eq!(
+        state.combatants[0].vertical.expect("vertical").flight,
+        FlightState::Grounded
+    );
+    assert_eq!(state.combatants[0].pose.expect("pose").cell.z, 0);
+}
+
+/// `fall_with_checks` rolls R-09 for short falls and applies P4 damage and
+/// landing state; a 20-ft drop is outside R-09 and rolls only damage.
+#[test]
+fn fall_with_checks_rolls_r09_and_applies_the_landing() {
+    let mut state = state_with(
+        registry("2024"),
+        vec![combatant(
+            "Faller",
+            creature("synthetic-faller", Size::Medium, 0, false, no_attacks()),
+            "party",
+            0,
+            0,
+            10,
+            FlightState::Flying,
+            (1, 1),
+            &[],
+        )],
+        grid_scene(&["...."], json!({".": {"elevation": 0}})),
+        spatial(),
+    );
+    let mut log = Vec::new();
+    let report = engine::fall_with_checks(
+        &mut state,
+        "Faller",
+        engine::FallOptions::default(),
+        combat_sim::space::FallAbility::Dexterity,
+        &mut ScriptedRng::new(&[9, 4]),
+        &mut log,
+    )
+    .expect("fall resolves")
+    .expect("spatial fall");
+    assert_eq!(report.resolution.fall_distance_ft, 10);
+    assert!(
+        log.iter().any(|line| line.contains("acrobatics check")
+            && line.contains("DC 10")
+            && line.contains("FAIL")),
+        "a failed DC 10 check is logged as the R-09 house rule: {log:?}"
+    );
+    assert_eq!(
+        state.combatants[0].vertical.expect("vertical").flight,
+        FlightState::Grounded
+    );
+    assert_eq!(state.combatants[0].pose.expect("pose").cell.z, 0);
+    assert!(
+        state.combatants[0]
+            .conditions
+            .iter()
+            .any(|active| active.condition == "prone"),
+        "a failed short-fall check lands flat: {:?}",
+        state.combatants[0].conditions
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Phase 4: legacy regression
 // ---------------------------------------------------------------------------
@@ -754,23 +920,19 @@ fn legacy_grid_attack_keeps_anchor_cell_reach() {
     let mut state = state_with(
         registry("2024"),
         vec![
-            grounded(
+            legacy_combatant(
                 "Attacker",
                 creature("synthetic-attacker", Size::Medium, 0, false, melee_attack()),
                 "party",
                 6,
                 6,
             ),
-            combatant(
+            legacy_combatant(
                 "Target",
                 creature("synthetic-target", Size::Large, 0, false, no_attacks()),
                 "enemy",
                 4,
                 4,
-                0,
-                FlightState::Grounded,
-                (2, 2),
-                &[],
             ),
         ],
         grid_scene(
@@ -799,16 +961,12 @@ fn legacy_grid_attack_keeps_anchor_cell_reach() {
 fn legacy_grid_move_keeps_the_old_router() {
     let mut state = state_with(
         registry("2024"),
-        vec![combatant(
+        vec![legacy_combatant(
             "Mover",
             creature("synthetic-mover", Size::Large, 0, false, no_attacks()),
             "party",
             0,
             0,
-            0,
-            FlightState::Grounded,
-            (2, 2),
-            &[],
         )],
         grid_scene(
             &[".....", "####.", ".....", "....."],
@@ -828,6 +986,245 @@ fn legacy_grid_move_keeps_the_old_router() {
     )
     .expect("the legacy router ignores the footprint");
     assert_eq!(state.combatants[0].cell(), Some([0, 2]));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: CLI end-to-end
+// ---------------------------------------------------------------------------
+
+struct TempState {
+    path: PathBuf,
+}
+
+impl TempState {
+    fn new(label: &str, state: &EncounterState) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "combat-sim-p5-{label}-{}-{nanos}-{count}.state.json",
+            std::process::id()
+        ));
+        let text = serde_json::to_string_pretty(state).expect("serialize state");
+        std::fs::write(&path, text).expect("write state");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempState {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn run_cli(state: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("--state")
+        .arg(state)
+        .args(args)
+        .output()
+        .expect("run combat-sim")
+}
+
+fn cli_text(output: &Output) -> String {
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+#[test]
+fn cli_fly_and_fall_explain_the_vertical_state() {
+    let state = state_with(
+        registry("2024"),
+        vec![grounded(
+            "Flyer",
+            creature("synthetic-flyer", Size::Medium, 30, false, no_attacks()),
+            "party",
+            0,
+            0,
+        )],
+        grid_scene(&["...."], json!({".": {"elevation": 0}})),
+        spatial(),
+    );
+    let temp = TempState::new("fly", &state);
+
+    let fly = run_cli(temp.path(), &["fly", "Flyer", "20"]);
+    assert!(fly.status.success(), "fly failed: {}", cli_text(&fly));
+    assert!(
+        cli_text(&fly).contains("flies to 20 ft above the floor"),
+        "{}",
+        cli_text(&fly)
+    );
+
+    let fall = run_cli(temp.path(), &["fall", "Flyer"]);
+    assert!(fall.status.success(), "fall failed: {}", cli_text(&fall));
+    let text = cli_text(&fall);
+    assert!(text.contains("falls 20 ft"), "{text}");
+    assert!(text.contains("2d6"), "{text}");
+
+    let status = run_cli(temp.path(), &["status"]);
+    assert!(status.status.success(), "{}", cli_text(&status));
+    assert!(
+        cli_text(&status).contains("prone"),
+        "the damaging fall lands prone: {}",
+        cli_text(&status)
+    );
+}
+
+#[test]
+fn cli_fall_without_spatial_state_is_an_explicit_error() {
+    let state = state_with(
+        registry("2024"),
+        vec![legacy_combatant(
+            "Walker",
+            creature("synthetic-walker", Size::Medium, 0, false, no_attacks()),
+            "party",
+            0,
+            0,
+        )],
+        grid_scene(&["...."], json!({".": {"elevation": 0}})),
+        None,
+    );
+    let temp = TempState::new("legacy-fall", &state);
+    let output = run_cli(temp.path(), &["fall", "Walker"]);
+    assert!(
+        !output.status.success(),
+        "a legacy save must not pretend to have a fall map"
+    );
+    assert!(
+        cli_text(&output).contains("no spatial fall map"),
+        "{}",
+        cli_text(&output)
+    );
+}
+
+#[test]
+fn cli_move_explains_a_spatial_rejection() {
+    let state = state_with(
+        registry("2024"),
+        vec![grounded(
+            "Walker",
+            creature("synthetic-walker", Size::Medium, 0, false, no_attacks()),
+            "party",
+            0,
+            0,
+        )],
+        grid_scene(
+            &[".x."],
+            json!({".": {"elevation": 0}, "x": {"height_ft": 5}}),
+        ),
+        spatial(),
+    );
+    let temp = TempState::new("move-blocked", &state);
+    let output = run_cli(temp.path(), &["move", "Walker", "--to", "2,0"]);
+    assert!(!output.status.success(), "{}", cli_text(&output));
+    let text = cli_text(&output);
+    assert!(
+        text.contains("cannot move") || text.contains("height") || text.contains("wall"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("dm-secrets"),
+        "rejection logs never include private state: {text}"
+    );
+}
+
+#[test]
+fn cli_attack_uses_the_unified_geometry_only_with_spatial_state() {
+    let spatial_state = state_with(
+        registry("2024"),
+        vec![
+            grounded(
+                "Attacker",
+                creature("synthetic-attacker", Size::Medium, 0, false, melee_attack()),
+                "party",
+                6,
+                6,
+            ),
+            combatant(
+                "Target",
+                creature("synthetic-target", Size::Large, 0, false, no_attacks()),
+                "enemy",
+                4,
+                4,
+                0,
+                FlightState::Grounded,
+                (2, 2),
+                &[],
+            ),
+        ],
+        grid_scene(
+            &["......", "......", "......", "......", "......", "......"],
+            json!({".": {"elevation": 0}}),
+        ),
+        spatial(),
+    );
+    let temp = TempState::new("spatial-attack", &spatial_state);
+    let output = run_cli(
+        temp.path(),
+        &[
+            "--seed",
+            "7",
+            "attack",
+            "Attacker",
+            "Target",
+            "synthetic-sword",
+        ],
+    );
+    assert!(output.status.success(), "{}", cli_text(&output));
+
+    let legacy_state = state_with(
+        registry("2024"),
+        vec![
+            legacy_combatant(
+                "Attacker",
+                creature("synthetic-attacker", Size::Medium, 0, false, melee_attack()),
+                "party",
+                6,
+                6,
+            ),
+            legacy_combatant(
+                "Target",
+                creature("synthetic-target", Size::Large, 0, false, no_attacks()),
+                "enemy",
+                4,
+                4,
+            ),
+        ],
+        grid_scene(
+            &["......", "......", "......", "......", "......", "......"],
+            json!({".": {"elevation": 0}}),
+        ),
+        None,
+    );
+    let legacy = TempState::new("legacy-attack", &legacy_state);
+    let output = run_cli(
+        legacy.path(),
+        &[
+            "--seed",
+            "7",
+            "attack",
+            "Attacker",
+            "Target",
+            "synthetic-sword",
+        ],
+    );
+    assert!(!output.status.success(), "{}", cli_text(&output));
+    assert!(
+        cli_text(&output).contains("out of reach"),
+        "{}",
+        cli_text(&output)
+    );
 }
 
 // Keep imports that later phases use; this file is the single P5 test module.

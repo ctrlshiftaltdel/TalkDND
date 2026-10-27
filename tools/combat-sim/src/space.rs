@@ -6707,6 +6707,22 @@ impl FallMap {
                     });
                     column.sort_spans();
                 }
+                // `GridCell.height_ft` is the obstacle height above this
+                // cell's floor (P5). It is a solid landing surface for falls
+                // and a vertical obstacle for line of sight; a wall cell keeps
+                // its whole column blocked above.
+                if let Some(height) = cell.height_ft {
+                    if !(1..=MAX_VOLUME_HEIGHT_FT).contains(&height) {
+                        return None;
+                    }
+                    column.spans.push(VerticalSpan {
+                        id: format!("cell-terrain:{x},{y}"),
+                        bottom_ft: floor_ft,
+                        top_ft: floor_ft.saturating_add(height),
+                        kind: FallSurfaceKind::Terrain,
+                    });
+                    column.sort_spans();
+                }
                 columns.insert((x, y), column);
             }
         }

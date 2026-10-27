@@ -15,8 +15,9 @@ use serde::Serialize;
 use crate::ai::Ai;
 use crate::content::{self, ContentSources, ItemKind, ShownItem};
 use crate::dice::{self, DiceRng, RollMode};
-use crate::engine::{self, AddConditionOptions, AttackOptions, RestKind, UseOptions};
+use crate::engine::{self, AddConditionOptions, AttackOptions, FallOptions, RestKind, UseOptions};
 use crate::sim::{self, SimulationConfig};
+use crate::space::FallAbility;
 use crate::state::{
     resolve_state_path, AddSpec, CombatantState, EncounterState, LookupError, NewEncounter,
 };
@@ -276,6 +277,28 @@ pub enum Command {
         no_oa: bool,
     },
 
+    /// Take off or change altitude in a grid scene.
+    Fly {
+        who: String,
+        /// Height above the local floor in feet (0 lands).
+        altitude_ft: i32,
+    },
+
+    /// Resolve a fall, rolling the R-09 landing check and the 2024 liquid
+    /// landing reaction. Needs a save that has explicit spatial state.
+    Fall {
+        who: String,
+        /// Pre-rolled Acrobatics total for the R-09 check (DM override).
+        #[arg(long)]
+        landing_check: Option<i32>,
+        /// Pre-rolled liquid-landing total (DM override).
+        #[arg(long)]
+        liquid_check: Option<i32>,
+        /// Ability used for the 2024 liquid-landing reaction.
+        #[arg(long, value_enum, default_value_t = LiquidAbilityArg::Dex)]
+        liquid: LiquidAbilityArg,
+    },
+
     /// Interact with a scene object.
     Interact {
         who: String,
@@ -499,6 +522,21 @@ pub enum ConditionCommand {
         who: String,
         condition: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum LiquidAbilityArg {
+    Str,
+    Dex,
+}
+
+impl From<LiquidAbilityArg> for FallAbility {
+    fn from(value: LiquidAbilityArg) -> Self {
+        match value {
+            LiquidAbilityArg::Str => Self::Strength,
+            LiquidAbilityArg::Dex => Self::Dexterity,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -998,6 +1036,37 @@ fn run_cli() -> Result<()> {
                 let who = canonical_name(state, &who)?;
                 warn_out_of_turn(state, &who, lines);
                 engine::move_to(state, &who, &target, no_oa, rng, lines)
+            })
+        }
+        Command::Fly { who, altitude_ft } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, save.as_deref(), seed, |state, _rng, lines| {
+                let who = canonical_name(state, &who)?;
+                warn_out_of_turn(state, &who, lines);
+                engine::fly(state, &who, altitude_ft, lines)
+            })
+        }
+        Command::Fall {
+            who,
+            landing_check,
+            liquid_check,
+            liquid,
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
+                let who = canonical_name(state, &who)?;
+                let options = FallOptions {
+                    landing_check_total: landing_check,
+                    liquid_landing_total: liquid_check,
+                };
+                let report =
+                    engine::fall_with_checks(state, &who, options, liquid.into(), rng, lines)?;
+                if report.is_none() {
+                    return Err(anyhow!(
+                        "this state has no spatial fall map; take off with `fly` or add explicit spatial state first"
+                    ));
+                }
+                Ok(())
             })
         }
         Command::Interact {

@@ -23,9 +23,12 @@ use crate::content::schema::{
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
 use crate::space::{
-    CellPos, Explain, FallCause, FallMap, FallResolution, FallResolver, FallRuleKind,
-    FlightCapability, FlightCheck, FlightConditions, FlightRules, FlightState, FlightSubject,
-    HeightProfile, LandingCondition, LandingOutcome, Position, Space, SpatialPose, OPEN_ZONE,
+    AreaShape, AreaSpecV1, BlockerKind, CellPos, CoverResult, Explain, FallAbility, FallCause,
+    FallMap, FallResolution, FallResolver, FallRuleKind, FlightCapability, FlightCheck,
+    FlightConditions, FlightRules, FlightState, FlightSubject, Footprint, GridMap, HeightProfile,
+    LandingCondition, LandingOutcome, LineOfSight, MovementCell, MovementMap, MovementPlanner,
+    PlanOutcome, Position, Space, SpatialBlocker, SpatialBody, SpatialPose, SpatialProfile,
+    TraversalCreature, OPEN_ZONE,
 };
 use crate::state::{
     ability_from_text, active_duration, ActiveCondition, ActiveDuration, ActiveSaveEnds,
@@ -263,6 +266,228 @@ fn ensure_targetable(state: &EncounterState, index: usize) -> Result<()> {
 
 fn hostile_to(state: &EncounterState, a: usize, b: usize) -> bool {
     state.combatants[a].side != state.combatants[b].side
+}
+
+// ---------------------------------------------------------------------------
+// P5 spatial query bridge (TASK-0090)
+// ---------------------------------------------------------------------------
+//
+// These helpers are the single engine-facing entry to the P2/P3/P4 kernel.
+// They are only consulted when the save explicitly carries P1 spatial data;
+// legacy saves keep the old `Space` trait path (contract §11, AC-5).
+
+/// Whether this save opted into the additive spatial state at all.
+fn spatial_query_enabled(state: &EncounterState) -> bool {
+    spatial_flight_enabled(state)
+}
+
+fn spatial_body_for(state: &EncounterState, index: usize) -> Option<SpatialBody> {
+    let combatant = state.combatants.get(index)?;
+    let pose = combatant.spatial_pose()?;
+    let height = HeightProfile::default()
+        .resolve(combatant.creature.size(), None)
+        .ok()?
+        .height_ft;
+    Some(
+        SpatialBody::new(combatant.name.clone(), pose, combatant.creature.size())
+            .with_height(height),
+    )
+}
+
+fn spatial_bodies(state: &EncounterState) -> Vec<(usize, SpatialBody)> {
+    state
+        .combatants
+        .iter()
+        .enumerate()
+        .filter(|(_, combatant)| !combatant.dormant && !combatant.is_dead())
+        .filter_map(|(index, _)| spatial_body_for(state, index).map(|body| (index, body)))
+        .collect()
+}
+
+/// Blocker volumes for line of sight and cover. Walls use the scene ceiling as
+/// their default height; `GridCell.height_ft` is a low-obstacle height above
+/// the cell floor. Terrain volumes follow the same override rule as the fall
+/// map: a non-empty `SpatialState` list replaces the scene list.
+fn spatial_blockers(state: &EncounterState, profile: &SpatialProfile) -> Vec<SpatialBlocker> {
+    let mut blockers = Vec::new();
+    if let Some(scene) = state.scene.as_deref() {
+        if let Some(grid) = GridMap::parse(scene) {
+            let wall_height = scene.cell_height_ft.unwrap_or(10).max(1);
+            for y in 0..grid.height {
+                for x in 0..grid.width {
+                    let Some(cell) = grid.cell_at(x, y) else {
+                        continue;
+                    };
+                    let floor = cell.elevation.unwrap_or(0);
+                    let cell_pos = CellPos { x, y, z: floor };
+                    if cell.wall {
+                        let height = cell.height_ft.unwrap_or(wall_height);
+                        if let Ok(blocker) = SpatialBlocker::wall(
+                            format!("wall:{x},{y}"),
+                            cell_pos,
+                            Footprint::ONE,
+                            height,
+                        ) {
+                            blockers.push(blocker);
+                        }
+                    } else if cell.height_ft.is_some() || cell.cover != Cover::None {
+                        let height = cell.height_ft.unwrap_or(3);
+                        let kind = if height >= 5 {
+                            BlockerKind::Terrain
+                        } else {
+                            BlockerKind::LowObstacle
+                        };
+                        if let Ok(blocker) = SpatialBlocker::new(
+                            format!("cell:{x},{y}"),
+                            cell_pos,
+                            Footprint::ONE,
+                            height,
+                            kind,
+                        ) {
+                            let cover = if cell.cover == Cover::None {
+                                Cover::Half
+                            } else {
+                                cell.cover
+                            };
+                            blockers.push(blocker.with_cover(cover).with_sight(height >= 5));
+                        }
+                    }
+                }
+            }
+        }
+        let terrain = state
+            .spatial
+            .as_ref()
+            .filter(|spatial| !spatial.terrain_volumes.is_empty())
+            .map_or(scene.terrain_volumes.as_slice(), |spatial| {
+                spatial.terrain_volumes.as_slice()
+            });
+        for volume in terrain {
+            if let Ok(blocker) = SpatialBlocker::terrain(volume, Cover::Half) {
+                blockers.push(blocker);
+            }
+        }
+    } else if let Some(spatial) = state.spatial.as_ref() {
+        for volume in &spatial.terrain_volumes {
+            if let Ok(blocker) = SpatialBlocker::terrain(volume, Cover::Half) {
+                blockers.push(blocker);
+            }
+        }
+    }
+    for (_, body) in spatial_bodies(state) {
+        if let Ok(blocker) = SpatialBlocker::creature(&body, false) {
+            blockers.push(blocker.with_cover(profile.creature_cover));
+        }
+    }
+    blockers.sort_by(|left, right| left.id.cmp(&right.id));
+    blockers
+}
+
+fn spatial_cover_result(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+) -> Option<CoverResult> {
+    let from = spatial_body_for(state, attacker)?;
+    let to = spatial_body_for(state, target)?;
+    let profile = state.effective_spatial_profile();
+    let blockers = spatial_blockers(state, &profile);
+    Some(crate::space::cover_between(&from, &to, &blockers, &profile))
+}
+
+fn spatial_line_of_sight(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+) -> Option<LineOfSight> {
+    let from = spatial_body_for(state, attacker)?;
+    let to = spatial_body_for(state, target)?;
+    let profile = state.effective_spatial_profile();
+    let blockers = spatial_blockers(state, &profile);
+    Some(crate::space::line_of_sight(&from, &to, &blockers, &profile))
+}
+
+fn ensure_spatial_line_of_sight(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+) -> Result<()> {
+    let Some(sight) = spatial_line_of_sight(state, attacker, target) else {
+        return Ok(());
+    };
+    if !sight.clear {
+        bail!(
+            "`{}` has no line of sight to `{}` (blocked by {})",
+            state.combatants[attacker].name,
+            state.combatants[target].name,
+            sight.blocked_by.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn spatial_body_distance(state: &EncounterState, from: usize, to: usize) -> Option<i32> {
+    let from = spatial_body_for(state, from)?;
+    let to = spatial_body_for(state, to)?;
+    let profile = state.effective_spatial_profile();
+    Some(crate::space::body_distance(&from, &to, &profile).feet)
+}
+
+fn spatial_can_reach(
+    state: &EncounterState,
+    from: usize,
+    to: usize,
+    reach_ft: i32,
+) -> Option<bool> {
+    let from = spatial_body_for(state, from)?;
+    let to = spatial_body_for(state, to)?;
+    let profile = state.effective_spatial_profile();
+    Some(crate::space::can_reach_bodies(&from, &to, reach_ft, &profile).reachable)
+}
+
+/// Pose for an arbitrary area centre. A creature standing on that cell wins
+/// (it carries altitude); otherwise the cell floor is used.
+fn spatial_pose_for_position(state: &EncounterState, position: &Position) -> Option<SpatialPose> {
+    match position {
+        Position::Cell { x, y } => {
+            if let Some(pose) = state
+                .combatants
+                .iter()
+                .filter(|combatant| !combatant.dormant && !combatant.is_dead())
+                .find(|combatant| combatant.cell() == Some([*x, *y]))
+                .and_then(CombatantState::spatial_pose)
+            {
+                return Some(pose);
+            }
+            let floor = state
+                .scene
+                .as_deref()
+                .and_then(GridMap::parse)
+                .and_then(|grid| grid.cell_at(*x, *y).map(|cell| cell.elevation.unwrap_or(0)))
+                .unwrap_or(0);
+            Some(SpatialPose {
+                cell: CellPos {
+                    x: *x,
+                    y: *y,
+                    z: floor,
+                },
+                footprint: Footprint::ONE,
+                facing: None,
+            })
+        }
+        Position::Zone { .. } => None,
+    }
+}
+
+fn spatial_distance_to_position(state: &EncounterState, from: usize, to: &Position) -> Option<i32> {
+    let from = spatial_body_for(state, from)?;
+    let to = SpatialBody::new(
+        "target-position",
+        spatial_pose_for_position(state, to)?,
+        Size::Medium,
+    );
+    let profile = state.effective_spatial_profile();
+    Some(crate::space::body_distance(&from, &to, &profile).feet)
 }
 
 fn effective_speed(state: &EncounterState, index: usize) -> i32 {
@@ -1683,6 +1908,11 @@ fn cover_bonus(cover: Cover, rules: &crate::content::schema::Rules) -> Option<i3
 }
 
 fn cover_between(state: &EncounterState, attacker: usize, target: usize) -> Cover {
+    if spatial_query_enabled(state) {
+        if let Some(result) = spatial_cover_result(state, attacker, target) {
+            return result.degree;
+        }
+    }
     let Some(space) = state.space() else {
         return Cover::None;
     };
@@ -1695,6 +1925,9 @@ fn cover_between(state: &EncounterState, attacker: usize, target: usize) -> Cove
 fn ensure_cover_allows(state: &EncounterState, attacker: usize, target: usize) -> Result<()> {
     if attacker == target {
         return Ok(());
+    }
+    if spatial_query_enabled(state) {
+        ensure_spatial_line_of_sight(state, attacker, target)?;
     }
     if cover_between(state, attacker, target) == Cover::Total {
         bail!(
@@ -2590,6 +2823,11 @@ fn attacker_in_melee_reach(
     if profile.kind == AttackKind::Melee {
         return true;
     }
+    if spatial_query_enabled(state) {
+        if let Some(reachable) = spatial_can_reach(state, attacker, target, profile.reach) {
+            return reachable;
+        }
+    }
     let Some(space) = state.space() else {
         return true;
     };
@@ -2723,13 +2961,25 @@ fn resolve_attack_inner(
     let target_position = state.combatants[target].position_ref();
     let (attacker_position, target_position) =
         (attacker_position.as_ref(), target_position.as_ref());
-    let distance = space
-        .distance(attacker_position, target_position)
-        .ok_or_else(|| anyhow!("no path between the combatants"))?;
+    let spatial = spatial_query_enabled(state);
+    let distance = if spatial {
+        spatial_body_distance(state, attacker, target)
+            .ok_or_else(|| anyhow!("no spatial body for the combatants"))?
+    } else {
+        space
+            .distance(attacker_position, target_position)
+            .ok_or_else(|| anyhow!("no path between the combatants"))?
+    };
+    let in_reach = if spatial {
+        spatial_can_reach(state, attacker, target, profile.reach)
+            .unwrap_or_else(|| space.can_reach(attacker_position, target_position, profile.reach))
+    } else {
+        space.can_reach(attacker_position, target_position, profile.reach)
+    };
     if !ignore_range {
         let mut kind = profile.kind;
         if kind == AttackKind::MeleeOrRanged {
-            kind = if space.can_reach(attacker_position, target_position, profile.reach) {
+            kind = if in_reach {
                 AttackKind::Melee
             } else {
                 AttackKind::Ranged
@@ -2737,7 +2987,7 @@ fn resolve_attack_inner(
         }
         match kind {
             AttackKind::Melee => {
-                if !space.can_reach(attacker_position, target_position, profile.reach) {
+                if !in_reach {
                     bail!(
                         "`{target_name}` is out of reach ({distance} ft; reach {})",
                         profile.reach
@@ -2760,6 +3010,9 @@ fn resolve_attack_inner(
                     has_disadvantage = true;
                 }
             }
+        }
+        if spatial {
+            ensure_spatial_line_of_sight(state, attacker, target)?;
         }
     }
     if space.light_at(target_position) == Light::Dark
@@ -3004,6 +3257,7 @@ fn resolve_attack_inner(
 }
 
 fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
+    let spatial = spatial_query_enabled(state);
     let Some(space) = state.space() else {
         return false;
     };
@@ -3017,6 +3271,11 @@ fn hostile_within_5(state: &EncounterState, index: usize) -> bool {
                 && combatant.is_active()
                 && combatant.side != state.combatants[index].side
                 && {
+                    if spatial {
+                        if let Some(distance) = spatial_body_distance(state, index, other) {
+                            return distance <= 5;
+                        }
+                    }
                     let other_position = combatant.position_ref();
                     space
                         .distance(position.as_ref(), other_position.as_ref())
@@ -4591,7 +4850,7 @@ fn apply_condition_internal(
     ends_on: Vec<EndsOn>,
     created_by: Option<String>,
     concentration: bool,
-    _rng: &mut dyn DiceRng,
+    rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
     let Some(def) = state.content.conditions.get(condition_id) else {
@@ -4654,6 +4913,7 @@ fn apply_condition_internal(
     if incapacitated && state.concentration.contains_key(&target_name) {
         break_concentration(state, target, log);
     }
+    maybe_fall_after_condition(state, target, rng, log)?;
     Ok(())
 }
 
@@ -4858,9 +5118,16 @@ fn use_resolved_ability(
                 .unwrap_or_else(|| state.combatants[actor].position());
             if let (Some(range), Some(space)) = (ability.range, state.space()) {
                 if range > 0 {
-                    let distance = space
-                        .distance(&state.combatants[actor].position(), &center)
-                        .unwrap_or(i32::MAX);
+                    let spatial_distance = if spatial_query_enabled(state) {
+                        spatial_distance_to_position(state, actor, &center)
+                    } else {
+                        None
+                    };
+                    let distance = spatial_distance.unwrap_or_else(|| {
+                        space
+                            .distance(&state.combatants[actor].position(), &center)
+                            .unwrap_or(i32::MAX)
+                    });
                     if distance > range {
                         bail!(
                             "area centre is out of range for {} ({distance} ft; range {range})",
@@ -4898,12 +5165,19 @@ fn use_resolved_ability(
                 }
                 if *target != actor {
                     if let (Some(range), Some(space)) = (ability.range, state.space()) {
-                        let distance = space
-                            .distance(
-                                &state.combatants[actor].position(),
-                                &state.combatants[*target].position(),
-                            )
-                            .unwrap_or(i32::MAX);
+                        let spatial_distance = if spatial_query_enabled(state) {
+                            spatial_body_distance(state, actor, *target)
+                        } else {
+                            None
+                        };
+                        let distance = spatial_distance.unwrap_or_else(|| {
+                            space
+                                .distance(
+                                    &state.combatants[actor].position(),
+                                    &state.combatants[*target].position(),
+                                )
+                                .unwrap_or(i32::MAX)
+                        });
                         if distance > range {
                             bail!(
                                 "`{}` is out of range for {} ({distance} ft; range {range})",
@@ -5026,6 +5300,33 @@ fn target_matches_side(
 
 /// Every non-dormant, living creature inside an area.
 fn area_targets(state: &EncounterState, center: &Position, radius: i32) -> Vec<usize> {
+    if spatial_query_enabled(state) {
+        if let Some(origin_pose) = spatial_pose_for_position(state, center) {
+            let profile = state.effective_spatial_profile();
+            let spec = AreaSpecV1 {
+                shape: AreaShape::Sphere,
+                size_ft: radius,
+                width_ft: None,
+            };
+            if let Ok(area) = crate::space::area_cells(&spec, &origin_pose, &profile) {
+                let origin = SpatialBody::new("area-origin", origin_pose, Size::Medium);
+                let blockers = spatial_blockers(state, &profile);
+                return state
+                    .combatants
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, combatant)| !combatant.dormant && !combatant.is_dead())
+                    .filter(|(index, _)| {
+                        spatial_body_for(state, *index).is_some_and(|target| {
+                            crate::space::area_intersection(&area, &origin, &target, &blockers)
+                                .intersects
+                        })
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+            }
+        }
+    }
     let Some(space) = state.space() else {
         return Vec::new();
     };
@@ -5972,22 +6273,16 @@ pub fn move_to(
     move_to_at(state, index, target, no_oa, rng, log)
 }
 
-/// [`move_to`] for callers that already hold the mover's index.
-pub fn move_to_at(
-    state: &mut EncounterState,
+/// Resolve a CLI destination. The legacy callers pass `check_occupancy`
+/// because their 2D router treats any shared cell as occupied; the spatial
+/// path defers to `can_occupy`, which understands altitude bands.
+fn resolve_move_destination(
+    state: &EncounterState,
     index: usize,
     target: &MoveTarget,
-    no_oa: bool,
-    rng: &mut dyn DiceRng,
+    check_occupancy: bool,
     log: &mut dyn LogSink,
-) -> Result<()> {
-    let combatant = &state.combatants[index];
-    if combatant.dormant {
-        bail!("`{}` is dormant and cannot move", combatant.name);
-    }
-    if combatant.is_dead() || combatant.hp <= 0 {
-        bail!("`{}` cannot move", combatant.name);
-    }
+) -> Result<Option<Position>> {
     let Some(space) = state.space() else {
         bail!("this state has no scene");
     };
@@ -6007,13 +6302,14 @@ pub fn move_to_at(
             if !space.contains(&position) {
                 bail!("cell ({x},{y}) is a wall or outside the grid");
             }
-            if state
-                .combatants
-                .iter()
-                .enumerate()
-                .any(|(other, combatant)| {
-                    other != index && !combatant.is_dead() && combatant.position() == position
-                })
+            if check_occupancy
+                && state
+                    .combatants
+                    .iter()
+                    .enumerate()
+                    .any(|(other, combatant)| {
+                        other != index && !combatant.is_dead() && combatant.position() == position
+                    })
             {
                 bail!("cell ({x},{y}) is occupied");
             }
@@ -6054,7 +6350,7 @@ pub fn move_to_at(
                             "{} is already in {zone}",
                             state.combatants[index].name
                         ));
-                        return Ok(());
+                        return Ok(None);
                     }
                     bail!("no free cell tagged `{zone}`");
                 }
@@ -6066,8 +6362,41 @@ pub fn move_to_at(
             "{} is already in {}",
             state.combatants[index].name, state.combatants[index].zone
         ));
-        return Ok(());
+        return Ok(None);
     }
+    Ok(Some(destination))
+}
+
+/// [`move_to`] for callers that already hold the mover's index.
+pub fn move_to_at(
+    state: &mut EncounterState,
+    index: usize,
+    target: &MoveTarget,
+    no_oa: bool,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let combatant = &state.combatants[index];
+    if combatant.dormant {
+        bail!("`{}` is dormant and cannot move", combatant.name);
+    }
+    if combatant.is_dead() || combatant.hp <= 0 {
+        bail!("`{}` cannot move", combatant.name);
+    }
+    if spatial_query_enabled(state)
+        && state
+            .space()
+            .is_some_and(|space| space.mode() == SceneMode::Grid)
+    {
+        return spatial_move_to_at(state, index, target, no_oa, rng, log);
+    }
+    let Some(destination) = resolve_move_destination(state, index, target, true, log)? else {
+        return Ok(());
+    };
+    let start = state.combatants[index].position();
+    let Some(space) = state.space() else {
+        bail!("this state has no scene");
+    };
     let blocked: Vec<Position> = state
         .combatants
         .iter()
@@ -6167,6 +6496,258 @@ pub fn move_to_at(
     Ok(())
 }
 
+/// Movement map for one horizontal plane. Ground movement uses each cell's
+/// floor; flight uses the mover's absolute altitude so walls and tall
+/// obstacles below the feet no longer block.
+fn spatial_movement_map(
+    state: &EncounterState,
+    grid: &GridMap,
+    plane_z: i32,
+    flying: bool,
+) -> Result<MovementMap> {
+    let mut cells = Vec::with_capacity((grid.width * grid.height) as usize);
+    for y in 0..grid.height {
+        for x in 0..grid.width {
+            let Some(cell) = grid.cell_at(x, y) else {
+                bail!("grid cell ({x},{y}) is missing");
+            };
+            let floor = cell.elevation.unwrap_or(0);
+            let mut movement = MovementCell::open();
+            movement.elevation_ft = if flying { plane_z } else { floor };
+            movement.difficult = cell.difficult;
+            if cell.wall {
+                movement.blocked = true;
+            } else if let Some(height) = cell.height_ft {
+                // The obstacle occupies `floor..floor+height`; feet at or
+                // above its top pass over it.
+                if plane_z < floor.saturating_add(height) {
+                    movement.blocked = true;
+                }
+            }
+            cells.push(movement);
+        }
+    }
+    let scene_terrain = state
+        .scene
+        .as_deref()
+        .map_or(&[][..], |scene| scene.terrain_volumes.as_slice());
+    let terrain = state
+        .spatial
+        .as_ref()
+        .filter(|spatial| !spatial.terrain_volumes.is_empty())
+        .map_or(scene_terrain, |spatial| spatial.terrain_volumes.as_slice());
+    for volume in terrain {
+        let top = volume.cell.z.saturating_add(volume.height_ft);
+        if plane_z < volume.cell.z || plane_z >= top {
+            continue;
+        }
+        for dy in 0..volume.footprint.depth {
+            for dx in 0..volume.footprint.width {
+                let x = volume.cell.x.saturating_add(dx as i32);
+                let y = volume.cell.y.saturating_add(dy as i32);
+                if x < 0 || y < 0 || x >= grid.width || y >= grid.height {
+                    continue;
+                }
+                cells[(y * grid.width + x) as usize].blocked = true;
+                cells[(y * grid.width + x) as usize].elevation_ft = if flying {
+                    plane_z
+                } else {
+                    grid.cell_at(x, y)
+                        .and_then(|cell| cell.elevation)
+                        .unwrap_or(0)
+                };
+            }
+        }
+    }
+    MovementMap::new(grid.width, grid.height, cells).map_err(|error| anyhow!(error.to_string()))
+}
+
+/// P3-backed grid movement. The path is validated before any state change and
+/// every step is re-checked before it is applied, so a blocked/reaction stop
+/// can never teleport the mover to the goal.
+fn spatial_move_to_at(
+    state: &mut EncounterState,
+    index: usize,
+    target: &MoveTarget,
+    no_oa: bool,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let Some(destination) = resolve_move_destination(state, index, target, false, log)? else {
+        return Ok(());
+    };
+    let Position::Cell {
+        x: dest_x,
+        y: dest_y,
+    } = destination
+    else {
+        bail!("spatial movement needs a grid destination");
+    };
+    let scene = state
+        .scene
+        .as_deref()
+        .ok_or_else(|| anyhow!("this state has no scene"))?
+        .clone();
+    let grid = GridMap::parse(&scene).ok_or_else(|| anyhow!("scene has no usable grid"))?;
+    let profile = state.effective_spatial_profile();
+    let start_pose = state.combatants[index]
+        .spatial_pose()
+        .ok_or_else(|| anyhow!("`{}` has no spatial pose", state.combatants[index].name))?;
+    let start_floor = grid
+        .cell_at(start_pose.cell.x, start_pose.cell.y)
+        .map(|cell| cell.elevation.unwrap_or(0))
+        .ok_or_else(|| anyhow!("the mover is outside the grid"))?;
+    let vertical = state.combatants[index].vertical_state();
+    let flying = matches!(vertical.flight, FlightState::Flying | FlightState::Hovering);
+    let start_z = if flying {
+        start_pose
+            .cell
+            .z
+            .max(start_floor.saturating_add(vertical.altitude_ft))
+    } else {
+        start_floor
+    };
+    let dest_floor = grid
+        .cell_at(dest_x, dest_y)
+        .map(|cell| cell.elevation.unwrap_or(0))
+        .ok_or_else(|| anyhow!("cell ({dest_x},{dest_y}) is outside the grid"))?;
+    if !flying && grid.is_wall(dest_x, dest_y) {
+        bail!("cell ({dest_x},{dest_y}) is a wall or outside the grid");
+    }
+    let goal_z = if flying { start_z } else { dest_floor };
+    let goal_pose = SpatialPose {
+        cell: CellPos {
+            x: dest_x,
+            y: dest_y,
+            z: goal_z,
+        },
+        footprint: start_pose.footprint,
+        facing: start_pose.facing,
+    };
+    let mut mover = spatial_body_for(state, index)
+        .ok_or_else(|| anyhow!("`{}` has no spatial body", state.combatants[index].name))?;
+    mover.pose = SpatialPose {
+        cell: CellPos {
+            x: start_pose.cell.x,
+            y: start_pose.cell.y,
+            z: start_z,
+        },
+        footprint: start_pose.footprint,
+        facing: start_pose.facing,
+    };
+    let mover_side = state.combatants[index].side.clone();
+    let occupants: Vec<TraversalCreature> = state
+        .combatants
+        .iter()
+        .enumerate()
+        .filter(|(other, combatant)| {
+            *other != index && !combatant.dormant && !combatant.is_dead() && combatant.hp > 0
+        })
+        .filter_map(|(other, combatant)| {
+            spatial_body_for(state, other).map(|body| {
+                TraversalCreature::new(
+                    body,
+                    combatant.side == mover_side,
+                    is_incapacitated(state, other),
+                )
+            })
+        })
+        .collect();
+    let map = spatial_movement_map(state, &grid, start_z, flying)?;
+    let planner = MovementPlanner::new(&map, &profile, &mover).with_occupants(&occupants);
+    let budget = state.combatants[index].speed_left.max(0);
+    let plan = planner
+        .path(&goal_pose, budget)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let path = match plan.outcome {
+        PlanOutcome::Reached(path) | PlanOutcome::OverBudget(path) => path,
+        PlanOutcome::Unreachable { reason, blockers } => {
+            if blockers.is_empty() {
+                bail!("cannot move to ({dest_x},{dest_y}): {}", reason.as_str());
+            }
+            bail!(
+                "cannot move to ({dest_x},{dest_y}): {} ({})",
+                reason.as_str(),
+                blockers.join(", ")
+            );
+        }
+    };
+    let name = state.combatants[index].name.clone();
+    let mut current_pose = mover.pose;
+    let mut current_position = Position::cell(start_pose.cell.x, start_pose.cell.y);
+    let mut previous_zone = state
+        .space()
+        .and_then(|space| space.zone_of(&current_position))
+        .unwrap_or_else(|| OPEN_ZONE.to_string());
+    for (applied_steps, step) in path.steps.into_iter().enumerate() {
+        if state.combatants[index].is_dead() || state.combatants[index].hp <= 0 {
+            break;
+        }
+        if !no_oa {
+            opportunity_attacks(state, index, &current_position, rng, log)?;
+            if state.combatants[index].is_dead() || state.combatants[index].hp <= 0 {
+                break;
+            }
+        }
+        let check = planner.step(&current_pose, &step.to);
+        if let Some(reason) = check.blocked {
+            if check.blockers.is_empty() {
+                log.log(format_args!(
+                    "{name} stops at ({},{}) after step {applied_steps}: {}",
+                    current_pose.cell.x,
+                    current_pose.cell.y,
+                    reason.as_str()
+                ));
+            } else {
+                log.log(format_args!(
+                    "{name} stops at ({},{}) after step {applied_steps}: {} ({})",
+                    current_pose.cell.x,
+                    current_pose.cell.y,
+                    reason.as_str(),
+                    check.blockers.join(", ")
+                ));
+            }
+            break;
+        }
+        let x = step.to.cell.x;
+        let y = step.to.cell.y;
+        let zone = grid.zone_at(x, y).unwrap_or_else(|| OPEN_ZONE.to_string());
+        state.combatants[index].set_cell(x, y, zone.clone());
+        state.combatants[index].pose = Some(step.to);
+        let floor = grid
+            .cell_at(x, y)
+            .map(|cell| cell.elevation.unwrap_or(0))
+            .unwrap_or(0);
+        let mut vertical = state.combatants[index].vertical_state();
+        vertical.altitude_ft = (step.to.cell.z - floor).max(0);
+        if vertical.flight == FlightState::Grounded && vertical.altitude_ft != 0 {
+            vertical.flight = FlightState::Flying;
+        }
+        vertical
+            .validate()
+            .map_err(|error| anyhow!(error.to_string()))?;
+        state.combatants[index].vertical = Some(vertical);
+        state.combatants[index].speed_left -= step.cost_ft;
+        log.log(format_args!(
+            "{name} moves {previous_zone} -> {zone} ({} ft)",
+            step.cost_ft
+        ));
+        if zone != previous_zone {
+            fire_enter_triggers(state, index, &Position::cell(x, y), rng, log)?;
+            previous_zone = zone;
+        }
+        current_pose = step.to;
+        current_position = Position::cell(x, y);
+    }
+    if state.combatants[index].speed_left < 0 {
+        log.log(format_args!(
+            "{name} has used {} ft more than the remaining movement",
+            -state.combatants[index].speed_left
+        ));
+    }
+    Ok(())
+}
+
 fn roll_climb(
     state: &mut EncounterState,
     index: usize,
@@ -6248,8 +6829,40 @@ fn opportunity_attacks(
                 && !has_flag(state, *index, ConditionFlag::NoOpportunityAttacks)
                 && !is_incapacitated(state, *index)
                 && {
-                    let position = combatant.position_ref();
-                    space.opportunity_threat(position.as_ref(), departure)
+                    if spatial_query_enabled(state) {
+                        let observer = spatial_body_for(state, *index);
+                        let mover_body = spatial_body_for(state, mover);
+                        match (observer, mover_body) {
+                            (Some(observer), Some(mover_body)) => {
+                                let reach = first_melee_attack(state, *index)
+                                    .and_then(|attack| attack.reach)
+                                    .unwrap_or(5);
+                                let profile = state.effective_spatial_profile();
+                                let reachable = crate::space::can_reach_bodies(
+                                    &observer,
+                                    &mover_body,
+                                    reach,
+                                    &profile,
+                                )
+                                .reachable;
+                                let blockers = spatial_blockers(state, &profile);
+                                let sight = crate::space::line_of_sight(
+                                    &observer,
+                                    &mover_body,
+                                    &blockers,
+                                    &profile,
+                                );
+                                reachable && sight.clear
+                            }
+                            _ => {
+                                let position = combatant.position_ref();
+                                space.opportunity_threat(position.as_ref(), departure)
+                            }
+                        }
+                    } else {
+                        let position = combatant.position_ref();
+                        space.opportunity_threat(position.as_ref(), departure)
+                    }
                 }
         })
         .map(|(index, _)| index)
@@ -6439,10 +7052,7 @@ pub fn spatial_flight_enabled(state: &EncounterState) -> bool {
 /// Build the vertical map for a grid encounter. Zone scenes have no metric
 /// vertical map; a fall there stays an explicit error rather than an invented
 /// approximation.
-pub fn fall_map_for_state(state: &EncounterState) -> Result<Option<FallMap>> {
-    if !spatial_flight_enabled(state) {
-        return Ok(None);
-    }
+fn build_fall_map(state: &EncounterState) -> Result<FallMap> {
     let scene = state
         .scene
         .as_deref()
@@ -6462,7 +7072,14 @@ pub fn fall_map_for_state(state: &EncounterState) -> Result<Option<FallMap>> {
             }
         }
     }
-    Ok(Some(map))
+    Ok(map)
+}
+
+pub fn fall_map_for_state(state: &EncounterState) -> Result<Option<FallMap>> {
+    if !spatial_flight_enabled(state) {
+        return Ok(None);
+    }
+    build_fall_map(state).map(Some)
 }
 
 /// Edition-specific "loses flight support" check for one combatant. A creature
@@ -6598,6 +7215,14 @@ pub fn apply_fall(
     let index = state
         .find_index(who)
         .map_err(|error| anyhow!(error.to_string()))?;
+    // Mark the fall before damage/landing conditions are applied. A nested
+    // condition (Prone) must not re-trigger the flight check.
+    let mut falling = state.combatants[index].vertical_state();
+    falling.flight = FlightState::Falling;
+    falling
+        .validate()
+        .map_err(|error| anyhow!(error.to_string()))?;
+    state.combatants[index].vertical = Some(falling);
     let name = state.combatants[index].name.clone();
     log.log(format_args!(
         "{name} falls {} ft ({})",
@@ -6694,6 +7319,285 @@ pub fn apply_fall(
     }))
 }
 
+fn roll_fall_check(
+    state: &mut EncounterState,
+    index: usize,
+    ability: FallAbility,
+    skill: &str,
+    dc: i32,
+    label: &str,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> i32 {
+    let ability_name = match ability {
+        FallAbility::Strength => AbilityName::Str,
+        FallAbility::Dexterity => AbilityName::Dex,
+    };
+    let base = state.combatants[index].skill_bonus(skill);
+    let (mode, advantages, disadvantages) =
+        check_modifiers(state, index, Some(ability_name), skill);
+    let result = roll_d20(
+        state,
+        index,
+        base,
+        mode,
+        Vec::new(),
+        advantages,
+        disadvantages,
+        rng,
+    );
+    let name = state.combatants[index].name.clone();
+    log.log(format_args!(
+        "{name} {skill} check: {} vs DC {dc} {} ({label})",
+        result.text(),
+        if result.total >= dc { "PASS" } else { "FAIL" }
+    ));
+    result.total
+}
+
+/// P5: the CLI rolls the R-09 landing check and the 2024 liquid-landing
+/// reaction, then hands the totals to the P4 application path.
+pub fn fall_with_checks(
+    state: &mut EncounterState,
+    who: &str,
+    options: FallOptions,
+    liquid_ability: FallAbility,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<Option<FallReport>> {
+    let Some(resolution) = resolve_fall(state, who)? else {
+        return Ok(None);
+    };
+    let index = state
+        .find_index(who)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let landing_check_total = match options.landing_check_total {
+        Some(total) => Some(total),
+        None => resolution.landing_check.as_ref().map(|check| {
+            roll_fall_check(
+                state,
+                index,
+                check.check.ability,
+                check.check.skill.as_str(),
+                check.check.dc,
+                "R-09 house rule",
+                rng,
+                log,
+            )
+        }),
+    };
+    let liquid_landing_total = match options.liquid_landing_total {
+        Some(total) => Some(total),
+        None => resolution.liquid_landing.as_ref().map(|liquid| {
+            let (ability, skill) = match liquid_ability {
+                FallAbility::Strength => (FallAbility::Strength, "athletics"),
+                FallAbility::Dexterity => (FallAbility::Dexterity, "acrobatics"),
+            };
+            let dc = liquid
+                .checks
+                .iter()
+                .map(|check| check.dc)
+                .max()
+                .unwrap_or(15);
+            roll_fall_check(
+                state,
+                index,
+                ability,
+                skill,
+                dc,
+                "2024 liquid landing reaction",
+                rng,
+                log,
+            )
+        }),
+    };
+    apply_fall(
+        state,
+        who,
+        &FallOptions {
+            landing_check_total,
+            liquid_landing_total,
+        },
+        rng,
+        log,
+    )
+}
+
+/// P5: explicit take-off / altitude change. Horizontal movement stays in
+/// `move_to_at`; this command owns the vertical axis and ceiling stops.
+pub fn fly(
+    state: &mut EncounterState,
+    who: &str,
+    altitude_ft: i32,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    if altitude_ft < 0 {
+        bail!("altitude must not be negative");
+    }
+    let index = state
+        .find_index(who)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    ensure_can_act(state, index)?;
+    let scene = state
+        .scene
+        .as_deref()
+        .ok_or_else(|| anyhow!("this state has no scene"))?
+        .clone();
+    if scene.mode != SceneMode::Grid {
+        bail!("fly needs a grid scene");
+    }
+    let map = build_fall_map(state)?;
+    let pose = state.combatants[index]
+        .spatial_pose()
+        .ok_or_else(|| anyhow!("`{}` has no spatial pose", state.combatants[index].name))?;
+    let floor = map
+        .floor_at(pose.cell.x, pose.cell.y)
+        .ok_or_else(|| anyhow!("`{}` is not on a fall column", state.combatants[index].name))?;
+    let current = state.combatants[index].vertical_state();
+    let capability = FlightCapability::from_speed(&state.combatants[index].creature.speed());
+    let name = state.combatants[index].name.clone();
+    if altitude_ft == 0 {
+        let mut vertical = current;
+        vertical.flight = FlightState::Grounded;
+        vertical.altitude_ft = 0;
+        vertical
+            .validate()
+            .map_err(|error| anyhow!(error.to_string()))?;
+        state.combatants[index].vertical = Some(vertical);
+        state.combatants[index].pose = Some(SpatialPose {
+            cell: CellPos {
+                x: pose.cell.x,
+                y: pose.cell.y,
+                z: floor,
+            },
+            ..pose
+        });
+        log.log(format_args!("{name} lands at {} ft", floor));
+        return Ok(());
+    }
+    let airborne = matches!(current.flight, FlightState::Flying | FlightState::Hovering);
+    let start_z = if airborne {
+        pose.cell.z.max(floor.saturating_add(current.altitude_ft))
+    } else {
+        floor
+    };
+    let start = SpatialPose {
+        cell: CellPos {
+            x: pose.cell.x,
+            y: pose.cell.y,
+            z: start_z,
+        },
+        ..pose
+    };
+    let action = if airborne {
+        crate::space::FlightAction::Fly
+    } else {
+        crate::space::FlightAction::TakeOff
+    };
+    let next_flight = crate::space::transition_flight(
+        current.flight,
+        action,
+        &capability,
+        start_z.saturating_sub(floor),
+    )
+    .map_err(|error| anyhow!(error.to_string()))?;
+    let height = HeightProfile::default()
+        .resolve(state.combatants[index].creature.size(), None)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let rules = FlightRules::try_for_ruleset(Some(&state.content.ruleset))
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let movement = FallResolver::new(&map, rules)
+        .vertical_move(
+            &start,
+            floor.saturating_add(altitude_ft),
+            height,
+            &capability,
+            next_flight,
+        )
+        .map_err(|error| anyhow!(error.to_string()))?;
+    if movement.blocked {
+        if let Some(ceiling) = &movement.ceiling {
+            log.log(format_args!(
+                "{name} stops below ceiling `{}` at {} ft",
+                ceiling.surface_id, movement.allowed_elevation_ft
+            ));
+        } else {
+            log.log(format_args!(
+                "{name} is stopped at {} ft",
+                movement.allowed_elevation_ft
+            ));
+        }
+    }
+    let mut vertical = current;
+    vertical.flight = next_flight;
+    vertical.altitude_ft = (movement.allowed_elevation_ft - floor).max(0);
+    vertical
+        .validate()
+        .map_err(|error| anyhow!(error.to_string()))?;
+    state.combatants[index].vertical = Some(vertical);
+    state.combatants[index].pose = Some(SpatialPose {
+        cell: CellPos {
+            x: pose.cell.x,
+            y: pose.cell.y,
+            z: movement.allowed_elevation_ft,
+        },
+        ..pose
+    });
+    log.log(format_args!(
+        "{name} flies to {} ft above the floor ({} ft absolute)",
+        vertical.altitude_ft, movement.allowed_elevation_ft
+    ));
+    Ok(())
+}
+
+/// P5: a condition that removes flight support drops the creature immediately.
+/// The return value is `Ok(())` even when the fall cannot be resolved (for
+/// example a zone scene with no metric column); the log explains the limit so
+/// gameplay is never silently changed.
+fn maybe_fall_after_condition(
+    state: &mut EncounterState,
+    index: usize,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    if !spatial_flight_enabled(state) {
+        return Ok(());
+    }
+    let vertical = state.combatants[index].vertical_state();
+    if !matches!(vertical.flight, FlightState::Flying | FlightState::Hovering) {
+        return Ok(());
+    }
+    let name = state.combatants[index].name.clone();
+    let check = flight_check(state, &name)?;
+    if !check.falls {
+        return Ok(());
+    }
+    if let Some(vertical) = state.combatants[index].vertical.as_mut() {
+        vertical.flight = FlightState::Falling;
+    }
+    log.log(format_args!(
+        "{name} loses flight support ({}, {})",
+        check
+            .reason
+            .map(|reason| reason.as_str().to_string())
+            .unwrap_or_else(|| "unstated".to_string()),
+        check.edition
+    ));
+    if let Err(error) = fall_with_checks(
+        state,
+        &name,
+        FallOptions::default(),
+        FallAbility::Dexterity,
+        rng,
+        log,
+    ) {
+        log.log(format_args!(
+            "{name}'s flight fall could not be resolved: {error}"
+        ));
+    }
+    Ok(())
+}
+
 /// `interact <who> <object> [--option N]`.
 pub fn interact(
     state: &mut EncounterState,
@@ -6758,6 +7662,23 @@ pub fn interact(
                 .join(", ")
         ),
     };
+    if spatial_query_enabled(state)
+        && state
+            .space()
+            .is_some_and(|space| space.mode() == SceneMode::Grid)
+    {
+        let actor_zone = state
+            .space()
+            .and_then(|space| space.zone_of(&state.combatants[actor].position()));
+        if actor_zone.as_deref() != Some(object.zone.as_str()) {
+            bail!(
+                "`{}` is not in reach of scene object `{}` (object zone `{}`)",
+                state.combatants[actor].name,
+                object.id,
+                object.zone
+            );
+        }
+    }
     let actor_name = state.combatants[actor].name.clone();
     log.log(format_args!(
         "{actor_name} interacts with {}",
@@ -7450,7 +8371,14 @@ fn combatant_status_line(state: &EncounterState, index: usize, current: bool) ->
     } else {
         ""
     };
+    let vertical = combatant.vertical_state();
     let location = match combatant.cell() {
+        Some([x, y]) if vertical.flight != FlightState::Grounded || vertical.altitude_ft != 0 => {
+            format!(
+                "{} ({x},{y}) @ {} ft {:?}",
+                combatant.zone, vertical.altitude_ft, vertical.flight
+            )
+        }
         Some([x, y]) => format!("{} ({x},{y})", combatant.zone),
         None => combatant.zone.clone(),
     };
