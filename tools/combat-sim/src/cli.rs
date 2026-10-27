@@ -557,6 +557,21 @@ impl From<RestKindArg> for RestKind {
 }
 
 pub fn run() -> Result<()> {
+    // The clap command tree is large in debug builds and the Windows main
+    // thread has a 1 MiB stack. Parse and dispatch on a thread with headroom so
+    // small subcommands also start reliably on every platform.
+    let handle = std::thread::Builder::new()
+        .name("combat-sim-cli".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(run_cli)
+        .context("start combat-sim CLI thread")?;
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+fn run_cli() -> Result<()> {
     let Cli {
         state,
         seed,
