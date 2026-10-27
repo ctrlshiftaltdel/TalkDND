@@ -129,9 +129,10 @@ pub fn run(root: &Path, save: &Path, cmd: Cmd) -> Result<()> {
             let q = query.join(" ");
             let entries = search(root, save, &q, scope, limit, include_hidden)?;
             if entries.is_empty() {
+                // Do not echo the query: it may be a term the party has not
+                // learned yet, and this line can end up in a session log.
                 println!(
-                    "没有找到含「{}」的知识条目；试试更短的词、--scope all，或先构建书籍索引（talkdnd adventure index build）",
-                    q.trim()
+                    "没有找到知识条目；试试更短的词、--scope all，或先构建书籍索引（talkdnd adventure index build）"
                 );
             } else {
                 for e in &entries {
@@ -290,7 +291,8 @@ pub fn context(root: &Path, save: &Path, key: &str) -> Result<Vec<String>> {
     let edition = edition(root, save)?;
     let terms = secret_terms(root, save)?;
     if hits_secret(key, &terms) {
-        bail!("`{key}` 含未揭示的秘密词；context 不输出");
+        // Do not repeat the key: it may itself be an unrevealed secret term.
+        bail!("该 key 含未揭示的秘密词；context 不输出");
     }
     let scene = progress::scene(save);
     let entities = load_entities(root, save)?;

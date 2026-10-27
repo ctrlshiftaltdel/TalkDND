@@ -635,6 +635,29 @@ fn cli_smoke_is_registered_and_read_only() {
             "{args:?}: {text}"
         );
     }
+    // A query/key that is itself an unrevealed secret is not echoed back.
+    for args in [
+        vec!["knowledge", "search", "TOP-SECRET-DMSECRET"],
+        vec!["knowledge", "context", "TOP-SECRET-DMSECRET"],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_talkdnd"))
+            .arg("--root")
+            .arg(&root)
+            .args(&args)
+            .env("TALKDND_NO_PDF2MD", "1")
+            .env("TALKDND_COMBAT_SIM", root.join("no-such-combat-sim"))
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !text.contains("TOP-SECRET-DMSECRET"),
+            "{args:?} echoed the secret: {text}"
+        );
+        if args[1] == "context" {
+            assert!(!out.status.success(), "{args:?}: {text}");
+        }
+    }
     assert_eq!(before, snapshot(&root), "knowledge must not write");
 
     let help = Command::new(env!("CARGO_BIN_EXE_talkdnd"))
