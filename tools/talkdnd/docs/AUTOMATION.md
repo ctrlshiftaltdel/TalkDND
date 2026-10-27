@@ -56,7 +56,10 @@ settings:
 Levels:
 
 - `manual` — only when the table explicitly asks; no prompt.
-- `assisted` — pause and ask, or warn before proceeding.
+- `assisted` — the DM proceeds but keeps the player in the loop: ask before
+  committing a player-owned choice or reaction, warn before a near limit, and
+  let the player interrupt narration / NPC dialogue. For `npc` this means the
+  DM voices the NPC normally; it does not ask permission for every line.
 - `auto` — resolve without asking and log it.
 
 `auto` is rejected for `player_choice` and `reaction` at every scope. The

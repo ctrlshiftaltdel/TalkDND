@@ -514,6 +514,15 @@ fn hand_edited_automation_fails_closed() {
         "{out}"
     );
 
+    // An unknown field directly under `settings` is refused too.
+    let bad = good.replacen("settings:\n", "settings:\n  mystery: 1\n", 1);
+    fs::write(save.join("save-meta.yaml"), &bad).unwrap();
+    let (okay, out) = run(&r, &["settings", "automation", "show"]);
+    assert!(
+        !okay && out.to_lowercase().contains("unknown field"),
+        "{out}"
+    );
+
     // A duplicate scene id in the YAML mapping is refused, not silently last-wins.
     let bad = good.replace(
         "    scenes: {}",
@@ -629,6 +638,55 @@ fn a_newer_schema_is_still_refused() {
         !good && out.contains("10") && out.contains("update talkdnd"),
         "{out}"
     );
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_settings_write_leaves_meta_and_log_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+    let (r, save) = new_save("write-fail");
+    let before = meta(&save);
+    let log_before = latest_log(&save);
+    fs::set_permissions(&save, fs::Permissions::from_mode(0o555)).unwrap();
+    let (good, out) = run(
+        &r,
+        &[
+            "settings",
+            "automation",
+            "set",
+            "npc",
+            "manual",
+            "--reason",
+            "table vote",
+        ],
+    );
+    fs::set_permissions(&save, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!good, "{out}");
+    assert_eq!(
+        meta(&save),
+        before,
+        "failed write must not change save-meta"
+    );
+    assert_eq!(
+        latest_log(&save),
+        log_before,
+        "failed write must not append an audit line"
+    );
+    // The save stays usable and the same change works after the repair.
+    let out = ok(
+        &r,
+        &[
+            "settings",
+            "automation",
+            "set",
+            "npc",
+            "manual",
+            "--reason",
+            "table vote",
+        ],
+    );
+    assert!(out.contains("assisted → manual"), "{out}");
     let _ = fs::remove_dir_all(&r);
 }
 

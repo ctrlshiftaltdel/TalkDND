@@ -121,6 +121,7 @@ pub struct Migration {
 /// Per-save table settings. They are changeable mid-game (unlike the locked
 /// deviation) and every change is written to the session log.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Settings {
     /// Read dice values, DCs and modifiers aloud. Off = narrate outcomes only;
     /// the programs still roll and log every die (`rolls.log`).
