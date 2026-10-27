@@ -495,6 +495,11 @@ enum SettingsCmd {
         #[command(subcommand)]
         cmd: memory::StyleCmd,
     },
+    /// Automation switches: save defaults, scene/encounter overrides
+    Automation {
+        #[command(subcommand)]
+        cmd: Option<settings::AutomationCmd>,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -884,14 +889,14 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             match cmd {
                 None => {
-                    for l in settings::lines(&s) {
+                    for l in settings::lines(&s)? {
                         println!("{l}");
                     }
                 }
                 Some(SettingsCmd::Dice { value }) => {
                     match settings::parse_dice(value.as_deref())? {
                         None => {
-                            for l in settings::lines(&s) {
+                            for l in settings::lines(&s)? {
                                 println!("{l}");
                             }
                         }
@@ -903,6 +908,14 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
                     }
                 }
                 Some(SettingsCmd::Style { cmd }) => memory::run_style(&root, &s, cmd)?,
+                Some(SettingsCmd::Automation { cmd }) => match cmd {
+                    Some(cmd) => settings::run_automation(&root, &s, cmd)?,
+                    None => {
+                        for l in settings::automation_lines(&s, None, None)? {
+                            println!("{l}");
+                        }
+                    }
+                },
             }
         }
         Cmd::Reveal { cmd } => {
