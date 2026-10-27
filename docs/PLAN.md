@@ -9,7 +9,7 @@
 - 让玩家在聊天里跑完一场 D&D：AI DM 负责叙述、NPC、选项与自由输入，玩家扮演自己的角色，存档可跨会话继续。
 - 所有骰子都由 `combat-sim` 的同一套 Rust 引擎产生并完整显示；战斗（攻击、伤害、条件、专注、移动、借机攻击）由该引擎结算，不靠模型口算。
 - 支持 2014 与 2024 两套规则，一档一版；`ruleset` 选中哪一版，就只加载那一版的战斗数据。
-- 把玩家自备的规则书、冒险书、个人存档和 DM 秘密留在本机；仓库只收程序、原创文档和 SRD 派生的战斗数据。
+- 把玩家自备的规则书、冒险书、个人存档和 DM 秘密留在本机；仓库只收程序、原创文档、SRD 5.1 / 5.2.1 内容包和 SRD 派生的战斗数据。
 - 用 `tools/talkdnd` 把开局、建卡、同伴、存档点、信息边界和完整性检查做成可复用的 DM 助手，而不是把规则散落在提示词里。
 - 把产品决策写进 `docs/PROJECT-CHARTER.md` 的 Decision Log，后续任务按同一份契约推进，不因会话更替而漂移。
 - 在 per-save 的偏离范围内允许 DM 原创内容，并用 DM-only 台账控制类型、稀有度和章节预算。
@@ -30,7 +30,7 @@
 
 **非目标：**
 
-- 不发行受版权保护的规则书或冒险书；玩家自备，至少放入对应版本的 SRD。
+- 不发行受版权保护的规则书或冒险书；SRD 5.1 / 5.2.1 内容包按 CC-BY-4.0 随程序分发，玩家不必自备 SRD PDF；自备的完整书只在本机使用。
 - 不提交存档、角色卡、会话日志或 DM 秘密；`LetsPlay/Saves/README.md` 是唯一例外。
 - 不在同一存档里混用 2014 与 2024 规则。
 - 不把非 SRD 的怪物、法术或战役硬编码进引擎或已跟踪数据。
@@ -48,7 +48,7 @@
 
 ## 可度量的全局验收
 
-- 玩家按 `LetsPlay/README.md` 放入自己的 SRD，在 `LetsPlay/` 启动 Agent，用 `LetsPlay/bin/combat-sim` 完成一次真实掷骰与一场战斗结算。
+- 玩家在 `LetsPlay/` 启动 Agent，用 `LetsPlay/bin/combat-sim` 完成一次真实掷骰与一场战斗结算；SRD 内容已随程序提供，放入自己的 SRD PDF 是可选的。
 - 存档的 `ruleset` 只加载对应版本目录；另一版目录不被读取。
 - `uv run --no-project python scripts/validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 在无书籍、无存档的干净树上通过。
 - 三个 crate 的 `cargo test`、`cargo fmt --check`、`cargo clippy -D warnings` 通过。

@@ -387,6 +387,18 @@ pub enum ContentCommand {
         #[command(subcommand)]
         command: PackCommand,
     },
+    /// Import SRD 5.1 / 5.2.1 JSON (5e-database) into content packs.
+    ImportSrdPack {
+        /// `2014` or `2024`.
+        #[arg(long, value_name = "EDITION")]
+        edition: String,
+        /// Directory holding `5e-SRD-*.json`.
+        #[arg(long, value_name = "DIR")]
+        src: PathBuf,
+        /// Output directory for `<pack-id>.pack.json`.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+    },
     /// Convert SRD 5.1 JSON (5e-database) into library YAML.
     ImportSrd {
         /// `5e-SRD-Monsters.json`.
@@ -1111,6 +1123,24 @@ fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> 
             println!(
                 "{}",
                 serde_json::to_string_pretty(&shown).context("failed to serialize content item")?
+            );
+            Ok(())
+        }
+        ContentCommand::ImportSrdPack { edition, src, out } => {
+            let report = crate::srd_pack::import(&edition, &src, &out)?;
+            for pack in &report.packs {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    pack.id, pack.entities, pack.file, pack.summary
+                );
+            }
+            for gap in &report.gaps {
+                println!("gap: {gap}");
+            }
+            println!(
+                "imported {} pack(s) for SRD {}",
+                report.packs.len(),
+                report.edition
             );
             Ok(())
         }

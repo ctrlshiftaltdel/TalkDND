@@ -6,6 +6,7 @@
 //! used to unlock books or to identify PDFs.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -196,6 +197,16 @@ impl ContentPack {
 pub fn content_hash(content: &ContentFile) -> Result<String> {
     let bytes = serde_json::to_vec(content).context("serialize pack content")?;
     Ok(crate::integrity::fingerprint(&bytes))
+}
+
+/// Whether a path uses the pack suffix (`<name>.pack.json`, `.pack.yaml` or
+/// `.pack.yml`). The loader uses this to load packs before ordinary content.
+pub fn is_pack_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    name.ends_with(".pack.json") || name.ends_with(".pack.yaml") || name.ends_with(".pack.yml")
 }
 
 /// Whether a JSON/YAML document is a pack rather than ordinary content.

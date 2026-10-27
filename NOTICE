@@ -20,6 +20,10 @@ combat-sim YAML format):
   - LetsPlay/Rules/combat/2024/**/*.yaml       SRD 5.2.1
   - LetsPlay/Rules/combat/2014/srd/*.yaml      SRD 5.1, generated from the
     5e-database JSON (https://github.com/5e-bits/5e-database, MIT License)
+  - LetsPlay/Rules/combat/2014/srd/*.pack.json SRD 5.1, generated from the
+    5e-database JSON (https://github.com/5e-bits/5e-database, MIT License)
+  - LetsPlay/Rules/combat/2024/srd/*.pack.json SRD 5.2.1, generated from the
+    5e-database JSON (https://github.com/5e-bits/5e-database, MIT License)
 
 Dungeons & Dragons and D&D are trademarks of Wizards of the Coast LLC. This
 project is unofficial fan content and is not affiliated with or endorsed by

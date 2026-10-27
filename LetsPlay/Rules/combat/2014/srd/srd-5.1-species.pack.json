@@ -1,0 +1,4038 @@
+{
+  "pack": {
+    "id": "srd-5.1-species",
+    "name": "SRD 5.1 Species",
+    "edition": "2014",
+    "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+    "license": "CC-BY-4.0",
+    "distribution": "srd",
+    "schema_version": 1,
+    "content_hash": "fnv1a64:ae032bfe4c7f30c9:71760",
+    "created_at": null,
+    "description": "SRD 5.1 species, subspecies and traits from github.com/5e-bits/5e-database."
+  },
+  "index": {
+    "entries": [
+      {
+        "id": "artificers-lore",
+        "kind": "rule-section",
+        "name": "Artificer's Lore",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "brave",
+        "kind": "rule-section",
+        "name": "Brave",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "breath-weapon",
+        "kind": "rule-section",
+        "name": "Breath Weapon",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "damage-resistance",
+        "kind": "rule-section",
+        "name": "Damage Resistance",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "darkvision",
+        "kind": "rule-section",
+        "name": "Darkvision",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-black",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (Black)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-blue",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (Blue)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-brass",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (Brass)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-bronze",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (Bronze)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-copper",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (Copper)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-gold",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (Gold)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-green",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (Green)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-red",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (Red)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-silver",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (Silver)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "draconic-ancestry-white",
+        "kind": "rule-section",
+        "name": "Draconic Ancestry (White)",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "dwarven-combat-training",
+        "kind": "rule-section",
+        "name": "Dwarven Combat Training",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "dwarven-resilience",
+        "kind": "rule-section",
+        "name": "Dwarven Resilience",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "dwarven-toughness",
+        "kind": "rule-section",
+        "name": "Dwarven Toughness",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "elf-weapon-training",
+        "kind": "rule-section",
+        "name": "Elf Weapon Training",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "extra-language",
+        "kind": "rule-section",
+        "name": "Extra Language",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "fey-ancestry",
+        "kind": "rule-section",
+        "name": "Fey Ancestry",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "gnome-cunning",
+        "kind": "rule-section",
+        "name": "Gnome Cunning",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "halfling-nimbleness",
+        "kind": "rule-section",
+        "name": "Halfling Nimbleness",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "hellish-resistance",
+        "kind": "rule-section",
+        "name": "Hellish Resistance",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "high-elf-cantrip",
+        "kind": "rule-section",
+        "name": "High Elf Cantrip",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "infernal-legacy",
+        "kind": "rule-section",
+        "name": "Infernal Legacy",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "keen-senses",
+        "kind": "rule-section",
+        "name": "Keen Senses",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lucky",
+        "kind": "rule-section",
+        "name": "Lucky",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "menacing",
+        "kind": "rule-section",
+        "name": "Menacing",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "naturally-stealthy",
+        "kind": "rule-section",
+        "name": "Naturally Stealthy",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "relentless-endurance",
+        "kind": "rule-section",
+        "name": "Relentless Endurance",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "savage-attacks",
+        "kind": "rule-section",
+        "name": "Savage Attacks",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "skill-versatility",
+        "kind": "rule-section",
+        "name": "Skill Versatility",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "stonecunning",
+        "kind": "rule-section",
+        "name": "Stonecunning",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "tinker",
+        "kind": "rule-section",
+        "name": "Tinker",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "tool-proficiency",
+        "kind": "rule-section",
+        "name": "Tool Proficiency",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "trance",
+        "kind": "rule-section",
+        "name": "Trance",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "dragonborn",
+        "kind": "species",
+        "name": "Dragonborn",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "dwarf",
+        "kind": "species",
+        "name": "Dwarf",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "elf",
+        "kind": "species",
+        "name": "Elf",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "gnome",
+        "kind": "species",
+        "name": "Gnome",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "half-elf",
+        "kind": "species",
+        "name": "Half-Elf",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "half-orc",
+        "kind": "species",
+        "name": "Half-Orc",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "halfling",
+        "kind": "species",
+        "name": "Halfling",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "high-elf",
+        "kind": "species",
+        "name": "High Elf",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "hill-dwarf",
+        "kind": "species",
+        "name": "Hill Dwarf",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "human",
+        "kind": "species",
+        "name": "Human",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "lightfoot-halfling",
+        "kind": "species",
+        "name": "Lightfoot Halfling",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "rock-gnome",
+        "kind": "species",
+        "name": "Rock Gnome",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      },
+      {
+        "id": "tiefling",
+        "kind": "species",
+        "name": "Tiefling",
+        "aliases": [],
+        "page": null,
+        "section": "Species",
+        "refs": []
+      }
+    ],
+    "images": []
+  },
+  "content": {
+    "conditions": null,
+    "masteries": null,
+    "abilities": null,
+    "creatures": null,
+    "ai_templates": null,
+    "scenes": null,
+    "encounters": null,
+    "items": null,
+    "classes": null,
+    "subclasses": null,
+    "species": [
+      {
+        "id": "dwarf",
+        "name": "Dwarf",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Dwarves mature at the same rate as humans, but they're considered young until they reach the age of 50. On average, they live about 350 years.\n\nMost dwarves are lawful, believing firmly in the benefits of a well-ordered society. They tend toward good as well, with a strong sense of fair play and a belief that everyone deserves to share in the benefits of a just order.\n\nDwarves stand between 4 and 5 feet tall and average about 150 pounds. Your size is Medium.\n\nYou can speak, read, and write Common and Dwarvish. Dwarvish is full of hard consonants and guttural sounds, and those characteristics spill over into whatever other language a dwarf might speak.\n\nSpeed: 25\nSize: Medium\nTraits: Darkvision, Dwarven Resilience, Stonecunning, Dwarven Combat Training, Tool Proficiency",
+        "refs": [],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "con",
+                "name": "CON",
+                "url": "/api/2014/ability-scores/con"
+              },
+              "bonus": 2
+            }
+          ],
+          "index": "dwarf",
+          "languages": [
+            {
+              "index": "common",
+              "name": "Common",
+              "url": "/api/2014/languages/common"
+            },
+            {
+              "index": "dwarvish",
+              "name": "Dwarvish",
+              "url": "/api/2014/languages/dwarvish"
+            }
+          ],
+          "name": "Dwarf",
+          "size": "Medium",
+          "speed": 25,
+          "subraces": [
+            {
+              "index": "hill-dwarf",
+              "name": "Hill Dwarf",
+              "url": "/api/2014/subraces/hill-dwarf"
+            }
+          ],
+          "traits": [
+            {
+              "index": "darkvision",
+              "name": "Darkvision",
+              "url": "/api/2014/traits/darkvision"
+            },
+            {
+              "index": "dwarven-resilience",
+              "name": "Dwarven Resilience",
+              "url": "/api/2014/traits/dwarven-resilience"
+            },
+            {
+              "index": "stonecunning",
+              "name": "Stonecunning",
+              "url": "/api/2014/traits/stonecunning"
+            },
+            {
+              "index": "dwarven-combat-training",
+              "name": "Dwarven Combat Training",
+              "url": "/api/2014/traits/dwarven-combat-training"
+            },
+            {
+              "index": "tool-proficiency",
+              "name": "Tool Proficiency",
+              "url": "/api/2014/traits/tool-proficiency"
+            }
+          ],
+          "url": "/api/2014/races/dwarf"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "elf",
+        "name": "Elf",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Although elves reach physical maturity at about the same age as humans, the elven understanding of adulthood goes beyond physical growth to encompass worldly experience. An elf typically claims adulthood and an adult name around the age of 100 and can live to be 750 years old.\n\nElves love freedom, variety, and self-expression, so they lean strongly toward the gentler aspects of chaos. They value and protect others' freedom as well as their own, and they are more often good than not.\n\nElves range from under 5 to over 6 feet tall and have slender builds. Your size is Medium.\n\nYou can speak, read, and write Common and Elvish. Elvish is fluid, with subtle intonations and intricate grammar. Elven literature is rich and varied, and their songs and poems are famous among other races. Many bards learn their language so they can add Elvish ballads to their repertoires.\n\nSpeed: 30\nSize: Medium\nTraits: Darkvision, Fey Ancestry, Trance, Keen Senses",
+        "refs": [],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "dex",
+                "name": "DEX",
+                "url": "/api/2014/ability-scores/dex"
+              },
+              "bonus": 2
+            }
+          ],
+          "index": "elf",
+          "languages": [
+            {
+              "index": "common",
+              "name": "Common",
+              "url": "/api/2014/languages/common"
+            },
+            {
+              "index": "elvish",
+              "name": "Elvish",
+              "url": "/api/2014/languages/elvish"
+            }
+          ],
+          "name": "Elf",
+          "size": "Medium",
+          "speed": 30,
+          "subraces": [
+            {
+              "index": "high-elf",
+              "name": "High Elf",
+              "url": "/api/2014/subraces/high-elf"
+            }
+          ],
+          "traits": [
+            {
+              "index": "darkvision",
+              "name": "Darkvision",
+              "url": "/api/2014/traits/darkvision"
+            },
+            {
+              "index": "fey-ancestry",
+              "name": "Fey Ancestry",
+              "url": "/api/2014/traits/fey-ancestry"
+            },
+            {
+              "index": "trance",
+              "name": "Trance",
+              "url": "/api/2014/traits/trance"
+            },
+            {
+              "index": "keen-senses",
+              "name": "Keen Senses",
+              "url": "/api/2014/traits/keen-senses"
+            }
+          ],
+          "url": "/api/2014/races/elf"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "halfling",
+        "name": "Halfling",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "A halfling reaches adulthood at the age of 20 and generally lives into the middle of his or her second century.\n\nMost halflings are lawful good. As a rule, they are good-hearted and kind, hate to see others in pain, and have no tolerance for oppression. They are also very orderly and traditional, leaning heavily on the support of their community and the comfort of their old ways.\n\nHalflings average about 3 feet tall and weigh about 40 pounds. Your size is Small.\n\nYou can speak, read, and write Common and Halfling. The Halfling language isn't secret, but halflings are loath to share it with others. They write very little, so they don't have a rich body of literature. Their oral tradition, however, is very strong. Almost all halflings speak Common to converse with the people in whose lands they dwell or through which they are traveling.\n\nSpeed: 25\nSize: Small\nTraits: Brave, Halfling Nimbleness, Lucky",
+        "refs": [],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "dex",
+                "name": "DEX",
+                "url": "/api/2014/ability-scores/dex"
+              },
+              "bonus": 2
+            }
+          ],
+          "index": "halfling",
+          "languages": [
+            {
+              "index": "common",
+              "name": "Common",
+              "url": "/api/2014/languages/common"
+            },
+            {
+              "index": "halfling",
+              "name": "Halfling",
+              "url": "/api/2014/languages/halfling"
+            }
+          ],
+          "name": "Halfling",
+          "size": "Small",
+          "speed": 25,
+          "subraces": [
+            {
+              "index": "lightfoot-halfling",
+              "name": "Lightfoot Halfling",
+              "url": "/api/2014/subraces/lightfoot-halfling"
+            }
+          ],
+          "traits": [
+            {
+              "index": "brave",
+              "name": "Brave",
+              "url": "/api/2014/traits/brave"
+            },
+            {
+              "index": "halfling-nimbleness",
+              "name": "Halfling Nimbleness",
+              "url": "/api/2014/traits/halfling-nimbleness"
+            },
+            {
+              "index": "lucky",
+              "name": "Lucky",
+              "url": "/api/2014/traits/lucky"
+            }
+          ],
+          "url": "/api/2014/races/halfling"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "human",
+        "name": "Human",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Humans reach adulthood in their late teens and live less than a century.\n\nHumans tend toward no particular alignment. The best and the worst are found among them.\n\nHumans vary widely in height and build, from barely 5 feet to well over 6 feet tall. Regardless of your position in that range, your size is Medium.\n\nYou can speak, read, and write Common and one extra language of your choice. Humans typically learn the languages of other peoples they deal with, including obscure dialects. They are fond of sprinkling their speech with words borrowed from other tongues: Orc curses, Elvish musical expressions, Dwarvish military phrases, and so on.\n\nSpeed: 30\nSize: Medium",
+        "refs": [],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "str",
+                "name": "STR",
+                "url": "/api/2014/ability-scores/str"
+              },
+              "bonus": 1
+            },
+            {
+              "ability_score": {
+                "index": "dex",
+                "name": "DEX",
+                "url": "/api/2014/ability-scores/dex"
+              },
+              "bonus": 1
+            },
+            {
+              "ability_score": {
+                "index": "con",
+                "name": "CON",
+                "url": "/api/2014/ability-scores/con"
+              },
+              "bonus": 1
+            },
+            {
+              "ability_score": {
+                "index": "int",
+                "name": "INT",
+                "url": "/api/2014/ability-scores/int"
+              },
+              "bonus": 1
+            },
+            {
+              "ability_score": {
+                "index": "wis",
+                "name": "WIS",
+                "url": "/api/2014/ability-scores/wis"
+              },
+              "bonus": 1
+            },
+            {
+              "ability_score": {
+                "index": "cha",
+                "name": "CHA",
+                "url": "/api/2014/ability-scores/cha"
+              },
+              "bonus": 1
+            }
+          ],
+          "index": "human",
+          "language_options": {
+            "choose": 1,
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "item": {
+                    "index": "dwarvish",
+                    "name": "Dwarvish",
+                    "url": "/api/2014/languages/dwarvish"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "elvish",
+                    "name": "Elvish",
+                    "url": "/api/2014/languages/elvish"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "giant",
+                    "name": "Giant",
+                    "url": "/api/2014/languages/giant"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "gnomish",
+                    "name": "Gnomish",
+                    "url": "/api/2014/languages/gnomish"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "goblin",
+                    "name": "Goblin",
+                    "url": "/api/2014/languages/goblin"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "halfling",
+                    "name": "Halfling",
+                    "url": "/api/2014/languages/halfling"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "orc",
+                    "name": "Orc",
+                    "url": "/api/2014/languages/orc"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "abyssal",
+                    "name": "Abyssal",
+                    "url": "/api/2014/languages/abyssal"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "celestial",
+                    "name": "Celestial",
+                    "url": "/api/2014/languages/celestial"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "draconic",
+                    "name": "Draconic",
+                    "url": "/api/2014/languages/draconic"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "deep-speech",
+                    "name": "Deep Speech",
+                    "url": "/api/2014/languages/deep-speech"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "infernal",
+                    "name": "Infernal",
+                    "url": "/api/2014/languages/infernal"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "primordial",
+                    "name": "Primordial",
+                    "url": "/api/2014/languages/primordial"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "sylvan",
+                    "name": "Sylvan",
+                    "url": "/api/2014/languages/sylvan"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "undercommon",
+                    "name": "Undercommon",
+                    "url": "/api/2014/languages/undercommon"
+                  },
+                  "option_type": "reference"
+                }
+              ]
+            },
+            "type": "languages"
+          },
+          "languages": [
+            {
+              "index": "common",
+              "name": "Common",
+              "url": "/api/2014/languages/common"
+            }
+          ],
+          "name": "Human",
+          "size": "Medium",
+          "speed": 30,
+          "subraces": [],
+          "traits": [],
+          "url": "/api/2014/races/human"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "dragonborn",
+        "name": "Dragonborn",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Young dragonborn grow quickly. They walk hours after hatching, attain the size and development of a 10-year-old human child by the age of 3, and reach adulthood by 15. They live to be around 80.\n\nDragonborn tend to extremes, making a conscious choice for one side or the other in the cosmic war between good and evil. Most dragonborn are good, but those who side with evil can be terrible villains.\n\nDragonborn are taller and heavier than humans, standing well over 6 feet tall and averaging almost 250 pounds. Your size is Medium.\n\nYou can speak, read, and write Common and Draconic. Draconic is thought to be one of the oldest languages and is often used in the study of magic. The language sounds harsh to most other creatures and includes numerous hard consonants and sibilants.\n\nSpeed: 30\nSize: Medium\nTraits: Draconic Ancestry, Breath Weapon, Damage Resistance",
+        "refs": [],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "str",
+                "name": "STR",
+                "url": "/api/2014/ability-scores/str"
+              },
+              "bonus": 2
+            },
+            {
+              "ability_score": {
+                "index": "cha",
+                "name": "CHA",
+                "url": "/api/2014/ability-scores/cha"
+              },
+              "bonus": 1
+            }
+          ],
+          "index": "dragonborn",
+          "languages": [
+            {
+              "index": "common",
+              "name": "Common",
+              "url": "/api/2014/languages/common"
+            },
+            {
+              "index": "draconic",
+              "name": "Draconic",
+              "url": "/api/2014/languages/draconic"
+            }
+          ],
+          "name": "Dragonborn",
+          "size": "Medium",
+          "speed": 30,
+          "subraces": [],
+          "traits": [
+            {
+              "index": "draconic-ancestry",
+              "name": "Draconic Ancestry",
+              "url": "/api/2014/traits/draconic-ancestry"
+            },
+            {
+              "index": "breath-weapon",
+              "name": "Breath Weapon",
+              "url": "/api/2014/traits/breath-weapon"
+            },
+            {
+              "index": "damage-resistance",
+              "name": "Damage Resistance",
+              "url": "/api/2014/traits/damage-resistance"
+            }
+          ],
+          "url": "/api/2014/races/dragonborn"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "gnome",
+        "name": "Gnome",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Gnomes mature at the same rate humans do, and most are expected to settle down into an adult life by around age 40. They can live 350 to almost 500 years.\n\nGnomes are most often good. Those who tend toward law are sages, engineers, researchers, scholars, investigators, or inventors. Those who tend toward chaos are minstrels, tricksters, wanderers, or fanciful jewelers. Gnomes are good-hearted, and even the tricksters among them are more playful than vicious.\n\nGnomes are between 3 and 4 feet tall and average about 40 pounds. Your size is Small.\n\nYou can speak, read, and write Common and Gnomish. The Gnomish language, which uses the Dwarvish script, is renowned for its technical treatises and its catalogs of knowledge about the natural world.\n\nSpeed: 25\nSize: Small\nTraits: Darkvision, Gnome Cunning",
+        "refs": [],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "int",
+                "name": "INT",
+                "url": "/api/2014/ability-scores/int"
+              },
+              "bonus": 2
+            }
+          ],
+          "index": "gnome",
+          "languages": [
+            {
+              "index": "common",
+              "name": "Common",
+              "url": "/api/2014/languages/common"
+            },
+            {
+              "index": "gnomish",
+              "name": "Gnomish",
+              "url": "/api/2014/languages/gnomish"
+            }
+          ],
+          "name": "Gnome",
+          "size": "Small",
+          "speed": 25,
+          "subraces": [
+            {
+              "index": "rock-gnome",
+              "name": "Rock Gnome",
+              "url": "/api/2014/subraces/rock-gnome"
+            }
+          ],
+          "traits": [
+            {
+              "index": "darkvision",
+              "name": "Darkvision",
+              "url": "/api/2014/traits/darkvision"
+            },
+            {
+              "index": "gnome-cunning",
+              "name": "Gnome Cunning",
+              "url": "/api/2014/traits/gnome-cunning"
+            }
+          ],
+          "url": "/api/2014/races/gnome"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "half-elf",
+        "name": "Half-Elf",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Half-elves mature at the same rate humans do and reach adulthood around the age of 20. They live much longer than humans, however, often exceeding 180 years.\n\nHalf-elves share the chaotic bent of their elven heritage. They value both personal freedom and creative expression, demonstrating neither love of leaders nor desire for followers. They chafe at rules, resent others' demands, and sometimes prove unreliable, or at least unpredictable.\n\nHalf-elves are about the same size as humans, ranging from 5 to 6 feet tall. Your size is Medium.\n\nYou can speak, read, and write Common, Elvish, and one extra language of your choice.\n\nSpeed: 30\nSize: Medium\nTraits: Darkvision, Fey Ancestry, Skill Versatility",
+        "refs": [],
+        "data": {
+          "ability_bonus_options": {
+            "choose": 2,
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "ability_score": {
+                    "index": "str",
+                    "name": "STR",
+                    "url": "/api/2014/ability-scores/str"
+                  },
+                  "bonus": 1,
+                  "option_type": "ability_bonus"
+                },
+                {
+                  "ability_score": {
+                    "index": "dex",
+                    "name": "DEX",
+                    "url": "/api/2014/ability-scores/dex"
+                  },
+                  "bonus": 1,
+                  "option_type": "ability_bonus"
+                },
+                {
+                  "ability_score": {
+                    "index": "con",
+                    "name": "CON",
+                    "url": "/api/2014/ability-scores/con"
+                  },
+                  "bonus": 1,
+                  "option_type": "ability_bonus"
+                },
+                {
+                  "ability_score": {
+                    "index": "int",
+                    "name": "INT",
+                    "url": "/api/2014/ability-scores/int"
+                  },
+                  "bonus": 1,
+                  "option_type": "ability_bonus"
+                },
+                {
+                  "ability_score": {
+                    "index": "wis",
+                    "name": "WIS",
+                    "url": "/api/2014/ability-scores/wis"
+                  },
+                  "bonus": 1,
+                  "option_type": "ability_bonus"
+                }
+              ]
+            },
+            "type": "ability_bonuses"
+          },
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "cha",
+                "name": "CHA",
+                "url": "/api/2014/ability-scores/cha"
+              },
+              "bonus": 2
+            }
+          ],
+          "index": "half-elf",
+          "language_options": {
+            "choose": 1,
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "item": {
+                    "index": "dwarvish",
+                    "name": "Dwarvish",
+                    "url": "/api/2014/languages/dwarvish"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "giant",
+                    "name": "Giant",
+                    "url": "/api/2014/languages/giant"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "gnomish",
+                    "name": "Gnomish",
+                    "url": "/api/2014/languages/gnomish"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "goblin",
+                    "name": "Goblin",
+                    "url": "/api/2014/languages/goblin"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "halfling",
+                    "name": "Halfling",
+                    "url": "/api/2014/languages/halfling"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "orc",
+                    "name": "Orc",
+                    "url": "/api/2014/languages/orc"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "abyssal",
+                    "name": "Abyssal",
+                    "url": "/api/2014/languages/abyssal"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "celestial",
+                    "name": "Celestial",
+                    "url": "/api/2014/languages/celestial"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "draconic",
+                    "name": "Draconic",
+                    "url": "/api/2014/languages/draconic"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "deep-speech",
+                    "name": "Deep Speech",
+                    "url": "/api/2014/languages/deep-speech"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "infernal",
+                    "name": "Infernal",
+                    "url": "/api/2014/languages/infernal"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "primordial",
+                    "name": "Primordial",
+                    "url": "/api/2014/languages/primordial"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "sylvan",
+                    "name": "Sylvan",
+                    "url": "/api/2014/languages/sylvan"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "undercommon",
+                    "name": "Undercommon",
+                    "url": "/api/2014/languages/undercommon"
+                  },
+                  "option_type": "reference"
+                }
+              ]
+            },
+            "type": "languages"
+          },
+          "languages": [
+            {
+              "index": "common",
+              "name": "Common",
+              "url": "/api/2014/languages/common"
+            },
+            {
+              "index": "elvish",
+              "name": "Elvish",
+              "url": "/api/2014/languages/elvish"
+            }
+          ],
+          "name": "Half-Elf",
+          "size": "Medium",
+          "speed": 30,
+          "subraces": [],
+          "traits": [
+            {
+              "index": "darkvision",
+              "name": "Darkvision",
+              "url": "/api/2014/traits/darkvision"
+            },
+            {
+              "index": "fey-ancestry",
+              "name": "Fey Ancestry",
+              "url": "/api/2014/traits/fey-ancestry"
+            },
+            {
+              "index": "skill-versatility",
+              "name": "Skill Versatility",
+              "url": "/api/2014/traits/skill-versatility"
+            }
+          ],
+          "url": "/api/2014/races/half-elf"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "half-orc",
+        "name": "Half-Orc",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Half-orcs mature a little faster than humans, reaching adulthood around age 14. They age noticeably faster and rarely live longer than 75 years.\n\nHalf-orcs inherit a tendency toward chaos from their orc parents and are not strongly inclined toward good. Half-orcs raised among orcs and willing to live out their lives among them are usually evil.\n\nHalf-orcs are somewhat larger and bulkier than humans, and they range from 5 to well over 6 feet tall. Your size is Medium.\n\nYou can speak, read, and write Common and Orc. Orc is a harsh, grating language with hard consonants. It has no script of its own but is written in the Dwarvish script.\n\nSpeed: 30\nSize: Medium\nTraits: Darkvision, Savage Attacks, Relentless Endurance, Menacing",
+        "refs": [],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "str",
+                "name": "STR",
+                "url": "/api/2014/ability-scores/str"
+              },
+              "bonus": 2
+            },
+            {
+              "ability_score": {
+                "index": "con",
+                "name": "CON",
+                "url": "/api/2014/ability-scores/con"
+              },
+              "bonus": 1
+            }
+          ],
+          "index": "half-orc",
+          "languages": [
+            {
+              "index": "common",
+              "name": "Common",
+              "url": "/api/2014/languages/common"
+            },
+            {
+              "index": "orc",
+              "name": "Orc",
+              "url": "/api/2014/languages/orc"
+            }
+          ],
+          "name": "Half-Orc",
+          "size": "Medium",
+          "speed": 30,
+          "subraces": [],
+          "traits": [
+            {
+              "index": "darkvision",
+              "name": "Darkvision",
+              "url": "/api/2014/traits/darkvision"
+            },
+            {
+              "index": "savage-attacks",
+              "name": "Savage Attacks",
+              "url": "/api/2014/traits/savage-attacks"
+            },
+            {
+              "index": "relentless-endurance",
+              "name": "Relentless Endurance",
+              "url": "/api/2014/traits/relentless-endurance"
+            },
+            {
+              "index": "menacing",
+              "name": "Menacing",
+              "url": "/api/2014/traits/menacing"
+            }
+          ],
+          "url": "/api/2014/races/half-orc"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "tiefling",
+        "name": "Tiefling",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Tieflings mature at the same rate as humans but live a few years longer.\n\nTieflings might not have an innate tendency toward evil, but many of them end up there. Evil or not, an independent nature inclines many tieflings toward a chaotic alignment.\n\nTieflings are about the same size and build as humans. Your size is Medium.\n\nYou can speak, read, and write Common and Infernal.\n\nSpeed: 30\nSize: Medium\nTraits: Darkvision, Hellish Resistance, Infernal Legacy",
+        "refs": [],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "int",
+                "name": "INT",
+                "url": "/api/2014/ability-scores/int"
+              },
+              "bonus": 1
+            },
+            {
+              "ability_score": {
+                "index": "cha",
+                "name": "CHA",
+                "url": "/api/2014/ability-scores/cha"
+              },
+              "bonus": 2
+            }
+          ],
+          "index": "tiefling",
+          "languages": [
+            {
+              "index": "common",
+              "name": "Common",
+              "url": "/api/2014/languages/common"
+            },
+            {
+              "index": "infernal",
+              "name": "Infernal",
+              "url": "/api/2014/languages/infernal"
+            }
+          ],
+          "name": "Tiefling",
+          "size": "Medium",
+          "speed": 30,
+          "subraces": [],
+          "traits": [
+            {
+              "index": "darkvision",
+              "name": "Darkvision",
+              "url": "/api/2014/traits/darkvision"
+            },
+            {
+              "index": "hellish-resistance",
+              "name": "Hellish Resistance",
+              "url": "/api/2014/traits/hellish-resistance"
+            },
+            {
+              "index": "infernal-legacy",
+              "name": "Infernal Legacy",
+              "url": "/api/2014/traits/infernal-legacy"
+            }
+          ],
+          "url": "/api/2014/races/tiefling"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "hill-dwarf",
+        "name": "Hill Dwarf",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "As a hill dwarf, you have keen senses, deep intuition, and remarkable resilience.\n\nTraits: Dwarven Toughness",
+        "refs": [
+          "dwarf"
+        ],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "wis",
+                "name": "WIS",
+                "url": "/api/2014/ability-scores/wis"
+              },
+              "bonus": 1
+            }
+          ],
+          "index": "hill-dwarf",
+          "name": "Hill Dwarf",
+          "race": {
+            "index": "dwarf",
+            "name": "Dwarf",
+            "url": "/api/2014/races/dwarf"
+          },
+          "racial_traits": [
+            {
+              "index": "dwarven-toughness",
+              "name": "Dwarven Toughness",
+              "url": "/api/2014/traits/dwarven-toughness"
+            }
+          ],
+          "url": "/api/2014/subraces/hill-dwarf"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "high-elf",
+        "name": "High Elf",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "As a high elf, you have a keen mind and a mastery of at least the basics of magic. In many fantasy gaming worlds, there are two kinds of high elves. One type is haughty and reclusive, believing themselves to be superior to non-elves and even other elves. The other type is more common and more friendly, and often encountered among humans and other races.\n\nTraits: Elf Weapon Training, High Elf Cantrip, Extra Language",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "int",
+                "name": "INT",
+                "url": "/api/2014/ability-scores/int"
+              },
+              "bonus": 1
+            }
+          ],
+          "index": "high-elf",
+          "name": "High Elf",
+          "race": {
+            "index": "elf",
+            "name": "Elf",
+            "url": "/api/2014/races/elf"
+          },
+          "racial_traits": [
+            {
+              "index": "elf-weapon-training",
+              "name": "Elf Weapon Training",
+              "url": "/api/2014/traits/elf-weapon-training"
+            },
+            {
+              "index": "high-elf-cantrip",
+              "name": "High Elf Cantrip",
+              "url": "/api/2014/traits/high-elf-cantrip"
+            },
+            {
+              "index": "extra-language",
+              "name": "Extra Language",
+              "url": "/api/2014/traits/extra-language"
+            }
+          ],
+          "url": "/api/2014/subraces/high-elf"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lightfoot-halfling",
+        "name": "Lightfoot Halfling",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "As a lightfoot halfling, you can easily hide from notice, even using other people as cover. You're inclined to be affable and get along well with others. Lightfoots are more prone to wanderlust than other halflings, and often dwell alongside other races or take up a nomadic life.\n\nTraits: Naturally Stealthy",
+        "refs": [
+          "halfling"
+        ],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "cha",
+                "name": "CHA",
+                "url": "/api/2014/ability-scores/cha"
+              },
+              "bonus": 1
+            }
+          ],
+          "index": "lightfoot-halfling",
+          "name": "Lightfoot Halfling",
+          "race": {
+            "index": "halfling",
+            "name": "Halfling",
+            "url": "/api/2014/races/halfling"
+          },
+          "racial_traits": [
+            {
+              "index": "naturally-stealthy",
+              "name": "Naturally Stealthy",
+              "url": "/api/2014/traits/naturally-stealthy"
+            }
+          ],
+          "url": "/api/2014/subraces/lightfoot-halfling"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "rock-gnome",
+        "name": "Rock Gnome",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "subspecies",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "As a rock gnome, you have a natural inventiveness and hardiness beyond that of other gnomes.\n\nTraits: Artificer's Lore, Tinker",
+        "refs": [
+          "gnome"
+        ],
+        "data": {
+          "ability_bonuses": [
+            {
+              "ability_score": {
+                "index": "con",
+                "name": "CON",
+                "url": "/api/2014/ability-scores/con"
+              },
+              "bonus": 1
+            }
+          ],
+          "index": "rock-gnome",
+          "name": "Rock Gnome",
+          "race": {
+            "index": "gnome",
+            "name": "Gnome",
+            "url": "/api/2014/races/gnome"
+          },
+          "racial_traits": [
+            {
+              "index": "artificers-lore",
+              "name": "Artificer's Lore",
+              "url": "/api/2014/traits/artificers-lore"
+            },
+            {
+              "index": "tinker",
+              "name": "Tinker",
+              "url": "/api/2014/traits/tinker"
+            }
+          ],
+          "url": "/api/2014/subraces/rock-gnome"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      }
+    ],
+    "backgrounds": null,
+    "feats": null,
+    "rule_sections": [
+      {
+        "id": "darkvision",
+        "name": "Darkvision",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have superior vision in dark and dim conditions. You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light. You cannot discern color in darkness, only shades of gray.",
+        "refs": [
+          "dwarf",
+          "elf",
+          "gnome",
+          "half-elf",
+          "half-orc",
+          "tiefling"
+        ],
+        "data": {
+          "index": "darkvision",
+          "name": "Darkvision",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dwarf",
+              "name": "Dwarf",
+              "url": "/api/2014/races/dwarf"
+            },
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2014/races/elf"
+            },
+            {
+              "index": "gnome",
+              "name": "Gnome",
+              "url": "/api/2014/races/gnome"
+            },
+            {
+              "index": "half-elf",
+              "name": "Half-Elf",
+              "url": "/api/2014/races/half-elf"
+            },
+            {
+              "index": "half-orc",
+              "name": "Half-Orc",
+              "url": "/api/2014/races/half-orc"
+            },
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2014/races/tiefling"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/darkvision"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "dwarven-resilience",
+        "name": "Dwarven Resilience",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have advantage on saving throws against poison, and you have resistance against poison damage.",
+        "refs": [
+          "dwarf"
+        ],
+        "data": {
+          "index": "dwarven-resilience",
+          "name": "Dwarven Resilience",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dwarf",
+              "name": "Dwarf",
+              "url": "/api/2014/races/dwarf"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/dwarven-resilience"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "dwarven-combat-training",
+        "name": "Dwarven Combat Training",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have proficiency with the battleaxe, handaxe, light hammer, and warhammer.\n\nProficiencies: Battleaxes, Handaxes, Light hammers, Warhammers",
+        "refs": [
+          "dwarf"
+        ],
+        "data": {
+          "index": "dwarven-combat-training",
+          "name": "Dwarven Combat Training",
+          "proficiencies": [
+            {
+              "index": "battleaxes",
+              "name": "Battleaxes",
+              "url": "/api/2014/proficiencies/battleaxes"
+            },
+            {
+              "index": "handaxes",
+              "name": "Handaxes",
+              "url": "/api/2014/proficiencies/handaxes"
+            },
+            {
+              "index": "light-hammers",
+              "name": "Light hammers",
+              "url": "/api/2014/proficiencies/light-hammers"
+            },
+            {
+              "index": "warhammers",
+              "name": "Warhammers",
+              "url": "/api/2014/proficiencies/warhammers"
+            }
+          ],
+          "races": [
+            {
+              "index": "dwarf",
+              "name": "Dwarf",
+              "url": "/api/2014/races/dwarf"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/dwarven-combat-training"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "tool-proficiency",
+        "name": "Tool Proficiency",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain proficiency with the artisan's tools of your choice: smith's tools, brewer's supplies, or mason's tools.",
+        "refs": [
+          "dwarf"
+        ],
+        "data": {
+          "index": "tool-proficiency",
+          "name": "Tool Proficiency",
+          "proficiencies": [],
+          "proficiency_choices": {
+            "choose": 1,
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "item": {
+                    "index": "smiths-tools",
+                    "name": "Smith's Tools",
+                    "url": "/api/2014/proficiencies/smiths-tools"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "brewers-supplies",
+                    "name": "Brewer's Supplies",
+                    "url": "/api/2014/proficiencies/brewers-supplies"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "masons-tools",
+                    "name": "Mason's Tools",
+                    "url": "/api/2014/proficiencies/masons-tools"
+                  },
+                  "option_type": "reference"
+                }
+              ]
+            },
+            "type": "proficiencies"
+          },
+          "races": [
+            {
+              "index": "dwarf",
+              "name": "Dwarf",
+              "url": "/api/2014/races/dwarf"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/tool-proficiency"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "stonecunning",
+        "name": "Stonecunning",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Whenever you make an Intelligence (History) check related to the origin of stonework, you are considered proficient in the History skill and add double your proficiency bonus to the check, instead of your normal proficiency bonus.",
+        "refs": [
+          "dwarf"
+        ],
+        "data": {
+          "index": "stonecunning",
+          "name": "Stonecunning",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dwarf",
+              "name": "Dwarf",
+              "url": "/api/2014/races/dwarf"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/stonecunning"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "dwarven-toughness",
+        "name": "Dwarven Toughness",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Your hit point maximum increases by 1, and it increases by 1 every time you gain a level.",
+        "refs": [
+          "hill-dwarf"
+        ],
+        "data": {
+          "index": "dwarven-toughness",
+          "name": "Dwarven Toughness",
+          "proficiencies": [],
+          "races": [],
+          "subraces": [
+            {
+              "index": "hill-dwarf",
+              "name": "Hill Dwarf",
+              "url": "/api/2014/subraces/hill-dwarf"
+            }
+          ],
+          "url": "/api/2014/traits/dwarven-toughness"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "keen-senses",
+        "name": "Keen Senses",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have proficiency in the Perception skill.\n\nProficiencies: Skill: Perception",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "index": "keen-senses",
+          "name": "Keen Senses",
+          "proficiencies": [
+            {
+              "index": "skill-perception",
+              "name": "Skill: Perception",
+              "url": "/api/2014/proficiencies/skill-perception"
+            }
+          ],
+          "races": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2014/races/elf"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/keen-senses"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "fey-ancestry",
+        "name": "Fey Ancestry",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have advantage on saving throws against being charmed, and magic cannot put you to sleep.",
+        "refs": [
+          "elf",
+          "half-elf"
+        ],
+        "data": {
+          "index": "fey-ancestry",
+          "name": "Fey Ancestry",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2014/races/elf"
+            },
+            {
+              "index": "half-elf",
+              "name": "Half-Elf",
+              "url": "/api/2014/races/half-elf"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/fey-ancestry"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "trance",
+        "name": "Trance",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Elves do not need to sleep. Instead, they meditate deeply, remaining semiconscious, for 4 hours a day. (The Common word for such meditation is \"trance.\") While meditating, you can dream after a fashion; such dreams are actually mental exercises that have become reflexive through years of practice. After resting this way, you gain the same benefit that a human does from 8 hours of sleep.",
+        "refs": [
+          "elf"
+        ],
+        "data": {
+          "index": "trance",
+          "name": "Trance",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "elf",
+              "name": "Elf",
+              "url": "/api/2014/races/elf"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/trance"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "elf-weapon-training",
+        "name": "Elf Weapon Training",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have proficiency with the longsword, shortsword, shortbow, and longbow.\n\nProficiencies: Longswords, Shortswords, Shortbows, Longbows",
+        "refs": [
+          "high-elf"
+        ],
+        "data": {
+          "index": "elf-weapon-training",
+          "name": "Elf Weapon Training",
+          "proficiencies": [
+            {
+              "index": "longswords",
+              "name": "Longswords",
+              "url": "/api/2014/proficiencies/longswords"
+            },
+            {
+              "index": "shortswords",
+              "name": "Shortswords",
+              "url": "/api/2014/proficiencies/shortswords"
+            },
+            {
+              "index": "shortbows",
+              "name": "Shortbows",
+              "url": "/api/2014/proficiencies/shortbows"
+            },
+            {
+              "index": "longbows",
+              "name": "Longbows",
+              "url": "/api/2014/proficiencies/longbows"
+            }
+          ],
+          "races": [],
+          "subraces": [
+            {
+              "index": "high-elf",
+              "name": "High Elf",
+              "url": "/api/2014/subraces/high-elf"
+            }
+          ],
+          "url": "/api/2014/traits/elf-weapon-training"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "high-elf-cantrip",
+        "name": "High Elf Cantrip",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know one cantrip of your choice form the wizard spell list. Intelligence is your spellcasting ability for it.",
+        "refs": [
+          "high-elf"
+        ],
+        "data": {
+          "index": "high-elf-cantrip",
+          "name": "High Elf Cantrip",
+          "proficiencies": [],
+          "races": [],
+          "subraces": [
+            {
+              "index": "high-elf",
+              "name": "High Elf",
+              "url": "/api/2014/subraces/high-elf"
+            }
+          ],
+          "trait_specific": {
+            "spell_options": {
+              "choose": 1,
+              "from": {
+                "option_set_type": "options_array",
+                "options": [
+                  {
+                    "item": {
+                      "index": "light",
+                      "name": "Light",
+                      "url": "/api/2014/spells/light"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "mage-hand",
+                      "name": "Mage Hand",
+                      "url": "/api/2014/spells/mage-hand"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "mending",
+                      "name": "Mending",
+                      "url": "/api/2014/spells/mending"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "message",
+                      "name": "Message",
+                      "url": "/api/2014/spells/message"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "minor-illusion",
+                      "name": "Minor Illusion",
+                      "url": "/api/2014/spells/minor-illusion"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "acid-splash",
+                      "name": "Acid Splash",
+                      "url": "/api/2014/spells/acid-splash"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "prestidigitation",
+                      "name": "Prestidigitation",
+                      "url": "/api/2014/spells/prestidigitation"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "ray-of-frost",
+                      "name": "Ray of Frost",
+                      "url": "/api/2014/spells/ray-of-frost"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "shocking-grasp",
+                      "name": "Shocking Grasp",
+                      "url": "/api/2014/spells/shocking-grasp"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "true-strike",
+                      "name": "True Strike",
+                      "url": "/api/2014/spells/true-strike"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "chill-touch",
+                      "name": "Chill Touch",
+                      "url": "/api/2014/spells/chill-touch"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "dancing-lights",
+                      "name": "Dancing Lights",
+                      "url": "/api/2014/spells/dancing-lights"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "fire-bolt",
+                      "name": "Fire Bolt",
+                      "url": "/api/2014/spells/fire-bolt"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "poison-spray",
+                      "name": "Poison Spray",
+                      "url": "/api/2014/spells/poison-spray"
+                    },
+                    "option_type": "reference"
+                  }
+                ]
+              },
+              "type": "spell"
+            }
+          },
+          "url": "/api/2014/traits/high-elf-cantrip"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "extra-language",
+        "name": "Extra Language",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You can speak, read, and write one extra language of your choice.",
+        "refs": [
+          "high-elf"
+        ],
+        "data": {
+          "index": "extra-language",
+          "language_options": {
+            "choose": 1,
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "item": {
+                    "index": "dwarvish",
+                    "name": "Dwarvish",
+                    "url": "/api/2014/languages/dwarvish"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "giant",
+                    "name": "Giant",
+                    "url": "/api/2014/languages/giant"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "gnomish",
+                    "name": "Gnomish",
+                    "url": "/api/2014/languages/gnomish"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "goblin",
+                    "name": "Goblin",
+                    "url": "/api/2014/languages/goblin"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "halfling",
+                    "name": "Halfling",
+                    "url": "/api/2014/languages/halfling"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "orc",
+                    "name": "Orc",
+                    "url": "/api/2014/languages/orc"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "abyssal",
+                    "name": "Abyssal",
+                    "url": "/api/2014/languages/abyssal"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "celestial",
+                    "name": "Celestial",
+                    "url": "/api/2014/languages/celestial"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "draconic",
+                    "name": "Draconic",
+                    "url": "/api/2014/languages/draconic"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "deep-speech",
+                    "name": "Deep Speech",
+                    "url": "/api/2014/languages/deep-speech"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "infernal",
+                    "name": "Infernal",
+                    "url": "/api/2014/languages/infernal"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "primordial",
+                    "name": "Primordial",
+                    "url": "/api/2014/languages/primordial"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "sylvan",
+                    "name": "Sylvan",
+                    "url": "/api/2014/languages/sylvan"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "undercommon",
+                    "name": "Undercommon",
+                    "url": "/api/2014/languages/undercommon"
+                  },
+                  "option_type": "reference"
+                }
+              ]
+            },
+            "type": "languages"
+          },
+          "name": "Extra Language",
+          "proficiencies": [],
+          "races": [],
+          "subraces": [
+            {
+              "index": "high-elf",
+              "name": "High Elf",
+              "url": "/api/2014/subraces/high-elf"
+            }
+          ],
+          "url": "/api/2014/traits/extra-language"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "lucky",
+        "name": "Lucky",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you roll a 1 on the d20 for an attack roll, ability check, or saving throw, you can reroll the die and must use the new roll.",
+        "refs": [
+          "halfling"
+        ],
+        "data": {
+          "index": "lucky",
+          "name": "Lucky",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "halfling",
+              "name": "Halfling",
+              "url": "/api/2014/races/halfling"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/lucky"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "brave",
+        "name": "Brave",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have advantage on saving throw against being frightened.",
+        "refs": [
+          "halfling"
+        ],
+        "data": {
+          "index": "brave",
+          "name": "Brave",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "halfling",
+              "name": "Halfling",
+              "url": "/api/2014/races/halfling"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/brave"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "halfling-nimbleness",
+        "name": "Halfling Nimbleness",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You can move through the space of any creature that is of a size larger than yours.",
+        "refs": [
+          "halfling"
+        ],
+        "data": {
+          "index": "halfling-nimbleness",
+          "name": "Halfling Nimbleness",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "halfling",
+              "name": "Halfling",
+              "url": "/api/2014/races/halfling"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/halfling-nimbleness"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "naturally-stealthy",
+        "name": "Naturally Stealthy",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You can attempt to hide even when you are obscured only by a creature that is at least one size larger than you.",
+        "refs": [
+          "lightfoot-halfling"
+        ],
+        "data": {
+          "index": "naturally-stealthy",
+          "name": "Naturally Stealthy",
+          "proficiencies": [],
+          "races": [],
+          "subraces": [
+            {
+              "index": "lightfoot-halfling",
+              "name": "Lightfoot Halfling",
+              "url": "/api/2014/subraces/lightfoot-halfling"
+            }
+          ],
+          "url": "/api/2014/traits/naturally-stealthy"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry",
+        "name": "Draconic Ancestry",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry",
+          "name": "Draconic Ancestry",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "subtrait_options": {
+              "choose": 1,
+              "from": {
+                "option_set_type": "options_array",
+                "options": [
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-black",
+                      "name": "Draconic Ancestry (Black)",
+                      "url": "/api/2014/traits/draconic-ancestry-black"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-blue",
+                      "name": "Draconic Ancestry (Blue)",
+                      "url": "/api/2014/traits/draconic-ancestry-blue"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-brass",
+                      "name": "Draconic Ancestry (Brass)",
+                      "url": "/api/2014/traits/draconic-ancestry-brass"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-bronze",
+                      "name": "Draconic Ancestry (Bronze)",
+                      "url": "/api/2014/traits/draconic-ancestry-bronze"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-copper",
+                      "name": "Draconic Ancestry (Copper)",
+                      "url": "/api/2014/traits/draconic-ancestry-copper"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-gold",
+                      "name": "Draconic Ancestry (Gold)",
+                      "url": "/api/2014/traits/draconic-ancestry-gold"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-green",
+                      "name": "Draconic Ancestry (Green)",
+                      "url": "/api/2014/traits/draconic-ancestry-green"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-red",
+                      "name": "Draconic Ancestry (Red)",
+                      "url": "/api/2014/traits/draconic-ancestry-red"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-silver",
+                      "name": "Draconic Ancestry (Silver)",
+                      "url": "/api/2014/traits/draconic-ancestry-silver"
+                    },
+                    "option_type": "reference"
+                  },
+                  {
+                    "item": {
+                      "index": "draconic-ancestry-white",
+                      "name": "Draconic Ancestry (White)",
+                      "url": "/api/2014/traits/draconic-ancestry-white"
+                    },
+                    "option_type": "reference"
+                  }
+                ]
+              },
+              "type": "trait"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-black",
+        "name": "Draconic Ancestry (Black)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-black",
+          "name": "Draconic Ancestry (Black)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 30,
+                "type": "line"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "acid",
+                    "name": "Acid",
+                    "url": "/api/2014/damage-types/acid"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "dex",
+                  "name": "DEX",
+                  "url": "/api/2014/ability-scores/dex"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "acid",
+              "name": "Acid",
+              "url": "/api/2014/damage-types/acid"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-black"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-blue",
+        "name": "Draconic Ancestry (Blue)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-blue",
+          "name": "Draconic Ancestry (Blue)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 30,
+                "type": "line"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "lightning",
+                    "name": "Lightning",
+                    "url": "/api/2014/damage-types/lightning"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "dex",
+                  "name": "DEX",
+                  "url": "/api/2014/ability-scores/dex"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "lightning",
+              "name": "Lightning",
+              "url": "/api/2014/damage-types/lightning"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-blue"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-brass",
+        "name": "Draconic Ancestry (Brass)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-brass",
+          "name": "Draconic Ancestry (Brass)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 30,
+                "type": "line"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "fire",
+                    "name": "Fire",
+                    "url": "/api/2014/damage-types/fire"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "dex",
+                  "name": "DEX",
+                  "url": "/api/2014/ability-scores/dex"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "fire",
+              "name": "Fire",
+              "url": "/api/2014/damage-types/fire"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-brass"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-bronze",
+        "name": "Draconic Ancestry (Bronze)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-bronze",
+          "name": "Draconic Ancestry (Bronze)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 30,
+                "type": "line"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "lightning",
+                    "name": "Lightning",
+                    "url": "/api/2014/damage-types/lightning"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "dex",
+                  "name": "DEX",
+                  "url": "/api/2014/ability-scores/dex"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "lightning",
+              "name": "Lightning",
+              "url": "/api/2014/damage-types/lightning"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-bronze"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-copper",
+        "name": "Draconic Ancestry (Copper)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-copper",
+          "name": "Draconic Ancestry (Copper)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 30,
+                "type": "line"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "acid",
+                    "name": "Acid",
+                    "url": "/api/2014/damage-types/acid"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "dex",
+                  "name": "DEX",
+                  "url": "/api/2014/ability-scores/dex"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "acid",
+              "name": "Acid",
+              "url": "/api/2014/damage-types/acid"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-copper"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-gold",
+        "name": "Draconic Ancestry (Gold)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-gold",
+          "name": "Draconic Ancestry (Gold)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 15,
+                "type": "cone"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "fire",
+                    "name": "Fire",
+                    "url": "/api/2014/damage-types/fire"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "dex",
+                  "name": "DEX",
+                  "url": "/api/2014/ability-scores/dex"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "fire",
+              "name": "Fire",
+              "url": "/api/2014/damage-types/fire"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-gold"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-green",
+        "name": "Draconic Ancestry (Green)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-green",
+          "name": "Draconic Ancestry (Green)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 15,
+                "type": "cone"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "poison",
+                    "name": "Poison",
+                    "url": "/api/2014/damage-types/poison"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "con",
+                  "name": "CON",
+                  "url": "/api/2014/ability-scores/con"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "poison",
+              "name": "Poison",
+              "url": "/api/2014/damage-types/poison"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-green"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-red",
+        "name": "Draconic Ancestry (Red)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-red",
+          "name": "Draconic Ancestry (Red)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 15,
+                "type": "cone"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "fire",
+                    "name": "Fire",
+                    "url": "/api/2014/damage-types/fire"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "dex",
+                  "name": "DEX",
+                  "url": "/api/2014/ability-scores/dex"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "fire",
+              "name": "Fire",
+              "url": "/api/2014/damage-types/fire"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-red"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-silver",
+        "name": "Draconic Ancestry (Silver)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-silver",
+          "name": "Draconic Ancestry (Silver)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 15,
+                "type": "cone"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "cold",
+                    "name": "Cold",
+                    "url": "/api/2014/damage-types/cold"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "con",
+                  "name": "CON",
+                  "url": "/api/2014/ability-scores/con"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "cold",
+              "name": "Cold",
+              "url": "/api/2014/damage-types/cold"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-silver"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "draconic-ancestry-white",
+        "name": "Draconic Ancestry (White)",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have draconic ancestry. Choose one type of dragon from the Draconic Ancestry table. Your breath weapon and damage resistance are determined by the dragon type, as shown in the table.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "draconic-ancestry-white",
+          "name": "Draconic Ancestry (White)",
+          "parent": {
+            "index": "draconic-ancestry",
+            "name": "Draconic Ancestry",
+            "url": "/api/2014/traits/draconic-ancestry"
+          },
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "trait_specific": {
+            "breath_weapon": {
+              "area_of_effect": {
+                "size": 15,
+                "type": "cone"
+              },
+              "damage": [
+                {
+                  "damage_at_character_level": {
+                    "1": "2d6",
+                    "11": "4d6",
+                    "16": "5d6",
+                    "6": "3d6"
+                  },
+                  "damage_type": {
+                    "index": "cold",
+                    "name": "Cold",
+                    "url": "/api/2014/damage-types/cold"
+                  }
+                }
+              ],
+              "dc": {
+                "dc_type": {
+                  "index": "con",
+                  "name": "CON",
+                  "url": "/api/2014/ability-scores/con"
+                },
+                "success_type": "half"
+              },
+              "desc": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation. When you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level. After you use your breath weapon, you can't use it again until you complete a short or long rest.",
+              "name": "Breath Weapon",
+              "usage": {
+                "times": 1,
+                "type": "per rest"
+              }
+            },
+            "damage_type": {
+              "index": "cold",
+              "name": "Cold",
+              "url": "/api/2014/damage-types/cold"
+            }
+          },
+          "url": "/api/2014/traits/draconic-ancestry-white"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "breath-weapon",
+        "name": "Breath Weapon",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You can use your action to exhale destructive energy. Your draconic ancestry determines the size, shape, and damage type of the exhalation.\n\nWhen you use your breath weapon, each creature in the area of the exhalation must make a saving throw, the type of which is determined by your draconic ancestry. The DC for this saving throw equals 8 + your Constitution modifier + your proficiency bonus. A creature takes 2d6 damage on a failed save, and half as much damage on a successful one. The damage increases to 3d6 at 6th level, 4d6 at 11th level, and 5d6 at 16th level.\n\nAfter you use your breath weapon, you cannot use it again until you complete a short or long rest.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "breath-weapon",
+          "name": "Breath Weapon",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/breath-weapon"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "damage-resistance",
+        "name": "Damage Resistance",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have resistance to the damage type associated with your draconic ancestry.",
+        "refs": [
+          "dragonborn"
+        ],
+        "data": {
+          "index": "damage-resistance",
+          "name": "Damage Resistance",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "dragonborn",
+              "name": "Dragonborn",
+              "url": "/api/2014/races/dragonborn"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/damage-resistance"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "gnome-cunning",
+        "name": "Gnome Cunning",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have advantage on all Intelligence, Wisdom, and Charisma saving throws against magic.",
+        "refs": [
+          "gnome"
+        ],
+        "data": {
+          "index": "gnome-cunning",
+          "name": "Gnome Cunning",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "gnome",
+              "name": "Gnome",
+              "url": "/api/2014/races/gnome"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/gnome-cunning"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "artificers-lore",
+        "name": "Artificer's Lore",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "Whenever you make an Intelligence (History) check related to magic items, alchemical objects, or technological devices, you can add twice your proficiency bonus, instead of any proficiency bonus you normally apply.",
+        "refs": [
+          "rock-gnome"
+        ],
+        "data": {
+          "index": "artificers-lore",
+          "name": "Artificer's Lore",
+          "proficiencies": [],
+          "races": [],
+          "subraces": [
+            {
+              "index": "rock-gnome",
+              "name": "Rock Gnome",
+              "url": "/api/2014/subraces/rock-gnome"
+            }
+          ],
+          "url": "/api/2014/traits/artificers-lore"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "tinker",
+        "name": "Tinker",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have proficiency with artisan's tools (tinker's tools). Using those tools, you can spend 1 hour and 10 gp worth of materials to construct a Tiny clockwork device (AC 5, 1 hp). The device ceases to function after 24 hours (unless you spend 1 hour repairing it to keep the device functioning), or when you use your action to dismantle it; at that time, you can reclaim the materials used to create it. You can have up to three such devices active at a time.\n\nWhen you create a device, choose one of the following options:\n\nClockwork Toy: This toy is a clockwork animal, monster, or person, such as a frog, mouse, bird, dragon, or soldier. When placed on the ground, the toy moves 5 feet across the ground on each of your turns in a random direction. It makes noises as appropriate to the creature it represents.\n\nFire Starter: The device produces a miniature flame, which you can use to light a candle, torch, or campfire. Using the device requires your action.\n\nMusic Box: When opened, this music box plays a single song at a moderate volume. The box stops playing when it reaches the song's end or when it is closed.\n\nProficiencies: Tinker's Tools",
+        "refs": [
+          "rock-gnome"
+        ],
+        "data": {
+          "index": "tinker",
+          "name": "Tinker",
+          "proficiencies": [
+            {
+              "index": "tinkers-tools",
+              "name": "Tinker's Tools",
+              "url": "/api/2014/proficiencies/tinkers-tools"
+            }
+          ],
+          "races": [],
+          "subraces": [
+            {
+              "index": "rock-gnome",
+              "name": "Rock Gnome",
+              "url": "/api/2014/subraces/rock-gnome"
+            }
+          ],
+          "url": "/api/2014/traits/tinker"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "skill-versatility",
+        "name": "Skill Versatility",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain proficiency in two skills of your choice.",
+        "refs": [
+          "half-elf"
+        ],
+        "data": {
+          "index": "skill-versatility",
+          "name": "Skill Versatility",
+          "proficiencies": [],
+          "proficiency_choices": {
+            "choose": 2,
+            "from": {
+              "option_set_type": "options_array",
+              "options": [
+                {
+                  "item": {
+                    "index": "skill-acrobatics",
+                    "name": "Skill: Acrobatics",
+                    "url": "/api/2014/proficiencies/skill-acrobatics"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-animal-handling",
+                    "name": "Skill: Animal Handling",
+                    "url": "/api/2014/proficiencies/skill-animal-handling"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-arcana",
+                    "name": "Skill: Arcana",
+                    "url": "/api/2014/proficiencies/skill-arcana"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-athletics",
+                    "name": "Skill: Athletics",
+                    "url": "/api/2014/proficiencies/skill-athletics"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-deception",
+                    "name": "Skill: Deception",
+                    "url": "/api/2014/proficiencies/skill-deception"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-history",
+                    "name": "Skill: History",
+                    "url": "/api/2014/proficiencies/skill-history"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-insight",
+                    "name": "Skill: Insight",
+                    "url": "/api/2014/proficiencies/skill-insight"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-intimidation",
+                    "name": "Skill: Intimidation",
+                    "url": "/api/2014/proficiencies/skill-intimidation"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-investigation",
+                    "name": "Skill: Investigation",
+                    "url": "/api/2014/proficiencies/skill-investigation"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-medicine",
+                    "name": "Skill: Medicine",
+                    "url": "/api/2014/proficiencies/skill-medicine"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-nature",
+                    "name": "Skill: Nature",
+                    "url": "/api/2014/proficiencies/skill-nature"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-perception",
+                    "name": "Skill: Perception",
+                    "url": "/api/2014/proficiencies/skill-perception"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-performance",
+                    "name": "Skill: Performance",
+                    "url": "/api/2014/proficiencies/skill-performance"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-persuasion",
+                    "name": "Skill: Persuasion",
+                    "url": "/api/2014/proficiencies/skill-persuasion"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-religion",
+                    "name": "Skill: Religion",
+                    "url": "/api/2014/proficiencies/skill-religion"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-sleight-of-hand",
+                    "name": "Skill: Sleight of Hand",
+                    "url": "/api/2014/proficiencies/skill-sleight-of-hand"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-stealth",
+                    "name": "Skill: Stealth",
+                    "url": "/api/2014/proficiencies/skill-stealth"
+                  },
+                  "option_type": "reference"
+                },
+                {
+                  "item": {
+                    "index": "skill-survival",
+                    "name": "Skill: Survival",
+                    "url": "/api/2014/proficiencies/skill-survival"
+                  },
+                  "option_type": "reference"
+                }
+              ]
+            },
+            "type": "proficiencies"
+          },
+          "races": [
+            {
+              "index": "half-elf",
+              "name": "Half-Elf",
+              "url": "/api/2014/races/half-elf"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/skill-versatility"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "menacing",
+        "name": "Menacing",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You gain proficiency in the Intimidation skill.\n\nProficiencies: Skill: Intimidation",
+        "refs": [
+          "half-orc"
+        ],
+        "data": {
+          "index": "menacing",
+          "name": "Menacing",
+          "proficiencies": [
+            {
+              "index": "skill-intimidation",
+              "name": "Skill: Intimidation",
+              "url": "/api/2014/proficiencies/skill-intimidation"
+            }
+          ],
+          "races": [
+            {
+              "index": "half-orc",
+              "name": "Half-Orc",
+              "url": "/api/2014/races/half-orc"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/menacing"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "relentless-endurance",
+        "name": "Relentless Endurance",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you are reduced to 0 hit points but not killed outright, you can drop to 1 hit point instead. you cannot use this feature again until you finish a long rest.",
+        "refs": [
+          "half-orc"
+        ],
+        "data": {
+          "index": "relentless-endurance",
+          "name": "Relentless Endurance",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "half-orc",
+              "name": "Half-Orc",
+              "url": "/api/2014/races/half-orc"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/relentless-endurance"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "savage-attacks",
+        "name": "Savage Attacks",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "When you score a critical hit with a melee weapon attack, you can roll one of the weapon's damage dice one additional time and add it to the extra damage of the critical hit.",
+        "refs": [
+          "half-orc"
+        ],
+        "data": {
+          "index": "savage-attacks",
+          "name": "Savage Attacks",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "half-orc",
+              "name": "Half-Orc",
+              "url": "/api/2014/races/half-orc"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/savage-attacks"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "hellish-resistance",
+        "name": "Hellish Resistance",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You have resistance to fire damage.",
+        "refs": [
+          "tiefling"
+        ],
+        "data": {
+          "index": "hellish-resistance",
+          "name": "Hellish Resistance",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2014/races/tiefling"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/hellish-resistance"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      },
+      {
+        "id": "infernal-legacy",
+        "name": "Infernal Legacy",
+        "source": "SRD 5.1 (github.com/5e-bits/5e-database)",
+        "page": null,
+        "section": "Species",
+        "tags": [
+          "trait",
+          "species",
+          "srd"
+        ],
+        "aliases": [],
+        "text": "You know the thaumaturgy cantrip. When you reach 3rd level, you can cast the hellish rebuke spell as a 2nd-level spell once with this trait and regain the ability to do so when you finish a long rest. When you reach 5th level, you can cast the darkness spell once with this trait and regain the ability to do so when you finish a long rest. Charisma is your spellcasting ability for these spells.",
+        "refs": [
+          "tiefling"
+        ],
+        "data": {
+          "index": "infernal-legacy",
+          "name": "Infernal Legacy",
+          "proficiencies": [],
+          "races": [
+            {
+              "index": "tiefling",
+              "name": "Tiefling",
+              "url": "/api/2014/races/tiefling"
+            }
+          ],
+          "subraces": [],
+          "url": "/api/2014/traits/infernal-legacy"
+        },
+        "manual": null,
+        "notes": null,
+        "todo": []
+      }
+    ],
+    "tables": null,
+    "rules": null
+  }
+}
