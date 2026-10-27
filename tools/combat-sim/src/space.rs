@@ -508,6 +508,7 @@ pub enum Diagonal {
 
 /// Squeezing policy selected by ruleset.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
 pub enum Squeeze {
     #[serde(rename = "edition_2014")]
     Edition2014,

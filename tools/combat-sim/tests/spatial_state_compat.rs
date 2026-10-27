@@ -293,6 +293,10 @@ fn ac1_types_have_units_validation_and_stable_serialization() {
         json!("edition_2014")
     );
     assert_eq!(
+        serde_json::to_value(Squeeze::Forbid).expect("squeeze"),
+        json!("forbid")
+    );
+    assert_eq!(
         serde_json::to_value(AreaShape::Emanation).expect("shape"),
         json!("emanation")
     );
