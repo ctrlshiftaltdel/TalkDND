@@ -12,7 +12,7 @@ TalkDND is an AI dungeon-master play kit for Dungeons & Dragons, plus a Rust com
 
 An AI assistant runs the game in chat. It narrates, plays NPCs, and offers choices. The player plays their own character and may type any action. Dice are rolled by the local `combat-sim` program, and the full expression is shown. Combat (attack rolls, damage, conditions, concentration, movement, opportunity attacks) is resolved by that same Rust engine. Play state is written into a local save so a later session can resume.
 
-The repository ships the program, original docs, the SRD 5.1 / 5.2.1 content packs, and SRD-derived combat data. It does not ship the PHB, DMG, or MM books the player reads.
+The repository ships the program, original docs, the SRD 5.1 / 5.2.1 content packs, and SRD-derived combat data. Starting with v1.2 it also ships licensed PHB/DMG/MM content packs that stay locked until the player supplies the matching PDF; it does not ship the printed books themselves.
 
 ## Audience
 
@@ -35,7 +35,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 
 ## Non-goals
 
-- Never distribute copyrighted rulebooks or adventures. The SRD 5.1 and 5.2.1 content packs ship with the program under CC-BY-4.0, so a player can play without adding any PDF. Players add their own PDFs only when they want page images, PDF fallback, or full-book content; official books, when the player owns them, stay on that player's machine.
+- Never distribute copyrighted adventures. Rulebook content ships only under the owner's licence: SRD 5.1 / 5.2.1 packs under CC-BY-4.0, and (from v1.2) PHB/DMG/MM full packs unlocked by the player's own PDF. Players add PDFs only when they want page images, PDF fallback, or full-book content; their books stay on their machine.
 - Do not commit save contents, character sheets, session logs, or DM secrets. `LetsPlay/Saves/README.md` is the only save-tree file that belongs in Git.
 - Do not mix 2014 and 2024 rules inside one save.
 - Do not hard-code a campaign, an adventure, or a monster that is outside the SRD into the engine or into tracked combat data.
@@ -455,6 +455,7 @@ Alternative considered: rely on DM discipline alone. Rejected: the new tools mak
 | 2026-10-27 | AgentOrch Format 1.1 → 1.6 upgrade (TASK-0100): `kit/orchestration.md`, `docs/PROJECT.md`, `docs/PLAN.md`, 1.6 scripts/tests, official `MANIFEST.json` baseline, downstream validator mode; no product behavior change. |
 | 2026-10-27 | TASK-0101 post-merge fix: validator skips local player books/saves, pdf2md output and build/cache dirs; tracked doc links still checked. |
 | 2026-10-27 | TASK-0099: SRD 5.1 / 5.2.1 full content packs ship with the program (CC-BY-4.0, generated from 5e-database); players no longer need to add the SRD PDFs. PHB/DMG/MM are still not shipped. |
+| 2026-10-27 | Owner confirmed the licence to distribute full PHB/DMG/MM content (legal review). Full packs ship from v1.2 but stay locked until the player supplies the matching PDF; no hash check, book identification is by content. If the licence scope changes, the full packs are withdrawn or replaced. Player-visible rulesets are 5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD (TASK-0107). |
 
 ### 2026-10-21 — pdf2md audit, page fixes and agent review
 
