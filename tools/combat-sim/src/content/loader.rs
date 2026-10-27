@@ -729,96 +729,99 @@ impl ContentSources {
 
         registry.ruleset = ruleset.edition().to_string();
 
-        // Split explicit pack files out of the base libraries. Full packs are
-        // not SRD layers: `*-srd` ignores them, and `*-full` loads them after
-        // the edition's SRD layer so they override the same ids. A full pack
-        // for the other edition is a hard error (one save, one ruleset).
-        let mut srd_libraries = Vec::new();
-        let mut full_libraries = Vec::new();
-        let mut handwritten_libraries: Vec<HandwrittenSource> = Vec::new();
-        for path in libraries {
-            if super::pack::is_pack_path(&path) {
-                let meta = read_pack_header(&path)?;
-                if strict
-                    && ruleset.is_full()
-                    && meta.id.starts_with("full-")
-                    && meta.distribution != super::pack::Distribution::Full
-                {
-                    bail!(
-                        "full pack `{}` ({}) must declare distribution: full, not {}; one save uses one ruleset",
-                        meta.id,
-                        path.display(),
-                        meta.distribution.as_str()
-                    );
-                }
-                match meta.distribution {
-                    super::pack::Distribution::Full => {
-                        if strict && ruleset.is_srd() {
-                            continue;
-                        }
-                        if strict && meta.edition != ruleset.edition() {
-                            bail!(
-                                "full pack `{}` ({}) is for edition {} but this save uses {} (edition {}); one save uses one ruleset",
-                                meta.id,
-                                path.display(),
-                                meta.edition,
-                                ruleset.display(),
-                                ruleset.edition()
-                            );
-                        }
-                        full_libraries.push(path);
+        // For a FULL save, split explicit pack files and the layered edition
+        // into SRD base, full packs, and hand-written overrides. `*-srd` and
+        // non-strict callers keep the original library order and behavior.
+        if strict && ruleset.is_full() {
+            let mut srd_libraries = Vec::new();
+            let mut full_libraries = Vec::new();
+            let mut handwritten_libraries: Vec<HandwrittenSource> = Vec::new();
+            for path in libraries {
+                if super::pack::is_pack_path(&path) {
+                    let meta = read_pack_header(&path)?;
+                    if meta.id.starts_with("full-")
+                        && meta.distribution != super::pack::Distribution::Full
+                    {
+                        bail!(
+                            "full pack `{}` ({}) must declare distribution: full, not {}; one save uses one ruleset",
+                            meta.id,
+                            path.display(),
+                            meta.distribution.as_str()
+                        );
                     }
-                    super::pack::Distribution::Srd => srd_libraries.push(path),
-                    super::pack::Distribution::Local => {
-                        handwritten_libraries.push(HandwrittenSource {
-                            path,
-                            exclude: None,
-                        })
+                    match meta.distribution {
+                        super::pack::Distribution::Full => {
+                            if meta.edition != ruleset.edition() {
+                                bail!(
+                                    "full pack `{}` ({}) is for edition {} but this save uses {} (edition {}); one save uses one ruleset",
+                                    meta.id,
+                                    path.display(),
+                                    meta.edition,
+                                    ruleset.display(),
+                                    ruleset.edition()
+                                );
+                            }
+                            full_libraries.push(path);
+                        }
+                        super::pack::Distribution::Srd => srd_libraries.push(path),
+                        super::pack::Distribution::Local => {
+                            handwritten_libraries.push(HandwrittenSource {
+                                path,
+                                exclude: None,
+                            })
+                        }
                     }
+                    continue;
                 }
-                continue;
-            }
-            // A layered library (`common/` + edition folders) is the SRD
-            // base; every other directory is hand-written or campaign content
-            // and loads after the full packs. For FULL, split the edition
-            // folder so only `common/` and `<edition>/srd/` stay in the SRD
-            // layer; the edition's other files (monsters/, spells.yaml, ...)
-            // keep overriding the full pack. `*-srd` keeps the old whole-layer
-            // order.
-            if path.is_dir() && path.join("common").is_dir() {
-                if strict && ruleset.is_full() {
+                // A layered library (`common/` + edition folders) is the SRD
+                // base; every other directory is hand-written or campaign
+                // content. Split the edition folder so only `common/` and
+                // `<edition>/srd/` stay in the SRD layer; the edition's other
+                // files (monsters/, spells.yaml, ...) keep overriding the
+                // full pack.
+                if path.is_dir() && path.join("common").is_dir() {
                     let (srd, hand) = full_layers(&path, ruleset.edition());
                     srd_libraries.extend(srd);
                     handwritten_libraries.extend(hand);
                 } else {
-                    srd_libraries.push(path);
+                    handwritten_libraries.push(HandwrittenSource {
+                        path,
+                        exclude: None,
+                    });
                 }
-            } else {
-                handwritten_libraries.push(HandwrittenSource {
-                    path,
-                    exclude: None,
-                });
             }
-        }
 
-        let srd_libraries: Vec<PathBuf> = srd_libraries
-            .iter()
-            .flat_map(|path| expand_layers(path, ruleset.edition()))
-            .collect();
-        for source in srd_libraries.iter().chain(full_libraries.iter()) {
-            load_source(source, None, ruleset, strict, &mut registry)?;
-        }
-        for source in &handwritten_libraries {
-            load_source(
-                &source.path,
-                source.exclude.as_deref(),
-                ruleset,
-                strict,
-                &mut registry,
-            )?;
-        }
-        for source in adventures.iter().chain(characters.iter()) {
-            load_source(source, None, ruleset, strict, &mut registry)?;
+            let srd_libraries: Vec<PathBuf> = srd_libraries
+                .iter()
+                .flat_map(|path| expand_layers(path, ruleset.edition()))
+                .collect();
+            for source in srd_libraries.iter().chain(full_libraries.iter()) {
+                load_source(source, None, ruleset, strict, &mut registry)?;
+            }
+            for source in &handwritten_libraries {
+                load_source(
+                    &source.path,
+                    source.exclude.as_deref(),
+                    ruleset,
+                    strict,
+                    &mut registry,
+                )?;
+            }
+            for source in adventures.iter().chain(characters.iter()) {
+                load_source(source, None, ruleset, strict, &mut registry)?;
+            }
+        } else {
+            let libraries: Vec<PathBuf> = libraries
+                .iter()
+                .flat_map(|path| expand_layers(path, ruleset.edition()))
+                .collect();
+            for source in libraries
+                .iter()
+                .chain(adventures.iter())
+                .chain(characters.iter())
+            {
+                load_source(source, None, ruleset, strict, &mut registry)?;
+            }
         }
 
         // Fail closed: FULL must actually add full-book content. Packs reached

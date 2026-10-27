@@ -33,6 +33,7 @@
 | 5e SRD | `5e-srd` | 2014 | `Rules/combat/common/` + `Rules/combat/2014/`；不加载完整书 pack |
 
 - **FULL 失败关闭**：至少需要一本同 edition 的已解锁完整书。缺书、未解锁或内容包损坏时，`talkdnd start` 与 `combat-sim content check` 会报错并指出缺哪本书、PDF 放哪里、pack 放哪里；不会静默退回 SRD。
+- **分层顺序**：FULL 的 SRD 层是 `Rules/combat/common/` + `Rules/combat/<edition>/srd/`；之后加载已解锁 full pack；`<edition>/` 下其余手写文件（`monsters/`、`spells.yaml` 等）与冒险/战役覆盖最后加载，因此手写内容仍可覆盖 full pack。
 - **一个存档只用一版**：FULL/SRD 只影响是否叠加完整书，不能把 5e 与 5.5e 混在同一存档；另一版的 `Rules/combat/<edition>/` 目录不会被读取。
 - **旧值兼容**：旧存档里的 `ruleset: "2014"` / `"2024"` 仍可读取，分别按 `5e-srd` / `5.5e-srd` 处理；下一次写 manifest（`start`、`migrate` 或 `chargen` 写字段）会把值改成新值并留下一行迁移注释，其他字段和你的注释保持不变。
 
