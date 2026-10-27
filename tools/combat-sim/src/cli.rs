@@ -387,6 +387,18 @@ pub enum ContentCommand {
         #[command(subcommand)]
         command: PackCommand,
     },
+    /// Extract the SRD rules prose that 5e-database does not carry.
+    ImportSrdProse {
+        /// Currently only `2024` has prose gaps.
+        #[arg(long, value_name = "EDITION")]
+        edition: String,
+        /// A pdf2md `index/` directory containing `manifest.json` and pages.
+        #[arg(long, value_name = "DIR")]
+        index: PathBuf,
+        /// Output directory for `<pack-id>.pack.json`.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+    },
     /// Import SRD 5.1 / 5.2.1 JSON (5e-database) into content packs.
     ImportSrdPack {
         /// `2014` or `2024`.
@@ -1123,6 +1135,30 @@ fn run_content(sources: &ContentSources, command: ContentCommand) -> Result<()> 
             println!(
                 "{}",
                 serde_json::to_string_pretty(&shown).context("failed to serialize content item")?
+            );
+            Ok(())
+        }
+        ContentCommand::ImportSrdProse {
+            edition,
+            index,
+            out,
+        } => {
+            let report = crate::srd_prose::import(&edition, &index, &out)?;
+            for chapter in &report.chapters {
+                println!(
+                    "{}\tp.{}-{}\t{} sections",
+                    chapter.name, chapter.start_page, chapter.end_page, chapter.sections
+                );
+            }
+            for duplicate in &report.duplicates {
+                println!("duplicate: {duplicate}");
+            }
+            for gap in &report.gaps {
+                println!("gap: {gap}");
+            }
+            println!(
+                "{}: {} entities, {} short headings skipped",
+                report.pack_id, report.entities, report.skipped
             );
             Ok(())
         }

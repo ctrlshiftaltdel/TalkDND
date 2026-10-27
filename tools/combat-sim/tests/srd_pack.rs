@@ -486,7 +486,8 @@ fn committed_2014_packs_are_complete() {
 #[test]
 fn committed_2024_packs_are_complete() {
     let packs = committed_packs(COMMITTED_2024);
-    assert_eq!(packs.len(), 7);
+    // Seven 5e-database packs plus the pdf2md rules-prose pack.
+    assert_eq!(packs.len(), 8);
     let expected = [
         ("srd-5.2.1-monsters", 341),
         ("srd-5.2.1-spells", 339),
@@ -502,6 +503,7 @@ fn committed_2024_packs_are_complete() {
         assert_eq!(pack.pack.edition, "2024", "{id}");
     }
     assert!(packs.iter().all(|pack| pack.pack.id != "srd-5.2.1-rules"));
+    assert!(pack_by_id(&packs, "srd-5.2.1-rules-prose").entity_count() > 0);
 }
 
 #[test]
