@@ -97,10 +97,12 @@ to `talkdnd settings automation` for the per-value source.
 
 Scene and encounter ids come from the save, not from the CLI:
 
-- the current scene label in `progress.yaml`;
+- the current scene label in `progress.yaml` when it is a valid id (the start
+  digest resolves a content scene **name** to its id);
 - `combat/*.state.json` (`scene.id` and `encounter_name`);
 - the adventure `combat/` directories named by `combat/campaign.yaml`
-  (`scenes[].id`, `encounters[].id`, and single-item files).
+  (`scenes[].id`, `scenes[].name` -> id, `encounters[].id`, and single-item
+  files).
 
 An override for an id that is not known is refused before anything is written.
 Ids are 1–80 letters, digits, `-`, `_` or `.`; whitespace, control

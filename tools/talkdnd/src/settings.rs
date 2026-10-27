@@ -340,8 +340,16 @@ impl Scope {
 }
 
 fn scope(scene: Option<&str>, encounter: Option<&str>) -> Result<Scope> {
-    let scene = scene.map(str::trim).filter(|s| !s.is_empty());
-    let encounter = encounter.map(str::trim).filter(|s| !s.is_empty());
+    let scene = match scene {
+        Some(value) if value.trim().is_empty() => bail!("--scene 不能为空"),
+        Some(value) => Some(value.trim()),
+        None => None,
+    };
+    let encounter = match encounter {
+        Some(value) if value.trim().is_empty() => bail!("--encounter 不能为空"),
+        Some(value) => Some(value.trim()),
+        None => None,
+    };
     match (scene, encounter) {
         (Some(_), Some(_)) => {
             bail!("--scene 与 --encounter 不能同时使用；一次只覆盖一个层级")
@@ -546,8 +554,8 @@ pub fn reset_automation(
             for name in names {
                 let old = meta.settings.automation.default_level(name);
                 let target = automation_category(name).map(|c| c.default).unwrap();
-                old_values.push(format!("{name}={old}"));
                 if old != target {
+                    old_values.push(format!("{name}={old}"));
                     meta.settings
                         .automation
                         .default
@@ -589,18 +597,30 @@ pub fn reset_automation(
     }
 
     if removed.is_empty() {
-        return Ok(vec![format!(
-            "自动化（{}）已经是章程默认；未改动、未记日志",
-            scope.describe()
-        )]);
+        return Ok(vec![if matches!(scope, Scope::Save) {
+            format!(
+                "自动化（{}）已经是章程默认；未改动、未记日志",
+                scope.describe()
+            )
+        } else {
+            format!(
+                "自动化（{}）没有可重置的覆盖；未改动、未记日志",
+                scope.describe()
+            )
+        }]);
     }
     meta.settings.automation.check()?;
     migrate::write_meta(save_dir, &meta)?;
     let line = if reset_all {
         format!(
-            "自动化重置（{}）：{} → 章程默认（{reason}）",
+            "自动化重置（{}）：{} → {}（{reason}）",
             scope.describe(),
-            old_values.join("、")
+            old_values.join("、"),
+            if matches!(scope, Scope::Save) {
+                "章程默认"
+            } else {
+                "未覆盖"
+            }
         )
     } else {
         format!(
@@ -707,7 +727,11 @@ impl KnownIds {
 fn known_ids(save_dir: &Path) -> KnownIds {
     let mut known = KnownIds::default();
     if let Some(scene) = progress::scene(save_dir) {
-        known.scenes.insert(scene);
+        // The free-text scene label doubles as an id only when it is a valid
+        // one; otherwise it can still be resolved through a content name.
+        if check_id("场景", &scene).is_ok() {
+            known.scenes.insert(scene);
+        }
     }
     // Live encounter state files carry the scene id and encounter name.
     if let Ok(rd) = fs::read_dir(save_dir.join("combat")) {

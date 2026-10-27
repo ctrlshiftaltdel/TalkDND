@@ -599,16 +599,7 @@ fn migration_8_to_9_backs_up_logs_and_keeps_old_saves_equivalent() {
     assert!(log.contains("Saves/_backups/"), "{log}");
     assert!(log.contains("自动化设置默认"), "{log}");
     let after = ok(&r, &["settings", "automation", "show"]);
-    assert_eq!(
-        before
-            .lines()
-            .filter(|l| l.contains("来源：存档默认"))
-            .count(),
-        after
-            .lines()
-            .filter(|l| l.contains("来源：存档默认"))
-            .count()
-    );
+    assert_eq!(before, after, "old-save automation must be equivalent");
     assert!(
         after.contains("npc（NPC 对话）：assisted — 来源：存档默认"),
         "{after}"
