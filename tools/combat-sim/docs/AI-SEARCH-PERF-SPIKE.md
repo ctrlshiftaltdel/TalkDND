@@ -27,7 +27,7 @@
 | Profile | `release`（仓库 `Cargo.toml`：`lto = "fat"`、`codegen-units = 1`、`panic = "abort"`） |
 | Sink | `engine::NullSink`（不格式化、不分配日志） |
 | 引擎基线 | `4bb287889f0805cf43a5cdef2189855f351b0718` |
-| 基准 harness | `tools/combat-sim/tests/ai_search_perf.rs`，位于本 PR head（精确 SHA 见 PR 证据评论） |
+| 基准 harness | `tools/combat-sim/tests/ai_search_perf.rs` @ `87d6c651ba68903861691735ec8510a1337b68ce`（该测试文件自此次提交后未改动；后续只有文档更新） |
 | 固定 seed | 基准 `0x5eed0179`；派生：setup `^0x1000`、action `^0x2000`、turn `^0x3000`、rollout `^0x4000` |
 | 采样量 | action 2000 / turn 1000 / clone 1000 / rollout 500；warm-up 50 |
 
@@ -64,7 +64,19 @@ CARGO_BUILD_JOBS=2 cargo test --release \
 
 ## 3. 测量结果
 
-参考运行（三次重复中的一次；P50 在重复运行间通常相差 ±10–15%，P95 受机器负载影响更大）。
+参考运行（多次重复中的一次）。P50 多数行在重复运行间相差约 ±10–15%，个别行在机器负载下可接近 2×（例如 `spell-single` action 6.4→10.5 µs）；P95 更敏感。节点预算的**量级**（10^3–10^4 / 10^5）在重复运行间稳定，本文结论按量级使用，不按单次小数位使用。
+
+重复运行中五个场景的 P50 范围（action / turn，µs）：
+
+| scenario | action P50 范围 | turn P50 范围 |
+|----------|-----------------|---------------|
+| melee-duel | 2.9–3.5 | 4.0–4.9 |
+| ranged-skirmish | 3.1–3.7 | 4.3–7.3 |
+| spell-single | 6.4–10.5 | 8.2–8.7 |
+| spell-multi | 15.5–16.0 | 15.9–18.2 |
+| size-grid | 3.1–3.5 | 7.2–7.4 |
+
+`clone+clear` 在各次运行中为 0.31–0.88 µs；`clone+256log` 为 12.1–16.8 µs；4v4 rollout P50 为 0.20–0.23 ms。
 
 ### 3.1 单动作 / 单回合 / clone（微秒）
 
