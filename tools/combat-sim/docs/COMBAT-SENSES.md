@@ -79,9 +79,10 @@ Light and obscurement combine, taking the worse of the two:
 | `bright` | heavy | heavily obscured |
 | `dark` | light | heavily obscured |
 
-Only heavy obscurement or `blocked` imposes attack disadvantage. Dim light and
-light obscurement do not; they matter to Perception, which the engine does not
-roll automatically.
+Only heavy obscurement, or a block such as `hidden`/`invisible`, imposes attack
+disadvantage. Total cover remains the separate cover and legality rule. Dim
+light and light obscurement do not impose disadvantage; they matter to
+Perception, which the engine does not roll automatically.
 
 ## Senses
 
