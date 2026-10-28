@@ -100,6 +100,7 @@ pub fn check(registry: &ContentRegistry) -> CheckReport {
     check_exhaustion(registry, &mut report);
     check_condition_behaviors(registry, &mut report);
     check_combat_actions(registry, &mut report);
+    check_ready(registry, &mut report);
 
     let (resolved, unresolved) = resolve_creatures(registry, &mut report);
     let creature_refs = collect_creature_refs(registry, &resolved);
@@ -516,6 +517,25 @@ fn check_exhaustion(registry: &ContentRegistry, report: &mut CheckReport) {
             source,
             "rules.exhaustion.speed_penalty_per_level must not be negative",
         );
+    }
+}
+
+fn check_ready(registry: &ContentRegistry, report: &mut CheckReport) {
+    let Some(ready) = &registry.rules.ready else {
+        return;
+    };
+    let source = registry.rules_source.as_ref();
+    let max = ready.max_responses();
+    if max != 1 {
+        report.error(
+            source,
+            format!(
+                "rules.ready.max_responses must be 1 (one prepared response per combatant); got {max}"
+            ),
+        );
+    }
+    if !ready.expires_at_start_of_next_turn() {
+        report.error(source, "rules.ready.expires must be `start_of_next_turn`");
     }
 }
 

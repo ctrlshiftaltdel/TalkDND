@@ -16,13 +16,14 @@ use crate::ai::Ai;
 use crate::content::{self, ContentSources, ItemKind, ShownItem};
 use crate::dice::{self, DiceRng, RollMode};
 use crate::engine::{
-    self, AddConditionOptions, AttackOptions, FallOptions, GrappleOptions, RestKind, ShoveMode,
-    ShoveOptions, UnarmedOptions, UseOptions,
+    self, AddConditionOptions, AttackOptions, FallOptions, GrappleOptions, ReadyOptions, RestKind,
+    ShoveMode, ShoveOptions, UnarmedOptions, UseOptions,
 };
 use crate::sim::{self, SimulationConfig};
 use crate::space::FallAbility;
 use crate::state::{
     resolve_state_path, AddSpec, CombatantState, EncounterState, LookupError, NewEncounter,
+    ReadyResponse, ReadyState, ReadyTrigger,
 };
 
 /// Global options shared by every command.
@@ -324,6 +325,46 @@ pub enum Command {
         no_oa: bool,
     },
 
+    /// Prepare one response to a perceivable trigger (Ready action).
+    Ready {
+        who: String,
+        /// Perceivable circumstance, recorded in the combat log.
+        #[arg(long)]
+        trigger: String,
+        /// Structured trigger kind used for automatic matching.
+        #[arg(long = "on", value_enum, default_value_t = ReadyTriggerArg::Manual)]
+        on: ReadyTriggerArg,
+        /// Weapon attack id for the response.
+        #[arg(long, conflicts_with_all = ["unarmed", "ability", "zone", "to"])]
+        attack: Option<String>,
+        /// Unarmed Strike response.
+        #[arg(long, conflicts_with_all = ["ability", "zone", "to"])]
+        unarmed: bool,
+        /// Owned action ability for the response.
+        #[arg(long, conflicts_with_all = ["zone", "to"])]
+        ability: Option<String>,
+        /// Response target; targeted responses default to the triggering creature.
+        #[arg(long, conflicts_with_all = ["zone", "to"])]
+        target: Option<String>,
+        /// Movement response destination zone.
+        #[arg(long, conflicts_with = "to")]
+        zone: Option<String>,
+        /// Movement response exact grid cell `X,Y`.
+        #[arg(long, value_name = "X,Y")]
+        to: Option<String>,
+    },
+
+    /// Fire a prepared response explicitly (DM trigger).
+    Trigger {
+        who: String,
+        /// Creature that caused the trigger; used when the response has no stored target.
+        #[arg(long)]
+        source: Option<String>,
+    },
+
+    /// Clear a prepared response without triggering it.
+    ReadyClear { who: String },
+
     /// Take off or change altitude in a grid scene.
     Fly {
         who: String,
@@ -617,6 +658,27 @@ impl From<ShoveModeArg> for ShoveMode {
         match value {
             ShoveModeArg::KnockDown => Self::KnockDown,
             ShoveModeArg::Away => Self::Away,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ReadyTriggerArg {
+    Manual,
+    EnterReach,
+    Attacked,
+    Ability,
+    TurnStart,
+}
+
+impl From<ReadyTriggerArg> for ReadyTrigger {
+    fn from(value: ReadyTriggerArg) -> Self {
+        match value {
+            ReadyTriggerArg::Manual => Self::Manual,
+            ReadyTriggerArg::EnterReach => Self::EnterReach,
+            ReadyTriggerArg::Attacked => Self::Attacked,
+            ReadyTriggerArg::Ability => Self::Ability,
+            ReadyTriggerArg::TurnStart => Self::TurnStart,
         }
     }
 }
@@ -1172,6 +1234,86 @@ fn run_cli() -> Result<()> {
                 engine::move_to(state, &who, &target, no_oa, rng, lines)
             })
         }
+        Command::Ready {
+            who,
+            trigger,
+            on,
+            attack,
+            unarmed,
+            ability,
+            target,
+            zone,
+            to,
+        } => {
+            if (zone.is_some() || to.is_some()) && target.is_some() {
+                return Err(anyhow!("--target does not apply to a readied move"));
+            }
+            let response = if let Some(attack) = attack {
+                ReadyResponse::Attack { attack, target }
+            } else if unarmed {
+                ReadyResponse::Unarmed { target }
+            } else if let Some(ability) = ability {
+                ReadyResponse::Ability { ability, target }
+            } else if let Some(zone) = zone {
+                ReadyResponse::Move {
+                    zone: Some(zone),
+                    cell: None,
+                }
+            } else if let Some(to) = to {
+                let (x, y) = to
+                    .split_once(',')
+                    .ok_or_else(|| anyhow!("--to expects X,Y"))?;
+                let x: i32 = x
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("invalid x coordinate in `{to}`"))?;
+                let y: i32 = y
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("invalid y coordinate in `{to}`"))?;
+                ReadyResponse::Move {
+                    zone: None,
+                    cell: Some([x, y]),
+                }
+            } else {
+                return Err(anyhow!(
+                    "ready needs one response: --attack, --unarmed, --ability, --zone or --to"
+                ));
+            };
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, save.as_deref(), seed, |state, _rng, lines| {
+                let who = canonical_name(state, &who)?;
+                check_own_turn(state, &who, "take the Ready action")?;
+                let options = ReadyOptions {
+                    trigger: on.into(),
+                    description: trigger,
+                    response,
+                };
+                engine::ready(state, &who, &options, lines)
+            })
+        }
+        Command::Trigger { who, source } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
+                let who = canonical_name(state, &who)?;
+                let source = source
+                    .as_deref()
+                    .map(|name| canonical_name(state, name))
+                    .transpose()?;
+                engine::trigger_ready(state, &who, source.as_deref(), rng, lines)?;
+                Ok(())
+            })
+        }
+        Command::ReadyClear { who } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, save.as_deref(), seed, |state, _rng, lines| {
+                let who = canonical_name(state, &who)?;
+                if !engine::clear_ready(state, &who, "cleared by command", lines)? {
+                    bail!("`{who}` has no readied action");
+                }
+                Ok(())
+            })
+        }
         Command::Fly { who, altitude_ft } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(&path, save.as_deref(), seed, |state, _rng, lines| {
@@ -1703,6 +1845,21 @@ fn check_action_turn(
         return Ok(());
     }
     force_or_deny(state, attacker, "attack", "", force, lines)
+}
+
+/// Blocks an action that is only legal on the actor's own turn (Ready). It has
+/// no `--force` escape hatch: a readied response is the out-of-turn action.
+fn check_own_turn(state: &EncounterState, actor: &str, action: &str) -> Result<()> {
+    let Some(active_name) = active_combatant(state) else {
+        return Ok(());
+    };
+    if active_name.eq_ignore_ascii_case(actor) {
+        return Ok(());
+    }
+    bail!(
+        "{actor} cannot {action} now: it is {active_name}'s turn (round {}). Run `next` first",
+        state.round
+    )
 }
 
 /// Blocks a non-reaction ability outside the actor's turn unless `--force`
@@ -2486,6 +2643,8 @@ struct CombatantStatus {
     dead: bool,
     knocked_out: bool,
     speed_left: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ready: Option<ReadyState>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2592,6 +2751,7 @@ impl StatusOutput {
                     dead: combatant.is_dead(),
                     knocked_out: combatant.knocked_out,
                     speed_left: combatant.speed_left,
+                    ready: combatant.ready.clone(),
                 }
             })
             .collect();

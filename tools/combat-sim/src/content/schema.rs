@@ -481,6 +481,10 @@ pub struct Rules {
     /// literals that build conditions directly keep compiling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition_behaviors: Option<BTreeMap<String, ConditionBehavior>>,
+    /// Optional Ready-action shape. Both editions share it today; keeping it in
+    /// `rules` means a later edition difference is data, not an engine branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready: Option<ReadyRule>,
 }
 
 /// Surprise handling. 2024: initiative with disadvantage. 2014: normal
@@ -540,6 +544,12 @@ impl Rules {
             self.condition_behaviors
                 .get_or_insert_with(BTreeMap::new)
                 .extend(behaviors);
+        }
+        if let Some(ready) = other.ready {
+            match &mut self.ready {
+                Some(existing) => existing.merge_from(ready),
+                slot @ None => *slot = Some(ready),
+            }
         }
     }
 }
@@ -655,6 +665,47 @@ impl ExhaustionRules {
 
     pub fn long_rest_reduction(&self) -> u32 {
         self.long_rest_reduction.unwrap_or(1)
+    }
+}
+
+/// Ready-action shape. The engine supports exactly one prepared response per
+/// combatant and expiry at the holder's next turn start; the data seam keeps
+/// both values out of edition branches.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyRule {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_responses: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<ReadyExpiry>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadyExpiry {
+    #[default]
+    StartOfNextTurn,
+}
+
+impl ReadyRule {
+    pub fn max_responses(&self) -> u32 {
+        self.max_responses.unwrap_or(1)
+    }
+
+    pub fn expires_at_start_of_next_turn(&self) -> bool {
+        matches!(
+            self.expires.unwrap_or_default(),
+            ReadyExpiry::StartOfNextTurn
+        )
+    }
+
+    fn merge_from(&mut self, other: ReadyRule) {
+        if other.max_responses.is_some() {
+            self.max_responses = other.max_responses;
+        }
+        if other.expires.is_some() {
+            self.expires = other.expires;
+        }
     }
 }
 
