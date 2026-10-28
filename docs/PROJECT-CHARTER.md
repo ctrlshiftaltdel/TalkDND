@@ -185,6 +185,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 
 - Ready actions are structured state, not free text. `CombatantState.ready` holds one `ReadyState` (`trigger`, `description`, `response`, `set_round`, `expires_round`) and is additive/serde-defaulted. The response is one of weapon attack, unarmed strike, action ability or movement. An ability response is **prepaid at setup**: its `Ability.cost` is spent and its concentration begins immediately, and the release path uses `use_resolved_ability` with explicit `action_spent`/`cost_paid`/`concentration_started` settlement flags so it neither re-pays nor re-begins. Expiry/clear/death/0 HP/incapacitation/dormancy never refund; cleanup ends only the concentration whose ability id matches the ready. The engine matches automatic triggers by the structured kind (`enter_reach`, `attacked`, `ability`, `turn_start`) rather than parsing prose, spends the reaction only after the response resolves, and keeps a refused ready. The action spend is the Ready setup; the response is executed with the action economy suppressed and the reaction spent once. `rules.ready` is the optional data seam (`max_responses: 1`, `expires: start_of_next_turn`), and both editions use the same shape.
 - Senses and obscurement are one visibility query, not new persisted state. `Creature.senses` stays free text and is parsed at runtime into darkvision/blindsight/tremorsense/truesight/passive-perception ranges. `Scene`/`Zone.obscured` is additive, serde-defaulted and skipped when empty; zone scenes prefer the zone value, grid scenes use the scene value. `can_see` combines light (darkvision shifts it, truesight ignores normal darkness), obscurement, total cover, hidden/invisible and tremorsense ground contact; blindsight and truesight respect total cover, tremorsense ignores cover but requires ground contact. Attack, ability-attack and AI-forecast paths query it in both directions and log the sense/light/obscurement reason. Hidden/invisible condition modifiers are filtered only when a sense defeats them, so the condition and the sense query do not double-count. `space.rs`, `state.rs`, `ai.rs`, `sim.rs` and the loader are untouched; magical darkness, per-cell light and automatic Perception stay out of scope.
+- v1.6 施法能力边界已决定（2026-10-28，D-1..D-12，见 Decision Log；**实现未交付**，随 T1–T5 与另立任务落地）：机械效果唯一执行器是 `combat-sim` 的 `cast`/`use`；材料按“声明 + DM 裁定”，昂贵/消耗材料失败关闭、V/S 仅提示、`--ignore-components` 仅 DM 且写日志；仪式按两版分模型（2024 edition 级“已准备 + Ritual 标签”，2014 职业级），战斗外由 `talkdnd` 校验/记录、`combat-sim` 不结算；升环扣槽 + 逐级骰表 + 戏法成长，其余效果 manual；同回合限制与长施法引擎不强制（分钟/小时施法在战斗内拒绝）；2014 魔祈授予的仪式为非目标。主存档 schema 当前仍为 9，将在 T2 落地时升到 10（整档备份迁移 + dirty-sheet 保护）。
 
 ## Open decisions
 
@@ -197,6 +198,25 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-28 — v1.6 施法核心的所有者决定 D-1..D-12（TASK-0121）
+
+项目所有者于 2026-10-28 对 v1.6 施法核心的 12 项开放决策逐项选择。设计来源是 [docs/SPELLCASTING.md](SPELLCASTING.md)（TASK-0120 / Issue #236，PR #237 已合并）；本条目只记录决定与影响，不改变设计模型。**截至本条目，v1.6 施法能力均未实现**：下列行为以后续任务（T1–T5，见设计 §6）合并进 main 为准；标注「另立任务」的方向尚未登记任务，不构成排期。
+
+- **D-1 — 存档 schema（决定日期 2026-10-28，所选选项 B）**：save-meta 升 10 + 整档备份迁移 + dirty-sheet 保护。影响范围：T2 的 9→10 迁移实现、旧二进制兼容（旧版 `talkdnd` 在 `save-meta` 即失败关闭）、`LetsPlay/docs/layout.md` 与发布说明；角色卡 `CharFile.version` 保持 1。后续任务：T2。
+- **D-2 — 法术来源范围（决定日期 2026-10-28，所选选项 A）**：8 基础职业表 + 子职授予 + Magical Secrets；完整书职业表不承诺。影响范围：T2 的职业数据（基础表、子职 grant、Magical Secrets）、T3 的准备校验覆盖面、T5 的数据与文档。后续任务：T2/T3/T5。
+- **D-3 — 材料跟踪深度（决定日期 2026-10-28，所选选项 A）**：材料只声明 + DM 裁定；不查库存、不做手部/器材模型。影响范围：T4 的 `--material` 语义（非空声明、写日志、不与文本匹配、不查物品栏）、T5 的 DM 文档；库存检查与手部/器材建模另立任务。后续任务：T4/T5。
+- **D-4 — 成分失败语义（决定日期 2026-10-28，所选选项 A）**：昂贵/消耗材料硬失败，V/S 仅提示；`--ignore-components` 仅 DM 且写日志。影响范围：T4 的 `cast` 失败关闭分支与越权日志。后续任务：T4。
+- **D-5 — 战斗外施法（决定日期 2026-10-28，所选选项 A）**：战斗外施法手动记录，v1.6 不自动结算。影响范围：T3 的命令面（不做战斗外自动结算）、T5 的 DM 文档；战斗外自动结算（`combat-sim` 临时 state）另立任务。后续任务：T3/T5。
+- **D-6 — 升环范围（决定日期 2026-10-28，所选选项 A）**：扣槽 + 逐级骰表 + 戏法成长；其他效果 manual。影响范围：T4 的升环实现（主伤害/治疗的逐级骰表、戏法表成长）、T5 的数据；其余效果保持 manual 文本。后续任务：T4/T5。
+- **D-7 — 仪式资格与边界（决定日期 2026-10-28，所选选项 A）**：按设计分版（2024 edition 级“已准备 + Ritual 标签”；2014 职业级），战斗外，`talkdnd` 只校验/记录。影响范围：T2 的 `rules.spellcasting.ritual` 与 `classes-2014.yaml` 数据、T3 的 ritual 命令、T5 的文档；`combat-sim` 不结算仪式。后续任务：T2/T3/T5。
+- **D-8 — 准备时机（决定日期 2026-10-28，所选选项 A）**：准备/替换提示 + 日志，不强制刚长休。影响范围：T2/T3 的 `prepare`/`unprepare` 行为（提示 + 日志，无长休门禁）。后续任务：T2/T3。
+- **D-9 — 旧自由文本 adopt（决定日期 2026-10-28，所选选项 A）**：精确 id/slug/name + legacy，不做模糊匹配。影响范围：T2 的迁移 adopt 与 `spells adopt` 匹配策略；未匹配项进 `legacy`。后续任务：T2。
+- **D-10 — 章程更新方式（决定日期 2026-10-28，所选选项 A）**：每个行为 PR 各自更新章程，串行合并。影响范围：T2–T5 的合并队列与 `docs/PROJECT-CHARTER.md` 路径锁；不集中到单一任务。后续任务：所有任务（T2–T5）。
+- **D-11 — 同回合限制与长施法（决定日期 2026-10-28，所选选项 A）**：引擎不强制同回合/长施法；分钟/小时施法在战斗内拒绝；DM 手动。影响范围：T4 的 `cast` 范围（`minute`/`hour` 施法时间失败关闭拒绝）、T5 的 DM 指引；引擎强制（同回合限制、长施法状态机）另立任务。后续任务：T4/T5；引擎强制另立任务。
+- **D-12 — 魔祈授予的仪式（决定日期 2026-10-28，所选选项 A）**：2014 魔祈授予的仪式为非目标，DM 手动裁定；另立任务再引入 `ritual_grants`。影响范围：T2 的 Warlock 数据（`ritual: none`）、T2/T3 的 ritual 拒绝路径、T5 的 DM 文档。后续任务：T2/T3/T5；`ritual_grants` 另立任务。
+
+被否方向（仅记 D-10 的选项 B，供对照）：把 12 项章程更新集中到实现任务 T5 一次性处理——被所有者否决；决定先于实现写入本章程，实现 PR 不得携带未审的产品决定。其余未选选项的取舍理由保留在 [docs/SPELLCASTING.md](SPELLCASTING.md) §7，本条目不重复展开。
 
 ### 2026-10-28 — v1.5.0 release (TASK-0119)
 
