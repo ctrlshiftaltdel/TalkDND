@@ -12,6 +12,7 @@
 - 支持 5.5e 与 5e 两套规则，玩家可选 **5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD**，一档一版；SRD 只用该 edition 的 SRD 层，FULL 在 SRD 层之后加载已解锁的完整书内容包。
 - 把玩家自备的规则书、冒险书、个人存档和 DM 秘密留在本机；仓库只收程序、原创文档、SRD 5.1 / 5.2.1 内容包和 SRD 派生的战斗数据。
 - 用 `tools/talkdnd` 把开局、建卡、同伴、存档点、信息边界和完整性检查做成可复用的 DM 助手，而不是把规则散落在提示词里。
+- 为 DM Agent 提供只读知识 API：稳定 id、固定来源类别、默认玩家已知过滤，把 SRD、玩家书索引、冒险、存档、原创与桌上裁定放在同一组 `search/get/cite/context/related` 后面；秘密过滤与 `guard` 同源且只读，不新增持久化索引或秘密缓存、不改存档 schema、不联网。
 - 自动化开关按存档保存：固定类别 + `manual / assisted / auto` 级别，存档默认可被场景/遭遇按 id 覆盖，有效顺序为遭遇 > 场景 > 存档默认；玩家选择与反应永不自动，接近上限先警告。
 - 把产品决策写进 `docs/PROJECT-CHARTER.md` 的 Decision Log，后续任务按同一份契约推进，不因会话更替而漂移。
 - 在 per-save 的偏离范围内允许 DM 原创内容，并用 DM-only 台账控制类型、稀有度和章节预算。
@@ -56,6 +57,7 @@
 - 存档的 `ruleset` 是四个值之一：`*-srd` 只加载对应 edition 的 SRD 层，`*-full` 要求同 edition 至少一本已解锁完整书，另一版目录不被读取；旧值 `2014` / `2024` 可读并在下次写入时迁移。
 - `uv run --no-project python scripts/validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 在无书籍、无存档的干净树上通过。
 - 三个 crate 的 `cargo test`、`cargo fmt --check`、`cargo clippy -D warnings` 通过。
+- `talkdnd knowledge` 的五个只读命令对同一输入给出稳定 id 与确定性排序；默认不泄露 `dm-secrets.md`、未揭示原创隐藏面、DM-only 冒险内容或未识别名字；`--include-hidden` 的结果标 `visibility: dm`。
 - AgentOrch 完整套件 `unittest discover -s tests` 通过；`check_drift` 只报告 `docs/PROJECT.md` 中列出的预期漂移。
 - 发布自动化产出章程列出的三个平台制品；发布包只含已跟踪的 `LetsPlay/` 内容与二进制。完整书 pack 作为独立发布资产由本地构建产生，仓库、LetsPlay 包与 CI 日志都不含书籍正文或扫描页。
 - 改变范围、目标、技术栈、规则支持或用户决定的 PR，在同一 PR 内更新 `docs/PROJECT-CHARTER.md`。
