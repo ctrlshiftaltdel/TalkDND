@@ -93,6 +93,9 @@ pub struct UnarmedOptions {
     pub disadvantage: bool,
     pub no_reactions: bool,
     pub nonlethal: bool,
+    /// Resolve exactly one Unarmed Strike and leave the remaining Attack action
+    /// slots open.
+    pub one: bool,
 }
 
 /// Which outcome a successful shove chooses.
@@ -2676,6 +2679,57 @@ pub fn attack_at(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    attack_at_with_limit(
+        state,
+        attacker_index,
+        target_index,
+        attack_name,
+        options,
+        None,
+        rng,
+        log,
+    )
+}
+
+/// One attack from the Attack action. It consumes exactly one slot and leaves
+/// the remaining slots open for a later `attack`, `grapple` or `shove`.
+pub fn attack_one(
+    state: &mut EncounterState,
+    attacker_name: &str,
+    target_name: &str,
+    attack_name: &str,
+    options: &AttackOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let attacker_index = state
+        .find_index(attacker_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let target_index = state
+        .find_index(target_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    attack_at_with_limit(
+        state,
+        attacker_index,
+        target_index,
+        attack_name,
+        options,
+        Some(1),
+        rng,
+        log,
+    )
+}
+
+fn attack_at_with_limit(
+    state: &mut EncounterState,
+    attacker_index: usize,
+    target_index: usize,
+    attack_name: &str,
+    options: &AttackOptions,
+    max_attacks: Option<u32>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
     ensure_can_act(state, attacker_index)?;
     ensure_targetable(state, target_index)?;
     if attacker_index == target_index {
@@ -2689,6 +2743,9 @@ pub fn attack_at(
         );
     }
     if options.multi {
+        if max_attacks.is_some() {
+            bail!("a single attack cannot be combined with multiattack");
+        }
         let entries = state.combatants[attacker_index]
             .creature
             .multiattack
@@ -2732,8 +2789,16 @@ pub fn attack_at(
         .ok()
         .map(AttackProfile::from_attack);
     if let Some(profile) = profile {
-        let attacks = begin_attack_slots(state, attacker_index)?;
+        let remaining = begin_attack_slots(state, attacker_index)?;
+        let attacks = max_attacks.map_or(remaining, |limit| remaining.min(limit));
         consume_attack_slots(state, attacker_index, attacks);
+        if max_attacks.is_some() && remaining > 1 {
+            log.log(format_args!(
+                "{} uses one attack; {} Attack action attack(s) remain",
+                state.combatants[attacker_index].name,
+                remaining - 1
+            ));
+        }
         let used_in_melee = profile.kind == AttackKind::Melee
             || (profile.kind == AttackKind::MeleeOrRanged
                 && ensure_melee_reachable(state, attacker_index, target_index, profile.reach)
@@ -2775,6 +2840,11 @@ pub fn attack_at(
             )?;
         }
     } else {
+        if max_attacks.is_some() {
+            bail!(
+                "a single attack requires a weapon or unarmed attack, not ability `{attack_name}`"
+            );
+        }
         spend_action(state, attacker_index, Activation::Action, log)?;
         resolve_named_entry(
             state,
@@ -3695,8 +3765,20 @@ pub fn attack_unarmed(
     }
     let profile = unarmed_profile(state, attacker)?;
     ensure_melee_reachable(state, attacker, target, profile.reach)?;
-    let attacks = begin_attack_slots(state, attacker)?;
+    let remaining = begin_attack_slots(state, attacker)?;
+    let attacks = if options.one {
+        1.min(remaining)
+    } else {
+        remaining
+    };
     consume_attack_slots(state, attacker, attacks);
+    if options.one && remaining > 1 {
+        log.log(format_args!(
+            "{} uses one Unarmed Strike; {} Attack action attack(s) remain",
+            state.combatants[attacker].name,
+            remaining - 1
+        ));
+    }
 
     if attacks > 1 {
         log.log(format_args!(

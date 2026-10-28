@@ -58,7 +58,7 @@
 - 存档的 `ruleset` 是四个值之一：`*-srd` 只加载对应 edition 的 SRD 层，`*-full` 要求同 edition 至少一本已解锁完整书，另一版目录不被读取；旧值 `2014` / `2024` 可读并在下次写入时迁移。
 - `uv run --no-project python scripts/validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 在无书籍、无存档的干净树上通过。
 - 三个 crate 的 `cargo test`、`cargo fmt --check`、`cargo clippy -D warnings` 通过。
-- 战斗核心动作在 2014/2024 下都按 `rules.combat_actions` 结算；擒抱/推撞失败与非法防御不消耗错误资源，推撞走强制移动并记录阻挡，额外攻击只由数据决定；擒抱/推撞消耗攻击动作的一次攻击，额外攻击生物可继续剩余攻击；旧 combat state 仍以 schema 1 加载。
+- 战斗核心动作在 2014/2024 下都按 `rules.combat_actions` 结算；擒抱/推撞失败与非法防御不消耗错误资源，推撞走强制移动并记录阻挡，额外攻击只由数据决定；擒抱/推撞消耗攻击动作的一次攻击，额外攻击生物可继续剩余攻击；`attack --one`/`--unarmed --one` 只结算一次并保留剩余攻击；旧 combat state 仍以 schema 1 加载。
 - `talkdnd knowledge` 的五个只读命令对同一输入给出稳定 id 与确定性排序；默认不泄露 `dm-secrets.md`、未揭示原创隐藏面、DM-only 冒险内容或未识别名字；`--include-hidden` 的结果标 `visibility: dm`。
 - AgentOrch 完整套件 `unittest discover -s tests` 通过；`check_drift` 只报告 `docs/PROJECT.md` 中列出的预期漂移。
 - 发布自动化产出章程列出的三个平台制品；发布包只含已跟踪的 `LetsPlay/` 内容与二进制。完整书 pack 作为独立发布资产由本地构建产生，仓库、LetsPlay 包与 CI 日志都不含书籍正文或扫描页。

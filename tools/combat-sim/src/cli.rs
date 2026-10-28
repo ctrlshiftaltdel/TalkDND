@@ -158,6 +158,10 @@ pub enum Command {
         /// using the bonus action after a Light main-hand Attack action.
         #[arg(long)]
         offhand: bool,
+        /// Resolve exactly one attack from the Attack action and leave the
+        /// remaining Extra Attack slots open for a later attack/grapple/shove.
+        #[arg(long, conflicts_with_all = ["multi", "offhand"])]
+        one: bool,
         /// Attack outside your turn (readied attack, DM ruling).
         #[arg(long)]
         force: bool,
@@ -790,6 +794,7 @@ fn run_cli() -> Result<()> {
             nonlethal,
             unarmed,
             offhand,
+            one,
             force,
         } => {
             let path = state_path(&sources, state.as_deref());
@@ -803,6 +808,7 @@ fn run_cli() -> Result<()> {
                         disadvantage: dis,
                         no_reactions,
                         nonlethal,
+                        one,
                     };
                     return engine::attack_unarmed(state, &attacker, &target, &options, rng, lines);
                 }
@@ -828,6 +834,11 @@ fn run_cli() -> Result<()> {
                     no_reactions,
                     nonlethal,
                 };
+                if one {
+                    return engine::attack_one(
+                        state, &attacker, &target, &attack, &options, rng, lines,
+                    );
+                }
                 engine::attack(state, &attacker, &target, &attack, &options, rng, lines)
             })
         }

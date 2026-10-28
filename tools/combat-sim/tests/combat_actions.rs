@@ -1211,6 +1211,182 @@ fn attack_budget_resets_at_turn_start() {
     assert!(state.combatants[fighter].action_used);
 }
 
+#[test]
+fn attack_one_then_grapple_keeps_remaining_slots() {
+    let mut state = state("2014", "extra-fight", &[]);
+    engine::attack_one(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 1);
+    assert_eq!(hp(&state, "Target"), 93);
+
+    engine::grapple(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        &GrappleOptions::default(),
+        &mut ScriptedRng::new(&[15, 5]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 2);
+    assert!(has_condition(&state, "Target", "grappled"));
+
+    // One slot remains and can still be used for a single attack.
+    engine::attack_one(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 5]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 3);
+    assert_eq!(hp(&state, "Target"), 85);
+}
+
+#[test]
+fn attack_one_then_shove_keeps_remaining_slots() {
+    let mut state = state("2014", "extra-fight", &[]);
+    engine::attack_one(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    engine::shove(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        &ShoveOptions {
+            mode: ShoveMode::KnockDown,
+            ..ShoveOptions::default()
+        },
+        &mut ScriptedRng::new(&[15, 5]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 2);
+    assert!(has_condition(&state, "Target", "prone"));
+}
+
+#[test]
+fn attack_one_then_remaining_attack_resolves_the_rest() {
+    let mut state = state("2014", "extra-fight", &[]);
+    engine::attack_one(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 1);
+
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 5, 15, 6]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 3);
+    assert_eq!(
+        log.iter()
+            .filter(|line| line.contains("attacks Target with Long Sword"))
+            .count(),
+        2,
+        "{log:?}"
+    );
+    assert!(
+        log.iter().any(|line| line.contains("attack 1/2")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn unarmed_attack_one_consumes_one_slot() {
+    let mut state = state("2014", "extra-fight", &[]);
+    engine::attack_unarmed(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        &UnarmedOptions {
+            one: true,
+            ..UnarmedOptions::default()
+        },
+        &mut ScriptedRng::new(&[15]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 1);
+    assert_eq!(hp(&state, "Target"), 96);
+
+    engine::attack(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 5, 15, 6]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 3);
+}
+
+#[test]
+fn attack_one_without_extra_attacks_matches_a_normal_attack() {
+    let mut one = state("2014", "zones-fight", &["grappler"]);
+    engine::attack_one(
+        &mut one,
+        "Grappler",
+        "Target",
+        "shortsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(hp(&one, "Target"), 93);
+    assert_eq!(attack_slot_count(&one, "Grappler"), 1);
+    assert!(one.combatants[index(&one, "Grappler")].action_used);
+
+    let mut normal = state("2014", "zones-fight", &["grappler"]);
+    engine::attack(
+        &mut normal,
+        "Grappler",
+        "Target",
+        "shortsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(hp(&normal, "Target"), 93);
+    assert_eq!(attack_slot_count(&normal, "Grappler"), 1);
+    assert!(normal.combatants[index(&normal, "Grappler")].action_used);
+}
+
 // ---------------------------------------------------------------------------
 // AC-6: compatibility
 // ---------------------------------------------------------------------------
@@ -1367,6 +1543,17 @@ fn cli_lists_and_runs_the_new_combat_actions() {
     let text = cli_text(&attack_help);
     assert!(text.contains("--unarmed"), "{text}");
     assert!(text.contains("--offhand"), "{text}");
+    assert!(text.contains("--one"), "{text}");
+
+    for args in [
+        ["attack", "A", "B", "x", "--one", "--offhand"],
+        ["attack", "A", "B", "x", "--one", "--multi"],
+    ] {
+        let output = run(&args);
+        assert!(!output.status.success(), "{}", cli_text(&output));
+        let text = cli_text(&output);
+        assert!(text.contains("--one"), "{text}");
+    }
 
     let scratch = campaign("2014");
     let state_path = scratch.dir.join("cli.state.json");

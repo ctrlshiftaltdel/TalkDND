@@ -115,7 +115,8 @@ The turn-start reset already clears every `turn:` key and resets `action_used`.
   stays open and a later `attack`/`attack --unarmed` resolves the remaining
   attacks.
 - `attack` and `attack --unarmed` consume every remaining slot and resolve them
-  in one command.
+  in one command by default, or exactly one slot with `--one`. `--one` leaves
+  the rest of the Attack action open for a later attack, grapple or shove.
 - `--offhand` is a bonus action and never consumes an attack slot.
 - `--multi` and `use` are whole-action paths. They cannot be used while an
   Attack action is open, and they clear any stale slots when they start.
@@ -125,12 +126,16 @@ The turn-start reset already clears every `turn:` key and resets `action_used`.
 ## CLI
 
 ```text
-combat-sim attack <actor> <target> <attack> [--adv] [--dis] [--nonlethal]
-combat-sim attack <actor> <target> --unarmed [--nonlethal]
+combat-sim attack <actor> <target> <attack> [--adv] [--dis] [--nonlethal] [--one]
+combat-sim attack <actor> <target> --unarmed [--nonlethal] [--one]
 combat-sim attack <actor> <target> <light-weapon> --offhand
 combat-sim grapple <actor> <target> [--defense athletics|acrobatics|str|dex]
 combat-sim shove <actor> <target> [--mode knock-down|away]
 ```
+
+`--one` resolves exactly one attack from the Attack action and leaves the
+remaining slots open. It cannot be combined with `--offhand` or `--multi`; use
+it when the next action is a grapple, a shove or another attack.
 
 `--defense` is optional; when omitted the target uses its best legal defense and
 the log says which one. A value that is not legal for the edition is rejected
