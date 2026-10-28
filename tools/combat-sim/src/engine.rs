@@ -33,7 +33,8 @@ use crate::space::{
 };
 use crate::state::{
     ability_from_text, active_duration, ActiveCondition, ActiveDuration, ActiveSaveEnds,
-    CombatOutcome, CombatantState, DeathSaves, EncounterState,
+    CombatOutcome, CombatantState, DeathSaves, EncounterState, ReadyResponse, ReadyState,
+    ReadyTrigger,
 };
 
 /// Destination for engine log lines.
@@ -96,6 +97,27 @@ pub struct UnarmedOptions {
     /// Resolve exactly one Unarmed Strike and leave the remaining Attack action
     /// slots open.
     pub one: bool,
+}
+
+/// Ready action setup. The response is stored as structured state and later
+/// resolved through the normal attack/ability/move paths.
+#[derive(Debug, Clone)]
+pub struct ReadyOptions {
+    pub trigger: ReadyTrigger,
+    pub description: String,
+    pub response: ReadyResponse,
+}
+
+/// Result of an explicit or automatic trigger attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadyOutcome {
+    /// The response resolved and the reaction was spent.
+    Triggered,
+    /// The ready is still held; the reason is logged and no reaction was spent.
+    Refused(String),
+    /// The ready was past its next-turn expiry or the holder was no longer
+    /// able to use it, so it was cleared without spending a reaction.
+    Expired,
 }
 
 /// Which outcome a successful shove chooses.
@@ -1645,9 +1667,15 @@ fn start_turn(
             .once_used
             .retain(|key, _| !key.starts_with("turn:"));
     }
-    if state.combatants[index].is_dead() || state.combatants[index].dormant {
+    if state.combatants[index].is_dead() {
+        clear_ready_if_any(state, index, "dead", log);
         return false;
     }
+    if state.combatants[index].dormant {
+        clear_ready_if_any(state, index, "no longer active", log);
+        return false;
+    }
+    expire_ready(state, index, log);
     expire_start_phases(state, index, log);
     expire_subject_conditions(state, index, UntilPhase::Start, log);
     recharge_resources(state, index, RechargePhase::Turn, rng, log);
@@ -1658,8 +1686,13 @@ fn start_turn(
         ));
         let _ = death_save_at(state, index, rng, log);
         if state.combatants[index].is_dead() {
+            clear_ready_if_any(state, index, "dead", log);
             return false;
         }
+    }
+    run_ready_triggers(state, ReadyTrigger::TurnStart, index, rng, log);
+    if state.combatants[index].is_dead() {
+        return false;
     }
     run_owned_triggers(state, index, TriggerWhen::StartOfTurn, None, rng, log);
     true
@@ -4263,7 +4296,9 @@ fn resolve_attack(
         ignore_range,
     );
     state.nonlethal_active = previous;
-    result
+    result?;
+    run_ready_triggers(state, ReadyTrigger::Attacked, attacker, rng, log);
+    Ok(())
 }
 
 fn attacker_in_melee_reach(
@@ -6116,6 +6151,7 @@ fn apply_forced_move(
     };
     drop(space);
     for position in steps {
+        let before = state.combatants[target].position();
         let display = state
             .space()
             .and_then(|space| space.zone_of(&position))
@@ -6127,6 +6163,7 @@ fn apply_forced_move(
         let name = state.combatants[target].name.clone();
         log.log(format_args!("{name} is moved to {display}"));
         fire_enter_triggers(state, target, &position, rng, log)?;
+        run_enter_reach_triggers(state, target, &before, rng, log);
     }
     Ok(())
 }
@@ -6436,6 +6473,9 @@ fn apply_condition_internal(
         log.log(format_args!("{target_name} is now {condition_id}{detail}"));
     }
     let incapacitated = has_flag(state, target, ConditionFlag::Incapacitated);
+    if incapacitated {
+        clear_ready_if_any(state, target, "incapacitated", log);
+    }
     if incapacitated && state.concentration.contains_key(&target_name) {
         break_concentration(state, target, log);
     }
@@ -6993,6 +7033,7 @@ fn use_resolved_ability(
         fire_ends_on(state, actor, EndsOn::OwnSpell, log);
     }
     let _ = options;
+    run_ready_triggers(state, ReadyTrigger::Ability, actor, rng, log);
     Ok(())
 }
 
@@ -7147,6 +7188,641 @@ pub fn use_ability(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Ready actions (v1.5c)
+// ---------------------------------------------------------------------------
+
+/// Prepares one response. Setting Ready spends the holder's action; the
+/// response itself spends the reaction when it triggers. Repeat, no-action,
+/// incapacitated and no-reaction cases fail before any state change.
+pub fn ready(
+    state: &mut EncounterState,
+    who: &str,
+    options: &ReadyOptions,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let index = state
+        .find_index(who)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    ensure_can_act(state, index)?;
+    let name = state.combatants[index].name.clone();
+    if state.combatants[index].ready.is_some() {
+        bail!("`{name}` already has a readied action");
+    }
+    let max_responses = state
+        .content
+        .rules
+        .ready
+        .as_ref()
+        .map(|rules| rules.max_responses())
+        .unwrap_or(1);
+    if max_responses != 1 {
+        bail!("rules.ready.max_responses must be 1; got {max_responses}");
+    }
+    if state.combatants[index].action_used {
+        bail!("`{name}` has already used an action this turn");
+    }
+    if has_flag(state, index, ConditionFlag::NoReactions) {
+        bail!("`{name}` cannot use reactions");
+    }
+    let description = normalize_ready_description(&options.description)?;
+    validate_ready_response(state, index, &options.response)?;
+    spend_action(state, index, Activation::Action, log)?;
+    let expires_round = next_named_turn_round(state, &name);
+    let summary = describe_ready_response(&options.response);
+    state.combatants[index].ready = Some(ReadyState {
+        trigger: options.trigger,
+        description: description.clone(),
+        response: options.response.clone(),
+        set_round: state.round,
+        expires_round,
+    });
+    log.log(format_args!(
+        "{name} readies {summary} (trigger {}: {description})",
+        options.trigger.as_str()
+    ));
+    Ok(())
+}
+
+/// Fires the holder's prepared response explicitly (DM trigger). A legal
+/// refusal keeps the ready and spends no reaction; the reason is logged.
+pub fn trigger_ready(
+    state: &mut EncounterState,
+    who: &str,
+    source: Option<&str>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<ReadyOutcome> {
+    let index = state
+        .find_index(who)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let source = match source {
+        Some(source) => Some(
+            state
+                .find_index(source)
+                .map_err(|error| anyhow!(error.to_string()))?,
+        ),
+        None => None,
+    };
+    trigger_ready_at(state, index, source, None, rng, log)
+}
+
+/// Clears a prepared response without triggering it. Returns whether one was
+/// present.
+pub fn clear_ready(
+    state: &mut EncounterState,
+    who: &str,
+    reason: &str,
+    log: &mut dyn LogSink,
+) -> Result<bool> {
+    let index = state
+        .find_index(who)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    Ok(clear_ready_if_any(state, index, reason, log))
+}
+
+fn clear_ready_if_any(
+    state: &mut EncounterState,
+    index: usize,
+    reason: &str,
+    log: &mut dyn LogSink,
+) -> bool {
+    let name = state.combatants[index].name.clone();
+    if state.combatants[index].ready.take().is_some() {
+        log.log(format_args!(
+            "{name}'s readied action is cleared ({reason})"
+        ));
+        true
+    } else {
+        false
+    }
+}
+
+fn expire_ready(state: &mut EncounterState, index: usize, log: &mut dyn LogSink) -> bool {
+    let name = state.combatants[index].name.clone();
+    if state.combatants[index].ready.take().is_some() {
+        log.log(format_args!(
+            "{name}'s readied action expires (start of their next turn)"
+        ));
+        true
+    } else {
+        false
+    }
+}
+
+fn normalize_ready_description(text: &str) -> Result<String> {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        bail!("ready needs a non-empty --trigger description");
+    }
+    let mut bounded: String = collapsed.chars().take(160).collect();
+    if collapsed.chars().count() > 160 {
+        bounded.push('…');
+    }
+    Ok(bounded)
+}
+
+fn validate_ready_response(
+    state: &EncounterState,
+    holder: usize,
+    response: &ReadyResponse,
+) -> Result<()> {
+    match response {
+        ReadyResponse::Attack { attack, target } => {
+            state.combatants[holder].find_attack(attack)?;
+            validate_ready_attack_target(state, holder, target.as_deref())?;
+        }
+        ReadyResponse::Unarmed { target } => {
+            unarmed_profile(state, holder)?;
+            validate_ready_attack_target(state, holder, target.as_deref())?;
+        }
+        ReadyResponse::Ability { ability, target } => {
+            let resolved = state.combatants[holder].find_owned_ability(&state.content, ability)?;
+            if resolved.ability.activation != Activation::Action {
+                bail!(
+                    "`{ability}` is a {} ability; only an action can be readied",
+                    activation_label(resolved.ability.activation)
+                );
+            }
+            if let Some(cost) = &resolved.ability.cost {
+                if !can_afford(state, holder, cost) {
+                    bail!(
+                        "`{}` cannot afford {} {}",
+                        state.combatants[holder].name,
+                        cost.amount,
+                        cost.resource
+                    );
+                }
+            }
+            let target_type = resolved
+                .ability
+                .target
+                .clone()
+                .unwrap_or_default()
+                .target_type;
+            match target_type {
+                TargetType::SelfTarget => {
+                    if target.is_some() {
+                        bail!("`{ability}` targets self and does not take --target");
+                    }
+                }
+                TargetType::Zone => {
+                    let label = target.as_deref().ok_or_else(|| {
+                        anyhow!(
+                            "readied area ability `{ability}` needs --target <zone|X,Y|creature>"
+                        )
+                    })?;
+                    resolve_area_center(state, label)?;
+                }
+                TargetType::Creature => {
+                    if let Some(target) = target {
+                        state
+                            .find_index(target)
+                            .map_err(|error| anyhow!(error.to_string()))?;
+                    }
+                }
+            }
+        }
+        ReadyResponse::Move { zone, cell } => {
+            let target = ready_move_target(zone.as_deref(), *cell)?;
+            let mut silent = Vec::new();
+            if resolve_move_destination(state, holder, &target, true, &mut silent)?.is_none() {
+                bail!("readied move destination is already the holder's position");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_ready_attack_target(
+    state: &EncounterState,
+    holder: usize,
+    target: Option<&str>,
+) -> Result<()> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let target = state
+        .find_index(target)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    if target == holder {
+        bail!("a creature cannot ready an attack against itself");
+    }
+    if !hostile_to(state, holder, target) {
+        bail!(
+            "`{}` is not hostile to `{}`",
+            state.combatants[target].name,
+            state.combatants[holder].name
+        );
+    }
+    Ok(())
+}
+
+fn activation_label(activation: Activation) -> &'static str {
+    match activation {
+        Activation::Action => "action",
+        Activation::Bonus => "bonus-action",
+        Activation::Reaction => "reaction",
+        Activation::Passive => "passive",
+        Activation::Free => "free",
+    }
+}
+
+fn describe_ready_response(response: &ReadyResponse) -> String {
+    let target_suffix = |target: &Option<String>| {
+        target
+            .as_ref()
+            .map(|target| format!(" against {target}"))
+            .unwrap_or_default()
+    };
+    match response {
+        ReadyResponse::Attack { attack, target } => {
+            format!("weapon attack `{attack}`{}", target_suffix(target))
+        }
+        ReadyResponse::Unarmed { target } => {
+            format!("unarmed strike{}", target_suffix(target))
+        }
+        ReadyResponse::Ability { ability, target } => {
+            format!("ability `{ability}`{}", target_suffix(target))
+        }
+        ReadyResponse::Move {
+            zone: Some(zone), ..
+        } => format!("a move to zone `{zone}`"),
+        ReadyResponse::Move {
+            cell: Some([x, y]), ..
+        } => format!("a move to cell ({x},{y})"),
+        ReadyResponse::Move { .. } => "a move".to_string(),
+    }
+}
+
+fn ready_move_target(zone: Option<&str>, cell: Option<[i32; 2]>) -> Result<MoveTarget> {
+    match (zone, cell) {
+        (Some(zone), None) => Ok(MoveTarget::Zone(zone.to_string())),
+        (None, Some([x, y])) => Ok(MoveTarget::Cell(x, y)),
+        _ => bail!("a readied move needs exactly one of --zone or --to"),
+    }
+}
+
+fn trigger_ready_at(
+    state: &mut EncounterState,
+    index: usize,
+    source: Option<usize>,
+    automatic: Option<ReadyTrigger>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<ReadyOutcome> {
+    let name = state.combatants[index].name.clone();
+    let Some(ready) = state.combatants[index].ready.clone() else {
+        bail!("`{name}` has no readied action");
+    };
+    if state.combatants[index].is_dead() {
+        clear_ready_if_any(state, index, "dead", log);
+        return Ok(ReadyOutcome::Expired);
+    }
+    if state.combatants[index].dormant {
+        clear_ready_if_any(state, index, "no longer active", log);
+        return Ok(ReadyOutcome::Expired);
+    }
+    if is_incapacitated(state, index) {
+        clear_ready_if_any(state, index, "incapacitated", log);
+        return Ok(ReadyOutcome::Expired);
+    }
+    if state.combatants[index].hp <= 0 {
+        clear_ready_if_any(state, index, "0 HP", log);
+        return Ok(ReadyOutcome::Expired);
+    }
+    if ready.expires_round > 0 && state.round > ready.expires_round {
+        clear_ready_if_any(state, index, "expired", log);
+        return Ok(ReadyOutcome::Expired);
+    }
+    if state.combatants[index].reaction_round == Some(state.round)
+        || has_flag(state, index, ConditionFlag::NoReactions)
+    {
+        let reason = format!("`{name}` cannot use a reaction this round");
+        log.log(format_args!("{name}'s readied action is refused: {reason}"));
+        return Ok(ReadyOutcome::Refused(reason));
+    }
+    let trigger_label = automatic.map(ReadyTrigger::as_str).unwrap_or("explicit");
+    log.log(format_args!(
+        "{name}'s readied action triggers ({trigger_label}: {})",
+        ready.description
+    ));
+    state.ready_in_progress = true;
+    let result = execute_ready_response(state, index, &ready.response, source, rng, log);
+    state.ready_in_progress = false;
+    match result {
+        Ok(()) => {
+            state.combatants[index].reaction_round = Some(state.round);
+            state.combatants[index].ready = None;
+            log.log(format_args!(
+                "{name} uses their reaction for the readied response"
+            ));
+            Ok(ReadyOutcome::Triggered)
+        }
+        Err(error) => {
+            let reason = error.to_string();
+            log.log(format_args!("{name}'s readied action is refused: {reason}"));
+            Ok(ReadyOutcome::Refused(reason))
+        }
+    }
+}
+
+fn execute_ready_response(
+    state: &mut EncounterState,
+    holder: usize,
+    response: &ReadyResponse,
+    source: Option<usize>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    match response {
+        ReadyResponse::Attack { attack, target } => {
+            let target = resolve_ready_target(state, holder, target.as_deref(), source, "attack")?;
+            ensure_ready_attack_target(state, holder, target)?;
+            let profile = AttackProfile::from_attack(state.combatants[holder].find_attack(attack)?);
+            resolve_attack(
+                state,
+                holder,
+                target,
+                &profile,
+                None,
+                &AttackOptions::default(),
+                rng,
+                log,
+                true,
+                false,
+            )?;
+            log_outcome(state, log);
+        }
+        ReadyResponse::Unarmed { target } => {
+            let target = resolve_ready_target(state, holder, target.as_deref(), source, "attack")?;
+            ensure_ready_attack_target(state, holder, target)?;
+            let profile = unarmed_profile(state, holder)?;
+            ensure_melee_reachable(state, holder, target, profile.reach)?;
+            resolve_attack(
+                state,
+                holder,
+                target,
+                &profile,
+                None,
+                &AttackOptions::default(),
+                rng,
+                log,
+                true,
+                false,
+            )?;
+            log_outcome(state, log);
+        }
+        ReadyResponse::Ability { ability, target } => {
+            let resolved = state.combatants[holder].find_owned_ability(&state.content, ability)?;
+            if resolved.ability.activation != Activation::Action {
+                bail!(
+                    "`{ability}` is a {} ability; only an action can be readied",
+                    activation_label(resolved.ability.activation)
+                );
+            }
+            let effect_source = EffectSource::from_ability(&resolved.ability, &resolved.params);
+            let target_type = resolved
+                .ability
+                .target
+                .clone()
+                .unwrap_or_default()
+                .target_type;
+            let mut targets = Vec::new();
+            let mut zone_center = None;
+            match target_type {
+                TargetType::SelfTarget => {}
+                TargetType::Zone => {
+                    let label = target.as_deref().ok_or_else(|| {
+                        anyhow!("readied area ability `{ability}` has no stored target")
+                    })?;
+                    zone_center = Some(resolve_area_center(state, label)?);
+                }
+                TargetType::Creature => {
+                    let target =
+                        resolve_ready_target(state, holder, target.as_deref(), source, "ability")?;
+                    targets.push(target);
+                }
+            }
+            let damaging = effects_have_damage(&resolved.ability.effects);
+            for target in &targets {
+                ensure_not_charmed_target(state, holder, *target, damaging)?;
+            }
+            use_resolved_ability(
+                state,
+                holder,
+                &resolved,
+                &effect_source,
+                &targets,
+                zone_center.as_ref(),
+                &AttackOptions::default(),
+                None,
+                None,
+                true,
+                rng,
+                log,
+            )?;
+            log_outcome(state, log);
+        }
+        ReadyResponse::Move { zone, cell } => {
+            let target = ready_move_target(zone.as_deref(), *cell)?;
+            move_to_at(state, holder, &target, false, rng, log)?;
+        }
+    }
+    Ok(())
+}
+
+fn resolve_ready_target(
+    state: &EncounterState,
+    holder: usize,
+    stored: Option<&str>,
+    source: Option<usize>,
+    what: &str,
+) -> Result<usize> {
+    if let Some(target) = stored {
+        return state
+            .find_index(target)
+            .map_err(|error| anyhow!(error.to_string()));
+    }
+    if let Some(source) = source {
+        return Ok(source);
+    }
+    bail!(
+        "readied {what} needs a target: name one at ready time with --target or pass --source to `trigger` (holder `{}`)",
+        state.combatants[holder].name
+    )
+}
+
+fn ensure_ready_attack_target(state: &EncounterState, holder: usize, target: usize) -> Result<()> {
+    ensure_targetable(state, target)?;
+    ensure_not_charmed_target(state, holder, target, true)?;
+    if holder == target {
+        bail!("a creature cannot attack itself");
+    }
+    if !hostile_to(state, holder, target) {
+        bail!(
+            "`{}` is not hostile to `{}`",
+            state.combatants[target].name,
+            state.combatants[holder].name
+        );
+    }
+    Ok(())
+}
+
+/// Automatic triggers from an enemy attack, ability or turn start.
+fn run_ready_triggers(
+    state: &mut EncounterState,
+    kind: ReadyTrigger,
+    actor: usize,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) {
+    if state.ready_in_progress {
+        return;
+    }
+    let Some(actor_state) = state.combatants.get(actor) else {
+        return;
+    };
+    if actor_state.is_dead() || actor_state.dormant {
+        return;
+    }
+    let actor_side = actor_state.side.clone();
+    let candidates: Vec<usize> = state
+        .combatants
+        .iter()
+        .enumerate()
+        .filter(|(index, combatant)| {
+            *index != actor
+                && combatant.side != actor_side
+                && combatant
+                    .ready
+                    .as_ref()
+                    .is_some_and(|ready| ready.trigger == kind)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    for index in candidates {
+        if state.combatants[index]
+            .ready
+            .as_ref()
+            .is_none_or(|ready| ready.trigger != kind)
+        {
+            continue;
+        }
+        let _ = trigger_ready_at(state, index, Some(actor), Some(kind), rng, log);
+    }
+}
+
+/// Automatic trigger for a mover crossing into a holder's reach/range. The
+/// caller passes the position before the step, so a move that starts inside
+/// reach does not count as entering it.
+fn run_enter_reach_triggers(
+    state: &mut EncounterState,
+    mover: usize,
+    before: &Position,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) {
+    if state.ready_in_progress {
+        return;
+    }
+    let Some(mover_state) = state.combatants.get(mover) else {
+        return;
+    };
+    if mover_state.is_dead() || mover_state.dormant {
+        return;
+    }
+    let mover_side = mover_state.side.clone();
+    let candidates: Vec<usize> = state
+        .combatants
+        .iter()
+        .enumerate()
+        .filter(|(index, combatant)| {
+            *index != mover
+                && combatant.side != mover_side
+                && combatant
+                    .ready
+                    .as_ref()
+                    .is_some_and(|ready| ready.trigger == ReadyTrigger::EnterReach)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    for index in candidates {
+        let Some(ready) = state.combatants[index].ready.clone() else {
+            continue;
+        };
+        if ready.trigger != ReadyTrigger::EnterReach {
+            continue;
+        }
+        if state.combatants[mover].is_dead() || state.combatants[mover].hp <= 0 {
+            break;
+        }
+        let reach = ready_watch_reach(state, index, &ready.response);
+        let after = state.combatants[mover].position();
+        let Some(now) = ready_distance_to_position(state, index, &after) else {
+            continue;
+        };
+        let Some(was) = ready_distance_to_position(state, index, before) else {
+            continue;
+        };
+        if was <= reach || now > reach {
+            continue;
+        }
+        let _ = trigger_ready_at(
+            state,
+            index,
+            Some(mover),
+            Some(ReadyTrigger::EnterReach),
+            rng,
+            log,
+        );
+    }
+}
+
+fn ready_watch_reach(state: &EncounterState, holder: usize, response: &ReadyResponse) -> i32 {
+    match response {
+        ReadyResponse::Attack { attack, .. } => state.combatants[holder]
+            .find_attack(attack)
+            .ok()
+            .map(|attack| {
+                let reach = attack.reach.unwrap_or(5);
+                match attack.kind {
+                    AttackKind::Melee => reach,
+                    AttackKind::Ranged => attack.range.map(|range| range[0]).unwrap_or(reach),
+                    AttackKind::MeleeOrRanged => {
+                        reach.max(attack.range.map(|range| range[0]).unwrap_or(reach))
+                    }
+                }
+            })
+            .unwrap_or(5),
+        ReadyResponse::Unarmed { .. } => unarmed_profile(state, holder)
+            .map(|profile| profile.reach)
+            .unwrap_or(5),
+        ReadyResponse::Ability { ability, .. } => state.combatants[holder]
+            .find_owned_ability(&state.content, ability)
+            .ok()
+            .and_then(|resolved| resolved.ability.range)
+            .filter(|range| *range > 0)
+            .unwrap_or(5),
+        ReadyResponse::Move { .. } => 5,
+    }
+}
+
+fn ready_distance_to_position(
+    state: &EncounterState,
+    holder: usize,
+    position: &Position,
+) -> Option<i32> {
+    if spatial_query_enabled(state) {
+        if let Some(distance) = spatial_distance_to_position(state, holder, position) {
+            return Some(distance);
+        }
+    }
+    let space = state.space()?;
+    let from = state.combatants[holder].position_ref();
+    space.distance(from.as_ref(), position)
+}
+
 /// A resolved area centre. `creature` is `Some` only when the caller named a
 /// creature; an explicit `x,y` or zone centre keeps the cell/zone floor.
 #[derive(Debug, Clone)]
@@ -7277,6 +7953,7 @@ fn begin_concentration(
 /// `status` no longer lists them.
 fn on_death(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
     let name = state.combatants[target].name.clone();
+    clear_ready_if_any(state, target, "dead", log);
     // End the dead creature's own concentration (and its conditions on others).
     break_concentration(state, target, log);
     // Drop conditions the dead creature got from other creatures' concentration.
@@ -8222,6 +8899,7 @@ pub fn move_to_at(
         if state.combatants[index].is_dead() || state.combatants[index].hp <= 0 {
             break;
         }
+        let from_position = current.clone();
         if step.locked {
             log.log(format_args!(
                 "{name} finds a locked door and stops at {}",
@@ -8287,6 +8965,7 @@ pub fn move_to_at(
             step.cost
         ));
         fire_enter_triggers(state, index, &step.position, rng, log)?;
+        run_enter_reach_triggers(state, index, &from_position, rng, log);
         current = step.position;
     }
     if state.combatants[index].speed_left < 0 {
@@ -8565,6 +9244,7 @@ fn spatial_move_to_at(
             fire_enter_triggers(state, index, &Position::cell(x, y), rng, log)?;
             previous_zone = zone;
         }
+        run_enter_reach_triggers(state, index, &current_position, rng, log);
         current_pose = step.to;
         current_position = Position::cell(x, y);
     }
@@ -8653,6 +9333,7 @@ fn spatial_forced_move(
         })
         .unwrap_or_else(|| OPEN_ZONE.to_string());
     for step in plan.steps {
+        let before = state.combatants[target].position();
         let x = step.to.cell.x;
         let y = step.to.cell.y;
         let zone = grid.zone_at(x, y).unwrap_or_else(|| OPEN_ZONE.to_string());
@@ -8676,6 +9357,7 @@ fn spatial_forced_move(
             fire_enter_triggers(state, target, &Position::cell(x, y), rng, log)?;
             previous_zone = zone;
         }
+        run_enter_reach_triggers(state, target, &before, rng, log);
     }
     if let Some(reason) = plan.stopped_by {
         log.log(format_args!(
@@ -10355,8 +11037,19 @@ fn combatant_status_line(state: &EncounterState, index: usize, current: bool) ->
         Some([x, y]) => format!("{} ({x},{y})", combatant.zone),
         None => combatant.zone.clone(),
     };
+    let ready = combatant
+        .ready
+        .as_ref()
+        .map(|ready| {
+            format!(
+                " | ready: {} ({} trigger)",
+                ready.description,
+                ready.trigger.as_str()
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "{marker}{initiative} {} {} HP {hp} AC {} {}{dormant}{concentration} | conditions: {conditions} | resources: {resources} | saves: {saves}",
+        "{marker}{initiative} {} {} HP {hp} AC {} {}{dormant}{concentration} | conditions: {conditions} | resources: {resources} | saves: {saves}{ready}",
         combatant.name,
         combatant.side.as_str(),
         armor_class(state, index),

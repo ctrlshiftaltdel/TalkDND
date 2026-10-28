@@ -6,7 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
+use combat_sim::content::schema::DoorSpec;
 use combat_sim::content::{self, ContentRegistry, ContentSources};
 use combat_sim::dice::DiceRng;
 use combat_sim::engine::{
@@ -150,7 +152,7 @@ creatures:
         activation: action
         target: {type: self}
         effects:
-          - condition: {id: prone}
+          - apply_condition: {condition: prone, to: self, duration: {permanent: true}}
       - id: quick-step
         name: Quick Step
         activation: bonus
@@ -257,11 +259,7 @@ fn attack_response(attack: &str, target: Option<&str>) -> ReadyResponse {
     }
 }
 
-fn options(
-    trigger: ReadyTrigger,
-    description: &str,
-    response: ReadyResponse,
-) -> ReadyOptions {
+fn options(trigger: ReadyTrigger, description: &str, response: ReadyResponse) -> ReadyOptions {
     ReadyOptions {
         trigger,
         description: description.to_string(),
@@ -380,7 +378,10 @@ fn ready_spends_the_action_and_stores_one_response_for_both_editions() {
         .unwrap();
 
         assert!(state.combatants[hero].action_used, "{edition}: action");
-        assert!(!state.combatants[hero].bonus_action_used, "{edition}: bonus");
+        assert!(
+            !state.combatants[hero].bonus_action_used,
+            "{edition}: bonus"
+        );
         let ready = state.combatants[hero]
             .ready
             .as_ref()
@@ -436,7 +437,10 @@ fn ready_refuses_without_an_action_or_while_unable_and_spends_nothing() {
         )
         .expect_err("no action");
         assert!(error.to_string().contains("action"), "{edition}: {error}");
-        assert!(state.combatants[hero].ready.is_none(), "{edition}: no state");
+        assert!(
+            state.combatants[hero].ready.is_none(),
+            "{edition}: no state"
+        );
         assert!(state.combatants[hero].action_used, "{edition}: unchanged");
 
         // Incapacitated.
@@ -454,7 +458,10 @@ fn ready_refuses_without_an_action_or_while_unable_and_spends_nothing() {
             error.to_string().contains("incapacitated"),
             "{edition}: {error}"
         );
-        assert!(state.combatants[hero].ready.is_none(), "{edition}: no state");
+        assert!(
+            state.combatants[hero].ready.is_none(),
+            "{edition}: no state"
+        );
         assert!(
             !state.combatants[hero].action_used,
             "{edition}: action unspent"
@@ -472,7 +479,10 @@ fn ready_refuses_without_an_action_or_while_unable_and_spends_nothing() {
         )
         .expect_err("no reactions");
         assert!(error.to_string().contains("reaction"), "{edition}: {error}");
-        assert!(state.combatants[hero].ready.is_none(), "{edition}: no state");
+        assert!(
+            state.combatants[hero].ready.is_none(),
+            "{edition}: no state"
+        );
         assert!(
             !state.combatants[hero].action_used,
             "{edition}: action unspent"
@@ -505,10 +515,7 @@ fn ready_rejects_bonus_action_abilities_and_unknown_responses() {
         attack_response("no-such-weapon", None),
     )
     .expect_err("unknown weapon");
-    assert!(
-        error.to_string().contains("no-such-weapon"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("no-such-weapon"), "{error}");
     assert!(state.combatants[hero].ready.is_none());
     assert!(!state.combatants[hero].action_used);
 }
@@ -609,10 +616,7 @@ fn explicit_trigger_needs_a_source_for_a_targeted_response() {
     }
     assert!(state.combatants[hero].ready.is_some());
     assert_eq!(state.combatants[hero].reaction_round, None);
-    assert!(
-        log.iter().any(|line| line.contains("refused")),
-        "{log:?}"
-    );
+    assert!(log.iter().any(|line| line.contains("refused")), "{log:?}");
 }
 
 #[test]
@@ -658,10 +662,7 @@ fn invalid_target_refuses_the_trigger_without_spending_the_reaction() {
         state.combatants[hero].reaction_round, None,
         "reaction is not spent on a refused trigger"
     );
-    assert!(
-        log.iter().any(|line| line.contains("refused")),
-        "{log:?}"
-    );
+    assert!(log.iter().any(|line| line.contains("refused")), "{log:?}");
 }
 
 #[test]
@@ -692,6 +693,85 @@ fn an_already_spent_reaction_blocks_the_trigger_and_keeps_the_ready() {
     }
     assert!(state.combatants[hero].ready.is_some());
     assert_eq!(state.combatants[hero].reaction_round, Some(1));
+}
+
+#[test]
+fn an_out_of_range_target_refuses_the_trigger_without_spending_the_reaction() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    let source = index(&state, "Source");
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        attack_response("sword", Some("Source")),
+    )
+    .unwrap();
+    state.combatants[source].set_zone("gamma");
+    let mut log = Vec::new();
+    let outcome = engine::trigger_ready(
+        &mut state,
+        "Hero",
+        Some("Source"),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    match outcome {
+        ReadyOutcome::Refused(reason) => {
+            assert!(
+                reason.contains("reach") || reason.contains("range"),
+                "{reason}"
+            )
+        }
+        other => panic!("expected refusal, got {other:?}"),
+    }
+    assert!(state.combatants[hero].ready.is_some());
+    assert_eq!(state.combatants[hero].reaction_round, None);
+}
+
+#[test]
+fn a_blocked_readied_move_stops_with_a_structured_log() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Move {
+            zone: Some("beta".to_string()),
+            cell: None,
+        },
+    )
+    .unwrap();
+    // The route was open when Ready was set; a door locks before the trigger.
+    let scene = Arc::make_mut(state.scene.as_mut().expect("scene"));
+    for edge in &mut scene.edges {
+        if (edge.a == "alpha" && edge.b == "beta") || (edge.a == "beta" && edge.b == "alpha") {
+            edge.door = Some(DoorSpec { locked: true });
+        }
+    }
+    state.rebuild_caches();
+
+    let mut log = Vec::new();
+    let outcome = engine::trigger_ready(
+        &mut state,
+        "Hero",
+        None,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(outcome, ReadyOutcome::Triggered);
+    assert_eq!(state.combatants[hero].zone, "alpha");
+    assert_eq!(state.combatants[hero].reaction_round, Some(1));
+    assert!(
+        log.iter()
+            .any(|line| line.contains("locked door") || line.contains("stops")),
+        "{log:?}"
+    );
 }
 
 #[test]
@@ -760,10 +840,7 @@ fn a_ready_past_its_expiry_round_is_cleared_on_trigger() {
     assert!(state.combatants[hero].ready.is_none());
     assert_eq!(state.combatants[hero].reaction_round, None);
     assert_eq!(state.combatants[hero].hp, 40);
-    assert!(
-        log.iter().any(|line| line.contains("expired")),
-        "{log:?}"
-    );
+    assert!(log.iter().any(|line| line.contains("expired")), "{log:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -825,8 +902,8 @@ fn an_enemy_entering_reach_triggers_a_readied_response() {
     state.round = 1;
     state.initiative = vec![index(&state, "Hero"), index(&state, "Source")];
     state.turn = 0;
-    state.combatants[index(&state, "Source")].set_zone("gamma");
     let source = index(&state, "Source");
+    state.combatants[source].set_zone("gamma");
     let hero = index(&state, "Hero");
     set_ready(
         &mut state,
@@ -936,7 +1013,8 @@ fn an_enemy_turn_start_triggers_a_readied_response() {
 fn a_readied_move_uses_the_existing_move_path() {
     let mut state = make_state("2024");
     state.round = 1;
-    state.combatants[index(&state, "Source")].set_zone("gamma");
+    let source = index(&state, "Source");
+    state.combatants[source].set_zone("gamma");
     let hero = index(&state, "Hero");
     set_ready(
         &mut state,
@@ -1033,7 +1111,10 @@ fn incapacitation_and_death_clean_up_a_ready_action() {
         &mut log,
     )
     .unwrap();
-    assert!(state.combatants[source].ready.is_none(), "death clears ready");
+    assert!(
+        state.combatants[source].ready.is_none(),
+        "death clears ready"
+    );
     assert!(
         log.iter().any(|line| line.contains("readied action")),
         "{log:?}"
@@ -1088,7 +1169,13 @@ fn old_combat_state_loads_with_no_ready_and_schema_one() {
     let path = state_path("old-state");
     state.save(&path).unwrap();
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert!(value["combatants"][0].get("ready").is_some());
+    let hero = value["combatants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|combatant| combatant["name"] == "Hero")
+        .expect("hero");
+    assert!(hero.get("ready").is_some(), "{value}");
     for combatant in value["combatants"].as_array_mut().unwrap() {
         combatant.as_object_mut().unwrap().remove("ready");
     }
@@ -1218,15 +1305,37 @@ fn cli_ready_trigger_and_ready_clear_round_trip_through_status_json() {
 }
 
 #[test]
+fn cli_refuses_ready_outside_the_holders_turn() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    state.initiative = vec![index(&state, "Hero"), index(&state, "Source")];
+    state.turn = 1;
+    let path = state_path("cli-out-of-turn");
+    state.save(&path).unwrap();
+    let output = run_cli(
+        &path,
+        &[
+            "ready",
+            "Hero",
+            "--trigger",
+            "an enemy attacks",
+            "--attack",
+            "sword",
+        ],
+    );
+    assert!(!output.status.success(), "out-of-turn ready must fail");
+    assert!(stderr(&output).contains("turn"), "{}", stderr(&output));
+    let status = status_json(&path);
+    assert!(combatant(&status, "Hero").get("ready").is_none());
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn content_check_validates_the_ready_rule_and_both_editions_load_it() {
     for edition in ["2014", "2024"] {
         let (_scratch, registry) = registry(edition);
         let report = content::check(&registry);
-        assert!(
-            !report.has_errors(),
-            "{edition}: {:#?}",
-            report.issues
-        );
+        assert!(!report.has_errors(), "{edition}: {:#?}", report.issues);
         assert_eq!(
             registry.rules.ready.as_ref().unwrap().max_responses(),
             1,

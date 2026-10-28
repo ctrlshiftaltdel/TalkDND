@@ -99,6 +99,10 @@ pub struct EncounterState {
     /// Transient: the current `use`/`cast` command asked for non-lethal attacks.
     #[serde(skip)]
     pub nonlethal_request: bool,
+    /// Transient: a readied response is resolving, so it cannot recursively
+    /// trigger another ready action.
+    #[serde(skip)]
+    pub ready_in_progress: bool,
     /// Lowercased combatant names for fast `find_index` lookups. Rebuilt
     /// whenever the combatant list or its names change.
     #[serde(skip)]
@@ -300,6 +304,82 @@ fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
+/// The structured circumstance a Ready action watches. The free-text
+/// description is for the audit log; this kind lets automatic triggers match
+/// deterministically without parsing prose.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadyTrigger {
+    /// Only the explicit `trigger` command fires it.
+    #[default]
+    Manual,
+    /// An enemy moves from outside to inside the response's reach/range.
+    EnterReach,
+    /// An enemy attacks.
+    Attacked,
+    /// An enemy uses an ability or spell.
+    Ability,
+    /// An enemy starts its turn.
+    TurnStart,
+}
+
+impl ReadyTrigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::EnterReach => "enter_reach",
+            Self::Attacked => "attacked",
+            Self::Ability => "ability",
+            Self::TurnStart => "turn_start",
+        }
+    }
+}
+
+/// The response a Ready action executes when it triggers. Every variant is
+/// resolved through the normal engine action paths; none teleports or bypasses
+/// target/range validation.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReadyResponse {
+    Attack {
+        attack: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+    },
+    Unarmed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+    },
+    Ability {
+        ability: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+    },
+    Move {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zone: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cell: Option<[i32; 2]>,
+    },
+}
+
+/// One prepared response. Additive state: old combat states omit it and load
+/// with no ready action, and `STATE_SCHEMA_VERSION` stays 1.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyState {
+    pub trigger: ReadyTrigger,
+    pub description: String,
+    pub response: ReadyResponse,
+    #[serde(default)]
+    pub set_round: u32,
+    /// Round in which the holder's next turn starts. `start_turn` is the
+    /// authoritative expiry; this field lets an out-of-band turn change fail
+    /// closed instead of letting a stale ready fire.
+    #[serde(default)]
+    pub expires_round: u32,
+}
+
 /// A combatant: the resolved creature plus mutable runtime state.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CombatantState {
@@ -363,6 +443,10 @@ pub struct CombatantState {
     /// Unconscious and stable instead of dying/dead.
     #[serde(default)]
     pub knocked_out: bool,
+    /// Structured Ready action. Additive: old states omit it and load with no
+    /// ready, and the field is skipped when empty so old files stay stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready: Option<ReadyState>,
 }
 
 impl CombatantState {
@@ -1127,6 +1211,7 @@ impl EncounterState {
             static_modifier_sources,
             nonlethal_active: false,
             nonlethal_request: false,
+            ready_in_progress: false,
         };
         state.refresh_initial_conditions()?;
         state.log.push(format!(
@@ -1927,6 +2012,7 @@ fn combatant_from_creature(
         opening_used: false,
         dead: false,
         knocked_out: false,
+        ready: None,
     }
 }
 
