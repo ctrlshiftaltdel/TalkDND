@@ -610,6 +610,52 @@ fn hidden_original_text_in_a_visible_relation_is_never_output() {
 }
 
 #[test]
+fn future_adventure_terms_filter_cross_entry_notes() {
+    let root = fixture("future-term-note");
+    let save = save(&root);
+    for path in [
+        root.join("Adventures/test-adventure/index/Test Book.pages.md"),
+        root.join("Adventures/test-adventure/index/structured.json"),
+    ] {
+        let text = fs::read_to_string(&path).unwrap();
+        write(&path, &text.replace("TOP-SECRET-FUTURE", "The Future Gate"));
+    }
+    write(
+        &save.join("relations.yaml"),
+        "version: 1\nrelations:\n  - {id: R-001, type: ally, from: E-001, to: E-002, since_session: 2030-01-01-session-01.md, source: synthetic, note: \"The Future Gate\"}\n",
+    );
+    let default = search(&root, &save, "Future Gate", Scope::All, 100, false).unwrap();
+    assert!(
+        !default.iter().any(|e| e.id == "save:relation:R-001"),
+        "default search leaked the future term: {:?}",
+        ids(&default)
+    );
+    let dm = search(&root, &save, "Future Gate", Scope::All, 100, true).unwrap();
+    assert!(
+        dm.iter().any(|e| e.id == "adventure:test-adventure:p2"),
+        "future chapter missing from DM view: {:?}",
+        ids(&dm)
+    );
+    assert!(
+        !dm.iter().any(|e| e.id == "save:relation:R-001"),
+        "include-hidden returned the relation quoting the future term: {:?}",
+        ids(&dm)
+    );
+    assert!(get(&root, &save, "save:relation:R-001", true).is_err());
+    assert!(cite(&root, &save, "save:relation:R-001").is_err());
+    let context_text = context(&root, &save, "E-001").unwrap().join("\n");
+    assert!(
+        !context_text.contains("Future Gate"),
+        "context leaked: {context_text}"
+    );
+    let related_text = joined(&related(&root, &save, "save:entity:E-001", 1).unwrap());
+    assert!(
+        !related_text.contains("Future Gate"),
+        "related leaked: {related_text}"
+    );
+}
+
+#[test]
 fn secret_bearing_ids_are_not_echoed() {
     let root = fixture("secret-id-echo");
     let save = save(&root);
