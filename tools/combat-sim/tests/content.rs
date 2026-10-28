@@ -541,3 +541,286 @@ fn edition_folders_follow_the_campaign_ruleset() {
 
 /// Serialises tests that set or depend on COMBAT_SIM_CAMPAIGN.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// ---------------------------------------------------------------------------
+// Ability.spell metadata (TASK-0122 T1): serde layering and content checks
+// ---------------------------------------------------------------------------
+
+use combat_sim::content::schema::{Ability, CastingUnit, SpellSchool};
+
+/// A consistent imported spell; tests mutate one field to trigger a check.
+const SPELL_ABILITY_YAML: &str = "abilities:
+  - id: test-bolt
+    name: Test Bolt
+    tags: [spell, evocation]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    spell:
+      level: 1
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      range_text: Touch
+";
+
+/// Loads a one-file spell library from a private temp dir.
+struct SpellLibrary {
+    dir: PathBuf,
+    registry: ContentRegistry,
+}
+
+impl SpellLibrary {
+    fn new(yaml: &str) -> Self {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("cs-spell-{}-{count}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join("spells.yaml"), yaml).expect("write spell library");
+        let registry = ContentSources {
+            libraries: vec![dir.clone()],
+            ..ContentSources::default()
+        }
+        .load()
+        .expect("load spell library");
+        Self { dir, registry }
+    }
+
+    fn messages(&self) -> String {
+        messages(&self.registry)
+    }
+}
+
+impl Drop for SpellLibrary {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[test]
+fn consistent_spell_metadata_checks_clean() {
+    let library = SpellLibrary::new(SPELL_ABILITY_YAML);
+    assert_eq!(library.messages(), "");
+}
+
+#[test]
+fn spell_level_must_match_slot_level() {
+    let yaml = SPELL_ABILITY_YAML.replace(
+        "      level: 1\n      school: evocation",
+        "      level: 2\n      school: evocation",
+    );
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(text.contains("ERROR"), "{text}");
+    assert!(
+        text.contains("spell level 2 does not match slot_level"),
+        "{text}"
+    );
+}
+
+#[test]
+fn spell_cost_resource_must_match_slot_level() {
+    let yaml = SPELL_ABILITY_YAML.replace(
+        "cost: {resource: spell-slot-1, amount: 1}",
+        "cost: {resource: spell-slot-2, amount: 1}",
+    );
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(
+        text.contains("cost resource `spell-slot-2` does not match `spell-slot-1`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn leveled_spell_without_cost_is_an_error() {
+    let yaml = SPELL_ABILITY_YAML.replace("    cost: {resource: spell-slot-1, amount: 1}\n", "");
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(
+        text.contains("is a level 1 spell but has no cost"),
+        "{text}"
+    );
+}
+
+#[test]
+fn cantrips_need_no_cost_or_slot_level() {
+    let yaml = SPELL_ABILITY_YAML
+        .replace("    cost: {resource: spell-slot-1, amount: 1}\n", "")
+        .replace("    slot_level: 1\n", "")
+        .replace("      level: 1\n", "      level: 0\n")
+        .replace(
+            "    tags: [spell, evocation]",
+            "    tags: [spell, cantrip, evocation]",
+        );
+    let library = SpellLibrary::new(&yaml);
+    assert_eq!(library.messages(), "");
+}
+
+#[test]
+fn upcast_table_keys_must_be_valid_slot_levels() {
+    let yaml = SPELL_ABILITY_YAML.replace(
+        "      range_text: Touch\n",
+        "      range_text: Touch\n      upcast:\n        text: Stronger.\n        dice_by_level: {1: 2d6, 0: 1d6, 10: 3d6}\n",
+    );
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(text.contains("key 0 is out of range"), "{text}");
+    assert!(text.contains("key 10 is out of range"), "{text}");
+    assert!(!text.contains("key 1 is out of range"), "{text}");
+    assert_eq!(text.matches("ERROR").count(), 2, "{text}");
+}
+
+#[test]
+fn priced_or_consumed_material_requires_text() {
+    let yaml = SPELL_ABILITY_YAML.replace(
+        "      components: {verbal: true, somatic: true}\n",
+        "      components: {verbal: true, somatic: true, material: {cost_gp: 300}}\n",
+    );
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(
+        text.contains("material component with cost or consumption but no text"),
+        "{text}"
+    );
+}
+
+#[test]
+fn school_and_ritual_tag_mismatches_are_warnings() {
+    let yaml = SPELL_ABILITY_YAML.replace(
+        "    tags: [spell, evocation]",
+        "    tags: [spell, illusion]",
+    );
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(!text.contains("ERROR"), "{text}");
+    assert!(text.contains("school `evocation` disagrees"), "{text}");
+
+    // A school tag that agrees stays quiet.
+    let library = SpellLibrary::new(SPELL_ABILITY_YAML);
+    assert_eq!(library.messages(), "");
+
+    // Tagged ritual but metadata says no: warning, not error.
+    let yaml = SPELL_ABILITY_YAML.replace(
+        "    tags: [spell, evocation]",
+        "    tags: [spell, evocation, ritual]",
+    );
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(!text.contains("ERROR"), "{text}");
+    assert!(text.contains("ritual flag (false) disagrees"), "{text}");
+
+    // Ritual metadata without the tag: also just a warning.
+    let yaml = SPELL_ABILITY_YAML.replace("      ritual: false\n", "      ritual: true\n");
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(text.contains("ritual flag (true) disagrees"), "{text}");
+}
+
+#[test]
+fn abilities_without_spell_block_round_trip_unchanged() {
+    let yaml = "abilities:\n  - id: plain
+    activation: action
+";
+    let library = SpellLibrary::new(yaml);
+    assert_eq!(library.messages(), "");
+    let ability = library.registry.abilities.get("plain").expect("ability");
+    assert!(ability.spell.is_none());
+    let text = serde_norway::to_string(&ability).expect("serialize");
+    assert!(!text.contains("spell"), "{text}");
+}
+
+#[test]
+fn spell_metadata_round_trips_through_serde() {
+    let ability: Ability = serde_norway::from_str(
+        "id: test-bolt
+activation: action
+slot_level: 1
+cost: {resource: spell-slot-1, amount: 1}
+spell:
+  level: 1
+  school: conjuration
+  casting_time: {amount: 10, unit: minute}
+  components: {verbal: true, somatic: true, material: {text: a diamond, cost_gp: 300, consumed: true}}
+  ritual: true
+  range_text: Touch
+  duration_text: Instantaneous
+  upcast:
+    text: Stronger.
+    dice_by_level: {2: 2d8, 3: 3d8}
+  cantrip_scaling:
+    text: Grows.
+    dice_by_character_level: {5: 2d6, 11: 3d6}
+  classes: [wizard, sorcerer]
+",
+    )
+    .expect("parse spell ability");
+    let spell = ability.spell.as_ref().expect("spell");
+    assert_eq!(spell.level, 1);
+    assert_eq!(spell.school, Some(SpellSchool::Conjuration));
+    assert_eq!(spell.casting_time.unit, CastingUnit::Minute);
+    assert_eq!(spell.casting_time.amount, Some(10));
+    let material = spell.components.material.as_ref().expect("material");
+    assert_eq!(material.text, "a diamond");
+    assert_eq!(material.cost_gp, Some(300));
+    assert!(material.consumed);
+    assert!(spell.ritual);
+    assert_eq!(spell.range_text.as_deref(), Some("Touch"));
+    assert_eq!(spell.duration_text.as_deref(), Some("Instantaneous"));
+    assert_eq!(
+        spell
+            .upcast
+            .as_ref()
+            .unwrap()
+            .dice_by_level
+            .get(&3)
+            .map(String::as_str),
+        Some("3d8")
+    );
+    assert_eq!(
+        spell
+            .cantrip_scaling
+            .as_ref()
+            .unwrap()
+            .dice_by_character_level
+            .get(&11)
+            .map(String::as_str),
+        Some("3d6")
+    );
+    assert_eq!(spell.classes, ["wizard", "sorcerer"]);
+
+    // Serialise and parse again: the metadata is preserved byte-for-byte in
+    // meaning, and empty optionals do not appear.
+    let text = serde_norway::to_string(&ability).expect("serialize");
+    assert!(text.contains("dice_by_level"), "{text}");
+    let reparsed: Ability = serde_norway::from_str(&text).expect("reparse");
+    assert_eq!(ability, reparsed);
+}
+
+#[test]
+fn partial_spell_metadata_falls_back_to_defaults() {
+    let ability: Ability = serde_norway::from_str(
+        "id: bare-spell
+activation: action
+spell: {level: 2}",
+    )
+    .expect("parse partial spell");
+    let spell = ability.spell.as_ref().expect("spell");
+    assert_eq!(spell.level, 2);
+    assert_eq!(spell.school, None);
+    assert_eq!(spell.casting_time.unit, CastingUnit::Action);
+    assert_eq!(spell.casting_time.amount, None);
+    assert!(!spell.components.verbal && !spell.components.somatic);
+    assert!(spell.components.material.is_none());
+    assert!(!spell.ritual);
+    assert!(spell.range_text.is_none() && spell.duration_text.is_none());
+    assert!(spell.upcast.is_none() && spell.cantrip_scaling.is_none());
+    assert!(spell.classes.is_empty());
+    // Serialisation only carries the fields that are set.
+    let text = serde_norway::to_string(&ability).expect("serialize");
+    assert!(!text.contains("school"), "{text}");
+    assert!(!text.contains("upcast"), "{text}");
+    assert!(!text.contains("classes"), "{text}");
+}

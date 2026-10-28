@@ -1335,6 +1335,150 @@ fn default_amount() -> u32 {
 }
 
 // ---------------------------------------------------------------------------
+// Spell metadata
+// ---------------------------------------------------------------------------
+
+/// The eight schools of magic. Data-only: a spell's school never changes how
+/// it resolves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpellSchool {
+    Abjuration,
+    Conjuration,
+    Divination,
+    Enchantment,
+    Evocation,
+    Illusion,
+    Necromancy,
+    Transmutation,
+}
+
+impl SpellSchool {
+    /// The legacy tag this school is written as, used by `content check` to
+    /// compare the metadata against the old school tag.
+    pub fn as_tag(self) -> &'static str {
+        match self {
+            Self::Abjuration => "abjuration",
+            Self::Conjuration => "conjuration",
+            Self::Divination => "divination",
+            Self::Enchantment => "enchantment",
+            Self::Evocation => "evocation",
+            Self::Illusion => "illusion",
+            Self::Necromancy => "necromancy",
+            Self::Transmutation => "transmutation",
+        }
+    }
+}
+
+/// How long casting takes, separate from [`Activation`] (the engine's action
+/// economy). Minute/hour casts stay `activation: action` as a catalogue value;
+/// they are not combat actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CastingUnit {
+    #[default]
+    Action,
+    BonusAction,
+    Reaction,
+    Minute,
+    Hour,
+    Special,
+}
+
+/// Structured casting time: an amount plus a unit, such as `1 bonus action`
+/// or `10 minutes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CastingTime {
+    /// Numeric part of the casting time; `None` for unit `special`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<u32>,
+    #[serde(default)]
+    pub unit: CastingUnit,
+}
+
+/// A material component: what it is, its price gate and whether casting
+/// consumes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialComponent {
+    #[serde(default)]
+    pub text: String,
+    /// Price gate in gp, if the material has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_gp: Option<u32>,
+    /// Whether casting consumes the material.
+    #[serde(default)]
+    pub consumed: bool,
+}
+
+/// Verbal / somatic / material components of a spell.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpellComponents {
+    #[serde(default)]
+    pub verbal: bool,
+    #[serde(default)]
+    pub somatic: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<MaterialComponent>,
+}
+
+/// Higher-level casting: display text plus a slot-level to dice table for the
+/// main damage/heal roll. Keys are slot levels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpcastSpec {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dice_by_level: BTreeMap<u8, String>,
+}
+
+/// Cantrip growth: display text plus a character-level to dice table for the
+/// main damage roll. Keys are character levels (5/11/17 in the SRD).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CantripScaling {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dice_by_character_level: BTreeMap<u8, String>,
+}
+
+/// Structured spell metadata attached to an [`Ability`] that is a spell.
+/// Purely descriptive: nothing here changes how the ability resolves, and
+/// abilities without this block behave exactly as before.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpellMeta {
+    /// 0 = cantrip, 1-9 = slot level.
+    #[serde(default)]
+    pub level: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub school: Option<SpellSchool>,
+    #[serde(default)]
+    pub casting_time: CastingTime,
+    #[serde(default)]
+    pub components: SpellComponents,
+    #[serde(default)]
+    pub ritual: bool,
+    /// Display text for the range (`Touch`, `Self (60-foot cone)`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_text: Option<String>,
+    /// Display text for the duration (`Instantaneous`, `Up to 1 minute`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upcast: Option<UpcastSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cantrip_scaling: Option<CantripScaling>,
+    /// Class ids that list this spell; empty = not catalogued per class.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub classes: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Ability
 // ---------------------------------------------------------------------------
 
@@ -1384,6 +1528,10 @@ pub struct Ability {
     pub notes: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// Structured spell metadata. `None` for non-spells and for content that
+    /// predates the field; presence never changes how the ability resolves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spell: Option<SpellMeta>,
 }
 
 impl Ability {

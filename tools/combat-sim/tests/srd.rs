@@ -1,5 +1,6 @@
 //! SRD JSON -> library YAML conversion on synthetic data.
 
+use combat_sim::content::schema::{Ability, CastingUnit};
 use combat_sim::srd::*;
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -65,6 +66,109 @@ fn converts_a_monster_and_spells() {
     assert_eq!(a[2]["range"], 5);
     assert_eq!(a[3]["target"]["type"], "self");
     assert!(a[3]["tags"].as_array().unwrap().contains(&json!("ritual")));
+}
+
+#[test]
+fn spell_metadata_fills_structured_spell_block() {
+    let s = json!([{
+        "index": "test-blast", "name": "Test Blast", "level": 3, "desc": ["Boom."],
+        "higher_level": ["When you cast this spell using a higher-level slot, the damage increases."],
+        "range": "150 feet", "components": ["V", "S", "M"], "material": "a pinch of powder",
+        "duration": "Instantaneous", "casting_time": "1 action", "ritual": true,
+        "school": {"index": "evocation"},
+        "attack_type": "ranged",
+        "damage": {"damage_type": {"index": "fire"}, "damage_at_slot_level": {"4": "9d6", "3": "8d6"}}
+    }]);
+    let (v, n) = convert_spells(&s, &BTreeSet::new());
+    assert_eq!(n, 1);
+    let a = &v["abilities"][0];
+    let spell = &a["spell"];
+    assert_eq!(spell["level"], 3);
+    assert_eq!(spell["school"], "evocation");
+    assert_eq!(
+        spell["casting_time"],
+        json!({"amount": 1, "unit": "action"})
+    );
+    assert_eq!(spell["components"]["verbal"], true);
+    assert_eq!(spell["components"]["somatic"], true);
+    assert_eq!(spell["components"]["material"]["text"], "a pinch of powder");
+    assert_eq!(spell["ritual"], true);
+    assert_eq!(spell["range_text"], "150 feet");
+    assert_eq!(spell["duration_text"], "Instantaneous");
+    assert!(spell["upcast"]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("When you cast"));
+    // Keys are sorted slot levels; values keep the effect-dice conventions.
+    let dice = spell["upcast"]["dice_by_level"].as_object().unwrap();
+    let keys: Vec<&str> = dice.keys().map(String::as_str).collect();
+    assert_eq!(keys, ["3", "4"]);
+    assert_eq!(dice["3"], "8d6");
+    // Legacy fields keep their exact old values.
+    assert_eq!(a["activation"], "action");
+    assert_eq!(a["cost"]["resource"], "spell-slot-3");
+    assert_eq!(a["slot_level"], 3);
+    assert!(a["manual"].as_str().unwrap().contains("Boom."));
+    // The imported value must deserialize into the typed Ability.
+    let ability: Ability = serde_json::from_value(a.clone()).unwrap();
+    let spell = ability.spell.unwrap();
+    assert_eq!(spell.level, 3);
+    assert_eq!(spell.school.unwrap().as_tag(), "evocation");
+    assert_eq!(
+        spell.components.material.as_ref().unwrap().text,
+        "a pinch of powder"
+    );
+    let upcast = spell.upcast.unwrap();
+    assert_eq!(upcast.dice_by_level[&3], "8d6");
+    assert_eq!(upcast.dice_by_level[&4], "9d6");
+}
+
+#[test]
+fn spell_metadata_maps_minutes_hours_and_cantrip_scaling() {
+    let s = json!([{
+        "index": "test-ritual-cast", "name": "Test Ritual Cast", "level": 1, "desc": ["Slow."],
+        "casting_time": "10 minutes", "range": "Touch"
+    }, {
+        "index": "test-long-cast", "name": "Test Long Cast", "level": 2, "desc": ["Slower."],
+        "casting_time": "1 hour"
+    }, {
+        "index": "test-spark", "name": "Test Spark", "level": 0, "desc": ["Zap."],
+        "casting_time": "1 bonus action", "range": "60 feet",
+        "school": {"index": "nonstandard"},
+        "damage": {"damage_type": {"index": "fire"}, "damage_at_character_level": {"5": "2d10", "1": "1d10"}}
+    }]);
+    let (v, n) = convert_spells(&s, &BTreeSet::new());
+    assert_eq!(n, 3);
+    let a = &v["abilities"];
+    assert_eq!(
+        a[0]["spell"]["casting_time"],
+        json!({"amount": 10, "unit": "minute"})
+    );
+    // The legacy activation mapping is unchanged: minute casts stay `action`.
+    assert_eq!(a[0]["activation"], "action");
+    assert_eq!(
+        a[1]["spell"]["casting_time"],
+        json!({"amount": 1, "unit": "hour"})
+    );
+    // Cantrip scaling uses the character-level table; unknown schools stay unset.
+    assert_eq!(a[2]["spell"]["level"], 0);
+    assert!(a[2]["spell"].get("school").is_none());
+    assert_eq!(a[2]["activation"], "bonus");
+    assert_eq!(
+        a[2]["spell"]["cantrip_scaling"]["dice_by_character_level"],
+        json!({"1": "1d10", "5": "2d10"})
+    );
+    // Everything deserializes; missing fields keep their defaults.
+    let ability: Ability = serde_json::from_value(a[0].clone()).unwrap();
+    let spell = ability.spell.expect("level 1 import carries a spell block");
+    assert_eq!(spell.casting_time.unit, CastingUnit::Minute);
+    assert_eq!(spell.casting_time.amount, Some(10));
+    assert!(!spell.components.verbal && !spell.components.somatic);
+    assert!(spell.components.material.is_none());
+    assert!(!spell.ritual);
+    assert_eq!(spell.school, None);
+    assert!(spell.upcast.is_none() && spell.cantrip_scaling.is_none());
+    assert!(spell.classes.is_empty());
 }
 
 #[test]

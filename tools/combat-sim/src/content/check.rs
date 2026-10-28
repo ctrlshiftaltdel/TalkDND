@@ -132,6 +132,22 @@ fn valid_id(id: &str) -> bool {
         })
 }
 
+/// Whether a tag names one of the eight schools of magic (the legacy school
+/// tag the SRD import writes).
+fn is_school_tag(tag: &str) -> bool {
+    [
+        "abjuration",
+        "conjuration",
+        "divination",
+        "enchantment",
+        "evocation",
+        "illusion",
+        "necromancy",
+        "transmutation",
+    ]
+    .contains(&tag)
+}
+
 fn check_id(report: &mut CheckReport, source: Option<&ContentSource>, kind: &str, id: &str) {
     if !valid_id(id) {
         report.error(
@@ -1301,11 +1317,77 @@ impl<'a> Walker<'a> {
                 ));
             }
         }
+        self.spell_meta(ability);
         self.effects(&ability.effects);
         for (index, trigger) in ability.triggers.iter().enumerate() {
             self.trigger(trigger, &format!("trigger #{}", index + 1));
         }
         self.modifiers(&ability.modifiers);
+    }
+
+    /// Checks the optional `spell` metadata block against the fields it must
+    /// agree with. Abilities without the block are not touched: legacy content
+    /// keeps its exact behaviour and produces no new issues.
+    fn spell_meta(&mut self, ability: &Ability) {
+        let Some(spell) = &ability.spell else {
+            return;
+        };
+        let id = &ability.id;
+        let level = spell.level as i32;
+        if ability.slot_level.unwrap_or(0) != level {
+            self.error(format!(
+                "ability `{id}` spell level {level} does not match slot_level {:?}",
+                ability.slot_level
+            ));
+        }
+        if level > 0 {
+            let expected = format!("spell-slot-{level}");
+            match &ability.cost {
+                Some(cost) if cost.resource == expected => {}
+                Some(cost) => self.error(format!(
+                    "ability `{id}` spell cost resource `{}` does not match `{expected}`; per-caster overrides belong on the character sheet AbilityRef, not here",
+                    cost.resource
+                )),
+                None => self.error(format!(
+                    "ability `{id}` is a level {level} spell but has no cost; expected `{expected}`"
+                )),
+            }
+        }
+        if let Some(upcast) = &spell.upcast {
+            for key in upcast.dice_by_level.keys() {
+                if (*key as i32) < level || *key > 9 {
+                    self.error(format!(
+                        "ability `{id}` upcast dice_by_level key {key} is out of range; keys must be slot levels from {level} to 9"
+                    ));
+                }
+            }
+        }
+        if let Some(material) = &spell.components.material {
+            if (material.cost_gp.is_some() || material.consumed) && material.text.is_empty() {
+                self.error(format!(
+                    "ability `{id}` has a material component with cost or consumption but no text describing it"
+                ));
+            }
+        }
+        if let Some(school) = spell.school {
+            if ability
+                .tags
+                .iter()
+                .any(|tag| tag != school.as_tag() && is_school_tag(tag))
+            {
+                self.warning(format!(
+                    "ability `{id}` spell school `{}` disagrees with its school tag",
+                    school.as_tag()
+                ));
+            }
+        }
+        let tagged_ritual = ability.tags.iter().any(|tag| tag == "ritual");
+        if tagged_ritual != spell.ritual {
+            self.warning(format!(
+                "ability `{id}` spell ritual flag ({}) disagrees with its `ritual` tag",
+                spell.ritual
+            ));
+        }
     }
 
     fn condition(&mut self, condition: &ConditionDef) {

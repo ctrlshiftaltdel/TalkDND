@@ -6191,6 +6191,7 @@ impl AttackProfile {
             todo: Vec::new(),
             notes: None,
             description: None,
+            spell: None,
         }
     }
 }
