@@ -4,6 +4,46 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v1.4.0 — 2026-10-28
+
+### 新功能
+
+- **只读 Agent 知识 API**（TASK-0113，PR #223）：新增 `talkdnd knowledge search|get|cite|context|related`，把六类来源放在同一组稳定命令后面：`ruling`（存档 `Rules/rulings*.md`，本机副本缺失时读 `Rules/defaults/rulings*.md`）、`save`（`entities.yaml` / `relations.yaml` / `memory.yaml` / `reveals.yaml`）、`book`（玩家自备书的 `index/structured.json` 与页码版）、`srd`（随程序分发的 `Rules/combat/<edition>/srd/*.pack.json`）、`adventure`（冒险索引、页码版与玩家可见资料图）、`original`（`original.yaml`）。`search` 支持 `--scope` 与 `--limit`（默认 20，最大 500）；`get` 取完整条目；`cite` 只输出引用；`context` 固定按场景 → 队伍 → 已知 → 关系 → 规则汇总；`related` 沿关系与共享引用展开 1–2 层。
+- **稳定 id 与固定字段**（PR #223）：每条结果带 `id`、`authority`、`title`、`citation`、`excerpt`、`known`、`visibility`，`related` 另带 `via`。id 编码来源与锚点（`srd:<kind>:<id>`、`book:<edition>:<slug>:<anchor>`、`adventure:<slug>:<anchor>`、`save:<entity|memory|reveal|relation>:<id>`、`original:<id>`、`ruling:<edition|common>:<anchor>`）；同一输入重复运行给出相同 id 与确定性排序，结果有固定上限。引用用游戏相对路径、书名 + 页码或文件 + 条目 id，不输出个人绝对路径。
+- **默认玩家已知视图与 `--include-hidden` DM 视图**（PR #223）：`reveals.yaml` 的事实按玩家已知处理，`memory.yaml` 只有 `player-confirmed` 默认可见；`dm_only` 实体/关系隐藏，关系的任一端是 `dm_only` 时整条关系按 DM 内容处理；未揭示的原创隐藏面、超出进度或 DM-only 的冒险小节、DM-only 资料图默认不出现；没有 `progress.yaml` / 自定义 track 时，`Chapter` / `Part` / `第 N 章` 且 N > 1 的章节按未来内容隐藏。`--include-hidden` 只扩大 save / adventure / original 的 DM 视图并标 `visibility: dm`、`known: false`，不会输出 `dm-secrets.md`，跨条目命中未揭示秘密词的条目仍被拒绝。
+- **只读秘密过滤**（PR #223）：知识 API 复用 `guard` 的只读 `collect_uncached` 收集秘密词（`dm-secrets.md`、`dm-plan.md`、手动秘密词、未揭示原创隐藏面、未来/DM-only 冒险专名），不写 `secret-terms.cache.json`；来自其他条目的秘密命中项不输出，错误与提示不回显带秘密的 id 或查询词。
+- **知识 API 文档**（PR #223）：新增开发者文档 `tools/talkdnd/docs/KNOWLEDGE.md` 与玩家/DM 参考 `LetsPlay/docs/knowledge.md`；`LetsPlay/AGENTS.md` 增加一行指引（仍为 149 行）；`docs/PLAN.md` 与本章程同步设计目标与决策。
+
+### 变更
+
+- **存档 schema 仍为 9**：v1.4 没有存档结构变化，也没有新的迁移步骤；v1.3 的 8 → 9 自动迁移继续有效。知识 API 不写 `integrity.yaml`、不建持久化索引、不写任何台账。
+- **只读边界**：`knowledge` 缺失的 sidecar/index 视为空来源，损坏或更新的索引 fail closed（退出码 1）；空搜索结果不是错误。`cite` 不接受 `--include-hidden`。无新增依赖、无网络调用、无引擎或规则变更。
+- **默认 AI、规则与四规则集不变**：战斗 AI 仍是 legacy，Utility/Search 仍是库级 opt-in；战斗规则、骰子与 5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD 的分层没有变化。完整书 pack 仍是与 v1.2.0 / v1.3.0 相同的可选发布资产。
+
+### 修复
+
+- **关系端点 DM-only 隐藏**（PR #223，commit `1c10a35`）：关系任一端实体是 `dm_only` 时，`context` 与 `related` 整条隐藏，即使关系行本身没有 `dm_only`。
+- **无进度时未来章节隐藏**（PR #223，commit `1c10a35`）：没有 `progress.yaml` / track 时，编号大于 1 的 `Chapter` / `Part` / `第 N 章` 默认按未来内容隐藏；当前章节、前言与玩家可见资料图仍可见。
+- **秘密词与秘密 id 不回显**（PR #223，commit `84ba6aa`、`1c10a35`、`0b2cd3d`）：跨条目命中未揭示秘密词的条目在默认视图与 `--include-hidden` 下都不输出；错误提示不回显带秘密的查询词或 id。知识 API 回归测试覆盖这些路径。
+
+### 更新说明 / 迁移
+
+- **覆盖式更新**：下载 1.4.0 发布包，把包内 `TalkDND/LetsPlay/` 的内容覆盖到现有游戏文件夹，覆盖同名文件；存档目录原样保留。不要用旧包整个替换。
+- **无需存档迁移**：schema 仍是 9；v1.3 的 8 → 9 迁移继续有效。知识 API 只读，不新增存档文件，也不要求在首次运行前做任何设置。
+- **知识索引可选**：书籍/冒险条目依赖 `index/structured.json`；还没有索引时搜索结果为空并提示 `bin/talkdnd adventure index build --book "<书名>"`。SRD 与裁定不需要额外步骤。
+- **用法**：`bin/talkdnd knowledge search "<词>"`、`get <id>`、`cite <id>`、`context <实体或场景>`、`related <id> [--depth 2]`；默认只给玩家已知内容，`--include-hidden` 只给 DM 自己看。说明见 `LetsPlay/docs/knowledge.md`。
+- **默认 AI 与完整书 pack 不变**：战斗 AI 仍是 legacy；完整书 pack 仍是可选资产，托管 CI 不构建也不上传；只用 SRD 的玩家不需要额外步骤。
+- 行为基线是 main `691dab84aca696a807449390fec8a1edd03b46cf`（PR #223 合并后）。该提交上 combat-sim 390、talkdnd 337、talkdnd-dev 45、AgentOrch 套件 676（19 skipped）个测试通过，`validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 退出码 0。发布提交只改三个 crate 的版本号与锁文件、本更新日志、章程和 `LetsPlay/README.md`，不含源码、测试或 CI 行为变更。
+- 本任务不创建或推送 tag；合并后由 Master 在 main 上打 `v1.4.0` 并触发 release workflow。
+
+### 已知限制
+
+- **知识 API 依赖已构建索引**：书籍/冒险搜索需要 `index/structured.json`；未构建时为空结果加提示，不是错误。归档书正文摘录只在本机 CLI 输出，不进入 Git / Issue / PR / CI。
+- **`--include-hidden` 是 DM 视图，不是玩家内容**：结果标 `visibility: dm`、`known: false`，不应直接贴给玩家或用于写选项；`dm-secrets.md` 永远不会成为输出源。
+- **没有全局权威排序**：`authority` 只是来源标签，规则裁定仍以存档 `Rules/rulings*.md` 为准；不要把冒险事实当规则，也不要把原创当正典。
+- **完整书 pack 不在普通包内**：托管 CI 不构建、不上传；没有 pack 时 5e SRD / 5.5e SRD 仍可完整游玩，FULL 会 fail closed。
+- **默认战斗 AI 仍是 legacy**：与 v1.2.0 / v1.3.0 相同，Utility/Search 仍是库级 opt-in；完整书识别、空间数据与合成基准的 v1.2.0 限制未在本版改变。
+
 ## v1.3.0 — 2026-10-27
 
 ### 新功能

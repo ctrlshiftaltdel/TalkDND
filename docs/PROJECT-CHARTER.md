@@ -140,7 +140,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - As of v1.0.0, a session interrupted mid-play can be resumed from the last good checkpoint, and the structured diff since the previous session is available without rereading the whole log.
 - Automation switches are per save: fixed categories resolve as encounter > scene > save default, unknown categories/levels/ids fail closed, every change is audited, and `player_choice` / `reaction` can never be `auto`.
 - As of v1.3.0, a schema-8 save opens without manual steps: the first `start` / `migrate` / `settings` write backs up the whole save, writes the charter automation defaults, preserves `dice_display` / `style`, and records the 8 → 9 migration; the pre-migration backup is the rollback.
-- As of v1.4.0, `talkdnd knowledge search|get|cite|context|related` answers across `ruling`, `save`, `book`, `srd`, `adventure` and `original` with stable ids and deterministic ordering; the default view hides `dm-secrets.md`, unrevealed original hidden faces, ahead/DM-only adventure content and unidentified names, and `--include-hidden` labels DM-only results `visibility: dm` without ever emitting `dm-secrets.md`.
+- As of v1.4.0, `talkdnd knowledge search|get|cite|context|related` answers across `ruling`, `save`, `book`, `srd`, `adventure` and `original` with stable ids and deterministic ordering; the default view hides `dm-secrets.md`, unrevealed original hidden faces, ahead/DM-only adventure content and unidentified names, and `--include-hidden` labels DM-only results `visibility: dm` without ever emitting `dm-secrets.md`. The command is read-only: it does not change the save schema (still 9), write `integrity.yaml`, build a persistent index, add a dependency, or make a network call.
 
 ## Architecture decisions
 
@@ -180,6 +180,18 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-28 — v1.4.0 release (TASK-0114)
+
+The owner ships the read-only agent knowledge API as TalkDND 1.4.0. The behavior baseline is main `691dab84aca696a807449390fec8a1edd03b46cf` (PR #223, TASK-0113). v1.4 contains that PR only: `talkdnd knowledge search|get|cite|context|related` over the six source categories `ruling`, `save`, `book`, `srd`, `adventure` and `original`, with stable ids, the fixed result fields, deterministic ordering and result caps; the default player-known view and the `--include-hidden` DM view; the relation-endpoint `dm_only` rule, the no-progress numbered-chapter rule, hidden original / future-adventure secret-term filtering and the refusal to emit `dm-secrets.md` or secret-bearing ids; and secret filtering through `guard`'s read-only `collect_uncached` without writing `secret-terms.cache.json`. The same PR adds `tools/talkdnd/docs/KNOWLEDGE.md`, `LetsPlay/docs/knowledge.md`, the one-line DM-guide pointer, this charter's decision and the `docs/PLAN.md` design goal.
+
+On `691dab8`, combat-sim 390, talkdnd 337, talkdnd-dev 45 and the AgentOrch suite 676 tests (19 skipped) pass, and `validate_kit.py --project-ready`, `check-leaks` and `check-letsplay` exit 0. The release commit changes release metadata only — the three crate versions to 1.4.0 (with the three `Cargo.lock` files), the CHANGELOG v1.4.0 section, this charter and `LetsPlay/README.md` — with no source, test or CI behavior change beyond what PR #223 already introduced. The tag builds from the merged main tree.
+
+The knowledge API is read-only: it writes no save file, no `integrity.yaml`, no persistent index and no secret cache, adds no dependency, makes no network call, and changes no engine or rules behavior. The main save schema remains 9; there is no v1.4 migration, and the v1.3 schema 8 → 9 path is unchanged. The default view is player-known: unrevealed `original.hidden`, ahead/DM-only adventure sections, `dm_only` entities and relations (including a relation with either endpoint `dm_only`) and non-`player-confirmed` memory stay hidden; `--include-hidden` labels DM-only save/adventure/original results `visibility: dm`, and `dm-secrets.md` is never an output source. The default combat AI remains the legacy heuristic and the Utility/Search planners stay library-level opt-ins; combat rules, dice, the four rulesets and the optional full-book release asset are unchanged from v1.2.0 / v1.3.0.
+
+Known limitations recorded in the changelog: book and adventure search needs the player's local `index/structured.json` (an empty result with a hint, not an error); `--include-hidden` is a DM view that must not be shown to players or used for options; `authority` is a source label, not a global precedence; and the v1.2 full-book/spatial/AI limitations are unchanged.
+
+Alternative considered: ship the knowledge API as a patch release. Rejected: `docs/versioning.md` treats a new command surface as a minor release, and the owner's release train names v1.4.0 for it.
 
 ### 2026-10-28 — Read-only agent knowledge API (TASK-0113, v1.4)
 
