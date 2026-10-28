@@ -12,3 +12,9 @@ rules:
       resolution: contest
       attacker_skill: athletics
       defender_skills: [athletics, acrobatics]
+  exhaustion:
+    check_disadvantage_from: 1
+    speed_halved_from: 2
+    attack_save_disadvantage_from: 3
+    hp_max_halved_from: 4
+    speed_zero_from: 5

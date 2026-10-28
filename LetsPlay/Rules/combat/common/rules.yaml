@@ -25,3 +25,13 @@ rules:
     two_weapon_fighting:
       require_light: true
       add_positive_ability_modifier: false
+  exhaustion:
+    condition: exhaustion
+    max_level: 6
+    death_level: 6
+    long_rest_reduction: 1
+  condition_behaviors:
+    charmed: {cannot_target_source: true, ends_when_source_dies: true}
+    frightened: {cannot_move_closer_to_source: true, ends_when_source_dies: true}
+    hidden: {hidden: true}
+    invisible: {hidden: true}

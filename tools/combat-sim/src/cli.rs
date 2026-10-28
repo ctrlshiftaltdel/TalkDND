@@ -561,6 +561,9 @@ pub enum ConditionCommand {
         source: Option<String>,
         #[arg(long)]
         linked: Option<String>,
+        /// Exhaustion level (1 through the ruleset maximum).
+        #[arg(long)]
+        level: Option<u32>,
         /// Repeated save: `ABILITY:DC`, for example `wis:13`.
         #[arg(long = "save-ends", value_name = "ABILITY:DC")]
         save_ends: Option<String>,
@@ -1087,6 +1090,7 @@ fn run_cli() -> Result<()> {
                 until_subject,
                 source,
                 linked,
+                level,
                 save_ends,
             } => {
                 let path = state_path(&sources, state.as_deref());
@@ -1123,6 +1127,7 @@ fn run_cli() -> Result<()> {
                         source,
                         linked,
                         save_ends,
+                        level,
                     };
                     engine::add_condition(state, &who, &condition, &options, rng, lines)
                 })
@@ -2466,6 +2471,8 @@ struct CombatantStatus {
     current: bool,
     hp: i32,
     max_hp: i32,
+    effective_max_hp: i32,
+    bloodied: bool,
     temp_hp: i32,
     ac: i32,
     zone: String,
@@ -2484,6 +2491,8 @@ struct CombatantStatus {
 #[derive(Debug, Serialize)]
 struct ConditionStatus {
     id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<u32>,
     source: Option<String>,
     linked: Option<String>,
     remaining: Option<String>,
@@ -2513,27 +2522,52 @@ impl StatusOutput {
                     current: current == Some(index),
                     hp: combatant.hp,
                     max_hp: combatant.max_hp,
+                    effective_max_hp: engine::effective_max_hp(state, index),
+                    bloodied: engine::is_bloodied(state, index),
                     temp_hp: combatant.temp_hp,
                     ac: engine::armor_class(state, index),
                     zone: combatant.zone.clone(),
                     pos: combatant.cell(),
-                    conditions: combatant
-                        .conditions
-                        .iter()
-                        .map(|condition| ConditionStatus {
-                            id: condition.condition.clone(),
-                            source: condition.source.clone(),
-                            linked: condition.linked.clone(),
-                            remaining: condition
-                                .duration
-                                .as_ref()
-                                .map(crate::state::ActiveDuration::describe),
-                            save_ends: condition.save_ends.as_ref().map(|save_ends| {
-                                format!("{}:{}", save_ends.ability.as_str(), save_ends.dc)
-                            }),
-                            concentration: condition.concentration,
-                        })
-                        .collect(),
+                    conditions: {
+                        let exhaustion = engine::exhaustion_condition_id(state);
+                        let mut conditions: Vec<ConditionStatus> = combatant
+                            .conditions
+                            .iter()
+                            .map(|condition| ConditionStatus {
+                                id: condition.condition.clone(),
+                                level: condition
+                                    .condition
+                                    .eq_ignore_ascii_case(exhaustion)
+                                    .then_some(combatant.exhaustion_level),
+                                source: condition.source.clone(),
+                                linked: condition.linked.clone(),
+                                remaining: condition
+                                    .duration
+                                    .as_ref()
+                                    .map(crate::state::ActiveDuration::describe),
+                                save_ends: condition.save_ends.as_ref().map(|save_ends| {
+                                    format!("{}:{}", save_ends.ability.as_str(), save_ends.dc)
+                                }),
+                                concentration: condition.concentration,
+                            })
+                            .collect();
+                        if combatant.exhaustion_level > 0
+                            && !conditions
+                                .iter()
+                                .any(|condition| condition.id.eq_ignore_ascii_case(exhaustion))
+                        {
+                            conditions.push(ConditionStatus {
+                                id: exhaustion.to_string(),
+                                level: Some(combatant.exhaustion_level),
+                                source: None,
+                                linked: None,
+                                remaining: None,
+                                save_ends: None,
+                                concentration: false,
+                            });
+                        }
+                        conditions
+                    },
                     resources: combatant
                         .resources
                         .iter()

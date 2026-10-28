@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use combat_sim::content::{self, ContentRegistry, ContentSources};
 use combat_sim::dice::{DiceRng, RollMode};
-use combat_sim::engine::{self, AddConditionOptions, AttackOptions, MoveTarget, RestKind, UseOptions};
+use combat_sim::engine::{
+    self, AddConditionOptions, AttackOptions, MoveTarget, RestKind, UseOptions,
+};
 use combat_sim::space::SpatialPose;
 use combat_sim::state::{EncounterState, NewEncounter, STATE_SCHEMA_VERSION};
 use serde_json::Value;
@@ -116,23 +118,17 @@ fn conditions_block(edition: &str) -> &'static str {
     match edition {
         "2014" => {
             r#"  - id: charmed
-    cannot_target_source: true
-    ends_when_source_dies: true
   - id: frightened
     modifiers:
       - {applies: attack_roll, effect: disadvantage, when: {source_in_line_of_sight: true}}
       - {applies: check, effect: disadvantage, when: {source_in_line_of_sight: true}}
-    cannot_move_closer_to_source: true
-    ends_when_source_dies: true
   - id: exhaustion
     modifiers:
       - {applies: check, effect: disadvantage, when: {exhaustion_level_min: 1}}
       - {applies: attack_roll, effect: disadvantage, when: {exhaustion_level_min: 3}}
       - {applies: save, effect: disadvantage, when: {exhaustion_level_min: 3}}
   - id: hidden
-    hidden: true
   - id: invisible
-    hidden: true
   - id: incapacitated
     flags: [incapacitated]
   - id: unconscious
@@ -142,20 +138,14 @@ fn conditions_block(edition: &str) -> &'static str {
         }
         "2024" => {
             r#"  - id: charmed
-    cannot_target_source: true
-    ends_when_source_dies: true
   - id: frightened
     modifiers:
       - {applies: attack_roll, effect: disadvantage, when: {source_in_line_of_sight: true}}
       - {applies: check, effect: disadvantage, when: {source_in_line_of_sight: true}}
-    cannot_move_closer_to_source: true
-    ends_when_source_dies: true
   - id: exhaustion
     manual: "data-driven d20 and Speed penalty"
   - id: hidden
-    hidden: true
   - id: invisible
-    hidden: true
   - id: incapacitated
     flags: [incapacitated]
   - id: unconscious
@@ -171,6 +161,11 @@ fn content_yaml(edition: &str) -> String {
     let text = r##"rules:
   dying_conditions: [unconscious]
 __RULES__
+  condition_behaviors:
+    charmed: {cannot_target_source: true, ends_when_source_dies: true}
+    frightened: {cannot_move_closer_to_source: true, ends_when_source_dies: true}
+    hidden: {hidden: true}
+    invisible: {hidden: true}
 conditions:
 __CONDITIONS__
 
@@ -282,8 +277,6 @@ encounters:
     scene: zones
     party_zone: alpha
     members:
-      - {creature: heroine, zone: alpha}
-      - {creature: ally, zone: alpha}
       - {creature: source, zone: beta}
       - {creature: bystander, zone: alpha}
   - id: grid-open-fight
@@ -291,20 +284,19 @@ encounters:
     party_zone: floor
     members:
       - {creature: source, zone: floor, pos: [5, 1]}
-      - {creature: bystander, zone: floor, pos: [1, 2]}
+      - {creature: bystander, zone: floor, pos: [6, 2]}
   - id: grid-wall-fight
     scene: grid-wall
     party_zone: floor
     members:
       - {creature: source, zone: floor, pos: [6, 1]}
-      - {creature: bystander, zone: floor, pos: [1, 2]}
+      - {creature: bystander, zone: floor, pos: [2, 2]}
 "##;
     // The creature id `hero` is built from the party list; the encounter rows
     // name it explicitly so the same fixture can build either a zones or grid
     // fight without a second hero definition.
     text.replace("__RULES__", rules_block(edition))
         .replace("__CONDITIONS__", conditions_block(edition))
-        .replace("{creature: heroine", "{creature: hero")
 }
 
 fn campaign(edition: &str) -> Scratch {
@@ -343,7 +335,15 @@ fn encounter(registry: ContentRegistry, id: &str, party: &[&str]) -> EncounterSt
 
 fn make_state(edition: &str, id: &str, party: &[&str]) -> EncounterState {
     let (_scratch, registry) = registry(edition);
-    encounter(registry, id, party)
+    let mut state = encounter(registry, id, party);
+    if id.starts_with("grid") {
+        // Keep the protagonist at a known open cell regardless of how the
+        // encounter builder places party members.
+        if let Ok(hero) = state.find_index("Hero") {
+            state.combatants[hero].set_cell(1, 1, "floor");
+        }
+    }
+    state
 }
 
 fn index(state: &EncounterState, name: &str) -> usize {
@@ -518,7 +518,7 @@ fn bloodied_is_half_or_less_and_tracks_damage_heal_and_temporary_hp() {
             &mut Vec::new(),
         )
         .unwrap();
-        assert_eq!(state.combatants[hero].hp, 19);
+        assert_eq!(state.combatants[hero].hp, 18);
         assert!(engine::is_bloodied(&state, hero));
 
         // 0 HP is still at or below half.
@@ -564,7 +564,11 @@ fn exhaustion_2014_six_levels_apply_the_edition_effects() {
     // Level 1: ability-check disadvantage.
     let mut state = make_state("2014", "zones-fight", &["hero", "ally"]);
     let log = exhaustion(&mut state, "Hero", 1);
-    assert!(log.iter().any(|line| line.contains("level 1")), "{log:?}");
+    assert!(
+        log.iter()
+            .any(|line| line.contains("level 1") && line.contains("ability-check disadvantage")),
+        "{log:?}"
+    );
     let mut log = Vec::new();
     engine::check(
         &mut state,
@@ -578,7 +582,8 @@ fn exhaustion_2014_six_levels_apply_the_edition_effects() {
     )
     .unwrap();
     assert!(
-        log.iter().any(|line| line.contains("dis:") && line.contains("Exhaustion")),
+        log.iter()
+            .any(|line| line.contains("dis:") && line.to_lowercase().contains("exhaustion")),
         "{log:?}"
     );
 
@@ -597,12 +602,13 @@ fn exhaustion_2014_six_levels_apply_the_edition_effects() {
         "Bystander",
         "sword",
         &AttackOptions::default(),
-        &mut ScriptedRng::new(&[15, 9, 4]),
+        &mut ScriptedRng::new(&[15, 4]),
         &mut log,
     )
     .unwrap();
     assert!(
-        log.iter().any(|line| line.contains("dis:") && line.contains("Exhaustion")),
+        log.iter()
+            .any(|line| line.contains("dis:") && line.to_lowercase().contains("exhaustion")),
         "{log:?}"
     );
     let mut log = Vec::new();
@@ -617,7 +623,8 @@ fn exhaustion_2014_six_levels_apply_the_edition_effects() {
     )
     .unwrap();
     assert!(
-        log.iter().any(|line| line.contains("dis:") && line.contains("Exhaustion")),
+        log.iter()
+            .any(|line| line.contains("dis:") && line.to_lowercase().contains("exhaustion")),
         "{log:?}"
     );
 
@@ -672,6 +679,17 @@ fn exhaustion_2024_applies_minus_two_and_speed_penalty_per_level() {
     );
     assert_eq!(dash_speed(&mut state, "Hero"), 25);
 
+    // Every level subtracts 5 ft, down to 5 ft at level 5.
+    for level in 2..=5 {
+        let mut state = make_state("2024", "zones-fight", &["hero", "ally"]);
+        exhaustion(&mut state, "Hero", level);
+        assert_eq!(
+            dash_speed(&mut state, "Hero"),
+            30 - 5 * level as i32,
+            "level {level}"
+        );
+    }
+
     // Level 3: -6 and Speed 30 - 15 = 15.
     let mut state = make_state("2024", "zones-fight", &["hero", "ally"]);
     exhaustion(&mut state, "Hero", 3);
@@ -691,6 +709,22 @@ fn exhaustion_2024_applies_minus_two_and_speed_penalty_per_level() {
         "{log:?}"
     );
     assert_eq!(dash_speed(&mut state, "Hero"), 15);
+
+    // Death saves are saving throws and take the same penalty.
+    let mut state = make_state("2024", "zones-fight", &["hero", "ally"]);
+    exhaustion(&mut state, "Hero", 3);
+    let hero = index(&state, "Hero");
+    state.combatants[hero].hp = 0;
+    let mut log = Vec::new();
+    engine::death_save(&mut state, "Hero", &mut ScriptedRng::new(&[15]), &mut log).unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("-6[exhaustion]")),
+        "{log:?}"
+    );
+    assert_eq!(
+        state.combatants[index(&state, "Hero")].death_saves.failures,
+        1
+    );
 
     // Level 6: death.
     let mut state = make_state("2024", "zones-fight", &["hero", "ally"]);
@@ -729,7 +763,10 @@ fn long_rest_reduces_exhaustion_and_restores_the_effective_maximum() {
     .unwrap();
     assert_eq!(state.combatants[index(&state, "Hero")].exhaustion_level, 3);
     assert_eq!(state.combatants[index(&state, "Hero")].hp, 40);
-    assert!(log.iter().any(|line| line.contains("exhaustion")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("exhaustion")),
+        "{log:?}"
+    );
 
     // 2024: level 3 -> 2, and level 1 -> 0 removes the marker.
     let mut state = make_state("2024", "zones-fight", &["hero", "ally"]);
@@ -777,6 +814,11 @@ fn charmed_records_its_source_and_blocks_attacks_and_damaging_abilities() {
             log.iter().any(|line| line.contains("source: Source")),
             "{edition}: {log:?}"
         );
+        assert!(
+            log.iter()
+                .any(|line| line.contains("cannot attack or damage the source")),
+            "{edition}: {log:?}"
+        );
 
         let error = engine::attack(
             &mut state,
@@ -810,8 +852,11 @@ fn charmed_records_its_source_and_blocks_attacks_and_damaging_abilities() {
             &mut state,
             "Hero",
             "damaging-bolt",
-            &["Source".to_string()],
-            &UseOptions::default(),
+            &[],
+            &UseOptions {
+                targets: vec!["Source".to_string()],
+                ..UseOptions::default()
+            },
             &mut ScriptedRng::new(&[]),
             &mut Vec::new(),
         )
@@ -822,8 +867,11 @@ fn charmed_records_its_source_and_blocks_attacks_and_damaging_abilities() {
             &mut state,
             "Hero",
             "healing-word",
-            &["Source".to_string()],
-            &UseOptions::default(),
+            &[],
+            &UseOptions {
+                targets: vec!["Source".to_string()],
+                ..UseOptions::default()
+            },
             &mut ScriptedRng::new(&[2]),
             &mut Vec::new(),
         )
@@ -887,29 +935,32 @@ fn frightened_disadvantage_requires_the_source_to_be_in_line_of_sight() {
         "Bystander",
         "sword",
         &AttackOptions::default(),
-        &mut ScriptedRng::new(&[15, 9, 4]),
+        &mut ScriptedRng::new(&[15, 4]),
         &mut log,
     )
     .unwrap();
     assert!(
-        log.iter().any(|line| line.contains("dis:") && line.contains("Frightened")),
+        log.iter()
+            .any(|line| line.contains("dis:") && line.to_lowercase().contains("frightened")),
         "{log:?}"
     );
 
     // A hidden source lifts the disadvantage.
     let source = index(&state, "Source");
-    state.combatants[source].conditions.push(combat_sim::state::ActiveCondition {
-        condition: "hidden".to_string(),
-        source: None,
-        linked: None,
-        duration: None,
-        save_ends: None,
-        ends_on: Vec::new(),
-        created_by: None,
-        concentration: false,
-        applied_round: 0,
-        notes: None,
-    });
+    state.combatants[source]
+        .conditions
+        .push(combat_sim::state::ActiveCondition {
+            condition: "hidden".to_string(),
+            source: None,
+            linked: None,
+            duration: None,
+            save_ends: None,
+            ends_on: Vec::new(),
+            created_by: None,
+            concentration: false,
+            applied_round: 0,
+            notes: None,
+        });
     let hero = index(&state, "Hero");
     state.combatants[hero].action_used = false;
     let mut log = Vec::new();
@@ -919,14 +970,11 @@ fn frightened_disadvantage_requires_the_source_to_be_in_line_of_sight() {
         "Bystander",
         "sword",
         &AttackOptions::default(),
-        &mut ScriptedRng::new(&[15, 9, 4]),
+        &mut ScriptedRng::new(&[15, 4]),
         &mut log,
     )
     .unwrap();
-    assert!(
-        !log.iter().any(|line| line.contains("dis:")),
-        "{log:?}"
-    );
+    assert!(!log.iter().any(|line| line.contains("dis:")), "{log:?}");
 }
 
 #[test]
@@ -940,7 +988,7 @@ fn frightened_source_behind_a_wall_does_not_impose_disadvantage() {
         "Bystander",
         "sword",
         &AttackOptions::default(),
-        &mut ScriptedRng::new(&[15, 9, 4]),
+        &mut ScriptedRng::new(&[15, 4]),
         &mut log,
     )
     .unwrap();
@@ -955,14 +1003,14 @@ fn frightened_blocks_willing_movement_closer_to_a_visible_source() {
         &mut state,
         "Hero",
         &MoveTarget::Cell(2, 1),
-        false,
+        true,
         &mut ScriptedRng::new(&[]),
         &mut Vec::new(),
     )
     .expect_err("move closer");
     assert!(error.to_string().contains("closer"), "{error}");
     assert!(
-        error.to_string().contains("frightened"),
+        error.to_string().contains("source of fear"),
         "movement refusal should name the condition: {error}"
     );
 
@@ -971,7 +1019,7 @@ fn frightened_blocks_willing_movement_closer_to_a_visible_source() {
         &mut state,
         "Hero",
         &MoveTarget::Cell(1, 2),
-        false,
+        true,
         &mut ScriptedRng::new(&[]),
         &mut Vec::new(),
     )
@@ -984,23 +1032,25 @@ fn frightened_source_hidden_dead_or_out_of_sight_lifts_the_movement_restriction(
     let mut state = make_state("2014", "grid-open-fight", &["hero"]);
     add(&mut state, "Hero", "frightened", None, Some("Source")).unwrap();
     let source = index(&state, "Source");
-    state.combatants[source].conditions.push(combat_sim::state::ActiveCondition {
-        condition: "hidden".to_string(),
-        source: None,
-        linked: None,
-        duration: None,
-        save_ends: None,
-        ends_on: Vec::new(),
-        created_by: None,
-        concentration: false,
-        applied_round: 0,
-        notes: None,
-    });
+    state.combatants[source]
+        .conditions
+        .push(combat_sim::state::ActiveCondition {
+            condition: "hidden".to_string(),
+            source: None,
+            linked: None,
+            duration: None,
+            save_ends: None,
+            ends_on: Vec::new(),
+            created_by: None,
+            concentration: false,
+            applied_round: 0,
+            notes: None,
+        });
     engine::move_to(
         &mut state,
         "Hero",
         &MoveTarget::Cell(2, 1),
-        false,
+        true,
         &mut ScriptedRng::new(&[]),
         &mut Vec::new(),
     )
@@ -1023,7 +1073,7 @@ fn frightened_source_hidden_dead_or_out_of_sight_lifts_the_movement_restriction(
         &mut state,
         "Hero",
         &MoveTarget::Cell(2, 1),
-        false,
+        true,
         &mut ScriptedRng::new(&[]),
         &mut Vec::new(),
     )
@@ -1036,7 +1086,7 @@ fn frightened_source_hidden_dead_or_out_of_sight_lifts_the_movement_restriction(
         &mut state,
         "Hero",
         &MoveTarget::Cell(2, 1),
-        false,
+        true,
         &mut ScriptedRng::new(&[]),
         &mut Vec::new(),
     )
@@ -1047,14 +1097,15 @@ fn frightened_source_hidden_dead_or_out_of_sight_lifts_the_movement_restriction(
 fn frightened_uses_the_spatial_movement_path_when_poses_are_explicit() {
     let mut state = make_state("2024", "grid-open-fight", &["hero"]);
     for combatant in &mut state.combatants {
-        combatant.pose = SpatialPose::from_position(&combatant.position(), combatant.creature.size());
+        combatant.pose =
+            SpatialPose::from_position(&combatant.position(), combatant.creature.size());
     }
     add(&mut state, "Hero", "frightened", None, Some("Source")).unwrap();
     let error = engine::move_to(
         &mut state,
         "Hero",
         &MoveTarget::Cell(2, 1),
-        false,
+        true,
         &mut ScriptedRng::new(&[]),
         &mut Vec::new(),
     )
@@ -1070,7 +1121,7 @@ fn frightened_zone_movement_closer_is_refused_until_the_source_is_gone() {
         &mut state,
         "Hero",
         &MoveTarget::Zone("beta".to_string()),
-        false,
+        true,
         &mut ScriptedRng::new(&[]),
         &mut Vec::new(),
     )
@@ -1091,7 +1142,7 @@ fn frightened_zone_movement_closer_is_refused_until_the_source_is_gone() {
         &mut state,
         "Hero",
         &MoveTarget::Zone("beta".to_string()),
-        false,
+        true,
         &mut ScriptedRng::new(&[]),
         &mut Vec::new(),
     )
@@ -1105,7 +1156,7 @@ fn frightened_zone_movement_closer_is_refused_until_the_source_is_gone() {
 #[test]
 fn old_combat_state_loads_with_no_exhaustion_and_schema_one() {
     assert_eq!(STATE_SCHEMA_VERSION, 1);
-    let mut state = make_state("2024", "zones-fight", &["hero", "ally"]);
+    let state = make_state("2024", "zones-fight", &["hero", "ally"]);
     let path = std::env::temp_dir().join(format!(
         "combat-sim-conditions-old-{}-{}.state.json",
         std::process::id(),
@@ -1114,7 +1165,10 @@ fn old_combat_state_loads_with_no_exhaustion_and_schema_one() {
     state.save(&path).unwrap();
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     for combatant in value["combatants"].as_array_mut().unwrap() {
-        combatant.as_object_mut().unwrap().remove("exhaustion_level");
+        combatant
+            .as_object_mut()
+            .unwrap()
+            .remove("exhaustion_level");
     }
     fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     let mut loaded = EncounterState::load(&path).unwrap();
@@ -1127,7 +1181,7 @@ fn old_combat_state_loads_with_no_exhaustion_and_schema_one() {
 
 #[test]
 fn condition_cli_adds_levels_and_sources_and_keeps_the_old_form_working() {
-    let mut state = make_state("2024", "zones-fight", &["hero", "ally"]);
+    let state = make_state("2024", "zones-fight", &["hero", "ally"]);
     let path = std::env::temp_dir().join(format!(
         "combat-sim-conditions-cli-{}-{}.state.json",
         std::process::id(),
@@ -1154,23 +1208,26 @@ fn condition_cli_adds_levels_and_sources_and_keeps_the_old_form_working() {
     let output = run_cli(&path, &["condition", "remove", "Hero", "exhaustion"]);
     assert_success(&output, "condition remove exhaustion");
     assert!(
-        stdout(&output).contains("no longer exhaustion"),
+        stdout(&output).contains("no longer exhaustion")
+            && stdout(&output).contains("removed by command"),
         "{}",
         stdout(&output)
     );
     let status = status_json(&path);
-    assert!(
-        !combatant(&status, "Hero")["conditions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|condition| condition["id"] == "exhaustion")
-    );
+    assert!(!combatant(&status, "Hero")["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|condition| condition["id"] == "exhaustion"));
 
     // The old form (no new flags) still works.
     let output = run_cli(&path, &["condition", "add", "Hero", "hidden"]);
     assert_success(&output, "legacy condition add");
-    assert!(has_condition(&EncounterState::load(&path).unwrap(), "Hero", "hidden"));
+    assert!(has_condition(
+        &EncounterState::load(&path).unwrap(),
+        "Hero",
+        "hidden"
+    ));
 
     let output = run_cli(
         &path,

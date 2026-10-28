@@ -473,6 +473,14 @@ pub struct Rules {
     /// shove, unarmed strike, two-weapon fighting).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub combat_actions: Option<CombatActions>,
+    /// Edition-specific exhaustion levels and their effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exhaustion: Option<ExhaustionRules>,
+    /// Optional per-condition engine behaviour (source restrictions, hidden,
+    /// source-death cleanup). Kept out of `ConditionDef` so old code and test
+    /// literals that build conditions directly keep compiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_behaviors: Option<BTreeMap<String, ConditionBehavior>>,
 }
 
 /// Surprise handling. 2024: initiative with disadvantage. 2014: normal
@@ -522,6 +530,131 @@ impl Rules {
                 slot @ None => *slot = Some(other),
             }
         }
+        if let Some(other) = other.exhaustion {
+            match &mut self.exhaustion {
+                Some(existing) => existing.merge_from(other),
+                slot @ None => *slot = Some(other),
+            }
+        }
+        if let Some(behaviors) = other.condition_behaviors {
+            self.condition_behaviors
+                .get_or_insert_with(BTreeMap::new)
+                .extend(behaviors);
+        }
+    }
+}
+
+/// Engine behaviour attached to a condition id through `rules`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConditionBehavior {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cannot_target_source: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cannot_move_closer_to_source: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ends_when_source_dies: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
+}
+
+impl ConditionBehavior {
+    pub fn is_empty(&self) -> bool {
+        !self.cannot_target_source
+            && !self.cannot_move_closer_to_source
+            && !self.ends_when_source_dies
+            && !self.hidden
+    }
+}
+
+/// Exhaustion parameters. The common layer holds the shape; the edition file
+/// supplies either the 2014 thresholds or the 2024 per-level penalties.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExhaustionRules {
+    /// Condition id used for the level marker. Defaults to `exhaustion`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_level: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub death_level: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_rest_reduction: Option<u32>,
+    /// 2014: ability-check disadvantage starts at this level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_disadvantage_from: Option<u32>,
+    /// 2014: Speed is halved from this level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_halved_from: Option<u32>,
+    /// 2014: attack and save disadvantage starts at this level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack_save_disadvantage_from: Option<u32>,
+    /// 2014: HP maximum is halved from this level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hp_max_halved_from: Option<u32>,
+    /// 2014: Speed becomes 0 from this level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_zero_from: Option<u32>,
+    /// 2024: flat penalty per level on d20 Tests (stored as a positive count).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d20_penalty_per_level: Option<i32>,
+    /// 2024: Speed penalty per level in feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_penalty_per_level: Option<i32>,
+}
+
+impl ExhaustionRules {
+    fn merge_from(&mut self, other: ExhaustionRules) {
+        if other.condition.is_some() {
+            self.condition = other.condition;
+        }
+        if other.max_level.is_some() {
+            self.max_level = other.max_level;
+        }
+        if other.death_level.is_some() {
+            self.death_level = other.death_level;
+        }
+        if other.long_rest_reduction.is_some() {
+            self.long_rest_reduction = other.long_rest_reduction;
+        }
+        if other.check_disadvantage_from.is_some() {
+            self.check_disadvantage_from = other.check_disadvantage_from;
+        }
+        if other.speed_halved_from.is_some() {
+            self.speed_halved_from = other.speed_halved_from;
+        }
+        if other.attack_save_disadvantage_from.is_some() {
+            self.attack_save_disadvantage_from = other.attack_save_disadvantage_from;
+        }
+        if other.hp_max_halved_from.is_some() {
+            self.hp_max_halved_from = other.hp_max_halved_from;
+        }
+        if other.speed_zero_from.is_some() {
+            self.speed_zero_from = other.speed_zero_from;
+        }
+        if other.d20_penalty_per_level.is_some() {
+            self.d20_penalty_per_level = other.d20_penalty_per_level;
+        }
+        if other.speed_penalty_per_level.is_some() {
+            self.speed_penalty_per_level = other.speed_penalty_per_level;
+        }
+    }
+
+    pub fn condition_id(&self) -> &str {
+        self.condition.as_deref().unwrap_or("exhaustion")
+    }
+
+    pub fn max_level(&self) -> u32 {
+        self.max_level.unwrap_or(6)
+    }
+
+    pub fn death_level(&self) -> u32 {
+        self.death_level.unwrap_or(6)
+    }
+
+    pub fn long_rest_reduction(&self) -> u32 {
+        self.long_rest_reduction.unwrap_or(1)
     }
 }
 
@@ -1737,6 +1870,14 @@ pub enum Predicate {
     AttackKind(AttackKind),
     SelfHpBelowPct(i32),
     TargetHpBelowPct(i32),
+    /// HP at or below half of the effective maximum.
+    Bloodied(Flag),
+    TargetBloodied(Flag),
+    /// The recorded source of this condition instance is alive, visible and
+    /// has line of sight to the holder. No source means "not restricted".
+    SourceInLineOfSight(Flag),
+    /// The holder's exhaustion level is at least this value.
+    ExhaustionLevelMin(u32),
     IsSpell(Flag),
     SlotLevelMin(i32),
     DamageDealt(Flag),
@@ -1761,6 +1902,10 @@ const PREDICATE_KEYS: &[&str] = &[
     "attack_kind",
     "self_hp_below_pct",
     "target_hp_below_pct",
+    "bloodied",
+    "target_bloodied",
+    "source_in_line_of_sight",
+    "exhaustion_level_min",
     "is_spell",
     "slot_level_min",
     "damage_dealt",
@@ -1811,6 +1956,10 @@ impl<'de> Deserialize<'de> for Predicate {
                     "attack_kind" => Predicate::AttackKind(map.next_value()?),
                     "self_hp_below_pct" => Predicate::SelfHpBelowPct(map.next_value()?),
                     "target_hp_below_pct" => Predicate::TargetHpBelowPct(map.next_value()?),
+                    "bloodied" => Predicate::Bloodied(map.next_value()?),
+                    "target_bloodied" => Predicate::TargetBloodied(map.next_value()?),
+                    "source_in_line_of_sight" => Predicate::SourceInLineOfSight(map.next_value()?),
+                    "exhaustion_level_min" => Predicate::ExhaustionLevelMin(map.next_value()?),
                     "is_spell" => Predicate::IsSpell(map.next_value()?),
                     "slot_level_min" => Predicate::SlotLevelMin(map.next_value()?),
                     "damage_dealt" => Predicate::DamageDealt(map.next_value()?),
