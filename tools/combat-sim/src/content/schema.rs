@@ -2273,6 +2273,9 @@ pub struct Scene {
     pub mode: SceneMode,
     #[serde(default)]
     pub light: Option<Light>,
+    /// Scene-wide obscurement. Grid scenes use this value for every cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obscured: Option<Obscurement>,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
@@ -2326,6 +2329,16 @@ pub enum Light {
     Dark,
 }
 
+/// How much the area itself blocks sight, independent of light.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Obscurement {
+    #[default]
+    None,
+    Light,
+    Heavy,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Cover {
@@ -2348,6 +2361,10 @@ pub struct Zone {
     pub elevation: Option<i32>,
     #[serde(default)]
     pub light: Option<Light>,
+    /// Zone-level obscurement. Zone scenes use this before the scene value;
+    /// grid scenes ignore it in favour of [`Scene::obscured`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obscured: Option<Obscurement>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
