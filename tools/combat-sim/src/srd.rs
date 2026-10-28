@@ -562,6 +562,145 @@ fn line_width(text: &str) -> Option<i32> {
     None
 }
 
+/// Upstream school index -> the eight standard schools; anything else keeps
+/// the metadata school unset instead of guessing.
+fn spell_school(s: &Value) -> Option<&str> {
+    const SCHOOLS: [&str; 8] = [
+        "abjuration",
+        "conjuration",
+        "divination",
+        "enchantment",
+        "evocation",
+        "illusion",
+        "necromancy",
+        "transmutation",
+    ];
+    let school = s.pointer("/school/index").and_then(Value::as_str)?;
+    SCHOOLS.contains(&school).then_some(school)
+}
+
+/// Upstream casting time ("1 action", "10 minutes") -> `{unit, amount}`.
+/// Action economy (`activation`) keeps its own legacy mapping.
+fn spell_casting_time(ct: &str) -> Value {
+    let unit = if ct.contains("bonus") {
+        "bonus_action"
+    } else if ct.contains("reaction") {
+        "reaction"
+    } else if ct.contains("minute") {
+        "minute"
+    } else if ct.contains("hour") {
+        "hour"
+    } else if ct.contains("special") {
+        "special"
+    } else {
+        "action"
+    };
+    let amount = ct
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse::<u64>().ok())
+        .filter(|_| unit != "special");
+    match amount {
+        Some(amount) => json!({"amount": amount, "unit": unit}),
+        None => json!({"unit": unit}),
+    }
+}
+
+/// Upstream `{"3": "8d6", ...}` dice table -> sorted `(level, expression)`
+/// pairs. Non-numeric keys and non-string values are skipped.
+fn dice_table(map: Option<&Value>) -> Vec<(u8, String)> {
+    let mut out: Vec<(u8, String)> = map
+        .and_then(Value::as_object)
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(level, dice)| {
+                    let level = level.parse::<u8>().ok()?;
+                    let dice = dice.as_str()?;
+                    // Same normalisation as the effect dice: no spaces, and
+                    // the ability-score placeholder in engine form.
+                    Some((level, dice.replace(' ', "").replace("MOD", "{spell_mod}")))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by_key(|(level, _)| *level);
+    out.dedup_by_key(|(level, _)| *level);
+    out
+}
+
+/// Sorted `(level, dice)` pairs -> a JSON object keyed by level.
+fn dice_table_json(table: &[(u8, String)]) -> Value {
+    let mut out = Map::new();
+    for (level, dice) in table {
+        out.insert(level.to_string(), json!(dice));
+    }
+    Value::Object(out)
+}
+
+/// Builds the structured `spell` metadata block for an imported spell. Every
+/// field is best-effort: anything the upstream JSON does not carry stays
+/// unset, and nothing here panics. `upcast` carries the slot-level dice table
+/// (only when the spell has higher-level text); `cantrip_scaling` carries the
+/// character-level table for cantrips.
+fn spell_meta(s: &Value, level: i64, ct: &str) -> Value {
+    let components = s.get("components").and_then(Value::as_array);
+    let has = |letter: &str| {
+        components
+            .map(|list| list.iter().filter_map(Value::as_str).any(|c| c == letter))
+            .unwrap_or(false)
+    };
+    let mut meta = json!({
+        "level": level,
+        "casting_time": spell_casting_time(ct),
+        "components": {
+            "verbal": has("V"),
+            "somatic": has("S"),
+        },
+        "ritual": s.get("ritual").and_then(Value::as_bool) == Some(true),
+    });
+    if let Some(school) = spell_school(s) {
+        meta["school"] = json!(school);
+    }
+    if let Some(material) = s.get("material").and_then(Value::as_str) {
+        if !material.is_empty() {
+            meta["components"]["material"] = json!({"text": material});
+        }
+    }
+    if let Some(range) = s.get("range").and_then(Value::as_str) {
+        meta["range_text"] = json!(range);
+    }
+    if let Some(duration) = s.get("duration").and_then(Value::as_str) {
+        if !duration.is_empty() {
+            meta["duration_text"] = json!(duration);
+        }
+    }
+    let higher = text_blocks(s.get("higher_level"));
+    if !higher.is_empty() {
+        let table = dice_table(
+            s.pointer("/damage/damage_at_slot_level")
+                .or_else(|| s.get("heal_at_slot_level")),
+        );
+        let mut upcast = json!({"text": higher.join(" ")});
+        if !table.is_empty() {
+            upcast["dice_by_level"] = dice_table_json(&table);
+        }
+        meta["upcast"] = upcast;
+    }
+    if level == 0 {
+        let table = dice_table(
+            s.pointer("/damage/damage_at_character_level")
+                .or_else(|| s.get("heal_at_character_level")),
+        );
+        if !table.is_empty() {
+            let mut scaling = json!({});
+            scaling["dice_by_character_level"] = dice_table_json(&table);
+            meta["cantrip_scaling"] = scaling;
+        }
+    }
+    meta
+}
+
 /// Maps upstream `area_of_effect` to the frozen #170 `AreaSpec`. `radius` is
 /// the generic size (sphere radius, cone length, cube side, cylinder radius,
 /// line length); `width_ft` only carries the line width. Wall-shaped upstream
@@ -731,6 +870,7 @@ pub fn spell(s: &Value, label: &str) -> Option<Value> {
             s.get("range").and_then(Value::as_str).unwrap_or("")
         )),
     );
+    a.insert("spell".into(), spell_meta(s, level, &ct));
     a.insert("source".into(), json!(format!("{label} {name}")));
     if !todo.is_empty() {
         a.insert("todo".into(), json!(todo));

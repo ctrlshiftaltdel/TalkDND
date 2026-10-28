@@ -332,6 +332,55 @@ fn imports_both_editions_from_fixtures() {
 }
 
 #[test]
+fn imported_spells_still_emit_abilities_and_carry_spell_metadata() {
+    let src = TempDir::new("spell-src");
+    let out = TempDir::new("spell-out");
+    fixtures(src.path(), "2014");
+    let report = srd_pack::import("2014", src.path(), out.path()).expect("import");
+    // The spells pack is still an abilities pack of the same shape.
+    let spells = report
+        .packs
+        .iter()
+        .find(|pack| pack.id.contains("spells"))
+        .expect("spells pack");
+    assert_eq!(spells.id, "srd-5.1-spells");
+
+    let pack = read_pack(&out.path().join("srd-5.1-spells.pack.json"));
+    let abilities = pack.content.abilities.as_ref().expect("abilities");
+    assert_eq!(abilities.len(), 1);
+    let ability = &abilities[0];
+    // Old fields are untouched.
+    assert_eq!(ability.id, "test-spell");
+    assert_eq!(
+        ability.cost.as_ref().expect("cost").resource,
+        "spell-slot-1"
+    );
+    assert!(ability.manual.as_deref().unwrap().contains("A test spell."));
+    // The new spell block is filled from the upstream metadata.
+    let spell = ability.spell.as_ref().expect("spell metadata");
+    assert_eq!(spell.level, 1);
+    assert_eq!(
+        spell.school.map(|school| school.as_tag()),
+        Some("evocation")
+    );
+    assert!(spell.components.verbal && spell.components.somatic);
+    assert!(spell.components.material.is_none());
+    assert!(!spell.ritual);
+    assert_eq!(spell.range_text.as_deref(), Some("60 feet"));
+    assert_eq!(spell.duration_text.as_deref(), Some("Instantaneous"));
+    let upcast = spell.upcast.as_ref().expect("upcast");
+    assert_eq!(
+        upcast.dice_by_level.get(&1).map(String::as_str),
+        Some("1d8")
+    );
+
+    // The pack loads as a library and the metadata survives the round-trip.
+    let registry = load(out.path());
+    let loaded = registry.abilities.get("test-spell").expect("ability");
+    assert!(loaded.spell.is_some());
+}
+
+#[test]
 fn generation_is_deterministic() {
     let src = TempDir::new("det-src");
     fixtures(src.path(), "2014");
