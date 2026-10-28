@@ -3728,6 +3728,7 @@ pub fn grapple(
         .map_err(|error| anyhow!(error.to_string()))?;
     ensure_can_act(state, attacker)?;
     ensure_targetable(state, target)?;
+    ensure_not_charmed_target(state, attacker, target, true)?;
     if attacker == target {
         bail!("a creature cannot grapple itself");
     }
@@ -3840,6 +3841,7 @@ pub fn shove(
         .map_err(|error| anyhow!(error.to_string()))?;
     ensure_can_act(state, attacker)?;
     ensure_targetable(state, target)?;
+    ensure_not_charmed_target(state, attacker, target, true)?;
     if attacker == target {
         bail!("a creature cannot shove itself");
     }
@@ -6433,12 +6435,6 @@ fn apply_condition_internal(
         state.combatants[target].conditions.push(active);
         log.log(format_args!("{target_name} is now {condition_id}{detail}"));
     }
-    let exhaustion_id = exhaustion_condition_id(state).to_string();
-    if condition_id.eq_ignore_ascii_case(&exhaustion_id)
-        && state.combatants[target].exhaustion_level == 0
-    {
-        state.combatants[target].exhaustion_level = 1;
-    }
     let incapacitated = has_flag(state, target, ConditionFlag::Incapacitated);
     if incapacitated && state.concentration.contains_key(&target_name) {
         break_concentration(state, target, log);
@@ -6602,6 +6598,7 @@ fn set_exhaustion_level(
         )?;
     }
     let rules = state.content.rules.exhaustion.clone().unwrap_or_default();
+    let already_dead = state.combatants[index].is_dead();
     state.combatants[index].exhaustion_level = level;
     if level >= rules.death_level() {
         state.combatants[index].hp = 0;
@@ -6609,7 +6606,10 @@ fn set_exhaustion_level(
         if state.combatants[index].makes_death_saves() {
             state.combatants[index].death_saves.dead = true;
         }
-        log.log(format_args!("{name} dies from exhaustion (level {level})"));
+        if !already_dead {
+            log.log(format_args!("{name} dies from exhaustion (level {level})"));
+            on_death(state, index, log);
+        }
         return Ok(());
     }
     let max_hp = effective_max_hp(state, index);
@@ -6642,19 +6642,37 @@ pub fn add_condition(
     let target = state
         .find_index(who)
         .map_err(|error| anyhow!(error.to_string()))?;
+    let source_sensitive = condition_behavior(state, condition_id).is_some_and(|behavior| {
+        behavior.cannot_target_source
+            || behavior.cannot_move_closer_to_source
+            || behavior.ends_when_source_dies
+    });
+    if source_sensitive {
+        for (label, name) in [
+            ("source", options.source.as_deref()),
+            ("linked", options.linked.as_deref()),
+        ] {
+            if let Some(name) = name {
+                state.find_index(name).map_err(|_| {
+                    anyhow!(
+                        "unknown or ambiguous {label} `{name}` for `{condition_id}`; it must name exactly one existing combatant"
+                    )
+                })?;
+            }
+        }
+    }
     let exhaustion_id = exhaustion_condition_id(state).to_string();
     if condition_id.eq_ignore_ascii_case(&exhaustion_id) {
-        if options.level == Some(0) {
-            bail!("exhaustion level must be between 1 and the ruleset maximum");
+        if let Some(level) = options.level {
+            if level == 0 {
+                bail!("exhaustion level must be between 1 and the ruleset maximum");
+            }
+            set_exhaustion_level(state, target, level, "set by command", log)?;
+            return Ok(());
         }
-        let level = match options.level {
-            Some(level) => level,
-            None => state.combatants[target].exhaustion_level.max(1),
-        };
-        set_exhaustion_level(state, target, level, "set by command", log)?;
-        return Ok(());
-    }
-    if options.level.is_some() {
+        // No --level keeps the legacy manual-marker behavior: add/refresh the
+        // condition without changing the exhaustion level.
+    } else if options.level.is_some() {
         bail!("`level` only applies to exhaustion, not `{condition_id}`");
     }
     if options.rounds.is_none()
@@ -7284,6 +7302,7 @@ fn on_death(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
                 condition
                     .source
                     .as_deref()
+                    .or(condition.linked.as_deref())
                     .is_some_and(|source| source.eq_ignore_ascii_case(&name))
                     && condition_behavior(state, &condition.condition)
                         .is_some_and(|behavior| behavior.ends_when_source_dies)

@@ -10,10 +10,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use combat_sim::content::{self, ContentRegistry, ContentSources};
 use combat_sim::dice::{DiceRng, RollMode};
 use combat_sim::engine::{
-    self, AddConditionOptions, AttackOptions, MoveTarget, RestKind, UseOptions,
+    self, AddConditionOptions, AttackOptions, GrappleOptions, MoveTarget, RestKind, ShoveOptions,
+    UseOptions,
 };
 use combat_sim::space::SpatialPose;
-use combat_sim::state::{EncounterState, NewEncounter, STATE_SCHEMA_VERSION};
+use combat_sim::state::{
+    ActiveCondition, ConcentrationState, EncounterState, NewEncounter, STATE_SCHEMA_VERSION,
+};
 use serde_json::Value;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -98,6 +101,21 @@ fn rules_block(edition: &str) -> &'static str {
     attack_save_disadvantage_from: 3
     hp_max_halved_from: 4
     speed_zero_from: 5
+  combat_actions:
+    unarmed_strike: {ability: str, proficient: true, damage: "1+{str}", type: bludgeoning, reach: 5}
+    grapple:
+      resolution: contest
+      attacker_skill: athletics
+      defender_skills: [athletics, acrobatics]
+      max_size_difference: 1
+      condition: grappled
+    shove:
+      resolution: contest
+      attacker_skill: athletics
+      defender_skills: [athletics, acrobatics]
+      max_size_difference: 1
+      distance: 5
+      prone_condition: prone
 "#
         }
         "2024" => {
@@ -108,6 +126,21 @@ fn rules_block(edition: &str) -> &'static str {
     long_rest_reduction: 1
     d20_penalty_per_level: 2
     speed_penalty_per_level: 5
+  combat_actions:
+    unarmed_strike: {ability: str, proficient: true, damage: "1d3+{str}", type: bludgeoning, reach: 5}
+    grapple:
+      resolution: save
+      save_abilities: [str, dex]
+      dc: "8+{str}+{prof}"
+      max_size_difference: 1
+      condition: grappled
+    shove:
+      resolution: save
+      save_abilities: [str, dex]
+      dc: "8+{str}+{prof}"
+      max_size_difference: 1
+      distance: 5
+      prone_condition: prone
 "#
         }
         other => panic!("unknown edition {other}"),
@@ -129,6 +162,10 @@ fn conditions_block(edition: &str) -> &'static str {
       - {applies: save, effect: disadvantage, when: {exhaustion_level_min: 3}}
   - id: hidden
   - id: invisible
+  - id: grappled
+    flags: [speed_zero]
+  - id: prone
+    flags: [stand_up_half_speed]
   - id: incapacitated
     flags: [incapacitated]
   - id: unconscious
@@ -146,6 +183,10 @@ fn conditions_block(edition: &str) -> &'static str {
     manual: "data-driven d20 and Speed penalty"
   - id: hidden
   - id: invisible
+  - id: grappled
+    flags: [speed_zero]
+  - id: prone
+    flags: [stand_up_half_speed]
   - id: incapacitated
     flags: [incapacitated]
   - id: unconscious
@@ -357,6 +398,35 @@ fn has_condition(state: &EncounterState, name: &str, condition: &str) -> bool {
         .any(|active| active.condition.eq_ignore_ascii_case(condition))
 }
 
+fn active_condition(
+    condition: &str,
+    source: Option<&str>,
+    linked: Option<&str>,
+    concentration: bool,
+) -> ActiveCondition {
+    ActiveCondition {
+        condition: condition.to_string(),
+        source: source.map(str::to_string),
+        linked: linked.map(str::to_string),
+        duration: None,
+        save_ends: None,
+        ends_on: Vec::new(),
+        created_by: None,
+        concentration,
+        applied_round: 0,
+        notes: None,
+    }
+}
+
+fn attack_action_started(state: &EncounterState, name: &str) -> bool {
+    let combatant = &state.combatants[index(state, name)];
+    combatant.action_used
+        || combatant
+            .once_used
+            .keys()
+            .any(|key| key.starts_with("turn:attack-action:"))
+}
+
 fn add(
     state: &mut EncounterState,
     who: &str,
@@ -402,6 +472,9 @@ fn activate(state: &mut EncounterState, who: &str, ability: &str) -> Vec<String>
 fn dash_speed(state: &mut EncounterState, who: &str) -> i32 {
     let index = index(state, who);
     state.combatants[index].speed_left = 0;
+    state.combatants[index].action_used = false;
+    state.combatants[index].bonus_action_used = false;
+    state.combatants[index].once_used.clear();
     activate(state, who, "dash");
     state.combatants[index].speed_left
 }
@@ -795,6 +868,77 @@ fn long_rest_reduces_exhaustion_and_restores_the_effective_maximum() {
     assert!(!has_condition(&state, "Hero", "exhaustion"));
 }
 
+#[test]
+fn condition_add_exhaustion_without_level_keeps_the_legacy_manual_marker() {
+    for edition in ["2014", "2024"] {
+        let mut state = make_state(edition, "zones-fight", &["hero", "ally"]);
+        let log = add(&mut state, "Hero", "exhaustion", None, None).unwrap();
+        assert!(has_condition(&state, "Hero", "exhaustion"));
+        assert_eq!(state.combatants[index(&state, "Hero")].exhaustion_level, 0);
+        assert_eq!(dash_speed(&mut state, "Hero"), 30);
+        assert!(!log.iter().any(|line| line.contains("level 1")), "{log:?}");
+
+        let log = exhaustion(&mut state, "Hero", 3);
+        assert_eq!(state.combatants[index(&state, "Hero")].exhaustion_level, 3);
+        assert!(log.iter().any(|line| line.contains("level 3")), "{log:?}");
+        assert_eq!(dash_speed(&mut state, "Hero"), 15);
+    }
+}
+
+#[test]
+fn exhaustion_death_runs_the_normal_death_cleanup_once() {
+    for edition in ["2014", "2024"] {
+        let mut state = make_state(edition, "zones-fight", &["hero", "ally"]);
+        add(&mut state, "Ally", "charmed", None, Some("Source")).unwrap();
+        add(&mut state, "Ally", "frightened", None, Some("Source")).unwrap();
+        let hero = index(&state, "Hero");
+        state.combatants[hero].conditions.push(active_condition(
+            "blessed",
+            Some("Source"),
+            None,
+            true,
+        ));
+        state.concentration.insert(
+            "Source".to_string(),
+            ConcentrationState {
+                ability: Some("test-spell".to_string()),
+                round: 1,
+            },
+        );
+
+        let mut log = exhaustion(&mut state, "Source", 6);
+        assert!(state.combatants[index(&state, "Source")].is_dead());
+        assert!(!has_condition(&state, "Ally", "charmed"), "{edition}");
+        assert!(!has_condition(&state, "Ally", "frightened"), "{edition}");
+        assert!(
+            !state.combatants[index(&state, "Hero")]
+                .conditions
+                .iter()
+                .any(|condition| condition.condition == "blessed"),
+            "{edition}"
+        );
+        assert!(!state.concentration.contains_key("Source"), "{edition}");
+        assert_eq!(
+            log.iter()
+                .filter(|line| line.contains("dies from exhaustion"))
+                .count(),
+            1,
+            "{edition}: {log:?}"
+        );
+
+        // Repeated level 6 must not run the death cleanup or the death log again.
+        let mut second = exhaustion(&mut state, "Source", 6);
+        log.append(&mut second);
+        assert_eq!(
+            log.iter()
+                .filter(|line| line.contains("dies from exhaustion"))
+                .count(),
+            1,
+            "{edition}: {log:?}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AC-3: Charmed
 // ---------------------------------------------------------------------------
@@ -876,6 +1020,157 @@ fn charmed_records_its_source_and_blocks_attacks_and_damaging_abilities() {
             &mut Vec::new(),
         )
         .unwrap();
+    }
+}
+
+#[test]
+fn charmed_blocks_grapple_and_shove_against_the_source() {
+    for edition in ["2014", "2024"] {
+        let mut state = make_state(edition, "zones-fight", &["hero", "ally"]);
+        add(&mut state, "Hero", "charmed", None, Some("Source")).unwrap();
+
+        for kind in ["grapple", "shove"] {
+            let mut log = Vec::new();
+            let error = if kind == "grapple" {
+                engine::grapple(
+                    &mut state,
+                    "Hero",
+                    "Source",
+                    &GrappleOptions::default(),
+                    &mut ScriptedRng::new(&[]),
+                    &mut log,
+                )
+            } else {
+                engine::shove(
+                    &mut state,
+                    "Hero",
+                    "Source",
+                    &ShoveOptions::default(),
+                    &mut ScriptedRng::new(&[]),
+                    &mut log,
+                )
+            }
+            .expect_err("charmed grapple/shove");
+            assert!(
+                error.to_string().contains("charmed"),
+                "{edition} {kind}: {error}"
+            );
+            assert!(
+                !attack_action_started(&state, "Hero"),
+                "{edition} {kind}: refusal must not spend an attack slot"
+            );
+        }
+
+        // A different target is still allowed.
+        let mut rng = if edition == "2014" {
+            ScriptedRng::new(&[15, 5])
+        } else {
+            ScriptedRng::new(&[2])
+        };
+        engine::grapple(
+            &mut state,
+            "Hero",
+            "Bystander",
+            &GrappleOptions::default(),
+            &mut rng,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(attack_action_started(&state, "Hero"));
+
+        let mut state = make_state(edition, "zones-fight", &["hero", "ally"]);
+        add(&mut state, "Hero", "charmed", None, Some("Source")).unwrap();
+        let mut rng = if edition == "2014" {
+            ScriptedRng::new(&[15, 5])
+        } else {
+            ScriptedRng::new(&[2])
+        };
+        engine::shove(
+            &mut state,
+            "Hero",
+            "Bystander",
+            &ShoveOptions::default(),
+            &mut rng,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(attack_action_started(&state, "Hero"));
+    }
+}
+
+#[test]
+fn source_death_cleanup_uses_the_linked_fallback() {
+    for edition in ["2014", "2024"] {
+        let mut state = make_state(edition, "zones-fight", &["hero", "ally"]);
+        let hero = index(&state, "Hero");
+        state.combatants[hero].conditions.push(active_condition(
+            "charmed",
+            None,
+            Some("Source"),
+            false,
+        ));
+        state.combatants[hero].conditions.push(active_condition(
+            "frightened",
+            None,
+            Some("Source"),
+            false,
+        ));
+
+        let mut log = Vec::new();
+        engine::damage(
+            &mut state,
+            "Source",
+            "999",
+            Some("slashing"),
+            false,
+            &mut ScriptedRng::new(&[]),
+            &mut log,
+        )
+        .unwrap();
+        assert!(!has_condition(&state, "Hero", "charmed"), "{edition}");
+        assert!(!has_condition(&state, "Hero", "frightened"), "{edition}");
+        assert!(
+            log.iter()
+                .filter(|line| line.contains("source died"))
+                .count()
+                >= 2,
+            "{edition}: {log:?}"
+        );
+    }
+}
+
+#[test]
+fn behavior_conditions_reject_unknown_source_or_linked() {
+    for edition in ["2014", "2024"] {
+        for condition in ["charmed", "frightened"] {
+            let mut state = make_state(edition, "zones-fight", &["hero", "ally"]);
+            let error = add(&mut state, "Hero", condition, None, Some("Nobody"))
+                .expect_err("unknown source");
+            assert!(
+                error.to_string().contains("unknown"),
+                "{edition} {condition}: {error}"
+            );
+            assert!(!has_condition(&state, "Hero", condition));
+            assert!(!attack_action_started(&state, "Hero"));
+
+            let error = engine::add_condition(
+                &mut state,
+                "Hero",
+                condition,
+                &AddConditionOptions {
+                    linked: Some("Nobody".to_string()),
+                    ..AddConditionOptions::default()
+                },
+                &mut ScriptedRng::new(&[]),
+                &mut Vec::new(),
+            )
+            .expect_err("unknown linked");
+            assert!(
+                error.to_string().contains("unknown"),
+                "{edition} {condition} linked: {error}"
+            );
+            assert!(!has_condition(&state, "Hero", condition));
+        }
     }
 }
 
@@ -1188,6 +1483,18 @@ fn condition_cli_adds_levels_and_sources_and_keeps_the_old_form_working() {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     state.save(&path).unwrap();
+
+    // The old form without --level keeps the manual-marker contract.
+    let output = run_cli(&path, &["condition", "add", "Hero", "exhaustion"]);
+    assert_success(&output, "legacy condition add exhaustion");
+    let status = status_json(&path);
+    let exhaustion = combatant(&status, "Hero")["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|condition| condition["id"] == "exhaustion")
+        .expect("exhaustion marker");
+    assert_eq!(exhaustion["level"], 0);
 
     let output = run_cli(
         &path,

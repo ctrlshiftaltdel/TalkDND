@@ -24,7 +24,8 @@ rules:
 ```
 
 - `cannot_target_source` — while the holder is affected, it cannot attack the
-  recorded source or target it with a damaging ability.
+  recorded source (including Grapple and Shove, which are attacks) or target it
+  with a damaging ability.
 - `cannot_move_closer_to_source` — willing movement that would reduce the
   distance to the recorded, visible source is refused.
 - `ends_when_source_dies` — the condition is removed from every holder when its
@@ -41,8 +42,11 @@ Exhaustion has two parts:
 1. An additive `CombatantState.exhaustion_level` (`u32`, serde default `0`) is
    the source of truth. Old combat states omit it and load with level 0.
 2. The normal `exhaustion` condition marker keeps the existing condition
-   display, immunity and modifier paths working. It is created and removed with
-   the level.
+   display, immunity and modifier paths working. `condition add exhaustion
+   --level N` creates the marker and sets the level. `condition add exhaustion`
+   without `--level` keeps the legacy manual-marker contract: it adds or
+   refreshes the marker at level 0 and applies no mechanical exhaustion until a
+   level is set explicitly.
 
 `rules.exhaustion` holds the edition parameters:
 
@@ -74,6 +78,12 @@ with `when: {exhaustion_level_min: N}`. For 2024 the engine adds a flat
 `-2 × level` bonus term (labelled `exhaustion`) to every d20 Test that goes
 through the attack, save, check or ability-check paths, and subtracts
 `5 × level` feet from Speed. Level 6 kills the creature.
+
+Level 6 uses the normal death path: it sets HP 0 and dead, then calls the same
+`on_death` cleanup as damage death. That clears conditions whose recorded
+source died, breaks the dead creature's concentration and removes the
+concentration conditions it imposed. Repeatedly setting level 6 on an already
+dead creature does not repeat the death log or cleanup.
 
 A long rest lowers the level by `long_rest_reduction`; healing and rest use the
 effective HP maximum, so a 2014 level-4 maximum is respected until the level
@@ -108,12 +118,14 @@ The old forms are unchanged:
 ```sh
 combat-sim --state fight.state.json condition add Hero hidden
 combat-sim --state fight.state.json condition remove Hero hidden
+combat-sim --state fight.state.json condition add Hero exhaustion   # legacy marker, level 0
 ```
 
 New optional arguments:
 
 ```sh
-# Exhaustion level 1-6 (or the ruleset max).
+# Exhaustion level 1-6 (or the ruleset max). Without --level the marker has no
+# mechanical effect, preserving the old manual-marker behavior.
 combat-sim --state fight.state.json condition add Hero exhaustion --level 3
 combat-sim --state fight.state.json condition remove Hero exhaustion
 
@@ -127,13 +139,20 @@ maximum, and non-exhaustion conditions. `condition remove exhaustion` clears
 the level and marker. `status --json` exposes `effective_max_hp`, `bloodied`,
 and a `level` field on the exhaustion condition entry.
 
+For conditions with `cannot_target_source`, `cannot_move_closer_to_source` or
+`ends_when_source_dies`, `--source` and `--linked` must name exactly one
+existing combatant; an unknown or ambiguous name fails before the condition is
+applied. Conditions without those behaviours keep their previous source
+handling.
+
 Logs name the condition, its source (when present), the level and the
 effect/removal reason. No save text or DM-only material is added to a log.
 
 ## Enforcement points
 
-- **Attacks**: `attack`, `--unarmed`, `--offhand` and ability attack effects
-  check the charmed source before spending the action.
+- **Attacks**: `attack`, `--unarmed`, `--offhand`, Grapple, Shove and ability
+  attack effects check the charmed source before spending the action or an
+  Attack action slot.
 - **Damaging abilities**: `use` / `cast` checks explicit creature targets; an
   ability is damaging when any reachable effect contains damage.
 - **Movement**: both the legacy zone/grid router and the spatial planner
@@ -145,7 +164,10 @@ effect/removal reason. No save text or DM-only material is added to a log.
 - **Hidden sources**: the `hidden` flag on a condition behaviour makes a source
   invisible to this check; `hidden` and `invisible` use it in both editions.
 - **Source death**: `on_death` removes all conditions with
-  `ends_when_source_dies` from every holder and logs the reason.
+  `ends_when_source_dies` from every holder and logs the reason. It checks
+  `source` first and falls back to `linked` for old data. Exhaustion level 6
+  calls this same path, so it also breaks the dead creature's concentration and
+  removes the conditions it imposed.
 
 ## Compatibility
 
@@ -154,7 +176,9 @@ effect/removal reason. No save text or DM-only material is added to a log.
   with no exhaustion.
 - No `save-meta` schema or `talkdnd` migration is added.
 - Old `condition add/remove` commands without the new flags keep their previous
-  behavior.
+  behavior. In particular, `condition add exhaustion` without `--level` still
+  adds only the manual marker; mechanical exhaustion starts when `--level` is
+  supplied.
 - Content packs without `rules.exhaustion` or `rules.condition_behaviors` load
   unchanged; the engine's exhaustion condition defaults to `exhaustion` and
   level effects remain absent unless the data provides them.
