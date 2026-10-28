@@ -8966,6 +8966,12 @@ pub fn move_to_at(
         ));
         fire_enter_triggers(state, index, &step.position, rng, log)?;
         run_enter_reach_triggers(state, index, &from_position, rng, log);
+        if state.combatants[index].position() != step.position {
+            log.log(format_args!(
+                "{name}'s movement stops after a readied response moved them"
+            ));
+            break;
+        }
         current = step.position;
     }
     if state.combatants[index].speed_left < 0 {
@@ -9245,8 +9251,15 @@ fn spatial_move_to_at(
             previous_zone = zone;
         }
         run_enter_reach_triggers(state, index, &current_position, rng, log);
+        let expected = Position::cell(x, y);
+        if state.combatants[index].position() != expected {
+            log.log(format_args!(
+                "{name}'s movement stops after a readied response moved them"
+            ));
+            break;
+        }
         current_pose = step.to;
-        current_position = Position::cell(x, y);
+        current_position = expected;
     }
     if state.combatants[index].speed_left < 0 {
         log.log(format_args!(
