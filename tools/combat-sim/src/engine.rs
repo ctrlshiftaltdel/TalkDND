@@ -7444,7 +7444,7 @@ fn end_ready_concentration(
         .concentration
         .get(&name)
         .and_then(|concentration| concentration.ability.as_deref())
-        .is_some_and(|active| active.eq_ignore_ascii_case(&ability));
+        .is_some_and(|active| active.eq_ignore_ascii_case(&resolved.ability.id));
     if !active {
         return;
     }
@@ -7753,7 +7753,7 @@ fn execute_ready_response(
                 ensure_not_charmed_target(state, holder, *target, damaging)?;
             }
             if resolved.ability.concentration
-                && !ready_ability_concentration_active(state, holder, ability)
+                && !ready_ability_concentration_active(state, holder, &resolved.ability.id)
             {
                 bail!("the readied spell's concentration is no longer active");
             }

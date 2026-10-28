@@ -692,7 +692,7 @@ fn ready_concentration_begins_at_setup_and_does_not_rebegin_on_trigger() {
             "Hero",
             ReadyTrigger::Manual,
             ReadyResponse::Ability {
-                ability: "blessing-aura".to_string(),
+                ability: "Blessing Aura".to_string(),
                 target: None,
             },
         )
@@ -797,7 +797,7 @@ fn concentration_ready_ends_only_its_own_concentration_on_clear() {
         "Hero",
         ReadyTrigger::Manual,
         ReadyResponse::Ability {
-            ability: "blessing-aura".to_string(),
+            ability: "Blessing Aura".to_string(),
             target: None,
         },
     )
