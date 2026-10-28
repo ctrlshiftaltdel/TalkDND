@@ -872,8 +872,12 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             report.books = repoint_names(save, &crate::library::plan_repoint(root, save));
         }
         if from < 10 {
+            let no_baseline = combat_sim::integrity::load(save)?.is_none();
             let dirty = integrity_dirty(save)?;
-            let plan = plan_spells_10(save, root, &dirty)?;
+            let mut plan = plan_spells_10(save, root, &dirty)?;
+            if no_baseline && !plan.dirty.is_empty() {
+                plan.warnings.push(no_baseline_warning());
+            }
             report.spell_sheets = plan.sheets.iter().map(|(id, _)| id.clone()).collect();
             report.spell_kept = plan.kept;
             report.spell_dirty = plan.dirty;
@@ -896,16 +900,20 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     // because version 0 is accepted. Sheets stay untouched too (schema 10:
     // see `migrate_spells_10`) — a serde round-trip would drop their hand
     // edits just the same.
-    let dirty = {
-        let manifest = combat_sim::integrity::load(save)?;
-        match manifest {
-            Some(manifest) => combat_sim::integrity::changes_against(&manifest, &before)
-                .into_iter()
-                .map(|change| change.path().to_string())
-                .collect(),
-            None => BTreeSet::new(),
-        }
+    let manifest = combat_sim::integrity::load(save)?;
+    let mut dirty: BTreeSet<String> = match &manifest {
+        Some(manifest) => combat_sim::integrity::changes_against(manifest, &before)
+            .into_iter()
+            .map(|change| change.path().to_string())
+            .collect(),
+        None => BTreeSet::new(),
     };
+    if manifest.is_none() {
+        // Fail closed for the sheet rewrite (schema 10): without a
+        // baseline every sheet counts as hand-edited and keeps its bytes
+        // (a serde round-trip would drop unknown fields and comments).
+        dirty.extend(sheet_yaml_paths(save));
+    }
     let slot = save
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -934,7 +942,10 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     }
 
     if from < 10 {
-        let plan = plan_spells_10(save, root, &dirty)?;
+        let mut plan = plan_spells_10(save, root, &dirty)?;
+        if manifest.is_none() && !plan.dirty.is_empty() {
+            plan.warnings.push(no_baseline_warning());
+        }
         apply_spells_10(save, &plan)?;
         report.spell_sheets = plan.sheets.iter().map(|(id, _)| id.clone()).collect();
         report.spell_kept = plan.kept;
@@ -1556,8 +1567,29 @@ fn add_versions(save: &Path, dirty: &BTreeSet<String>) -> Result<()> {
 
 // ---------- 9→10: structured spell lists ----------
 
+/// Relative `sheets/*.yaml` paths, sorted. Serves as the fail-safe dirty
+/// set when a save carries no integrity manifest at all.
+fn sheet_yaml_paths(save: &Path) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let Ok(rd) = fs::read_dir(save.join("sheets")) else {
+        return out;
+    };
+    for p in rd.filter_map(|e| e.ok().map(|e| e.path())) {
+        if p.extension().is_some_and(|x| x == "yaml") {
+            if let Some(stem) = p.file_stem() {
+                out.insert(format!("sheets/{}.yaml", stem.to_string_lossy()));
+            }
+        }
+    }
+    out
+}
+
 /// Files the integrity manifest flags as changed (or added/removed) against
 /// its baseline. Read-only; shared by the dry-run plan and the migration.
+/// Fail-safe: with no manifest there is no way to tell hand edits from tool
+/// writes, so every sheet counts as dirty and the schema-10 step reports it
+/// instead of serde-rewriting (a round-trip would drop unknown fields,
+/// comments and formatting).
 fn integrity_dirty(save: &Path) -> Result<BTreeSet<String>> {
     let before = combat_sim::integrity::snapshot(save);
     Ok(match combat_sim::integrity::load(save)? {
@@ -1565,8 +1597,15 @@ fn integrity_dirty(save: &Path) -> Result<BTreeSet<String>> {
             .into_iter()
             .map(|change| change.path().to_string())
             .collect(),
-        None => BTreeSet::new(),
+        None => sheet_yaml_paths(save),
     })
+}
+
+/// Warning for saves without an integrity baseline: the schema-10 spells
+/// step skipped every sheet.
+fn no_baseline_warning() -> String {
+    "没有 integrity 基线：所有 sheets/*.yaml 视为手改，spells 迁移已跳过（不重写）；".to_string()
+        + "先运行 `talkdnd check` 建立基线，再重跑迁移"
 }
 
 /// The planned schema-10 `spells` blocks for every structured sheet.

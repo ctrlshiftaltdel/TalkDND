@@ -117,6 +117,9 @@ fn migrates_a_v9_save_from_chargen_json_and_is_idempotent() {
         r#"{"ruleset":"2014","class":"cleric","level":1,"spells_done":true,
             "spells":["Bless","guidance","Cure Wounds","远程治疗术"]}"#,
     );
+    // Manifest baseline: the migration only rewrites sheets clean against
+    // it (AC-2 fail-safe).
+    combat_sim::integrity::ensure(&save).unwrap();
 
     // Dry-run: reports the plan, writes nothing.
     let dry = migrate::ensure(&save, &root, true).unwrap();
@@ -188,7 +191,9 @@ fn migrates_from_markdown_fallback_with_book_mode_for_wizard() {
         r#"{"ruleset":"2024","class":"cleric","level":1,"spells_done":true,
             "spells":["bless"]}"#,
     );
-
+    // Manifest baseline: the migration only rewrites sheets clean against
+    // it (AC-2 fail-safe).
+    combat_sim::integrity::ensure(&save).unwrap();
     migrate::ensure(&save, &root, false).unwrap();
     let lists = spells_of(&save, "mira");
     assert_eq!(lists.mode, "spellbook", "wizard keeps a book");
@@ -212,6 +217,9 @@ fn migration_adopts_2024_new_cantrips_as_cantrips() {
     let save = save_at(&root, "2030-03-03-01");
     let body = "## 法术\n\n- Elementalism\n- Sorcerous Burst\n- Burning Hands\n";
     write_sheet(&save, "zara", "sorcerer", "2024", body);
+    // Manifest baseline: the migration only rewrites sheets clean against
+    // it (AC-2 fail-safe).
+    combat_sim::integrity::ensure(&save).unwrap();
     migrate::ensure(&save, &root, false).unwrap();
     let lists = spells_of(&save, "zara");
     // 2024 spells the old static CANTRIPS list does not know must land in
@@ -284,12 +292,57 @@ fn migration_skips_dirty_sheets_in_both_shapes() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// AC-2/AC-6 (fail-safe): with no integrity manifest at all the migration
+/// cannot tell hand edits from tool writes, so every sheet is treated as
+/// dirty — reported, never serde-rewritten, bytes stay identical.
+#[test]
+fn migration_without_integrity_manifest_keeps_every_sheet_byte_identical() {
+    let root = root("mig-nobaseline");
+    let save = save_at(&root, "2030-07-07-01");
+    write_sheet(&save, "hero", "cleric", "2014", "## 法术\n\n- Bless\n");
+    write_chargen(
+        &save,
+        r#"{"ruleset":"2014","class":"cleric","level":1,"spells_done":true,
+            "spells":["bless"]}"#,
+    );
+    // A hand edit no manifest knows about: a comment a serde round-trip
+    // would drop. Deliberately NO combat_sim::integrity::ensure(&save).
+    let hero_path = charsheet::path(&save, "hero");
+    let hero_text = fs::read_to_string(&hero_path).unwrap();
+    fs::write(&hero_path, format!("{hero_text}\n# DM note\n")).unwrap();
+
+    // Dry-run already reports the sheet as dirty, with the warning.
+    let dry = migrate::ensure(&save, &root, true).unwrap();
+    assert_eq!(dry.spell_dirty, vec!["hero".to_string()], "{dry:?}");
+    assert!(dry.spell_sheets.is_empty(), "{dry:?}");
+    assert!(
+        dry.warnings.iter().any(|w| w.contains("integrity 基线")),
+        "{dry:?}"
+    );
+
+    // The real migration must not rewrite the sheet either.
+    let report = migrate::ensure(&save, &root, false).unwrap();
+    assert_eq!(report.spell_dirty, vec!["hero".to_string()], "{report:?}");
+    assert_eq!(report.spell_sheets, Vec::<String>::new(), "{report:?}");
+    assert_eq!(
+        fs::read_to_string(&hero_path).unwrap(),
+        format!("{hero_text}\n# DM note\n"),
+        "sheet must stay byte-identical without a baseline"
+    );
+    // The rest of the migration still ran; the save loads at schema 10.
+    assert_eq!(migrate::load(&save).unwrap().unwrap().schema, 10);
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn migration_covers_noncasters_and_reports_unknown_classes() {
     let root = root("mig-misc");
     let save = save_at(&root, "2030-05-05-01");
     write_sheet(&save, "brute", "barbarian", "2014", "## 法术\n\n- 无\n");
     write_sheet(&save, "odd", "sword-sage", "2014", "");
+    // Manifest baseline: the migration only rewrites sheets clean against
+    // it (AC-2 fail-safe).
+    combat_sim::integrity::ensure(&save).unwrap();
     let report = migrate::ensure(&save, &root, false).unwrap();
     assert_eq!(report.spell_sheets.len(), 2, "{report:?}");
     // Non-caster: an empty block, no fabricated lists.
@@ -386,6 +439,57 @@ fn chargen_validate_prefers_structured_lists() {
         r.errors
     );
     let _ = c;
+}
+
+/// AC-3 (design §3.3): spellbook mode counts `prepared` against the
+/// prepare limit — the `book` may hold far more than the limit allows.
+#[test]
+fn chargen_validate_spellbook_counts_prepared_not_book() {
+    let mut c = base_creation();
+    c.class = Some("wizard".into());
+    c.scores = BTreeMap::from([("int".into(), 14)]);
+    // int 14 (+2) + level 1 allows 3 prepared (2014 formula).
+    c.spell_lists = Some(SpellLists {
+        version: 1,
+        mode: "spellbook".into(),
+        ability: "int".into(),
+        cantrips: vec!["fire-bolt".into(), "mage-hand".into(), "light".into()],
+        book: vec![
+            "magic-missile".into(),
+            "shield".into(),
+            "mage-armor".into(),
+            "detect-magic".into(),
+            "feather-fall".into(),
+        ],
+        prepared: vec!["magic-missile".into(), "shield".into(), "mage-armor".into()],
+        ..Default::default()
+    });
+    let r = chargen::validate(&c);
+    assert!(
+        !r.errors.iter().any(|e| e.contains("too many")),
+        "a full book with a legal prepared list must not error: {:?}",
+        r.errors
+    );
+    assert!(
+        !r.warnings.iter().any(|w| w.contains("可准备法术")),
+        "prepared at the limit must not warn: {:?}",
+        r.warnings
+    );
+
+    // One prepared spell over the limit is an error.
+    c.spell_lists
+        .as_mut()
+        .unwrap()
+        .prepared
+        .push("detect-magic".into());
+    let r = chargen::validate(&c);
+    assert!(
+        r.errors
+            .iter()
+            .any(|e| e.contains("too many 可准备法术: 4 (allowed 3)")),
+        "{:?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -625,6 +729,9 @@ fn migration_backup_restores_a_schema_9_save_that_migrates_again() {
         r#"{"ruleset":"2014","class":"cleric","level":1,"spells_done":true,
             "spells":["bless"]}"#,
     );
+    // Manifest baseline: the migration only rewrites sheets clean against
+    // it (AC-2 fail-safe).
+    combat_sim::integrity::ensure(&save).unwrap();
     migrate::ensure(&save, &root, false).unwrap();
     assert_eq!(migrate::load(&save).unwrap().unwrap().schema, 10);
 

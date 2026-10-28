@@ -782,15 +782,15 @@ pub fn validate(c: &Creation) -> Report {
         let g = crate::classdata::generate(c, &crate::classdata::Book::srd(&rs), None);
         let (cantrips, leveled, kind) = match &c.spell_lists {
             Some(lists) => {
-                let kind = match lists.mode.as_str() {
-                    "known" => "已知法术",
-                    _ => "可准备法术",
+                // Design §3.3: known mode counts the known list; prepared
+                // and spellbook modes both count `prepared` against the
+                // prepare limit — `book` is the spellbook contents and
+                // usually larger than the limit.
+                let (counted, kind) = match lists.mode.as_str() {
+                    "known" => (lists.known.len(), "已知法术"),
+                    _ => (lists.prepared.len(), "可准备法术"),
                 };
-                (
-                    lists.cantrips.len() as i32,
-                    lists.mode_list().len() as i32,
-                    kind,
-                )
+                (lists.cantrips.len() as i32, counted as i32, kind)
             }
             None => {
                 let kind = match g.spells {

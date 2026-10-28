@@ -427,7 +427,7 @@ fn a_save_schema_newer_than_talkdnd_is_refused() {
     let r = root("schema99");
     ok(&r, &["new", "--date", "2030-06-08"]);
     let save = r.join("Saves/2030-06-08-01");
-    fs::write(save.join("save-meta.yaml"), "schema: 109\ntool: future\n").unwrap();
+    fs::write(save.join("save-meta.yaml"), "schema: 99\ntool: future\n").unwrap();
     let (good, out) = run(&r, &["start"]);
     assert!(
         !good && out.contains("99") && out.contains("update talkdnd"),
