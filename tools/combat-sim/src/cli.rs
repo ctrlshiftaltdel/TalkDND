@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 use crate::ai::Ai;
+use crate::content::schema::{Light, Obscurement};
 use crate::content::{self, ContentSources, ItemKind, ShownItem};
 use crate::dice::{self, DiceRng, RollMode};
 use crate::engine::{
@@ -2645,6 +2646,28 @@ struct CombatantStatus {
     speed_left: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     ready: Option<ReadyState>,
+    /// Raw `Creature.senses` text, preserved exactly as authored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    senses: Option<String>,
+    /// Parsed vision facts for this combatant.
+    vision: VisionStatus,
+}
+
+#[derive(Debug, Serialize)]
+struct VisionStatus {
+    light: Light,
+    effective_light: Light,
+    obscurement: Obscurement,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    darkvision_ft: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blindsight_ft: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tremorsense_ft: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    truesight_ft: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    passive_perception: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2673,6 +2696,7 @@ impl StatusOutput {
             .into_iter()
             .map(|index| {
                 let combatant: &CombatantState = &state.combatants[index];
+                let vision = engine::vision_profile(state, index);
                 CombatantStatus {
                     name: combatant.name.clone(),
                     side: combatant.side.as_str().to_string(),
@@ -2752,6 +2776,17 @@ impl StatusOutput {
                     knocked_out: combatant.knocked_out,
                     speed_left: combatant.speed_left,
                     ready: combatant.ready.clone(),
+                    senses: combatant.creature.senses.clone(),
+                    vision: VisionStatus {
+                        light: vision.light,
+                        effective_light: vision.effective_light,
+                        obscurement: vision.obscurement,
+                        darkvision_ft: vision.senses.darkvision,
+                        blindsight_ft: vision.senses.blindsight,
+                        tremorsense_ft: vision.senses.tremorsense,
+                        truesight_ft: vision.senses.truesight,
+                        passive_perception: vision.senses.passive_perception,
+                    },
                 }
             })
             .collect();

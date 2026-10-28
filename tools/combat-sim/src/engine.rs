@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::content::expr::ExprContext;
 use crate::content::schema::{
@@ -17,9 +18,9 @@ use crate::content::schema::{
     AttackEffect, AttackKind, AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag,
     Cover, CritMode, DamageEffect, DamagePart, DamageType, Direction, Duration, DurationUntil,
     Effect, EndsOn, ExprValue, ForcedMoveEffect, GrappleRule, Light, Modifier, ModifierApplies,
-    ModifierEffect, ModifierFilter, OncePer, Predicate, Recharge, SaveEffect, SaveEndsAt,
-    SceneMode, ShoveRule, Size, TargetRef, TargetSide, TargetType, ToggleTriggerEffect, Trigger,
-    TriggerWhen, TwoWeaponRule, UnarmedStrikeRule,
+    ModifierEffect, ModifierFilter, Obscurement, OncePer, Predicate, Recharge, SaveEffect,
+    SaveEndsAt, SceneMode, ShoveRule, Size, TargetRef, TargetSide, TargetType, ToggleTriggerEffect,
+    Trigger, TriggerWhen, TwoWeaponRule, UnarmedStrikeRule,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
@@ -405,6 +406,12 @@ fn combatant_is_hidden(state: &EncounterState, index: usize) -> bool {
     state.combatants[index].conditions.iter().any(|active| {
         condition_behavior(state, &active.condition).is_some_and(|behavior| behavior.hidden)
     })
+}
+
+/// Whether a combatant carries a condition whose data marks it hidden from
+/// sight (for example `hidden` or `invisible`). Used by concise text status.
+pub fn combatant_is_unseen(state: &EncounterState, index: usize) -> bool {
+    combatant_is_hidden(state, index)
 }
 
 /// Whether `source_name` is alive, not hidden and in line of sight of the
@@ -2485,6 +2492,9 @@ fn forecast_profile(
             &attacker_context,
             source,
         ) {
+            if visibility_condition_ignored(state, attacker, target, &collected) {
+                continue;
+            }
             match collected.modifier.effect {
                 ModifierEffect::Advantage => has_advantage = true,
                 ModifierEffect::Disadvantage => has_disadvantage = true,
@@ -2498,6 +2508,9 @@ fn forecast_profile(
             &target_context,
             None,
         ) {
+            if visibility_condition_ignored(state, target, attacker, &collected) {
+                continue;
+            }
             match collected.modifier.effect {
                 ModifierEffect::Advantage => has_advantage = true,
                 ModifierEffect::Disadvantage => has_disadvantage = true,
@@ -2541,14 +2554,10 @@ fn forecast_profile(
             if kind != AttackKind::Melee && hostile_within_5(state, attacker) {
                 has_disadvantage = true;
             }
-            if space.light_at(target_position) == Light::Dark
-                && !has_dark_sense(&state.combatants[attacker])
-            {
+            if visibility_penalty(state, attacker, target) {
                 has_disadvantage = true;
             }
-            if space.light_at(attacker_position) == Light::Dark
-                && !has_dark_sense(&state.combatants[target])
-            {
+            if visibility_penalty(state, target, attacker) {
                 has_advantage = true;
             }
         } else {
@@ -2651,14 +2660,10 @@ pub fn simple_attack_forecast(
             if effective_kind != AttackKind::Melee && hostile_within_5(state, attacker) {
                 has_disadvantage = true;
             }
-            if space.light_at(target_position) == Light::Dark
-                && !has_dark_sense(&state.combatants[attacker])
-            {
+            if visibility_penalty(state, attacker, target) {
                 has_disadvantage = true;
             }
-            if space.light_at(attacker_position) == Light::Dark
-                && !has_dark_sense(&state.combatants[target])
-            {
+            if visibility_penalty(state, target, attacker) {
                 has_advantage = true;
             }
         } else {
@@ -4277,11 +4282,453 @@ pub fn attack_offhand_with_options(
     Ok(())
 }
 
-fn has_dark_sense(combatant: &CombatantState) -> bool {
-    combatant.creature.senses.as_deref().is_some_and(|senses| {
-        let senses = senses.to_ascii_lowercase();
-        senses.contains("darkvision") || senses.contains("blindsight")
-    })
+/// Ranges parsed from the free-form `Creature.senses` text, in feet.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParsedSenses {
+    pub darkvision: Option<i32>,
+    pub blindsight: Option<i32>,
+    pub tremorsense: Option<i32>,
+    pub truesight: Option<i32>,
+    pub passive_perception: Option<i32>,
+}
+
+/// How well an observer can see a target after senses, light and obscurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    Clear,
+    LightlyObscured,
+    HeavilyObscured,
+    Blocked,
+}
+
+/// Structured result of [`can_see`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanSee {
+    pub visibility: Visibility,
+    pub reason: String,
+    pub source: String,
+    pub light: Light,
+    pub obscurement: Obscurement,
+    pub distance_ft: Option<i32>,
+}
+
+impl CanSee {
+    fn blocked(reason: impl Into<String>, source: impl Into<String>) -> Self {
+        Self {
+            visibility: Visibility::Blocked,
+            reason: reason.into(),
+            source: source.into(),
+            light: Light::Bright,
+            obscurement: Obscurement::None,
+            distance_ft: None,
+        }
+    }
+}
+
+/// Vision facts shown by `status --json` for one combatant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisionProfile {
+    pub light: Light,
+    pub effective_light: Light,
+    pub obscurement: Obscurement,
+    /// Visibility at the combatant's own position for a regular observer.
+    pub visibility: Visibility,
+    pub senses: ParsedSenses,
+}
+
+/// Parses darkvision / blindsight / tremorsense / truesight ranges and passive
+/// perception from the existing free-form senses string. Invalid or absent
+/// values become `None`; the raw string stays on the creature.
+pub fn parse_senses(raw: Option<&str>) -> ParsedSenses {
+    let Some(raw) = raw else {
+        return ParsedSenses::default();
+    };
+    let mut senses = ParsedSenses::default();
+    for part in raw.split([';', ',']) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let part = part
+            .strip_prefix("Senses ")
+            .or_else(|| part.strip_prefix("senses "))
+            .unwrap_or(part);
+        let lower = part.to_ascii_lowercase();
+        if let Some(value) = lower
+            .strip_prefix("darkvision")
+            .and_then(parse_leading_range)
+        {
+            senses.darkvision = Some(senses.darkvision.unwrap_or(0).max(value));
+        }
+        if let Some(value) = lower
+            .strip_prefix("blindsight")
+            .and_then(parse_leading_range)
+        {
+            senses.blindsight = Some(senses.blindsight.unwrap_or(0).max(value));
+        }
+        if let Some(value) = lower
+            .strip_prefix("tremorsense")
+            .and_then(parse_leading_range)
+        {
+            senses.tremorsense = Some(senses.tremorsense.unwrap_or(0).max(value));
+        }
+        if let Some(value) = lower
+            .strip_prefix("truesight")
+            .and_then(parse_leading_range)
+        {
+            senses.truesight = Some(senses.truesight.unwrap_or(0).max(value));
+        }
+        if let Some(value) = lower
+            .strip_prefix("passive perception")
+            .and_then(parse_leading_range)
+        {
+            senses.passive_perception = Some(senses.passive_perception.unwrap_or(0).max(value));
+        }
+    }
+    senses
+}
+
+fn parse_leading_range(text: &str) -> Option<i32> {
+    let mut chars = text.trim_start().chars();
+    let first = chars.next()?;
+    if !first.is_ascii_digit() {
+        return None;
+    }
+    let mut value = first.to_digit(10)? as i32;
+    for ch in chars {
+        let Some(digit) = ch.to_digit(10) else {
+            break;
+        };
+        value = value.saturating_mul(10).saturating_add(digit as i32);
+    }
+    (value > 0).then_some(value)
+}
+
+/// Obscurement at a position. Grid scenes use the scene-level value; zone
+/// scenes prefer the zone's value and fall back to the scene value.
+pub fn obscurement_at(state: &EncounterState, at: &Position) -> Obscurement {
+    let Some(scene) = state.scene.as_deref() else {
+        return Obscurement::None;
+    };
+    if scene.mode == SceneMode::Grid {
+        return scene.obscured.unwrap_or_default();
+    }
+    state
+        .space()
+        .and_then(|space| space.zone_of(at))
+        .and_then(|id| scene.zones.iter().find(|zone| zone.id == id))
+        .and_then(|zone| zone.obscured)
+        .or(scene.obscured)
+        .unwrap_or_default()
+}
+
+/// Light and obscurement at a combatant's own position, with the senses it can
+/// use. This is informational; [`can_see`] is the rules query.
+pub fn vision_profile(state: &EncounterState, index: usize) -> VisionProfile {
+    let combatant = &state.combatants[index];
+    let position = combatant.position();
+    let light = state
+        .space()
+        .map(|space| space.light_at(&position))
+        .unwrap_or(Light::Bright);
+    let obscurement = obscurement_at(state, &position);
+    let senses = parse_senses(combatant.creature.senses.as_deref());
+    let effective_light = if senses.truesight.is_some() {
+        Light::Bright
+    } else if senses.darkvision.is_some() {
+        darkvision_light(light)
+    } else {
+        light
+    };
+    VisionProfile {
+        light,
+        effective_light,
+        obscurement,
+        visibility: combine_visibility(effective_light, obscurement),
+        senses,
+    }
+}
+
+/// Whether `observer` can see `target` through light, obscurement, cover and
+/// the observer's senses. The raw senses string is parsed on every call; this
+/// is a rules query, not persisted state.
+pub fn can_see(state: &EncounterState, observer: usize, target: usize) -> CanSee {
+    if observer >= state.combatants.len() || target >= state.combatants.len() {
+        return CanSee::blocked("unknown combatant", "none");
+    }
+    if observer == target {
+        return CanSee {
+            visibility: Visibility::Clear,
+            reason: "self".to_string(),
+            source: "self".to_string(),
+            light: Light::Bright,
+            obscurement: Obscurement::None,
+            distance_ft: Some(0),
+        };
+    }
+    let Some(scene) = state.scene.as_deref() else {
+        return CanSee::blocked("no scene", "none");
+    };
+    let Some(space) = state.space() else {
+        return CanSee::blocked("no valid scene space", "none");
+    };
+    let observer_position = state.combatants[observer].position_ref();
+    let target_position = state.combatants[target].position_ref();
+    let (observer_position, target_position) =
+        (observer_position.as_ref(), target_position.as_ref());
+    let Some(distance) = space.distance(observer_position, target_position) else {
+        return CanSee::blocked("no path between the combatants", "none");
+    };
+    let light = space.light_at(target_position);
+    let obscurement = if scene.mode == SceneMode::Grid {
+        scene.obscured.unwrap_or_default()
+    } else {
+        obscurement_at(state, target_position)
+    };
+    let senses = parse_senses(state.combatants[observer].creature.senses.as_deref());
+    let target_hidden = has_condition_named(state, target, "hidden");
+    let target_invisible = has_condition_named(state, target, "invisible");
+    let total_cover = space.cover(observer_position, target_position) == Cover::Total;
+
+    if target_hidden && !sense_defeats_hidden(state, target, &senses, distance) {
+        return blocked_with("hidden", "normal vision", light, obscurement, distance);
+    }
+    if target_invisible && !sense_defeats_invisible(state, target, &senses, distance) {
+        return blocked_with("invisible", "normal vision", light, obscurement, distance);
+    }
+
+    if senses_in_range(senses.blindsight, distance) {
+        if total_cover {
+            return blocked_with(
+                "total cover",
+                format!("blindsight {} ft.", senses.blindsight.unwrap_or(0)),
+                light,
+                obscurement,
+                distance,
+            );
+        }
+        return CanSee {
+            visibility: Visibility::Clear,
+            reason: "blindsight".to_string(),
+            source: format!("blindsight {} ft.", senses.blindsight.unwrap_or(0)),
+            light,
+            obscurement,
+            distance_ft: Some(distance),
+        };
+    }
+
+    if senses_in_range(senses.tremorsense, distance)
+        && is_ground_contact(state, target)
+        && !is_incorporeal(state, target)
+    {
+        return CanSee {
+            visibility: Visibility::Clear,
+            reason: "tremorsense".to_string(),
+            source: format!("tremorsense {} ft.", senses.tremorsense.unwrap_or(0)),
+            light,
+            obscurement,
+            distance_ft: Some(distance),
+        };
+    }
+
+    if senses_in_range(senses.truesight, distance) {
+        if total_cover {
+            return blocked_with(
+                "total cover",
+                format!("truesight {} ft.", senses.truesight.unwrap_or(0)),
+                light,
+                obscurement,
+                distance,
+            );
+        }
+        let visibility = combine_visibility(Light::Bright, obscurement);
+        return CanSee {
+            visibility,
+            reason: visibility_reason(Light::Bright, obscurement, true),
+            source: format!("truesight {} ft.", senses.truesight.unwrap_or(0)),
+            light,
+            obscurement,
+            distance_ft: Some(distance),
+        };
+    }
+
+    if total_cover {
+        return blocked_with("total cover", "normal vision", light, obscurement, distance);
+    }
+
+    let darkvision = senses_in_range(senses.darkvision, distance);
+    let effective_light = if darkvision {
+        darkvision_light(light)
+    } else {
+        light
+    };
+    let visibility = combine_visibility(effective_light, obscurement);
+    let source = if darkvision {
+        format!("darkvision {} ft.", senses.darkvision.unwrap_or(0))
+    } else {
+        "normal vision".to_string()
+    };
+    CanSee {
+        visibility,
+        reason: visibility_reason(effective_light, obscurement, darkvision),
+        source,
+        light,
+        obscurement,
+        distance_ft: Some(distance),
+    }
+}
+
+fn visibility_penalty(state: &EncounterState, observer: usize, target: usize) -> bool {
+    visibility_penalty_from(&can_see(state, observer, target))
+}
+
+fn visibility_penalty_from(view: &CanSee) -> bool {
+    // Total cover already drives the attack's legality and AC; it must not be
+    // counted a second time as "cannot see the target" disadvantage.
+    view.visibility == Visibility::HeavilyObscured
+        || (view.visibility == Visibility::Blocked && view.reason != "total cover")
+}
+
+fn blocked_with(
+    reason: impl Into<String>,
+    source: impl Into<String>,
+    light: Light,
+    obscurement: Obscurement,
+    distance: i32,
+) -> CanSee {
+    CanSee {
+        visibility: Visibility::Blocked,
+        reason: reason.into(),
+        source: source.into(),
+        light,
+        obscurement,
+        distance_ft: Some(distance),
+    }
+}
+
+fn senses_in_range(range: Option<i32>, distance: i32) -> bool {
+    range.is_some_and(|range| range > 0 && distance <= range)
+}
+
+fn darkvision_light(light: Light) -> Light {
+    match light {
+        Light::Bright | Light::Dim => Light::Bright,
+        Light::Dark => Light::Dim,
+    }
+}
+
+fn combine_visibility(light: Light, obscurement: Obscurement) -> Visibility {
+    let light = match light {
+        Light::Bright => Visibility::Clear,
+        Light::Dim => Visibility::LightlyObscured,
+        Light::Dark => Visibility::HeavilyObscured,
+    };
+    let obscured = match obscurement {
+        Obscurement::None => Visibility::Clear,
+        Obscurement::Light => Visibility::LightlyObscured,
+        Obscurement::Heavy => Visibility::HeavilyObscured,
+    };
+    light.max(obscured)
+}
+
+fn visibility_reason(light: Light, obscurement: Obscurement, darkvision: bool) -> String {
+    let light = match light {
+        Light::Bright => "bright light",
+        Light::Dim => "dim light",
+        Light::Dark => "darkness",
+    };
+    let obscured = match obscurement {
+        Obscurement::None => "",
+        Obscurement::Light => "lightly obscured",
+        Obscurement::Heavy => "heavily obscured",
+    };
+    match (obscured.is_empty(), darkvision) {
+        (true, true) => format!("{light} (darkvision)"),
+        (true, false) => light.to_string(),
+        (false, true) => format!("{obscured} ({light}, darkvision)"),
+        (false, false) => format!("{obscured} ({light})"),
+    }
+}
+
+fn has_condition_named(state: &EncounterState, index: usize, condition: &str) -> bool {
+    state.combatants[index]
+        .conditions
+        .iter()
+        .any(|active| active.condition.eq_ignore_ascii_case(condition))
+}
+
+fn is_ground_contact(state: &EncounterState, index: usize) -> bool {
+    let vertical = state.combatants[index].vertical_state();
+    vertical.altitude_ft == 0 && vertical.flight == FlightState::Grounded
+}
+
+fn is_incorporeal(state: &EncounterState, index: usize) -> bool {
+    state.combatants[index]
+        .creature
+        .tags
+        .as_ref()
+        .is_some_and(|tags| {
+            tags.iter()
+                .any(|tag| tag.eq_ignore_ascii_case("incorporeal"))
+        })
+}
+
+fn sense_defeats_hidden(
+    state: &EncounterState,
+    target: usize,
+    senses: &ParsedSenses,
+    distance: i32,
+) -> bool {
+    senses_in_range(senses.blindsight, distance)
+        || (senses_in_range(senses.tremorsense, distance)
+            && is_ground_contact(state, target)
+            && !is_incorporeal(state, target))
+}
+
+fn sense_defeats_invisible(
+    state: &EncounterState,
+    target: usize,
+    senses: &ParsedSenses,
+    distance: i32,
+) -> bool {
+    sense_defeats_hidden(state, target, senses, distance)
+        || senses_in_range(senses.truesight, distance)
+}
+
+/// Whether a hidden/invisible condition's own attack modifiers still apply.
+/// A sense that defeats the condition replaces those data-driven modifiers, so
+/// truesight/blindsight/tremorsense do not double-count `hidden`/`invisible`.
+fn visibility_condition_ignored(
+    state: &EncounterState,
+    owner: usize,
+    observer: usize,
+    collected: &CollectedModifier,
+) -> bool {
+    let Some(condition) = collected.origin_condition.as_deref() else {
+        return false;
+    };
+    if owner == observer {
+        return false;
+    }
+    let Some(distance) = sense_distance(state, observer, owner) else {
+        return false;
+    };
+    let senses = parse_senses(state.combatants[observer].creature.senses.as_deref());
+    if condition.eq_ignore_ascii_case("hidden") {
+        return sense_defeats_hidden(state, owner, &senses, distance);
+    }
+    if condition.eq_ignore_ascii_case("invisible") {
+        return sense_defeats_invisible(state, owner, &senses, distance);
+    }
+    false
+}
+
+fn sense_distance(state: &EncounterState, observer: usize, target: usize) -> Option<i32> {
+    let space = state.space()?;
+    let observer_position = state.combatants[observer].position_ref();
+    let target_position = state.combatants[target].position_ref();
+    space.distance(observer_position.as_ref(), target_position.as_ref())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4439,6 +4886,9 @@ fn resolve_attack_inner(
             &attacker_context,
             source,
         ) {
+            if visibility_condition_ignored(state, attacker, target, &collected) {
+                continue;
+            }
             match collected.modifier.effect {
                 ModifierEffect::Advantage => {
                     advantage_sources.push(collected.label.clone());
@@ -4458,6 +4908,9 @@ fn resolve_attack_inner(
             &target_context,
             None,
         ) {
+            if visibility_condition_ignored(state, target, attacker, &collected) {
+                continue;
+            }
             match collected.modifier.effect {
                 ModifierEffect::Advantage => {
                     advantage_sources.push(collected.label.clone());
@@ -4538,16 +4991,29 @@ fn resolve_attack_inner(
             ensure_spatial_line_of_sight(state, attacker, target)?;
         }
     }
-    if space.light_at(target_position) == Light::Dark
-        && !has_dark_sense(&state.combatants[attacker])
-    {
-        disadvantage_sources.push("darkness".to_string());
+    let attacker_view = can_see(state, attacker, target);
+    if visibility_penalty_from(&attacker_view) {
+        let label = if attacker_view.light == Light::Dark
+            && attacker_view.obscurement != Obscurement::Heavy
+        {
+            "darkness"
+        } else if attacker_view.obscurement == Obscurement::Heavy {
+            "heavy obscurement"
+        } else {
+            "unseen"
+        };
+        disadvantage_sources.push(format!(
+            "{label} (cannot see target; {}: {})",
+            attacker_view.source, attacker_view.reason
+        ));
         has_disadvantage = true;
     }
-    if space.light_at(attacker_position) == Light::Dark
-        && !has_dark_sense(&state.combatants[target])
-    {
-        advantage_sources.push("unseen".to_string());
+    let target_view = can_see(state, target, attacker);
+    if visibility_penalty_from(&target_view) {
+        advantage_sources.push(format!(
+            "unseen (target cannot see attacker; {}: {})",
+            target_view.source, target_view.reason
+        ));
         has_advantage = true;
     }
     drop(space);
@@ -11247,8 +11713,18 @@ fn combatant_status_line(state: &EncounterState, index: usize, current: bool) ->
             )
         })
         .unwrap_or_default();
+    let vision = match vision_profile(state, index).visibility {
+        Visibility::HeavilyObscured => " | heavily obscured",
+        Visibility::LightlyObscured => " | lightly obscured",
+        Visibility::Clear | Visibility::Blocked => "",
+    };
+    let unseen = if combatant_is_hidden(state, index) {
+        " | unseen"
+    } else {
+        ""
+    };
     format!(
-        "{marker}{initiative} {} {} HP {hp} AC {} {}{dormant}{concentration} | conditions: {conditions} | resources: {resources} | saves: {saves}{ready}",
+        "{marker}{initiative} {} {} HP {hp} AC {} {}{dormant}{concentration} | conditions: {conditions} | resources: {resources} | saves: {saves}{ready}{vision}{unseen}",
         combatant.name,
         combatant.side.as_str(),
         armor_class(state, index),

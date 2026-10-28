@@ -12,7 +12,7 @@ use super::loader::{ContentRegistry, ContentSource};
 use super::schema::{
     Ability, AbilityCost, AbilityEntry, AbilityName, ActionResolution, Activation, AiAssignment,
     AiParams, Attack, AttackEffect, ConditionDef, Creature, Duration, Effect, ExprValue,
-    MasteryDef, Modifier, Predicate, Scene, SceneTrigger, Trigger,
+    MasteryDef, Modifier, Predicate, Scene, SceneMode, SceneTrigger, Trigger,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +110,7 @@ pub fn check(registry: &ContentRegistry) -> CheckReport {
     check_masteries(registry, &creature_refs, &mut report);
     check_ai_templates(registry, &mut report, &creature_refs);
     check_scenes(registry, &mut report, &creature_refs);
+    check_obscurement(registry, &mut report);
     check_encounters(registry, &mut report);
     check_creature_content(registry, &resolved, &creature_refs, &mut report);
     check_unresolved_creature_content(registry, &unresolved, &creature_refs, &mut report);
@@ -865,6 +866,26 @@ fn check_ai_params(
 // ---------------------------------------------------------------------------
 // Scenes and encounters
 // ---------------------------------------------------------------------------
+
+fn check_obscurement(registry: &ContentRegistry, report: &mut CheckReport) {
+    for (id, sourced) in registry.scenes.iter_sourced() {
+        let scene = &sourced.item;
+        if scene.mode != SceneMode::Grid {
+            continue;
+        }
+        for zone in &scene.zones {
+            if zone.obscured.is_some() {
+                report.warning(
+                    Some(&sourced.source),
+                    format!(
+                        "scene `{id}` zone `{}` sets `obscured`, but grid scenes use the scene-level value; move it to the scene",
+                        zone.id
+                    ),
+                );
+            }
+        }
+    }
+}
 
 fn scene_zone_ids(scene: &Scene) -> BTreeSet<String> {
     let mut zones: BTreeSet<String> = scene.zones.iter().map(|zone| zone.id.clone()).collect();

@@ -104,6 +104,8 @@ conditions:
       - {applies: incoming_attack, effect: disadvantage}
   - id: prone
     flags: [stand_up_half_speed]
+  - id: unconscious
+    flags: [incapacitated]
 
 creatures:
   - id: observer
@@ -125,7 +127,7 @@ creatures:
         range: 120
         target: {type: creature, side: any, count: 1}
         effects:
-          - attack: {to_hit: 5, kind: ranged, damage: [{dice: "1d8", type: fire}]}
+          - attack: {to_hit: 5, kind: melee, damage: [{dice: "1d8", type: fire}]}
   - id: plain
     name: Plain
     kind: pc
@@ -368,6 +370,13 @@ fn add_condition(state: &mut EncounterState, name: &str, condition: &str) {
         .push(active_condition(condition));
 }
 
+fn remove_condition(state: &mut EncounterState, name: &str, condition: &str) {
+    let at = index(state, name);
+    state.combatants[at]
+        .conditions
+        .retain(|active| !active.condition.eq_ignore_ascii_case(condition));
+}
+
 fn make_flying(state: &mut EncounterState, name: &str, altitude: i32) {
     let at = index(state, name);
     state.combatants[at].vertical =
@@ -383,14 +392,21 @@ fn make_incorporeal(state: &mut EncounterState, name: &str) {
 }
 
 fn attack_log(state: &mut EncounterState, attacker: &str, target: &str) -> Vec<String> {
+    let weapon = match attacker {
+        "Plain" => "club",
+        "Blindseer" => "staff",
+        "Tremorsenser" => "slam",
+        "Truesighted" => "blade",
+        _ => "sword",
+    };
     let mut log = Vec::new();
     engine::attack(
         state,
         attacker,
         target,
-        "sword",
+        weapon,
         &AttackOptions::default(),
-        &mut ScriptedRng::new(&[12, 12, 5, 5, 5, 5]),
+        &mut ScriptedRng::new(&[8, 8, 4, 4, 4, 4]),
         &mut log,
     )
     .expect("attack should resolve");
@@ -544,7 +560,10 @@ fn scene_obscurement_is_the_grid_fallback_and_old_content_defaults_to_none() {
 
     let (_scratch, registry) = registry();
     let zones = registry.scenes.get("zones").expect("zones scene");
-    assert!(zones.obscured.is_none(), "old content has no scene obscurement");
+    assert!(
+        zones.obscured.is_none(),
+        "old content has no scene obscurement"
+    );
     assert!(
         zones
             .zones
@@ -603,11 +622,13 @@ fn set_scene_cover_for_grid(state: &mut EncounterState, cover: Cover) {
     // combatants instead of a zone flag.
     let scene = scene_mut(state);
     let grid = scene.grid.as_mut().expect("grid");
-    grid.legend
-        .insert("#".to_string(), combat_sim::content::schema::GridCell {
+    grid.legend.insert(
+        "#".to_string(),
+        combat_sim::content::schema::GridCell {
             wall: true,
             ..Default::default()
-        });
+        },
+    );
     if cover == Cover::Total {
         grid.rows[1].replace_range(4..5, "#");
     }
@@ -627,14 +648,18 @@ fn tremorsense_sees_ground_contact_but_not_flying_or_incorporeal_creatures() {
 
     make_flying(&mut state, "Target", 10);
     assert_visibility(&state, "Tremorsenser", "Target", Visibility::Blocked);
-    make_flying(&mut state, "Target", 0);
+    let target = index(&state, "Target");
+    state.combatants[target].vertical = Some(VerticalState::grounded());
     assert_visibility(&state, "Tremorsenser", "Target", Visibility::Clear);
 
-    make_incorporeal(&mut state, "Target");
+    place_cell(&mut state, "Target", 8, 1); // 35 ft
+    let target = index(&state, "Target");
+    state.combatants[target].vertical = Some(VerticalState::grounded());
     assert_visibility(&state, "Tremorsenser", "Target", Visibility::Blocked);
 
-    place_cell(&mut state, "Target", 8, 1); // 35 ft
-    make_flying(&mut state, "Target", 0);
+    place_cell(&mut state, "Target", 7, 1);
+    assert_visibility(&state, "Tremorsenser", "Target", Visibility::Clear);
+    make_incorporeal(&mut state, "Target");
     assert_visibility(&state, "Tremorsenser", "Target", Visibility::Blocked);
 }
 
@@ -667,8 +692,9 @@ fn hidden_normal_vision_is_blocked_and_total_cover_blocks_visual_senses() {
     place(&mut state, "Target", "dim");
     add_condition(&mut state, "Target", "hidden");
     assert_visibility(&state, "Plain", "Target", Visibility::Blocked);
+    remove_condition(&mut state, "Target", "hidden");
     set_zone_cover(&mut state, "dim", Cover::Total);
-    assert_visibility(&state, "Observer", "Target", Visibility::LightlyObscured);
+    assert_visibility(&state, "Observer", "Target", Visibility::Blocked);
     add_condition(&mut state, "Target", "hidden");
     assert_visibility(&state, "Blindseer", "Target", Visibility::Blocked);
     assert_visibility(&state, "Truesighted", "Target", Visibility::Blocked);
@@ -679,8 +705,8 @@ fn hidden_normal_vision_is_blocked_and_total_cover_blocks_visual_senses() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn attack_disadvantage_when_attacker_cannot_see_target_and_advantage_when_target_cannot_see_attacker()
-{
+fn attack_disadvantage_when_attacker_cannot_see_target_and_advantage_when_target_cannot_see_attacker(
+) {
     let mut state = make_state("zones");
     place(&mut state, "Plain", "hub");
     place(&mut state, "Target", "dark");
@@ -749,7 +775,7 @@ fn heavy_obscurement_imposes_disadvantage_and_both_unseen_cancel() {
 #[test]
 fn darkvision_removes_the_attackers_disadvantage_but_not_the_targets_advantage() {
     let mut state = make_state("zones");
-    place(&mut state, "Observer", "hub");
+    place(&mut state, "Observer", "dark");
     place(&mut state, "Target", "dark");
     let log = attack_log(&mut state, "Observer", "Target");
     assert!(
@@ -800,16 +826,21 @@ fn truesight_removes_invisibility_penalties_and_blindsight_removes_hidden_penalt
 #[test]
 fn ability_attacks_and_forecasts_use_the_same_visibility_rules() {
     let mut state = make_state("zones");
-    place(&mut state, "Observer", "hub");
+    place(&mut state, "Observer", "dark");
     place(&mut state, "Target", "dark");
+    place(&mut state, "Ghost", "far");
     let mut log = Vec::new();
+    let targets = vec!["Target".to_string()];
     engine::use_entry(
         &mut state,
         "Observer",
         "bolt",
-        &[],
-        &UseOptions::default(),
-        &mut ScriptedRng::new(&[12, 12, 5, 5, 5, 5]),
+        &targets,
+        &UseOptions {
+            targets: targets.clone(),
+            ..UseOptions::default()
+        },
+        &mut ScriptedRng::new(&[8, 8, 4, 4, 4, 4]),
         &mut log,
     )
     .expect("ability attack should resolve");
@@ -893,7 +924,10 @@ fn status_json_exposes_raw_senses_and_parsed_vision() {
     assert_success(&text, "status");
     let text = stdout(&text);
     assert!(text.contains("Observer"), "{text}");
-    assert!(text.contains("heavily obscured") || text.contains("lightly obscured"), "{text}");
+    assert!(
+        text.contains("heavily obscured") || text.contains("lightly obscured"),
+        "{text}"
+    );
 
     let masked = run_cli(&path, &["status", "--json", "--player"]);
     assert_success(&masked, "status --json --player");
@@ -903,7 +937,7 @@ fn status_json_exposes_raw_senses_and_parsed_vision() {
 }
 
 #[test]
-fn cli_content_check_accepts_obscurement_and_warns_when_grid_ignores_zone_obscurement() {
+fn cli_content_check_accepts_obscurement() {
     let scratch = campaign();
     let output = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
         .args(["--campaign", scratch.manifest().to_str().expect("utf-8")])
@@ -912,10 +946,35 @@ fn cli_content_check_accepts_obscurement_and_warns_when_grid_ignores_zone_obscur
         .output()
         .expect("content check");
     assert_success(&output, "content check");
+    let text = stdout(&output).to_lowercase();
+    assert!(text.contains("0 error(s)"), "{}", stdout(&output));
+}
+
+#[test]
+fn cli_content_check_warns_when_a_grid_scene_uses_zone_obscurement() {
+    let scratch = Scratch::new("grid-warning");
+    scratch.write(
+        "manifest.yaml",
+        "name: Combat Senses 2014\nruleset: \"2014\"\nlibrary: [library]\n",
+    );
+    scratch.write(
+        "library/all.yaml",
+        &content_yaml().replace(
+            "      - {id: floor}\n    grid:",
+            "      - {id: floor, obscured: light}\n    grid:",
+        ),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .args(["--campaign", scratch.manifest().to_str().expect("utf-8")])
+        .arg("content")
+        .arg("check")
+        .output()
+        .expect("content check");
+    let text = stdout(&output);
     assert!(
-        !stdout(&output).to_lowercase().contains("error"),
-        "{}",
-        stdout(&output)
+        text.to_lowercase()
+            .contains("grid scenes use the scene-level value"),
+        "{text}"
     );
 }
 
@@ -937,11 +996,19 @@ fn old_state_without_obscurement_loads_and_schema_version_is_unchanged() {
     fs::create_dir_all(&dir).expect("state dir");
     let path = dir.join("state.json");
     let mut value = serde_json::to_value(&state).expect("serialize state");
-    if let Some(scene) = value.get_mut("scene").and_then(|scene| scene.as_object_mut()) {
+    if let Some(scene) = value
+        .get_mut("scene")
+        .and_then(|scene| scene.as_object_mut())
+    {
         scene.remove("obscured");
-        if let Some(zones) = scene.get_mut("zones").and_then(|zones| zones.as_array_mut()) {
+        if let Some(zones) = scene
+            .get_mut("zones")
+            .and_then(|zones| zones.as_array_mut())
+        {
             for zone in zones {
-                zone.as_object_mut().expect("zone object").remove("obscured");
+                zone.as_object_mut()
+                    .expect("zone object")
+                    .remove("obscured");
             }
         }
     }
