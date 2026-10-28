@@ -4991,8 +4991,14 @@ fn resolve_attack_inner(
             ensure_spatial_line_of_sight(state, attacker, target)?;
         }
     }
+    let hidden_modifier = disadvantage_sources.iter().any(|source| {
+        source.eq_ignore_ascii_case("hidden") || source.eq_ignore_ascii_case("invisible")
+    });
+    let unseen_modifier = advantage_sources.iter().any(|source| {
+        source.eq_ignore_ascii_case("hidden") || source.eq_ignore_ascii_case("invisible")
+    });
     let attacker_view = can_see(state, attacker, target);
-    if visibility_penalty_from(&attacker_view) {
+    if visibility_penalty_from(&attacker_view) && !hidden_modifier {
         let label = if attacker_view.light == Light::Dark
             && attacker_view.obscurement != Obscurement::Heavy
         {
@@ -5009,7 +5015,7 @@ fn resolve_attack_inner(
         has_disadvantage = true;
     }
     let target_view = can_see(state, target, attacker);
-    if visibility_penalty_from(&target_view) {
+    if visibility_penalty_from(&target_view) && !unseen_modifier {
         advantage_sources.push(format!(
             "unseen (target cannot see attacker; {}: {})",
             target_view.source, target_view.reason
