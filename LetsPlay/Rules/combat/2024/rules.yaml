@@ -11,3 +11,6 @@ rules:
       resolution: save
       save_abilities: [str, dex]
       dc: "8+{str}+{prof}"
+  exhaustion:
+    d20_penalty_per_level: 2
+    speed_penalty_per_level: 5

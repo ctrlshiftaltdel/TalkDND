@@ -149,6 +149,8 @@ pub struct AddConditionOptions {
     pub source: Option<String>,
     pub linked: Option<String>,
     pub save_ends: Option<(AbilityName, i32)>,
+    /// Exhaustion level (1-6). Ignored for other conditions.
+    pub level: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,6 +271,237 @@ fn has_flag(state: &EncounterState, index: usize, flag: ConditionFlag) -> bool {
 
 fn is_incapacitated(state: &EncounterState, index: usize) -> bool {
     has_flag(state, index, ConditionFlag::Incapacitated)
+}
+
+/// The condition id used for the additive exhaustion level.
+pub fn exhaustion_condition_id(state: &EncounterState) -> &str {
+    state
+        .content
+        .rules
+        .exhaustion
+        .as_ref()
+        .map(|rules| rules.condition_id())
+        .unwrap_or("exhaustion")
+}
+
+fn exact_index(state: &EncounterState, name: &str) -> Option<usize> {
+    state
+        .combatants
+        .iter()
+        .position(|combatant| combatant.name.eq_ignore_ascii_case(name))
+}
+
+/// Effective HP maximum after 2014 level-4 exhaustion.
+pub fn effective_max_hp(state: &EncounterState, index: usize) -> i32 {
+    let base = state.combatants[index].max_hp.max(1);
+    let halved_from = state
+        .content
+        .rules
+        .exhaustion
+        .as_ref()
+        .and_then(|rules| rules.hp_max_halved_from);
+    if halved_from.is_some_and(|level| state.combatants[index].exhaustion_level >= level) {
+        (base / 2).max(1)
+    } else {
+        base
+    }
+}
+
+/// HP at or below half of the effective maximum. This is a derived status:
+/// it is always current after damage, healing or temporary-HP changes without
+/// writing an extra state flag.
+pub fn is_bloodied(state: &EncounterState, index: usize) -> bool {
+    let max = effective_max_hp(state, index);
+    state.combatants[index].hp <= max / 2
+}
+
+fn exhaustion_d20_penalty(state: &EncounterState, index: usize) -> i32 {
+    let level = state.combatants[index].exhaustion_level;
+    if level == 0 {
+        return 0;
+    }
+    let per_level = state
+        .content
+        .rules
+        .exhaustion
+        .as_ref()
+        .and_then(|rules| rules.d20_penalty_per_level)
+        .unwrap_or(0)
+        .max(0);
+    -(per_level.saturating_mul(level as i32))
+}
+
+fn exhaustion_attack_save_disadvantage(state: &EncounterState, index: usize) -> bool {
+    let level = state.combatants[index].exhaustion_level;
+    state
+        .content
+        .rules
+        .exhaustion
+        .as_ref()
+        .and_then(|rules| rules.attack_save_disadvantage_from)
+        .is_some_and(|from| level >= from)
+}
+
+fn condition_behavior<'a>(
+    state: &'a EncounterState,
+    condition: &str,
+) -> Option<&'a crate::content::schema::ConditionBehavior> {
+    let behaviors = state.content.rules.condition_behaviors.as_ref()?;
+    behaviors.get(condition).or_else(|| {
+        behaviors
+            .iter()
+            .find(|(id, _)| id.eq_ignore_ascii_case(condition))
+            .map(|(_, behavior)| behavior)
+    })
+}
+
+fn combatant_is_hidden(state: &EncounterState, index: usize) -> bool {
+    state.combatants[index].conditions.iter().any(|active| {
+        condition_behavior(state, &active.condition).is_some_and(|behavior| behavior.hidden)
+    })
+}
+
+/// Whether `source_name` is alive, not hidden and in line of sight of the
+/// holder. Uses the same LOS kernel as the rest of the engine.
+fn source_is_visible(state: &EncounterState, holder: usize, source_name: &str) -> bool {
+    let Some(source) = exact_index(state, source_name) else {
+        return false;
+    };
+    if state.combatants[source].is_dead() || state.combatants[source].hp <= 0 {
+        return false;
+    }
+    if combatant_is_hidden(state, source) {
+        return false;
+    }
+    if source == holder {
+        return true;
+    }
+    if let Some(sight) = spatial_line_of_sight(state, holder, source) {
+        return sight.clear;
+    }
+    let Some(space) = state.space() else {
+        return true;
+    };
+    let from = state.combatants[holder].position_ref();
+    let to = state.combatants[source].position_ref();
+    space.cover(from.as_ref(), to.as_ref()) != Cover::Total
+}
+
+fn frightened_source_names(state: &EncounterState, holder: usize) -> Vec<String> {
+    state.combatants[holder]
+        .conditions
+        .iter()
+        .filter_map(|active| {
+            if !condition_behavior(state, &active.condition)
+                .is_some_and(|behavior| behavior.cannot_move_closer_to_source)
+            {
+                return None;
+            }
+            let name = active
+                .source
+                .as_deref()
+                .or(active.linked.as_deref())?
+                .to_string();
+            source_is_visible(state, holder, &name).then_some(name)
+        })
+        .collect()
+}
+
+fn distance_from_source(state: &EncounterState, source: usize, position: &Position) -> Option<i32> {
+    if spatial_query_enabled(state) {
+        return spatial_distance_to_position(state, source, position);
+    }
+    let space = state.space()?;
+    let source_position = state.combatants[source].position_ref();
+    space.distance(source_position.as_ref(), position)
+}
+
+fn ensure_frightened_move(
+    state: &EncounterState,
+    holder: usize,
+    from: &Position,
+    to: &Position,
+) -> Result<()> {
+    for name in frightened_source_names(state, holder) {
+        let Some(source) = exact_index(state, &name) else {
+            continue;
+        };
+        let Some(from_ft) = distance_from_source(state, source, from) else {
+            continue;
+        };
+        let Some(to_ft) = distance_from_source(state, source, to) else {
+            continue;
+        };
+        if to_ft < from_ft {
+            bail!(
+                "`{}` can't willingly move closer to `{}` (source of fear)",
+                state.combatants[holder].name,
+                name
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The charmer recorded by a `cannot_target_source` condition, if it is still
+/// alive. Supports both the structured `source` and the older `linked` field.
+fn charmed_source_name(state: &EncounterState, holder: usize) -> Option<String> {
+    state.combatants[holder]
+        .conditions
+        .iter()
+        .filter_map(|active| {
+            if !condition_behavior(state, &active.condition)
+                .is_some_and(|behavior| behavior.cannot_target_source)
+            {
+                return None;
+            }
+            let name = active
+                .source
+                .as_deref()
+                .or(active.linked.as_deref())?
+                .to_string();
+            let source = exact_index(state, &name)?;
+            (!state.combatants[source].is_dead()).then_some(name)
+        })
+        .next()
+}
+
+fn ensure_not_charmed_target(
+    state: &EncounterState,
+    holder: usize,
+    target: usize,
+    damaging: bool,
+) -> Result<()> {
+    if !damaging {
+        return Ok(());
+    }
+    let Some(source) = charmed_source_name(state, holder) else {
+        return Ok(());
+    };
+    if state.combatants[target].name.eq_ignore_ascii_case(&source) {
+        bail!(
+            "`{}` is charmed by `{}` and cannot attack or target it with damaging effects",
+            state.combatants[holder].name,
+            source
+        );
+    }
+    Ok(())
+}
+
+fn effects_have_damage(effects: &[Effect]) -> bool {
+    effects.iter().any(|effect| match effect {
+        Effect::Damage(_) => true,
+        Effect::Attack(attack) => {
+            !attack.damage.is_empty()
+                || effects_have_damage(&attack.on_hit)
+                || effects_have_damage(&attack.on_miss)
+        }
+        Effect::Save(save) => {
+            effects_have_damage(&save.on_fail) || effects_have_damage(&save.on_success)
+        }
+        Effect::Choice(branches) => branches.iter().any(|branch| effects_have_damage(branch)),
+        _ => false,
+    })
 }
 
 fn ensure_can_act(state: &EncounterState, index: usize) -> Result<()> {
@@ -559,33 +792,44 @@ fn effective_fly_speed(state: &EncounterState, index: usize) -> i32 {
 }
 
 fn effective_speed_from(state: &EncounterState, index: usize, base: i32) -> i32 {
-    if has_flag(state, index, ConditionFlag::SpeedZero) {
+    let level = state.combatants[index].exhaustion_level;
+    let exhaustion = state.content.rules.exhaustion.as_ref();
+    if has_flag(state, index, ConditionFlag::SpeedZero)
+        || exhaustion
+            .and_then(|rules| rules.speed_zero_from)
+            .is_some_and(|from| level >= from)
+    {
         return 0;
     }
-    let halved = has_flag(state, index, ConditionFlag::SpeedHalved);
-    if !has_modifier_sources(state, index) {
-        return if halved { base / 2 } else { base };
-    }
-    let modifiers = collect_modifiers(
-        state,
-        index,
-        ModifierApplies::Speed,
-        &PredicateContext::for_owner(index),
-        None,
-    );
+    let halved = has_flag(state, index, ConditionFlag::SpeedHalved)
+        || exhaustion
+            .and_then(|rules| rules.speed_halved_from)
+            .is_some_and(|from| level >= from);
     let mut speed = base;
-    for modifier in modifiers {
-        if modifier.modifier.effect == ModifierEffect::Bonus {
-            let context = score_context(&state.combatants[index]);
-            if let Some(value) = &modifier.modifier.value {
-                if let Ok((_, expression)) = evaluate_value(&context, value) {
-                    speed += expression.modifier;
+    if has_modifier_sources(state, index) {
+        let modifiers = collect_modifiers(
+            state,
+            index,
+            ModifierApplies::Speed,
+            &PredicateContext::for_owner(index),
+            None,
+        );
+        for modifier in modifiers {
+            if modifier.modifier.effect == ModifierEffect::Bonus {
+                let context = score_context(&state.combatants[index]);
+                if let Some(value) = &modifier.modifier.value {
+                    if let Ok((_, expression)) = evaluate_value(&context, value) {
+                        speed += expression.modifier;
+                    }
                 }
             }
         }
     }
     if halved {
         speed /= 2;
+    }
+    if let Some(penalty) = exhaustion.and_then(|rules| rules.speed_penalty_per_level) {
+        speed -= penalty.max(0).saturating_mul(level as i32);
     }
     speed.max(0)
 }
@@ -647,6 +891,7 @@ struct PredicateContext {
     target: Option<usize>,
     attacker: Option<usize>,
     linked: Option<String>,
+    source: Option<String>,
     attack: AttackFacts,
     has_advantage: bool,
     has_disadvantage: bool,
@@ -667,6 +912,7 @@ impl PredicateContext {
             target: None,
             attacker: None,
             linked: None,
+            source: None,
             attack: AttackFacts::default(),
             has_advantage: false,
             has_disadvantage: false,
@@ -736,12 +982,24 @@ fn eval_predicate(
             .iter()
             .any(|property| context.attack.has_property(*property)),
         Predicate::AttackKind(kind) => context.attack.kind == *kind,
-        Predicate::SelfHpBelowPct(percent) => {
-            hp_below_pct(&state.combatants[context.self_idx], *percent)
-        }
+        Predicate::SelfHpBelowPct(percent) => hp_below_pct(state, context.self_idx, *percent),
         Predicate::TargetHpBelowPct(percent) => context
             .target
-            .is_some_and(|target| hp_below_pct(&state.combatants[target], *percent)),
+            .is_some_and(|target| hp_below_pct(state, target, *percent)),
+        Predicate::Bloodied(flag) => is_bloodied(state, context.self_idx) == flag.get(),
+        Predicate::TargetBloodied(flag) => context
+            .target
+            .is_some_and(|target| is_bloodied(state, target) == flag.get()),
+        Predicate::SourceInLineOfSight(flag) => {
+            let visible = context
+                .source
+                .as_deref()
+                .is_none_or(|source| source_is_visible(state, context.self_idx, source));
+            visible == flag.get()
+        }
+        Predicate::ExhaustionLevelMin(minimum) => {
+            state.combatants[context.self_idx].exhaustion_level >= *minimum
+        }
         Predicate::IsSpell(flag) => {
             let is_spell = context
                 .source_tags
@@ -763,11 +1021,12 @@ fn eval_predicate(
     }
 }
 
-fn hp_below_pct(combatant: &CombatantState, percent: i32) -> bool {
-    if combatant.max_hp <= 0 {
-        return combatant.hp <= 0;
+fn hp_below_pct(state: &EncounterState, index: usize, percent: i32) -> bool {
+    let max = effective_max_hp(state, index);
+    if max <= 0 {
+        return state.combatants[index].hp <= 0;
     }
-    combatant.hp.saturating_mul(100) <= combatant.max_hp.saturating_mul(percent)
+    state.combatants[index].hp.saturating_mul(100) <= max.saturating_mul(percent)
 }
 
 fn distance_between(state: &EncounterState, a: Option<usize>, b: Option<usize>) -> Option<i32> {
@@ -886,6 +1145,7 @@ fn collect_modifiers(
     for (instance_index, instance) in active.iter().enumerate() {
         let mut scoped = context.clone();
         scoped.linked = instance.linked.clone();
+        scoped.source = instance.source.clone();
         let mut condition_ids = Vec::new();
         collect_condition_chain(&state.content, &instance.condition, &mut condition_ids);
         for condition_id in condition_ids {
@@ -1155,6 +1415,7 @@ fn damage_roll_bonus(
         target: None,
         attacker: None,
         linked: None,
+        source: None,
         attack: AttackFacts::default(),
         has_advantage: false,
         has_disadvantage: false,
@@ -1426,6 +1687,7 @@ fn expire_conditions(
         return Ok(());
     }
     let name = state.combatants[index].name.clone();
+    let exhaustion_id = exhaustion_condition_id(state).to_string();
     let mut remove = Vec::new();
     let mut still_active = Vec::new();
     let mut concentration_broken = false;
@@ -1485,6 +1747,13 @@ fn expire_conditions(
         if expired {
             remove.push(position);
             log.log(format_args!("{name} is no longer {}", instance.condition));
+            if instance.condition.eq_ignore_ascii_case(&exhaustion_id) {
+                let previous = state.combatants[index].exhaustion_level;
+                state.combatants[index].exhaustion_level = 0;
+                log.log(format_args!(
+                    "{name}'s exhaustion ends (level {previous} -> 0)"
+                ));
+            }
             if instance.concentration {
                 concentration_broken = true;
             }
@@ -1891,12 +2160,15 @@ fn evaluate_dice(context: &ExprContext, value: &ExprValue) -> Result<DiceExpr> {
 }
 
 fn roll_d20_quiet(
+    state: &EncounterState,
+    owner: usize,
     base: i32,
     mode: RollMode,
     advantage_sources: Vec<String>,
     disadvantage_sources: Vec<String>,
     rng: &mut dyn DiceRng,
 ) -> D20Result {
+    let base = base + exhaustion_d20_penalty(state, owner);
     let roll = D20Roll::roll_total(base, mode, rng);
     D20Result {
         dice: Vec::new(),
@@ -1913,15 +2185,19 @@ fn roll_d20_quiet(
 }
 
 fn roll_d20(
-    _state: &EncounterState,
-    _owner: usize,
+    state: &EncounterState,
+    owner: usize,
     base: i32,
     mode: RollMode,
-    bonuses: Vec<BonusTerm>,
+    mut bonuses: Vec<BonusTerm>,
     advantage_sources: Vec<String>,
     disadvantage_sources: Vec<String>,
     rng: &mut dyn DiceRng,
 ) -> D20Result {
+    let exhaustion = exhaustion_d20_penalty(state, owner);
+    if exhaustion != 0 {
+        bonuses.push(flat_bonus_term(exhaustion, "exhaustion"));
+    }
     let roll = D20Roll::roll(base, mode, rng);
     let bonus_total: i32 = bonuses.iter().map(|term| term.record.total).sum();
     D20Result {
@@ -2036,6 +2312,7 @@ fn effective_ac(
         target: Some(target),
         attacker,
         linked: None,
+        source: None,
         attack: attack.clone(),
         has_advantage: false,
         has_disadvantage: false,
@@ -2110,6 +2387,7 @@ fn forecast_profile(
         target: Some(target),
         attacker: Some(attacker),
         linked: None,
+        source: None,
         attack: facts.clone(),
         has_advantage: false,
         has_disadvantage: false,
@@ -2127,6 +2405,7 @@ fn forecast_profile(
         target: Some(target),
         attacker: Some(attacker),
         linked: None,
+        source: None,
         attack: facts.clone(),
         has_advantage: false,
         has_disadvantage: false,
@@ -2440,6 +2719,7 @@ pub fn save_fail_chance(
             target: Some(target),
             attacker,
             linked: None,
+            source: None,
             attack: AttackFacts::default(),
             has_advantage: false,
             has_disadvantage: false,
@@ -2472,6 +2752,7 @@ pub fn save_fail_chance(
     if auto_fail {
         return 1.0;
     }
+    bonus += f64::from(exhaustion_d20_penalty(state, target));
     if ability == AbilityName::Dex && !ignore_cover {
         if let Some(attacker) = attacker {
             if attacker != target {
@@ -2557,6 +2838,7 @@ pub fn damage_multiplier(
         target: Some(target),
         attacker: source,
         linked: None,
+        source: None,
         attack: AttackFacts::default(),
         has_advantage: false,
         has_disadvantage: false,
@@ -2732,6 +3014,7 @@ fn attack_at_with_limit(
 ) -> Result<()> {
     ensure_can_act(state, attacker_index)?;
     ensure_targetable(state, target_index)?;
+    ensure_not_charmed_target(state, attacker_index, target_index, true)?;
     if attacker_index == target_index {
         bail!("a creature cannot attack itself");
     }
@@ -3445,6 +3728,7 @@ pub fn grapple(
         .map_err(|error| anyhow!(error.to_string()))?;
     ensure_can_act(state, attacker)?;
     ensure_targetable(state, target)?;
+    ensure_not_charmed_target(state, attacker, target, true)?;
     if attacker == target {
         bail!("a creature cannot grapple itself");
     }
@@ -3557,6 +3841,7 @@ pub fn shove(
         .map_err(|error| anyhow!(error.to_string()))?;
     ensure_can_act(state, attacker)?;
     ensure_targetable(state, target)?;
+    ensure_not_charmed_target(state, attacker, target, true)?;
     if attacker == target {
         bail!("a creature cannot shove itself");
     }
@@ -3753,6 +4038,7 @@ pub fn attack_unarmed(
         .map_err(|error| anyhow!(error.to_string()))?;
     ensure_can_act(state, attacker)?;
     ensure_targetable(state, target)?;
+    ensure_not_charmed_target(state, attacker, target, true)?;
     if attacker == target {
         bail!("a creature cannot attack itself");
     }
@@ -3859,6 +4145,7 @@ pub fn attack_offhand_with_options(
         .map_err(|error| anyhow!(error.to_string()))?;
     ensure_can_act(state, attacker)?;
     ensure_targetable(state, target)?;
+    ensure_not_charmed_target(state, attacker, target, true)?;
     if attacker == target {
         bail!("a creature cannot attack itself");
     }
@@ -4048,6 +4335,7 @@ fn resolve_attack_inner(
         target: Some(target),
         attacker: Some(attacker),
         linked: None,
+        source: None,
         attack: facts.clone(),
         has_advantage: false,
         has_disadvantage: false,
@@ -4065,6 +4353,7 @@ fn resolve_attack_inner(
         target: Some(target),
         attacker: Some(attacker),
         linked: None,
+        source: None,
         attack: facts.clone(),
         has_advantage: false,
         has_disadvantage: false,
@@ -4268,7 +4557,15 @@ fn resolve_attack_inner(
             rng,
         )
     } else {
-        roll_d20_quiet(base, mode, advantage_sources, disadvantage_sources, rng)
+        roll_d20_quiet(
+            state,
+            attacker,
+            base,
+            mode,
+            advantage_sources,
+            disadvantage_sources,
+            rng,
+        )
     };
     let mut hit = result.nat20 || (!result.nat1 && result.total >= base_ac);
     let mut crit = result.nat20;
@@ -4461,7 +4758,9 @@ pub fn combatant_has_modifier_sources(state: &EncounterState, owner: usize) -> b
 }
 
 fn has_modifier_sources(state: &EncounterState, owner: usize) -> bool {
-    if !state.combatants[owner].conditions.is_empty() {
+    if !state.combatants[owner].conditions.is_empty()
+        || state.combatants[owner].exhaustion_level > 0
+    {
         return true;
     }
     state.has_static_modifier_sources(owner)
@@ -4547,6 +4846,7 @@ fn try_hit_reactions(
                 target: Some(target),
                 attacker: Some(attacker),
                 linked: None,
+                source: None,
                 attack: facts.clone(),
                 has_advantage: false,
                 has_disadvantage: false,
@@ -4870,6 +5170,7 @@ fn predicate_from_effect(
         target,
         attacker,
         linked: None,
+        source: None,
         attack: facts,
         has_advantage: context.has_advantage,
         has_disadvantage: context.has_disadvantage,
@@ -4978,6 +5279,7 @@ fn run_owned_triggers(
                 target: None,
                 attacker: None,
                 linked: None,
+                source: None,
                 attack: AttackFacts::default(),
                 has_advantage: false,
                 has_disadvantage: false,
@@ -5024,8 +5326,10 @@ fn run_owned_triggers(
 
 fn fire_ends_on(state: &mut EncounterState, owner: usize, event: EndsOn, log: &mut dyn LogSink) {
     let name = state.combatants[owner].name.clone();
+    let exhaustion_id = exhaustion_condition_id(state).to_string();
     let mut kept = Vec::new();
     let mut concentration_broken = false;
+    let mut exhaustion_ended = false;
     for instance in state.combatants[owner].conditions.drain(..) {
         let ends = instance.ends_on.contains(&event)
             || state
@@ -5035,6 +5339,9 @@ fn fire_ends_on(state: &mut EncounterState, owner: usize, event: EndsOn, log: &m
                 .is_some_and(|def| def.ends_on.contains(&event));
         if ends {
             log.log(format_args!("{name} is no longer {}", instance.condition));
+            if instance.condition.eq_ignore_ascii_case(&exhaustion_id) {
+                exhaustion_ended = true;
+            }
             if instance.concentration {
                 concentration_broken = true;
             }
@@ -5043,6 +5350,13 @@ fn fire_ends_on(state: &mut EncounterState, owner: usize, event: EndsOn, log: &m
         }
     }
     state.combatants[owner].conditions = kept;
+    if exhaustion_ended {
+        let previous = state.combatants[owner].exhaustion_level;
+        state.combatants[owner].exhaustion_level = 0;
+        log.log(format_args!(
+            "{name}'s exhaustion ends (level {previous} -> 0)"
+        ));
+    }
     if concentration_broken {
         break_concentration(state, owner, log);
     }
@@ -5193,7 +5507,7 @@ fn apply_effect(
                     .target
                     .ok_or_else(|| anyhow!("remove_condition needs a target"))?,
             };
-            remove_condition_from(state, target, &effect.condition, log);
+            remove_condition_from(state, target, &effect.condition, "removed by effect", log);
             Ok(())
         }
         Effect::ForcedMove(effect) => apply_forced_move(state, context, effect, rng, log),
@@ -5437,6 +5751,7 @@ fn save_modifiers(
         target: Some(target),
         attacker: None,
         linked: None,
+        source: None,
         attack: AttackFacts::default(),
         has_advantage: false,
         has_disadvantage: false,
@@ -5622,6 +5937,7 @@ fn apply_heal_effect(
         target: Some(target),
         attacker: None,
         linked: None,
+        source: None,
         attack: AttackFacts::default(),
         has_advantage: false,
         has_disadvantage: false,
@@ -5675,7 +5991,7 @@ fn apply_heal_effect(
     }
     let name = state.combatants[target].name.clone();
     let before = state.combatants[target].hp;
-    let max_hp = state.combatants[target].max_hp;
+    let max_hp = effective_max_hp(state, target);
     state.combatants[target].hp = (before + amount).min(max_hp);
     let healed = state.combatants[target].hp - before;
     log.log(format_args!(
@@ -5878,6 +6194,7 @@ fn check_modifiers(
         target: None,
         attacker: None,
         linked: None,
+        source: None,
         attack: AttackFacts::default(),
         has_advantage: false,
         has_disadvantage: false,
@@ -6072,6 +6389,27 @@ fn apply_condition_internal(
     ends.extend(def.ends_on.iter().copied());
     ends.sort_by_key(|event| format!("{event:?}"));
     ends.dedup();
+    let mut detail = String::new();
+    if let Some(source) = &source_name {
+        detail.push_str(&format!("; source: {source}"));
+    }
+    if let Some(linked) = &linked {
+        detail.push_str(&format!("; linked: {linked}"));
+    }
+    if let Some(behavior) = condition_behavior(state, condition_id) {
+        if behavior.cannot_target_source {
+            detail.push_str("; cannot attack or damage the source");
+        }
+        if behavior.cannot_move_closer_to_source {
+            detail.push_str("; cannot willingly move closer to the source");
+        }
+        if behavior.ends_when_source_dies {
+            detail.push_str("; ends when the source dies");
+        }
+        if behavior.hidden {
+            detail.push_str("; hidden from sight");
+        }
+    }
     let active = ActiveCondition {
         condition: condition_id.to_string(),
         source: source_name,
@@ -6090,10 +6428,12 @@ fn apply_condition_internal(
         .find(|existing| existing.condition.eq_ignore_ascii_case(condition_id))
     {
         *existing = active;
-        log.log(format_args!("{target_name}'s {condition_id} is refreshed"));
+        log.log(format_args!(
+            "{target_name}'s {condition_id} is refreshed{detail}"
+        ));
     } else {
         state.combatants[target].conditions.push(active);
-        log.log(format_args!("{target_name} is now {condition_id}"));
+        log.log(format_args!("{target_name} is now {condition_id}{detail}"));
     }
     let incapacitated = has_flag(state, target, ConditionFlag::Incapacitated);
     if incapacitated && state.concentration.contains_key(&target_name) {
@@ -6128,15 +6468,26 @@ fn remove_condition_from(
     state: &mut EncounterState,
     target: usize,
     condition_id: &str,
+    reason: &str,
     log: &mut dyn LogSink,
 ) {
     let name = state.combatants[target].name.clone();
     let before = state.combatants[target].conditions.len();
+    let was_exhaustion = condition_id.eq_ignore_ascii_case(exhaustion_condition_id(state));
     state.combatants[target]
         .conditions
         .retain(|condition| !condition.condition.eq_ignore_ascii_case(condition_id));
     if state.combatants[target].conditions.len() != before {
-        log.log(format_args!("{name} is no longer {condition_id}"));
+        log.log(format_args!(
+            "{name} is no longer {condition_id} ({reason})"
+        ));
+        if was_exhaustion {
+            let previous = state.combatants[target].exhaustion_level;
+            state.combatants[target].exhaustion_level = 0;
+            log.log(format_args!(
+                "{name}'s exhaustion ends (level {previous} -> 0)"
+            ));
+        }
         let concentration_condition = state.content.rules.concentration_condition.clone();
         if concentration_condition
             .as_deref()
@@ -6145,6 +6496,138 @@ fn remove_condition_from(
             break_concentration(state, target, log);
         }
     }
+}
+
+fn exhaustion_effect_summary(state: &EncounterState, level: u32) -> String {
+    let Some(rules) = state.content.rules.exhaustion.as_ref() else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    if let Some(from) = rules.check_disadvantage_from {
+        if level >= from {
+            parts.push("ability-check disadvantage".to_string());
+        }
+    }
+    if let Some(from) = rules.speed_halved_from {
+        if level >= from {
+            parts.push("Speed halved".to_string());
+        }
+    }
+    if let Some(from) = rules.attack_save_disadvantage_from {
+        if level >= from {
+            parts.push("attack/save disadvantage".to_string());
+        }
+    }
+    if let Some(from) = rules.hp_max_halved_from {
+        if level >= from {
+            parts.push("HP maximum halved".to_string());
+        }
+    }
+    if let Some(from) = rules.speed_zero_from {
+        if level >= from {
+            parts.push("Speed 0".to_string());
+        }
+    }
+    if let Some(penalty) = rules.d20_penalty_per_level {
+        parts.push(format!(
+            "{} to d20 tests",
+            signed(-(penalty.max(0).saturating_mul(level as i32)))
+        ));
+    }
+    if let Some(penalty) = rules.speed_penalty_per_level {
+        parts.push(format!(
+            "{} ft Speed",
+            signed(-(penalty.max(0).saturating_mul(level as i32)))
+        ));
+    }
+    parts.join(", ")
+}
+
+/// Set or clear the additive exhaustion level. The marker condition is kept in
+/// sync so existing modifier/status paths see it.
+fn set_exhaustion_level(
+    state: &mut EncounterState,
+    index: usize,
+    level: u32,
+    reason: &str,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let rules = state.content.rules.exhaustion.clone().unwrap_or_default();
+    let max = rules.max_level();
+    if level > max {
+        bail!("exhaustion level {level} is outside 0..={max} for this ruleset");
+    }
+    let condition_id = rules.condition_id().to_string();
+    let name = state.combatants[index].name.clone();
+    let previous = state.combatants[index].exhaustion_level;
+    if level == 0 {
+        state.combatants[index].exhaustion_level = 0;
+        let before = state.combatants[index].conditions.len();
+        state.combatants[index]
+            .conditions
+            .retain(|condition| !condition.condition.eq_ignore_ascii_case(&condition_id));
+        if state.combatants[index].conditions.len() != before {
+            log.log(format_args!(
+                "{name} is no longer {condition_id} (level {previous} -> 0; {reason})"
+            ));
+        }
+        return Ok(());
+    }
+    if !state.combatants[index].has_condition(&state.content, &condition_id) {
+        let mut rng = seeded_rng(0);
+        apply_condition_internal(
+            state,
+            index,
+            &condition_id,
+            None,
+            None,
+            Some(Duration {
+                rounds: None,
+                until: None,
+                minutes: None,
+                permanent: Some(true),
+                ends_on: Vec::new(),
+            }),
+            None,
+            None,
+            Vec::new(),
+            None,
+            false,
+            &mut rng,
+            log,
+        )?;
+    }
+    let rules = state.content.rules.exhaustion.clone().unwrap_or_default();
+    let already_dead = state.combatants[index].is_dead();
+    state.combatants[index].exhaustion_level = level;
+    if level >= rules.death_level() {
+        state.combatants[index].hp = 0;
+        state.combatants[index].dead = true;
+        if state.combatants[index].makes_death_saves() {
+            state.combatants[index].death_saves.dead = true;
+        }
+        if !already_dead {
+            log.log(format_args!("{name} dies from exhaustion (level {level})"));
+            on_death(state, index, log);
+        }
+        return Ok(());
+    }
+    let max_hp = effective_max_hp(state, index);
+    if state.combatants[index].hp > max_hp {
+        state.combatants[index].hp = max_hp;
+        log.log(format_args!(
+            "{name}'s current HP is capped at the effective maximum {max_hp}"
+        ));
+    }
+    let summary = exhaustion_effect_summary(state, level);
+    if summary.is_empty() {
+        log.log(format_args!("{name}'s exhaustion is now level {level}"));
+    } else {
+        log.log(format_args!(
+            "{name}'s exhaustion is now level {level} ({summary})"
+        ));
+    }
+    Ok(())
 }
 
 /// CLI `condition add`.
@@ -6159,6 +6642,39 @@ pub fn add_condition(
     let target = state
         .find_index(who)
         .map_err(|error| anyhow!(error.to_string()))?;
+    let source_sensitive = condition_behavior(state, condition_id).is_some_and(|behavior| {
+        behavior.cannot_target_source
+            || behavior.cannot_move_closer_to_source
+            || behavior.ends_when_source_dies
+    });
+    if source_sensitive {
+        for (label, name) in [
+            ("source", options.source.as_deref()),
+            ("linked", options.linked.as_deref()),
+        ] {
+            if let Some(name) = name {
+                state.find_index(name).map_err(|_| {
+                    anyhow!(
+                        "unknown or ambiguous {label} `{name}` for `{condition_id}`; it must name exactly one existing combatant"
+                    )
+                })?;
+            }
+        }
+    }
+    let exhaustion_id = exhaustion_condition_id(state).to_string();
+    if condition_id.eq_ignore_ascii_case(&exhaustion_id) {
+        if let Some(level) = options.level {
+            if level == 0 {
+                bail!("exhaustion level must be between 1 and the ruleset maximum");
+            }
+            set_exhaustion_level(state, target, level, "set by command", log)?;
+            return Ok(());
+        }
+        // No --level keeps the legacy manual-marker behavior: add/refresh the
+        // condition without changing the exhaustion level.
+    } else if options.level.is_some() {
+        bail!("`level` only applies to exhaustion, not `{condition_id}`");
+    }
     if options.rounds.is_none()
         && options.minutes.is_none()
         && options.until.is_none()
@@ -6265,7 +6781,12 @@ pub fn remove_condition(
     let target = state
         .find_index(who)
         .map_err(|error| anyhow!(error.to_string()))?;
-    remove_condition_from(state, target, condition_id, log);
+    if condition_id.eq_ignore_ascii_case(exhaustion_condition_id(state))
+        && state.combatants[target].exhaustion_level > 0
+    {
+        return set_exhaustion_level(state, target, 0, "removed by command", log);
+    }
+    remove_condition_from(state, target, condition_id, "removed by command", log);
     Ok(())
 }
 
@@ -6597,6 +7118,10 @@ pub fn use_ability(
             targets.push(index);
         }
     }
+    let damaging = effects_have_damage(&resolved.ability.effects);
+    for target in &targets {
+        ensure_not_charmed_target(state, actor, *target, damaging)?;
+    }
     let attack_options = AttackOptions {
         advantage: options.advantage,
         disadvantage: options.disadvantage,
@@ -6682,6 +7207,7 @@ pub fn use_entry(
             .map_err(|error| anyhow!(error.to_string()))?;
         ensure_can_act(state, actor)?;
         ensure_targetable(state, target)?;
+        ensure_not_charmed_target(state, actor, target, true)?;
         spend_action(state, actor, Activation::Action, log)?;
         let attack = state.combatants[actor].find_attack(name)?.clone();
         let profile = AttackProfile::from_attack(&attack);
@@ -6766,6 +7292,38 @@ fn on_death(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
         }
     }
     state.combatants[target].conditions = kept;
+
+    // Conditions whose data says they end when their recorded source dies.
+    for holder in 0..state.combatants.len() {
+        let ended: Vec<String> = state.combatants[holder]
+            .conditions
+            .iter()
+            .filter(|condition| {
+                condition
+                    .source
+                    .as_deref()
+                    .or(condition.linked.as_deref())
+                    .is_some_and(|source| source.eq_ignore_ascii_case(&name))
+                    && condition_behavior(state, &condition.condition)
+                        .is_some_and(|behavior| behavior.ends_when_source_dies)
+            })
+            .map(|condition| condition.condition.clone())
+            .collect();
+        if ended.is_empty() {
+            continue;
+        }
+        let holder_name = state.combatants[holder].name.clone();
+        state.combatants[holder].conditions.retain(|condition| {
+            !ended
+                .iter()
+                .any(|id| condition.condition.eq_ignore_ascii_case(id))
+        });
+        for condition in ended {
+            log.log(format_args!(
+                "{holder_name} is no longer {condition} (source died)"
+            ));
+        }
+    }
 }
 
 fn break_concentration(state: &mut EncounterState, actor: usize, log: &mut dyn LogSink) {
@@ -6921,7 +7479,7 @@ fn apply_damage_rolls(
 
     // Massive damage.
     let overflow = hp_damage.saturating_sub(before.max(0));
-    let max_hp = state.combatants[target].max_hp;
+    let max_hp = effective_max_hp(state, target);
     if state.combatants[target].hp == 0 && !was_at_zero && state.nonlethal_active {
         // 2024 PHB "Knocking Out a Creature": Unconscious and stable instead.
         knock_out(state, target, source, log);
@@ -7142,6 +7700,7 @@ fn run_damage_taken_triggers(
                 target: Some(target),
                 attacker: Some(source),
                 linked: None,
+                source: None,
                 attack: AttackFacts::default(),
                 has_advantage: false,
                 has_disadvantage: false,
@@ -7267,6 +7826,7 @@ pub fn heal(
             target: Some(target),
             attacker: None,
             linked: None,
+            source: None,
             attack: AttackFacts::default(),
             has_advantage: false,
             has_disadvantage: false,
@@ -7300,6 +7860,7 @@ pub fn heal(
         target: Some(target),
         attacker: None,
         linked: None,
+        source: None,
         attack: AttackFacts::default(),
         has_advantage: false,
         has_disadvantage: false,
@@ -7330,7 +7891,7 @@ pub fn heal(
     }
     let name = state.combatants[target].name.clone();
     let before = state.combatants[target].hp;
-    let max_hp = state.combatants[target].max_hp;
+    let max_hp = effective_max_hp(state, target);
     state.combatants[target].hp = (before + amount).min(max_hp);
     let healed = state.combatants[target].hp - before;
     log.log(format_args!(
@@ -7650,6 +8211,11 @@ pub fn move_to_at(
         .move_route(&start, &destination, &blocked)
         .ok_or_else(|| anyhow!("no path to the destination"))?;
     drop(space);
+    let mut previous = start.clone();
+    for step in &route {
+        ensure_frightened_move(state, index, &previous, &step.position)?;
+        previous = step.position.clone();
+    }
     let name = state.combatants[index].name.clone();
     let mut current = start;
     for step in route {
@@ -7929,6 +8495,12 @@ fn spatial_move_to_at(
             );
         }
     };
+    let mut previous_position = Position::cell(start_pose.cell.x, start_pose.cell.y);
+    for step in &path.steps {
+        let next = Position::cell(step.to.cell.x, step.to.cell.y);
+        ensure_frightened_move(state, index, &previous_position, &next)?;
+        previous_position = next;
+    }
     let name = state.combatants[index].name.clone();
     let mut current_pose = mover.pose;
     let mut current_position = Position::cell(start_pose.cell.x, start_pose.cell.y);
@@ -9447,7 +10019,21 @@ fn death_save_at(
         log.log(format_args!("{name} is stable"));
         return Ok(());
     }
-    let roll = D20Roll::roll(0, RollMode::Normal, rng);
+    let mode = if exhaustion_attack_save_disadvantage(state, index) {
+        RollMode::Disadvantage
+    } else {
+        RollMode::Normal
+    };
+    let roll = roll_d20(
+        state,
+        index,
+        0,
+        mode,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        rng,
+    );
     log.log(format_args!("{name} death save: {}", roll.text()));
     if roll.nat20 {
         state.combatants[index].hp = 1;
@@ -9548,6 +10134,19 @@ pub fn rest(
                 if state.concentration.contains_key(&name) {
                     break_concentration(state, index, log);
                 }
+                let level = state.combatants[index].exhaustion_level;
+                if level > 0 {
+                    let reduction = state
+                        .content
+                        .rules
+                        .exhaustion
+                        .as_ref()
+                        .map(|rules| rules.long_rest_reduction())
+                        .unwrap_or(1);
+                    let next = level.saturating_sub(reduction);
+                    set_exhaustion_level(state, index, next, "long rest", log)?;
+                }
+                let max_hp = effective_max_hp(state, index);
                 let combatant = &mut state.combatants[index];
                 for (id, resource) in combatant.resources.iter_mut() {
                     if id == "hit-dice" {
@@ -9557,7 +10156,7 @@ pub fn rest(
                         resource.current = resource.max;
                     }
                 }
-                combatant.hp = combatant.max_hp;
+                combatant.hp = max_hp;
                 combatant.temp_hp = 0;
                 combatant.death_saves = DeathSaves::default();
                 let dying = state
@@ -9622,12 +10221,13 @@ fn spend_hit_dice(
         ));
         total += gain;
     }
+    let max_hp = effective_max_hp(state, index);
     let combatant = &mut state.combatants[index];
     if let Some(r) = combatant.resources.get_mut("hit-dice") {
         r.current -= count as i32;
     }
     let before = combatant.hp;
-    combatant.hp = (combatant.hp + total).min(combatant.max_hp);
+    combatant.hp = (combatant.hp + total).min(max_hp);
     if before <= 0 && combatant.hp > 0 {
         combatant.death_saves = DeathSaves::default();
     }
@@ -9688,23 +10288,30 @@ fn combatant_status_line(state: &EncounterState, index: usize, current: bool) ->
     let initiative = combatant
         .initiative_total
         .map_or_else(|| "-".to_string(), |total| total.to_string());
+    let max_hp = effective_max_hp(state, index);
     let hp = if combatant.temp_hp > 0 {
-        format!(
-            "{}/{} (+{})",
-            combatant.hp, combatant.max_hp, combatant.temp_hp
-        )
+        format!("{}/{} (+{})", combatant.hp, max_hp, combatant.temp_hp)
     } else {
-        format!("{}/{}", combatant.hp, combatant.max_hp)
+        format!("{}/{}", combatant.hp, max_hp)
     };
+    let exhaustion_id = exhaustion_condition_id(state);
     let conditions = if combatant.conditions.is_empty() {
         "none".to_string()
     } else {
         combatant
             .conditions
             .iter()
-            .map(|condition| match &condition.duration {
-                Some(duration) => format!("{}({})", condition.condition, duration.describe()),
-                None => condition.condition.clone(),
+            .map(|condition| {
+                if condition.condition.eq_ignore_ascii_case(exhaustion_id) {
+                    return format!(
+                        "{}(level {})",
+                        condition.condition, combatant.exhaustion_level
+                    );
+                }
+                match &condition.duration {
+                    Some(duration) => format!("{}({})", condition.condition, duration.describe()),
+                    None => condition.condition.clone(),
+                }
             })
             .collect::<Vec<_>>()
             .join(", ")

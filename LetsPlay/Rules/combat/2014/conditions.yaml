@@ -1,7 +1,11 @@
 # 2014 (SRD 5.1 Appendix PH-A) edition-specific conditions.
 conditions:
   - id: exhaustion
-    manual: "2014: 6 levels. 1 disadv. ability checks; 2 speed halved; 3 disadv. attacks & saves; 4 HP max halved; 5 speed 0; 6 death. Track level manually."
+    modifiers:
+      - {applies: check, effect: disadvantage, when: {exhaustion_level_min: 1}}
+      - {applies: attack_roll, effect: disadvantage, when: {exhaustion_level_min: 3}}
+      - {applies: save, effect: disadvantage, when: {exhaustion_level_min: 3}}
+    manual: "2014: 6 levels. 1 disadv. ability checks; 2 speed halved; 3 disadv. attacks & saves; 4 HP max halved; 5 speed 0; 6 death. Set the level with `condition add --level`; a long rest lowers it by 1."
   - id: grappled
     flags: [speed_zero]
     manual: "2014: speed 0 only (no attack penalty). Escape: action, Athletics/Acrobatics contest vs grappler's Athletics. The grappler can drag/carry it (speed halved)."

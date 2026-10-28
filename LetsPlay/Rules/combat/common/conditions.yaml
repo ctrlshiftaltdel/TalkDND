@@ -6,14 +6,14 @@ conditions:
       - {applies: incoming_attack, effect: advantage}
     manual: "Can't see; automatically fails checks that require sight."
   - id: charmed
-    manual: "Can't attack the charmer or target it with damaging abilities; charmer has advantage on social checks."
+    manual: "Can't attack the charmer or target it with damaging abilities; the charmer has advantage on social checks (resolve social checks manually, the engine does not roll them). Record the charmer with --source."
   - id: deafened
     manual: "Can't hear; automatically fails checks that require hearing."
   - id: frightened
     modifiers:
-      - {applies: attack_roll, effect: disadvantage}
-      - {applies: check, effect: disadvantage}
-    manual: "Disadvantage only while the source of fear is in line of sight; can't willingly move closer to it."
+      - {applies: attack_roll, effect: disadvantage, when: {source_in_line_of_sight: true}}
+      - {applies: check, effect: disadvantage, when: {source_in_line_of_sight: true}}
+    manual: "Disadvantage only while the source of fear is alive, not hidden, and in line of sight; can't willingly move closer to it. Without --source the disadvantage stays on, as before."
   - id: invisible
     modifiers:
       - {applies: attack_roll, effect: advantage}

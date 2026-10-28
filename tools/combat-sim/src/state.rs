@@ -296,6 +296,10 @@ impl fmt::Display for CombatOutcome {
     }
 }
 
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 /// A combatant: the resolved creature plus mutable runtime state.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CombatantState {
@@ -323,6 +327,10 @@ pub struct CombatantState {
     pub footprint: Option<Footprint>,
     #[serde(default)]
     pub conditions: Vec<ActiveCondition>,
+    /// Exhaustion level 1-6. Zero means none. Additive: old states omit it
+    /// and load with no exhaustion.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub exhaustion_level: u32,
     #[serde(default)]
     pub resources: BTreeMap<String, ResourceState>,
     #[serde(default)]
@@ -462,6 +470,18 @@ impl CombatantState {
     }
 
     pub fn has_condition(&self, content: &ContentRegistry, condition: &str) -> bool {
+        // Exhaustion is stored as an additive level field so old states load
+        // without a schema bump; the level is the source of truth even if the
+        // display marker was lost.
+        if self.exhaustion_level > 0 {
+            let exhaustion = content.rules.exhaustion.as_ref();
+            let id = exhaustion
+                .map(|rules| rules.condition_id())
+                .unwrap_or("exhaustion");
+            if id.eq_ignore_ascii_case(condition) {
+                return true;
+            }
+        }
         if self.conditions.is_empty() {
             return false;
         }
@@ -1893,6 +1913,7 @@ fn combatant_from_creature(
         vertical: None,
         footprint: None,
         conditions: Vec::new(),
+        exhaustion_level: 0,
         resources,
         death_saves: DeathSaves::default(),
         action_used: false,

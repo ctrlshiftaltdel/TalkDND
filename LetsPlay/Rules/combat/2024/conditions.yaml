@@ -1,7 +1,7 @@
 # 2024 (SRD 5.2.1) edition-specific conditions.
 conditions:
   - id: exhaustion
-    manual: "2024: each level -2 to d20 Tests and -5 ft speed; level 6 = death. Track level manually."
+    manual: "2024: each level -2 to d20 Tests and -5 ft speed; level 6 = death. Set the level with `condition add --level`; a long rest lowers it by 1."
   - id: grappled
     flags: [speed_zero]
     modifiers:

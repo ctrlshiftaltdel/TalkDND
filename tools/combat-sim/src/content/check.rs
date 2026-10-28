@@ -97,6 +97,8 @@ pub fn check(registry: &ContentRegistry) -> CheckReport {
     check_ids_and_todos(registry, &mut report);
     check_condition_implies(registry, &mut report);
     check_rules(registry, &mut report);
+    check_exhaustion(registry, &mut report);
+    check_condition_behaviors(registry, &mut report);
     check_combat_actions(registry, &mut report);
 
     let (resolved, unresolved) = resolve_creatures(registry, &mut report);
@@ -437,6 +439,104 @@ fn check_rules(registry: &ContentRegistry, report: &mut CheckReport) {
             condition,
             "rules.concentration_condition",
         );
+    }
+}
+
+fn check_exhaustion(registry: &ContentRegistry, report: &mut CheckReport) {
+    let Some(rules) = &registry.rules.exhaustion else {
+        return;
+    };
+    let source = registry.rules_source.as_ref();
+    let condition = rules.condition_id();
+    check_condition(
+        report,
+        registry,
+        source,
+        condition,
+        "rules.exhaustion.condition",
+    );
+    let max = rules.max_level();
+    if max == 0 {
+        report.error(source, "rules.exhaustion.max_level must be positive");
+    }
+    if rules.death_level() == 0 || rules.death_level() > max {
+        report.error(
+            source,
+            format!("rules.exhaustion.death_level must be between 1 and max_level ({max})"),
+        );
+    }
+    if rules.long_rest_reduction() == 0 {
+        report.error(
+            source,
+            "rules.exhaustion.long_rest_reduction must be positive",
+        );
+    }
+    for (name, value) in [
+        (
+            "rules.exhaustion.check_disadvantage_from",
+            rules.check_disadvantage_from,
+        ),
+        (
+            "rules.exhaustion.speed_halved_from",
+            rules.speed_halved_from,
+        ),
+        (
+            "rules.exhaustion.attack_save_disadvantage_from",
+            rules.attack_save_disadvantage_from,
+        ),
+        (
+            "rules.exhaustion.hp_max_halved_from",
+            rules.hp_max_halved_from,
+        ),
+        ("rules.exhaustion.speed_zero_from", rules.speed_zero_from),
+    ] {
+        if let Some(value) = value {
+            if value == 0 || value > max {
+                report.error(
+                    source,
+                    format!("{name} must be between 1 and max_level ({max})"),
+                );
+            }
+        }
+    }
+    if rules
+        .d20_penalty_per_level
+        .is_some_and(|penalty| penalty < 0)
+    {
+        report.error(
+            source,
+            "rules.exhaustion.d20_penalty_per_level must not be negative",
+        );
+    }
+    if rules
+        .speed_penalty_per_level
+        .is_some_and(|penalty| penalty < 0)
+    {
+        report.error(
+            source,
+            "rules.exhaustion.speed_penalty_per_level must not be negative",
+        );
+    }
+}
+
+fn check_condition_behaviors(registry: &ContentRegistry, report: &mut CheckReport) {
+    let Some(behaviors) = &registry.rules.condition_behaviors else {
+        return;
+    };
+    let source = registry.rules_source.as_ref();
+    for (condition, behavior) in behaviors {
+        if registry.conditions.get(condition).is_none() {
+            report.error(
+                source,
+                format!("rules.condition_behaviors: unknown condition `{condition}`"),
+            );
+        }
+        if behavior.is_empty() {
+            report.warning(
+                source,
+                format!("rules.condition_behaviors.{condition} has no behaviour flags"),
+            );
+        }
     }
 }
 
