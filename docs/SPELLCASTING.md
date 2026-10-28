@@ -1,7 +1,7 @@
 # 施法核心设计（v1.6）
 
 > **状态：设计稿，未实现。** 本文只定义目标、边界、数据模型、命令面与实现拆分，不代表任何能力已经交付。
-> 任务：TASK-0120 / Issue #236（第 3 轮修订：仪式资格来源改为 class pack 优先、Warlock 魔祈仪式列为非目标 D-12、Magical Secrets 数量与 id 修正、Mystic Arcanum 等级由 pack 核实、2014 同回合限制表述修正）。
+> 任务：TASK-0120 / Issue #236（第 4 轮修订：2024 仪式资格修正为 edition 级规则——已准备 + Ritual 标签即可，不依赖职业特性，数据放 `rules.spellcasting.ritual`；第 3 轮：仪式资格来源改为 class pack 优先、Warlock 魔祈仪式列为非目标 D-12、Magical Secrets 数量与 id 修正、Mystic Arcanum 等级由 pack 核实、2014 同回合限制表述修正）。
 > 本文的改动范围只有 `docs/SPELLCASTING.md` 与 `docs/PLAN.md` 的设计目标；不修改代码、测试、规则数据、存档 schema、Cargo/CI 或发布文件。
 > 带「待所有者决定」的条目是产品决定，本设计只给选项与推荐，不替项目所有者拍板。
 
@@ -11,7 +11,7 @@
 - **元数据模型推荐**：不新增独立 `SpellDef`；在 `Ability` 上加一个可选的嵌套块 `spell: SpellMeta`。执行路径、内容包、角色卡 `AbilityRef`、`use`/`cast` 全部保持一套。
 - **列表模型**：在 `sheets/<id>.yaml` 增加 `spells` 块，区分 `known` / `prepared` / `book` / `cantrips` / `always_prepared` / `arcanum` / `legacy`；职业模式与数量来自 `tools/talkdnd/data/classes-<edition>.yaml` 与现有 `classdata::generate`，不按职业名写死在引擎里。法术来源与授予语义（基础职业表 / 子职始终准备 / 子职扩展列表 / 特性授予 / DM 授权）见 §3.9，不是所有子职条目都是 always_prepared。
 - **契约施法者与 Mystic Arcanum**：Warlock 只有一个 `spell-slot-<L>` 资源（L = 契约槽等级，上限 5）。设计规定 `spells sync` 为契约施法者把法术 ref 的 `AbilityRef.cost` 覆盖为 `spell-slot-<L>`（现有 `resolve_ability` 支持 ref 成本覆盖），法术一律按 L 环施放，`--slot` 拒绝；Mystic Arcanum 6–9 环建模为独立 `arcanum-<N>` 资源（长休恢复、不占槽、每级 1 次），见 §3.10 与 §5.5。
-- **仪式（两版分开）**：资格首要来源是 class pack 的特性文本（已核实：2014 Bard=known、Cleric/Druid=prepared、Wizard=book——wizard 不要求已准备；2024 pack 的 class 数据只有 wizard 出现 ritual，Ritual Adept 允许书内未准备），PDF 只用于 pack 未覆盖的逐字差异；2024 非 wizard 职业是否带职业级仪式特性待核对（U-3）。数据用 `ritual: none|known|prepared|book`（+ 2024 wizard 的 `ritual_adept`）表达，不用单一布尔；Warlock 经魔祈（Book of Ancient Secrets 等）获得的仪式施法不在 v1.6 数据模型内（非目标 D-12）。仪式施法时间 = 正常施法时间 + 10 分钟；仪式不占槽、不升环；`talkdnd` 只校验与记录，`combat-sim` 不结算仪式。见 §5.3。
+- **仪式（两版分开）**：2024 是 edition 级规则——已准备 + Ritual 标签即可仪式施放，不依赖任何职业特性（`rule-2024-rules-glossary-ritual` 原文已核实）；Ritual Adept（wizard）另允许书内未准备。2014 是职业特性（class pack 已核实）：Bard=known、Cleric/Druid=prepared、Wizard=book——wizard 不要求已准备；PDF 只用于 pack 未覆盖的逐字差异。数据按 edition 分层：`rules.spellcasting.ritual`（2024 覆盖为 `prepared`；2014 为 `per-class`，查 `classes-2014.yaml` 的 `classes.<id>.ritual: none|known|prepared|book`）+ 2024 wizard 的 `ritual_adept`，不用单一布尔；Warlock 经魔祈（Book of Ancient Secrets 等）获得的仪式施法不在 v1.6 数据模型内（非目标 D-12）。仪式施法时间 = 正常施法时间 + 10 分钟；仪式不占槽、不升环；`talkdnd` 只校验与记录，`combat-sim` 不结算仪式。见 §5.3。
 - **同回合限制与长施法**：2014 附赠动作法术的同回合限制、2024 每回合一个法术位法术的限制、以及超过一个动作的长施法（逐回合动作 + 专注、中断失败且不扣槽）不在 v1.6 引擎强制范围内，列为所有者决策 D-11（选项与推荐见 §7）；分钟/小时施法时间在战斗内由 `cast` 失败关闭拒绝，理由是战斗轮内无法完成施法，不是 D-5（战斗外结算）。
 - **存档 schema**：推荐 `save-meta` 9 → 10 并带整档备份迁移；如果所有者选择维持 9，则必须把角色卡 `CharFile.version` 升到 2，否则旧版 `talkdnd` 在重写角色卡时会静默丢掉新字段。迁移必须新增 dirty-sheet 保护（现有 `migrate.rs::ensure` 的 dirty 跳过只覆盖台账文件，不含 `sheets/*.yaml`）。见 D-1 与 §3.6。
 - **唯一执行器**：机械效果只由 `combat-sim` 的 `cast`/`use` 解析；`talkdnd` 只管理列表、成分声明、仪式校验与法术位记录，绝不复制一套施法结算；仪式永远不经 `combat-sim` 结算。
@@ -204,7 +204,7 @@ pub struct SpellMeta {
 | `spell.components.verbal` | `bool` | 是 | 是否需要言语 | 同 |
 | `spell.components.somatic` | `bool` | 是 | 是否需要姿势 | 同 |
 | `spell.components.material` | `Option<MaterialComponent>` | 否 | 材料文本、价格门槛、是否消耗 | 逐法术数据；2024 的器材/材料表述以数据为准 |
-| `spell.ritual` | `bool` | 是 | 是否可仪式施法 | 同机制；职业是否具备仪式施法由职业数据决定 |
+| `spell.ritual` | `bool` | 是 | 是否可仪式施法 | 同机制；仪式资格由版本规则决定（§5.3：2024 为 edition 级规则，2014 为职业数据） |
 | `spell.range_text` | `Option<String>` | 否 | 展示用范围文本（Touch / Self / Sight / Unlimited / Self (cone)） | 逐版文本 |
 | `spell.duration_text` | `Option<String>` | 否 | 展示用持续时间文本（Instantaneous / Up to 1 minute / Until dispelled） | 逐版文本 |
 | `spell.upcast` | `Option<UpcastSpec>` | 否 | 升环骰表 + 展示文本 | 逐版骰表；2014 “At Higher Levels”，2024 “Using a Higher-Level Spell Slot” |
@@ -265,12 +265,12 @@ pub struct CantripScaling {
 | 职业进度（caster/known/prepared/cantrips/slots） | `tools/talkdnd/data/classes-2014.yaml`、`classes-2024.yaml` | 手写/审校 | `talkdnd` 已嵌入并用于建卡/升级；不需要引擎 |
 | 职业法术表 | 推荐新增 `classes.<id>.spells: [spell-id, ...]`（同两个 YAML） | 手写/审校，后续可由 SRD 导入生成 | 当前 class pack 的 `data.spells` 是 URL，不是列表；`talkdnd` 需要离线可用；见 D-2 |
 | 子职法术列表与授予 | `classes.<id>.subclasses.<sub>.spells: [{id, grant: always_prepared \| class_list \| any_class, level}]` | 手写/审校（2014 可由子职 pack `data.spells` 辅助转换） | grant 类型区分“自动准备 / 扩展职业列表 / 跨职业特性来源”，见 §3.9；不能把所有子职条目压成 always_prepared |
-| 仪式资格（逐版） | `classes.<id>.ritual: none \| known \| prepared \| book`；2024 wizard 另有 `ritual_adept: true` | 从 class pack 特性文本提取/审校（首要来源，见 U-3）；PDF 只用于 pack 未覆盖的逐字差异 | 2014：Bard=known、Cleric/Druid=prepared、Wizard=book（pack 已核实）；2024：wizard=prepared + Ritual Adept（pack 已核实），其余职业待核对（U-3）；不用单一布尔，见 §5.3 |
+| 仪式资格（逐版） | edition 级 `rules.spellcasting.ritual`：2024 覆盖 `prepared`、2014 为 `per-class`（查 `classes-2014.yaml` 的 `classes.<id>.ritual: none \| known \| prepared \| book`）；2024 wizard 另有 `ritual_adept: true` | 2024 已由 `rule-2024-rules-glossary-ritual` 原文核实（edition 级规则）；2014 从 class pack 特性文本提取/审校（已核实）；PDF 只用于 pack 未覆盖的逐字差异 | 2014：Bard=known、Cleric/Druid=prepared、Wizard=book（pack 已核实）；2024：已准备 + Ritual 标签即可，不依赖职业特性（glossary 已核实）；wizard 的 Ritual Adept 允许书内未准备（pack 已核实）；不用单一布尔，见 §5.3 |
 | Mystic Arcanum 资源 | `classes.<id>.arcanum: true`（warlock；`classdata` 生成 `arcanum-6..9`） | 手写/审校 | 独立资源、长休恢复、不占法术位；解锁等级两版均已由 pack 原文核实（U-9），见 §3.10 |
 | 抄书/仪式数值 | 推荐 `rules.spellcasting`（`common/rules.yaml` 形状 + 各版覆盖） | 数据 | 时间/金币逐版不同；引擎只读值，不硬编码 |
 | 法术书数量 | `classes.<id>.book_per_level` 或 `book: {start, per_level}` | 手写/审校 | 只有 wizard 使用；见 D-2 |
 
-**不放在 `common/`**：法术、职业表、仪式资格都逐版不同；`common/` 只放共享的规则形状（例如 `rules.spellcasting` 的字段名与默认语义）。这与现有 `rules.combat_actions` / `rules.exhaustion` 的分层一致。
+**不放在 `common/`**：法术、职业表逐版不同；仪式资格的取值也逐版不同——2024 是 edition 级规则值（进 2024 的 `rules.spellcasting.ritual` 覆盖），2014 是职业特性（进 `classes-2014.yaml`）；`common/` 只放共享的规则形状（例如 `rules.spellcasting` 的字段名与默认语义）。这与现有 `rules.combat_actions` / `rules.exhaustion` 的分层一致。
 
 ### 2.5 与现有 `Ability` 执行路径和内容包的兼容
 
@@ -297,7 +297,7 @@ pub struct CantripScaling {
 | 戏法替换 | 多数在升级时按职业文本替换 | 多数在长休时替换 | `classes-*.yaml` 的 `cantrip_replace` |
 | 代表法术数值 | Cure Wounds `1d8+mod`；Sleep 是 HP 池、无豁免 | Cure Wounds `2d8+mod`；Sleep 是 5 尺球、WIS 豁免/失能 | `2014/spells.yaml` 与 `2024/spells.yaml` |
 | 成分/材料 | V/S/M；器材/材料包可替代无价格材料 | 同结构；具体法术文本与材料以 2024 数据为准 | `spells.yaml` 的 `spell.components` |
-| 仪式 | 资格按职业特性：Bard=known、Cleric/Druid=prepared、Wizard=book（书内未准备也可仪式施放，pack 已核实）；时长 = 正常施法时间 + 10 分钟 | 资格 = 已准备 + Ritual 标签 + 职业仪式特性；Wizard 的 Ritual Adept 另允许从法术书施放未准备法术（pack 已核实）；非 wizard 职业待核对（U-3）；仪式不能升环 | `classes-*.yaml` 的 `ritual` / `ritual_adept`（首要来源 class pack，U-3） |
+| 仪式 | 资格按职业特性：Bard=known、Cleric/Druid=prepared、Wizard=book（书内未准备也可仪式施放，pack 已核实）；时长 = 正常施法时间 + 10 分钟 | 资格 = 已准备 + Ritual 标签（edition 级 glossary 规则，`rule-2024-rules-glossary-ritual` 原文已核实，不依赖职业特性）；Wizard 的 Ritual Adept 另允许从法术书施放未准备法术（pack 已核实）；仪式不能升环 | `rules.spellcasting.ritual`（2024 = `prepared`）+ `classes-2014.yaml` 的 `ritual` / 2024 wizard 的 `ritual_adept`（见 §5.3） |
 | 升环 | “At Higher Levels” 文本 | “Using a Higher-Level Spell Slot” 文本 | `spell.upcast` |
 | 戏法成长 | 角色等级 5/11/17 | 同 | `spell.cantrip_scaling` |
 
@@ -369,7 +369,7 @@ pub struct CantripScaling {
 | 长休 | 不改变已知列表 | 可以替换准备列表；数量按表/公式 | 从书中准备子集；可以替换 | 2024 多数职业可替换一个戏法（按职业数据） | 工具只改列表并写日志；不自动长休、不自动回血/回法术位 |
 | 升级 | 按职业表学习新法术；可替换一个（按职业文本） | 准备上限可能增加；选择新准备法术 | 书 +2 个法术；准备上限可能增加 | 数量可能增加；选择新戏法 | `talkdnd level-up` 重算槽位/施法数值；列表变化由玩家选择 |
 | 抄书 | 不适用 | 不适用 | 只有 wizard：把法术加入书；花费 `rules.spellcasting.scribe` 的时间/金币；不自动准备 | 不适用 | 需要 DM 确认来源（卷轴/书）；`talkdnd char <name> scribe` |
-| 仪式 | 2014 Bard（`ritual: known`）可仪式施放已知法术 | `ritual: prepared` 的职业（2014 Cleric/Druid；2024 合资格职业，见 §5.3）可仪式施放已准备法术 | 2014 Wizard（`ritual: book`）书内未准备也可施放；2024 Wizard 由 Ritual Adept 覆盖（`ritual_adept: true`） | 不适用（戏法无仪式） | 时长 = 正常施法时间 + 10 分钟；不消耗法术位、不升环；战斗外；`talkdnd char <name> ritual` 只校验与记录 |
+| 仪式 | 2014 Bard（`ritual: known`）可仪式施放已知法术 | `ritual: prepared` 的职业（2014 Cleric/Druid）可仪式施放已准备法术；2024 所有施法职业按 edition 级规则仪式施放已准备法术（见 §5.3） | 2014 Wizard（`ritual: book`）书内未准备也可施放；2024 Wizard 由 Ritual Adept 覆盖（`ritual_adept: true`） | 不适用（戏法无仪式） | 时长 = 正常施法时间 + 10 分钟；不消耗法术位、不升环；战斗外；`talkdnd char <name> ritual` 只校验与记录 |
 
 **准备时机**：RAW 是长休时替换准备列表。工具不强制“必须刚长休”，但会在 `prepare`/`unprepare` 时写一条日志并提示“这是长休时的选择”；如果存档有世界时间，可建议 `talkdnd time` 记录。是否强制长休门禁是 D-8。
 
@@ -377,7 +377,7 @@ pub struct CantripScaling {
 
 **抄书**：成本/时间不硬编码。推荐在 `rules.spellcasting` 放 `scribe_hours_per_level`、`scribe_cost_gp_per_level`（common 形状，2014/2024 覆盖）；具体数值由实现任务从 SRD 文本核对后写入。`talkdnd char <name> scribe` 只加书、扣金币（`progress` 的钱袋）、写日志；不自动准备。
 
-**仪式**：资格与来源按 §5.3 的两版模型（`classes.<id>.ritual: none|known|prepared|book`，2024 wizard 另有 `ritual_adept`）；`talkdnd char <name> ritual` 校验“法术有 `ritual: true` + 该职业的 `ritual` 值与列表匹配（known → known 列表、prepared → prepared 列表、book → book）+ 该版规则允许（2024 仪式要求已准备，除非 Ritual Adept）”，不消耗法术位，写一条“正常施法时间 + 10 分钟”的日志；不自动推进世界时间。2024 仪式不能升环，2014 仪式同样不占槽、不升环。见 D-7。
+**仪式**：资格与来源按 §5.3 的两版模型（edition 级 `rules.spellcasting.ritual`：2024 = `prepared`，2014 = `per-class` 查 `classes.<id>.ritual: none|known|prepared|book`；2024 wizard 另有 `ritual_adept`）；`talkdnd char <name> ritual` 校验“法术有 `ritual: true` + 该版资格满足（2014：职业的 `ritual` 值与列表匹配——known → known 列表、prepared → prepared 列表、book → book；2024：法术在准备列表，Ritual Adept 另允许书内未准备）”，不消耗法术位，写一条“正常施法时间 + 10 分钟”的日志；不自动推进世界时间。2024 仪式不能升环，2014 仪式同样不占槽、不升环。见 D-7。
 
 ### 3.5 存档位置
 
@@ -596,17 +596,17 @@ spells:
 
 ### 5.3 仪式（两版分开建模）
 
-**资格模型**：单一 `ritual_casting` 布尔无法表达两版差异。用逐职业数据字段：
+**资格模型**：单一 `ritual_casting` 布尔无法表达两版差异。按 edition 分层：
 
-- `classes.<id>.ritual: none | known | prepared | book`——仪式施放时法术必须在哪个列表。
-- 2024 wizard 另有 `classes.<id>.ritual_adept: true`——书内未准备的法术也可仪式施放（Ritual Adept）。
+- `rules.spellcasting.ritual`（edition 级）：2024 覆盖为 `prepared`——已准备 + Ritual 标签即可仪式施放，这是 edition 规则，不依赖任何职业特性（glossary 原文已核实，见下表）；2014 为 `per-class`——由职业特性决定，查 `classes-2014.yaml` 的 `classes.<id>.ritual: none | known | prepared | book`（仪式施放时法术必须在哪个列表）。
+- 2024 wizard 另有 `classes.<id>.ritual_adept: true`——书内未准备的法术也可仪式施放（Ritual Adept）。它是 edition 规则的例外，不是仪式资格的来源。
 
-**两版语义**（首要来源 class pack 特性文本；PDF 只用于 pack 未覆盖的逐字差异，见 U-3）：
+**两版语义**（2014 首要来源 class pack 特性文本；2024 已由 prose pack 的 glossary 原文核实；PDF 只用于 pack 未覆盖的逐字差异）：
 
 | 版本 | 规则 | 对应数据 |
 |------|------|----------|
 | 2014 | 职业特性授予（pack 已核实）：Bard=known、Cleric/Druid=prepared、Wizard=book（wizard 不要求已准备）；pack 的 class 数据中只有这四个职业有 Ritual Casting 特性 | `bard: known`、`cleric: prepared`、`druid: prepared`、`wizard: book`，其余 `none`（Warlock 经魔祈的仪式见 D-12，v1.6 数据为 `none`） |
-| 2024 | 法术须“已准备且带 Ritual 标签”+ 该职业有仪式施法特性（Ritual Adept 例外：书内未准备也可）；pack 已核实只有 wizard 的 class 数据出现 ritual（`wizard-ritual-adept` 含 Ritual Adept 原文），其余职业是否带职业级仪式特性待核对（U-3） | `wizard: prepared + ritual_adept: true`；其余职业按 U-3 核对结果（确无特性则 `none`） |
+| 2024 | 已准备 + Ritual 标签即可仪式施放——edition 级规则，不依赖职业特性（glossary `rule-2024-rules-glossary-ritual` 原文已核实：“If you have a spell prepared that has the Ritual tag, you can cast that spell as a Ritual…”）；Ritual Adept（wizard 特性，`wizard-ritual-adept` pack 已核实）例外：书内未准备也可 | 2024 覆盖 `rules.spellcasting.ritual: prepared`；`classes-2024.yaml` 不写职业级 `ritual` 字段；wizard 另有 `ritual_adept: true` |
 
 **特性/魔祈授予的仪式（D-12，v1.6 非目标）**：2014 pack 的魔祈文本也授予仪式施法——`eldritch-invocation-book-of-ancient-secrets`（依赖 Pact of the Tome 的 Book of Shadows：把选定的两个 1 环仪式法术写入书并可作为 ritual 施放，另可把已知的带 ritual tag 的 warlock 法术作为 ritual 施放；抄录新仪式 2 小时/环 + 50 gp）、`pact-of-the-chain`（find familiar 可作为 ritual 施放）。v1.6 不建模魔祈选择，因此数据模型没有位置表达这些角色级仪式资格；Warlock 的 `ritual: none` 只表示“无职业级仪式特性”，不是断言 SRD 中 Warlock 无法仪式施法。是否引入角色级 `ritual_grants`（来源限定为 invocation 文本）由 D-12 决定；在此之前 `talkdnd ritual` 对此类角色失败关闭拒绝，DM 手动裁定并记日志。
 
@@ -618,7 +618,7 @@ spells:
 
 **执行边界（与 §4.1/§4.5/`docs/PLAN.md` 一致）**：
 
-- `talkdnd char <名字> ritual <法术>` 是唯一仪式入口：校验 `spell.ritual == true` + 该职业 `ritual` 值与法术所在列表匹配（2024 还要求已准备，Ritual Adept 例外）+ 写“正常施法时间 + 10 分钟”日志；**不结算效果、不推进世界时间**。
+- `talkdnd char <名字> ritual <法术>` 是唯一仪式入口：校验 `spell.ritual == true` + 该版资格满足（2014：职业 `ritual` 值与法术所在列表匹配；2024：法术在准备列表，Ritual Adept 另允许书内未准备）+ 写“正常施法时间 + 10 分钟”日志；**不结算效果、不推进世界时间**。
 - `combat-sim cast` **不提供 `--ritual`、不结算仪式**；仪式效果由 DM 叙述或手动命令记录。
 - 如果仪式法术需要材料，仍按 5.1 的“有价格/消耗”声明规则；仪式不因为“不耗槽”而免材料声明。
 
@@ -676,7 +676,7 @@ spells:
 | Sleep | HP 池 5d8，无豁免 | 5 尺球，WIS 豁免/失能 | 否，数据 |
 | 职业模式 | 部分 known | 全部 prepared/spellbook | 否，`classes-*.yaml` |
 | 准备数量 | 公式 | 表 | 否，`classes-*.yaml` |
-| 仪式资格 | 职业特性：Bard=known、Cleric/Druid=prepared、Wizard=book（pack 已核实）；魔祈授予的仪式不在 v1.6（D-12） | 已准备 + Ritual 标签 + 职业特性（wizard=Ritual Adept，pack 已核实）；其余职业待核对（U-3） | 否，`classes-*.yaml` 的 `ritual`/`ritual_adept` |
+| 仪式资格 | 职业特性：Bard=known、Cleric/Druid=prepared、Wizard=book（pack 已核实）；魔祈授予的仪式不在 v1.6（D-12） | edition 级规则：已准备 + Ritual 标签，不依赖职业特性（glossary 已核实）；wizard 的 Ritual Adept 另允许书内未准备（pack 已核实） | 否，`rules.spellcasting.ritual`（2024）/ `classes-2014.yaml` 的 `ritual`、2024 wizard 的 `ritual_adept` |
 | 材料/成分 | 逐法术 | 逐法术 | 否，数据 |
 | 升环骰表 | 逐法术 | 逐法术 | 否，数据 |
 
@@ -800,7 +800,7 @@ spells:
 1. `CharFile` 增加 `spells: Option<SpellLists>`；旧 YAML 无该字段按 `None` 加载；`store` 保留字段。
 2. **版本策略按 D-1 条件化**：若 D-1 选 B → `CURRENT_SCHEMA = 10`、`CharFile.version` 保持 1；若 D-1 选 A → `CURRENT_SCHEMA` 保持 9、`CharFile.version` 升 2 且旧版 `store` 对 version 2 文件失败关闭。两条分支都要有测试。
 3. `Creation` 增加结构化列表（或 `spell_lists`），`set spells` 仍可用；`validate` 优先结构化列表，旧自由文本回退；数量与 `classdata::generate` 一致。
-4. 职业数据增加：`spells`（基础职业法术表）、`ritual: none|known|prepared|book`（+ 2024 `ritual_adept`；Warlock 为 `none` 并按 D-12 口径）、子职 `spells[].grant`（§3.9）、`arcanum: true`（warlock）、`book`/`scribe`、`cantrip_replace` 所需字段；8 个 SRD 施法职业覆盖 3.2 表。grant 类型按 SRD 文本核对（U-3），不得把 Fiend 之类扩展列表写成 `always_prepared`。
+4. 职业数据增加：`spells`（基础职业法术表）、`ritual: none|known|prepared|book`（2014 职业级字段：Bard=known、Cleric/Druid=prepared、Wizard=book，Warlock 为 `none` 并按 D-12 口径）、edition 级 `rules.spellcasting.ritual`（2024 = `prepared`，见 §5.3；2024 职业不写职业级 `ritual` 字段）、2024 wizard `ritual_adept: true`、子职 `spells[].grant`（§3.9）、`arcanum: true`（warlock）、`book`/`scribe`、`cantrip_replace` 所需字段；8 个 SRD 施法职业覆盖 3.2 表。grant 类型按 SRD 文本核对（U-3），不得把 Fiend 之类扩展列表写成 `always_prepared`。
 5. **迁移按 D-1 条件化**：若选 B → 实现 9→10：dry-run、整档备份、逐 sheet 添加/补全 `spells`、从 `chargen.json`/正文精确 adopt、`legacy` 列表、幂等；**并新增 dirty-sheet 保护**（§3.6）：迁移前取 integrity dirty 集合，dirty sheet 不做 serde 往返重写（跳过并按 legacy 处理，或证明安全的纯增量写入），报告中逐条列出；若选 A → 不迁移 schema，实现 `CharFile.version` 2 的失败关闭与 additive 读取，旧版兼容说明写入 `LetsPlay/docs/character-data.md`。
 6. 旧存档迁移（或 A 分支下旧存档直读）后 `talkdnd start`/`char` 可读；迁移失败不半写；回退备份可用。
 7. 测试覆盖：旧 sheet、旧 chargen.json、无法映射的名字、重复迁移、**dirty sheet 有/无 `spells` 块两种形态**、2024 新戏法识别、契约施法者 `pact(lvl)` 资源生成、`arcanum-6..9` 按等级生成。
@@ -820,7 +820,7 @@ spells:
 - `negative_cases`：未知法术 id、来源校验失败（§3.9）、超过准备数量、`unprepare always_prepared`、契约施法者列表含 `spell.level > L` → 全部拒绝且不写文件；旧二进制读 schema 10 档案 → 在 save-meta 拒绝。
 - `migration_cases`：schema 9 档案（B 分支）→ 备份 + adopt + legacy + dirty-sheet 保护；`CharFile.version` 1 → 2（A 分支）→ 旧版失败关闭；旧 `spell-slot-*` 资源与自由文本 `spells` 的兼容路径按 §3.7/§3.10。
 - `integration_paths`：`chargen.json` ↔ `sheets` adopt；`progress.rs::rebuild_class_derived` 升级重算；`classdata::generate` 新字段；`LetsPlay/docs/layout.md` 的 schema 描述（B 分支）。
-- `unverified_assumptions`：真实存档是否存在手工法术 ref/chargen 残留（U-2/U-6）；2024 非 wizard 职业仪式资格与子职 grant 的 SRD 文本（U-3）；`arcanum-N` 数据落地与逐字差异（U-9）。派发前由 Master 确认 D-1 已决。
+- `unverified_assumptions`：真实存档是否存在手工法术 ref/chargen 残留（U-2/U-6）；子职 grant 语义与抄书数值的 SRD 文本（U-3）；`arcanum-N` 数据落地与逐字差异（U-9）。派发前由 Master 确认 D-1 已决。
 
 #### T3 — 列表 CLI、角色卡 refs、建卡/升级接入
 
@@ -1004,7 +1004,7 @@ T1 ──┬─> T2 ──> T3 ──┐
 | D-4 | 成分不满足时硬失败还是 warning？谁可越权？ | A：昂贵/消耗硬失败，V/S warning；B：全部 warning；C：全部硬失败 | **A**；`--ignore-components` 仅 DM 且写日志 | T4 |
 | D-5 | 战斗外施法：手动 `talkdnd char`，还是给 `combat-sim` 临时 state？ | A：手动（v1.6）；B：临时 state 走 `use_ability`；C：`talkdnd` 内结算 | **A**；B 另开任务；**绝不 C** | T3/T5 |
 | D-6 | 升环范围：只扣槽/上下文，还是逐级骰表？戏法成长是否同版？ | A：槽位 + `upcast` 骰表 + 戏法表；B：只扣槽；C：全部 manual | **A**（主伤害/治疗；其他 manual） | T4/T5 |
-| D-7 | 仪式：两版资格语义（§5.3 的 `ritual: none|known|prepared|book` + 2024 `ritual_adept`）与战斗外边界是否确认？ | A：按 §5.3 建模，战斗外，`talkdnd` 只校验/记录，`combat-sim` 不结算；B：简化成单一布尔（无法表达 2024 差异，不推荐）；C：战斗内也允许仪式 | **A** | T2/T3/T5 |
+| D-7 | 仪式：两版资格语义（§5.3 的 edition 级 `rules.spellcasting.ritual`——2024 = `prepared`、2014 = `per-class` 查 `classes.<id>.ritual`——+ 2024 wizard `ritual_adept`）与战斗外边界是否确认？ | A：按 §5.3 建模，战斗外，`talkdnd` 只校验/记录，`combat-sim` 不结算；B：简化成单一布尔（无法表达两版差异，不推荐）；C：战斗内也允许仪式 | **A** | T2/T3/T5 |
 | D-8 | 准备/替换是否强制“刚长休”？ | A：工具提示 + 日志，不强制；B：强制最近长休；C：完全不管 | **A**（v1.6 不强制；靠日志与桌规） | T2/T3 |
 | D-9 | 旧自由文本 adopt：自动精确匹配，还是全手动？ | A：精确 id/slug/name + `legacy`；B：模糊匹配；C：全手动 | **A**；不做模糊匹配 | T2 |
 | D-10 | 章程更新：每个行为 PR 各自更新，还是集中到 T5？并行合并如何排队？ | A：各自更新、串行合并；B：所有者授权集中 T5 | **A**（符合 LIVING CHARTER）；若要并行合并选 B 并明确授权 | 所有任务；路径锁/合并队列 |
@@ -1017,12 +1017,12 @@ T1 ──┬─> T2 ──> T3 ──┐
 |----|-----------|------------|----------|------|
 | U-1 | 上游 `5e-SRD-Spells.json` 是否含 `classes` 数组 | 决定职业表能否从 SRD 导入，而不是手写 | 用 `5e-database` 源 JSON 检查 `spells[].classes`；当前 `srd.rs::spell` 不读取 | T1/T2 数据来源 |
 | U-2 | 旧角色卡是否已有法术 refs，或 `chargen` 是否在别处写 refs | 决定“当前 cast 是否真的对新建 PC 可用” | 用真实存档 `sheets/*.yaml` 检查 `actions`/`features`；代码路径见 1.3 | 现状结论、T3 sync 策略 |
-| U-3 | 抄书时间/金币（两版）；2024 非 wizard 职业是否带职业级仪式特性；戏法替换时机；子职 grant 语义（Fiend=class_list 等的 SRD 原文） | 数据不能猜。已核实（uv 脚本只读扫描两版 class pack）：2014 Bard/Cleric/Druid/Wizard 的 class 特性含 Ritual Casting（desc 分别对应 known/prepared/prepared/book，wizard 不要求已准备），2014 魔祈 rule_sections（book-of-ancient-secrets、pact-of-the-chain 等）含仪式文本；2024 `wizard-ritual-adept` 有 Ritual Adept 原文，class 数据只有 wizard 出现 ritual | 2024 非 wizard 职业对照 SRD 文本确认是否确无职业级仪式特性；其余逐条核对后写入 `classes-*.yaml`/`rules.spellcasting`；PDF 只用于 pack 未覆盖的逐字差异 | T2/T5 |
+| U-3 | 抄书时间/金币（两版）；戏法替换时机；子职 grant 语义（Fiend=class_list 等的 SRD 原文） | 数据不能猜。已核实（uv 脚本只读扫描）：2024 仪式资格为 edition 级规则——`rule-2024-rules-glossary-ritual` 原文：“If you have a spell prepared that has the Ritual tag, you can cast that spell as a Ritual…”，不要求职业特性，2014 职业级模型不受影响；2014 Bard/Cleric/Druid/Wizard 的 class 特性含 Ritual Casting（desc 分别对应 known/prepared/prepared/book，wizard 不要求已准备），2014 魔祈 rule_sections（book-of-ancient-secrets、pact-of-the-chain 等）含仪式文本；2024 `wizard-ritual-adept` 有 Ritual Adept 原文（edition 规则的例外） | 其余逐条核对后写入 `classes-*.yaml`/`rules.spellcasting`；PDF 只用于 pack 未覆盖的逐字差异 | T2/T5 |
 | U-4 | `content check` 对新增 `spell` 字段的 warning/error 容忍度 | 旧内容是否会被误报 | T1 后用两版 `content check` 与旧 pack 跑 | T1/T5 |
 | U-5 | FULL 包是否包含职业法术表/法术 `classes` | 决定 FULL 存档能否严格校验准备 | 用本机 full pack 的 `classes`/`abilities` 检查；仓库没有 full pack | D-2/T2 |
 | U-6 | `chargen.json` 在确认后是否保留、是否与 sheet 一致 | 决定 migrate 能否用它 adopt | 用真实存档检查；迁移测试用合成 fixture | T2 |
 | U-7 | `talkdnd` 能否在非战斗命令中加载 `ContentRegistry`（只读、无 state） | 决定职业表/法术元数据是否复用引擎内容而不是复制 | 用 `ContentSources { libraries: [Rules/combat/<edition>] }.load()` 的库调用验证；不联网 | T2/T3 |
-| U-8 | 2014 附赠动作同回合限制、2024 每回合一个法术位法术、长施法（中断不扣槽）的逐字文本 | D-11 选 B/C 或 T5 写 DM 指引时需要逐字依据；已核实 2024 prose pack 是 glossary，不含这些章节文本；2024 Magical Secrets 的来源范围已由 `bard-magical-secrets` 原文核实，不再列入 | 用玩家自备 SRD PDF 核对；结论写入 `rules.spellcasting`/`LetsPlay/docs/spellcasting.md` | D-11/T5 |
+| U-8 | 2014 附赠动作同回合限制、2024 每回合一个法术位法术、长施法（中断不扣槽）的逐字文本 | D-11 选 B/C 或 T5 写 DM 指引时需要逐字依据；已核实 2024 prose pack 含 Ritual glossary 条目（`rule-2024-rules-glossary-ritual`），但不含上述限制对应的条目（“每回合一个法术位法术”“同回合限制”“长施法中断不扣槽”在 prose pack 中均无）；2024 Magical Secrets 的来源范围已由 `bard-magical-secrets` 原文核实，不再列入 | 用玩家自备 SRD PDF 核对；结论写入 `rules.spellcasting`/`LetsPlay/docs/spellcasting.md` | D-11/T5 |
 | U-9 | Mystic Arcanum 的 `arcanum-N` 数据落地与逐字差异 | 解锁等级已由 pack 原文核实（不再待核对）：2014 有 `mystic-arcanum-6th-level` 等四条；2024 `warlock-mystic-arcanum` 原文给出 11 级 6 环、13 级 7 环、15 级 8 环、17 级 9 环，长休恢复、升级可替换同环法术 | 数据写入时以 pack 原文为准；pack 未覆盖的措辞对照 SRD PDF | T2（warlock 数据） |
 
 ## 9. 参考
