@@ -10,9 +10,9 @@ use std::fmt;
 use super::expr;
 use super::loader::{ContentRegistry, ContentSource};
 use super::schema::{
-    Ability, AbilityCost, AbilityEntry, AiAssignment, AiParams, Attack, AttackEffect, ConditionDef,
-    Creature, Duration, Effect, ExprValue, MasteryDef, Modifier, Predicate, Scene, SceneTrigger,
-    Trigger,
+    Ability, AbilityCost, AbilityEntry, AbilityName, ActionResolution, Activation, AiAssignment,
+    AiParams, Attack, AttackEffect, ConditionDef, Creature, Duration, Effect, ExprValue,
+    MasteryDef, Modifier, Predicate, Scene, SceneTrigger, Trigger,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +97,7 @@ pub fn check(registry: &ContentRegistry) -> CheckReport {
     check_ids_and_todos(registry, &mut report);
     check_condition_implies(registry, &mut report);
     check_rules(registry, &mut report);
+    check_combat_actions(registry, &mut report);
 
     let (resolved, unresolved) = resolve_creatures(registry, &mut report);
     let creature_refs = collect_creature_refs(registry, &resolved);
@@ -451,6 +452,169 @@ fn check_condition(
             source,
             format!("{context}: unknown condition `{condition}`"),
         );
+    }
+}
+
+fn check_combat_actions(registry: &ContentRegistry, report: &mut CheckReport) {
+    let Some(actions) = &registry.rules.combat_actions else {
+        return;
+    };
+    let source = registry.rules_source.as_ref();
+
+    if let Some(unarmed) = &actions.unarmed_strike {
+        match &unarmed.damage {
+            Some(damage) => {
+                check_action_expression(report, source, damage, "unarmed_strike.damage")
+            }
+            None => report.error(
+                source,
+                "rules.combat_actions.unarmed_strike.damage is required",
+            ),
+        }
+        if unarmed.reach.is_some_and(|reach| reach <= 0) {
+            report.error(
+                source,
+                "rules.combat_actions.unarmed_strike.reach must be positive",
+            );
+        }
+    }
+
+    if let Some(grapple) = &actions.grapple {
+        if let Some(condition) = &grapple.condition {
+            check_condition(
+                report,
+                registry,
+                source,
+                condition,
+                "rules.combat_actions.grapple.condition",
+            );
+        } else {
+            report.error(source, "rules.combat_actions.grapple.condition is required");
+        }
+        check_resolution(
+            report,
+            source,
+            grapple.resolution,
+            grapple.attacker_skill.as_deref(),
+            grapple.defender_skills.as_deref(),
+            grapple.save_abilities.as_deref(),
+            grapple.dc.as_ref(),
+            "grapple",
+        );
+        if grapple
+            .max_size_difference
+            .is_some_and(|difference| difference < 0)
+        {
+            report.error(
+                source,
+                "rules.combat_actions.grapple.max_size_difference must not be negative",
+            );
+        }
+    }
+
+    if let Some(shove) = &actions.shove {
+        if let Some(condition) = &shove.prone_condition {
+            check_condition(
+                report,
+                registry,
+                source,
+                condition,
+                "rules.combat_actions.shove.prone_condition",
+            );
+        } else {
+            report.error(
+                source,
+                "rules.combat_actions.shove.prone_condition is required",
+            );
+        }
+        check_resolution(
+            report,
+            source,
+            shove.resolution,
+            shove.attacker_skill.as_deref(),
+            shove.defender_skills.as_deref(),
+            shove.save_abilities.as_deref(),
+            shove.dc.as_ref(),
+            "shove",
+        );
+        if shove
+            .max_size_difference
+            .is_some_and(|difference| difference < 0)
+        {
+            report.error(
+                source,
+                "rules.combat_actions.shove.max_size_difference must not be negative",
+            );
+        }
+        if shove.distance.is_some_and(|distance| distance <= 0) {
+            report.error(
+                source,
+                "rules.combat_actions.shove.distance must be positive",
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_resolution(
+    report: &mut CheckReport,
+    source: Option<&ContentSource>,
+    resolution: Option<ActionResolution>,
+    attacker_skill: Option<&str>,
+    defender_skills: Option<&[String]>,
+    save_abilities: Option<&[AbilityName]>,
+    dc: Option<&ExprValue>,
+    action: &str,
+) {
+    match resolution.unwrap_or_default() {
+        ActionResolution::Contest => {
+            if attacker_skill.is_none() {
+                report.error(
+                    source,
+                    format!(
+                        "rules.combat_actions.{action}.attacker_skill is required for a contest"
+                    ),
+                );
+            }
+            if defender_skills.is_none_or(|skills| skills.is_empty()) {
+                report.error(
+                    source,
+                    format!(
+                        "rules.combat_actions.{action}.defender_skills is required for a contest"
+                    ),
+                );
+            }
+        }
+        ActionResolution::Save => {
+            if save_abilities.is_none_or(|abilities| abilities.is_empty()) {
+                report.error(
+                    source,
+                    format!("rules.combat_actions.{action}.save_abilities is required for a save"),
+                );
+            }
+            match dc {
+                Some(dc) => check_action_expression(report, source, dc, &format!("{action}.dc")),
+                None => report.error(
+                    source,
+                    format!("rules.combat_actions.{action}.dc is required for a save"),
+                ),
+            }
+        }
+    }
+}
+
+fn check_action_expression(
+    report: &mut CheckReport,
+    source: Option<&ContentSource>,
+    value: &ExprValue,
+    context: &str,
+) {
+    let expr_context = expr::ExprContext::new()
+        .with_prof(2)
+        .with_level(1)
+        .with_attack_mod(0);
+    if let Err(error) = expr_context.evaluate(&value.as_text()) {
+        report.error(source, format!("rules.combat_actions.{context}: {error}"));
     }
 }
 
@@ -914,6 +1078,9 @@ impl<'a> Walker<'a> {
                 }
             }
         }
+        if creature.extra_attacks.is_some_and(|extra| extra > 10) {
+            self.error("extra_attacks must be at most 10");
+        }
         if let Some(ai) = &creature.ai {
             check_ai_assignment(
                 &mut self.report,
@@ -978,6 +1145,20 @@ impl<'a> Walker<'a> {
     fn ability(&mut self, ability: &Ability) {
         if let Some(cost) = &ability.cost {
             self.cost(cost, &format!("ability `{}`", ability.id));
+        }
+        if let Some(extra) = ability.extra_attacks {
+            if extra > 10 {
+                self.error(format!(
+                    "ability `{}` extra_attacks must be at most 10",
+                    ability.id
+                ));
+            }
+            if ability.activation != Activation::Passive {
+                self.warning(format!(
+                    "ability `{}` grants extra attacks but is not passive",
+                    ability.id
+                ));
+            }
         }
         self.effects(&ability.effects);
         for (index, trigger) in ability.triggers.iter().enumerate() {

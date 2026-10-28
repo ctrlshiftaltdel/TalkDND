@@ -7,3 +7,21 @@ rules:
     help: helped
   cover: {half: 2, three_quarters: 5}
   concentration_condition: concentrating
+  # Shared shape for the basic combat actions. Edition files override the
+  # resolution/damage fields that differ between 2014 and 2024.
+  combat_actions:
+    unarmed_strike:
+      ability: str
+      proficient: true
+      type: bludgeoning
+      reach: 5
+    grapple:
+      max_size_difference: 1
+      condition: grappled
+    shove:
+      max_size_difference: 1
+      distance: 5
+      prone_condition: prone
+    two_weapon_fighting:
+      require_light: true
+      add_positive_ability_modifier: false

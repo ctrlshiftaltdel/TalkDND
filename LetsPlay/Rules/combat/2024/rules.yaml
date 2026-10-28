@@ -1,3 +1,13 @@
 # 2024 (SRD 5.2.1): surprised creatures roll initiative with Disadvantage.
 rules:
   surprise: {initiative_disadvantage: true}
+  combat_actions:
+    unarmed_strike: {damage: "1d3+{str}"}
+    grapple:
+      resolution: save
+      save_abilities: [str, dex]
+      dc: "8+{str}+{prof}"
+    shove:
+      resolution: save
+      save_abilities: [str, dex]
+      dc: "8+{str}+{prof}"

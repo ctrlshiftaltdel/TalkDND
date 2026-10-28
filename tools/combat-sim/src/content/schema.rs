@@ -469,6 +469,10 @@ pub struct Rules {
     /// ruleset default from [`SpatialProfile::for_ruleset`] applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial_profile: Option<SpatialProfile>,
+    /// Edition-specific parameters for the shared combat actions (grapple,
+    /// shove, unarmed strike, two-weapon fighting).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combat_actions: Option<CombatActions>,
 }
 
 /// Surprise handling. 2024: initiative with disadvantage. 2014: normal
@@ -512,6 +516,12 @@ impl Rules {
         if other.spatial_profile.is_some() {
             self.spatial_profile = other.spatial_profile;
         }
+        if let Some(other) = other.combat_actions {
+            match &mut self.combat_actions {
+                Some(existing) => existing.merge_from(other),
+                slot @ None => *slot = Some(other),
+            }
+        }
     }
 }
 
@@ -532,6 +542,213 @@ impl CoverRules {
         }
         if other.three_quarters.is_some() {
             self.three_quarters = other.three_quarters;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core combat actions
+// ---------------------------------------------------------------------------
+
+/// Parameters for the actions every creature can attempt. The common layer
+/// supplies the shared shape; each edition overrides the resolution rules.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CombatActions {
+    #[serde(default)]
+    pub unarmed_strike: Option<UnarmedStrikeRule>,
+    #[serde(default)]
+    pub grapple: Option<GrappleRule>,
+    #[serde(default)]
+    pub shove: Option<ShoveRule>,
+    #[serde(default)]
+    pub two_weapon_fighting: Option<TwoWeaponRule>,
+}
+
+impl CombatActions {
+    fn merge_from(&mut self, other: CombatActions) {
+        merge_rule(&mut self.unarmed_strike, other.unarmed_strike);
+        merge_rule(&mut self.grapple, other.grapple);
+        merge_rule(&mut self.shove, other.shove);
+        merge_rule(&mut self.two_weapon_fighting, other.two_weapon_fighting);
+    }
+}
+
+fn merge_rule<T: MergeRule>(slot: &mut Option<T>, other: Option<T>) {
+    if let Some(other) = other {
+        match slot {
+            Some(existing) => existing.merge_from(other),
+            empty @ None => *empty = Some(other),
+        }
+    }
+}
+
+trait MergeRule {
+    fn merge_from(&mut self, other: Self);
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnarmedStrikeRule {
+    #[serde(default)]
+    pub ability: Option<AbilityName>,
+    /// Unarmed strikes use the creature's proficiency bonus unless this is
+    /// explicitly false.
+    #[serde(default)]
+    pub proficient: Option<bool>,
+    #[serde(default)]
+    pub damage: Option<ExprValue>,
+    #[serde(rename = "type", default)]
+    pub damage_type: Option<DamageType>,
+    #[serde(default)]
+    pub reach: Option<i32>,
+}
+
+impl MergeRule for UnarmedStrikeRule {
+    fn merge_from(&mut self, other: Self) {
+        if other.ability.is_some() {
+            self.ability = other.ability;
+        }
+        if other.proficient.is_some() {
+            self.proficient = other.proficient;
+        }
+        if other.damage.is_some() {
+            self.damage = other.damage;
+        }
+        if other.damage_type.is_some() {
+            self.damage_type = other.damage_type;
+        }
+        if other.reach.is_some() {
+            self.reach = other.reach;
+        }
+    }
+}
+
+/// How a grapple or shove is opposed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionResolution {
+    /// 2014: a contested Strength (Athletics) check.
+    #[default]
+    Contest,
+    /// 2024: a Strength or Dexterity saving throw against the unarmed DC.
+    Save,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrappleRule {
+    #[serde(default)]
+    pub resolution: Option<ActionResolution>,
+    #[serde(default)]
+    pub attacker_skill: Option<String>,
+    #[serde(default)]
+    pub defender_skills: Option<Vec<String>>,
+    #[serde(default)]
+    pub save_abilities: Option<Vec<AbilityName>>,
+    #[serde(default)]
+    pub dc: Option<ExprValue>,
+    #[serde(default)]
+    pub max_size_difference: Option<i32>,
+    #[serde(default)]
+    pub condition: Option<String>,
+}
+
+impl MergeRule for GrappleRule {
+    fn merge_from(&mut self, other: Self) {
+        if other.resolution.is_some() {
+            self.resolution = other.resolution;
+        }
+        if other.attacker_skill.is_some() {
+            self.attacker_skill = other.attacker_skill;
+        }
+        if other.defender_skills.is_some() {
+            self.defender_skills = other.defender_skills;
+        }
+        if other.save_abilities.is_some() {
+            self.save_abilities = other.save_abilities;
+        }
+        if other.dc.is_some() {
+            self.dc = other.dc;
+        }
+        if other.max_size_difference.is_some() {
+            self.max_size_difference = other.max_size_difference;
+        }
+        if other.condition.is_some() {
+            self.condition = other.condition;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShoveRule {
+    #[serde(default)]
+    pub resolution: Option<ActionResolution>,
+    #[serde(default)]
+    pub attacker_skill: Option<String>,
+    #[serde(default)]
+    pub defender_skills: Option<Vec<String>>,
+    #[serde(default)]
+    pub save_abilities: Option<Vec<AbilityName>>,
+    #[serde(default)]
+    pub dc: Option<ExprValue>,
+    #[serde(default)]
+    pub max_size_difference: Option<i32>,
+    #[serde(default)]
+    pub distance: Option<i32>,
+    #[serde(default)]
+    pub prone_condition: Option<String>,
+}
+
+impl MergeRule for ShoveRule {
+    fn merge_from(&mut self, other: Self) {
+        if other.resolution.is_some() {
+            self.resolution = other.resolution;
+        }
+        if other.attacker_skill.is_some() {
+            self.attacker_skill = other.attacker_skill;
+        }
+        if other.defender_skills.is_some() {
+            self.defender_skills = other.defender_skills;
+        }
+        if other.save_abilities.is_some() {
+            self.save_abilities = other.save_abilities;
+        }
+        if other.dc.is_some() {
+            self.dc = other.dc;
+        }
+        if other.max_size_difference.is_some() {
+            self.max_size_difference = other.max_size_difference;
+        }
+        if other.distance.is_some() {
+            self.distance = other.distance;
+        }
+        if other.prone_condition.is_some() {
+            self.prone_condition = other.prone_condition;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TwoWeaponRule {
+    /// Only Light melee weapons qualify for the off-hand attack.
+    #[serde(default)]
+    pub require_light: Option<bool>,
+    /// 2014 and 2024 both omit a positive ability modifier from off-hand
+    /// damage. Set true only for an explicit feature such as a Fighting Style.
+    #[serde(default)]
+    pub add_positive_ability_modifier: Option<bool>,
+}
+
+impl MergeRule for TwoWeaponRule {
+    fn merge_from(&mut self, other: Self) {
+        if other.require_light.is_some() {
+            self.require_light = other.require_light;
+        }
+        if other.add_positive_ability_modifier.is_some() {
+            self.add_positive_ability_modifier = other.add_positive_ability_modifier;
         }
     }
 }
@@ -604,6 +821,10 @@ pub struct Creature {
     pub features: Option<Vec<AbilityEntry>>,
     #[serde(default)]
     pub multiattack: Option<Vec<String>>,
+    /// Additional attacks granted when taking the Attack action (Extra Attack).
+    /// Zero/absent keeps the legacy one-attack behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_attacks: Option<u32>,
     /// Initial condition ids.
     #[serde(default)]
     pub conditions: Option<Vec<String>>,
@@ -664,6 +885,7 @@ impl Creature {
         replace!(actions);
         replace!(features);
         replace!(multiattack);
+        replace!(extra_attacks);
         replace!(conditions);
         replace!(dormant);
         replace!(ai);
@@ -960,6 +1182,10 @@ pub struct Ability {
     pub effects: Vec<Effect>,
     #[serde(default)]
     pub triggers: Vec<Trigger>,
+    /// Extra attacks granted by a passive feature while taking the Attack
+    /// action. The engine takes the highest value, never a sum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_attacks: Option<u32>,
     #[serde(default)]
     pub modifiers: Vec<Modifier>,
     #[serde(default)]
