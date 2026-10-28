@@ -6,9 +6,9 @@ TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D
 - 每一幕结尾给几个选项，也可以随便输入你想做的事；
 - 所有骰子都是真随机（在命令行里用操作系统熵掷出），并把完整算式展示给你；
 - 每一步都写进存档日志，下次可以从存档点接着玩；
-- 战斗由 **combat-sim** 结算（命中、伤害、状态、专注、移动、借机攻击……）。
+- 战斗由 **combat-sim** 结算（命中、伤害、状态、专注、移动、借机攻击、擒抱/推撞、准备动作……）。
 
-当前发布：**v1.4.0**（2026-10-28）。本版新增只读 Agent 知识 API（`bin/talkdnd knowledge search|get|cite|context|related`），把规则裁定、存档知识、玩家书、SRD、冒险与原创六类来源放在同一组命令后面，默认只返回玩家已知内容。存档结构仍是 **schema 9**，本版没有新的迁移；默认战斗 AI 仍是 legacy，四规则集与完整书 pack 可选资产与 v1.3.0 相同，详见 `CHANGELOG.md` 的 v1.4.0 小节。
+当前发布：**v1.5.0**（2026-10-28）。本版发布四组战斗规则：核心动作（擒抱、推撞、徒手打击、双武器战斗、额外攻击）、战斗条件（血怒、力竭、魅惑、恐惧）、准备动作（Ready）与感官/遮蔽。存档结构仍是 **schema 9**，本版没有新的迁移，战斗状态也仍是 schema 1；默认战斗 AI 仍是 legacy，四规则集与完整书 pack 可选资产与 v1.4.0 相同，详见 `CHANGELOG.md` 的 v1.5.0 小节。
 
 要玩：留在本目录。本目录的 `AGENTS.md` 是 DM 手册。开发与改代码在仓库根，不在这里。
 
@@ -190,7 +190,9 @@ $CS roll 1d20+5 --adv --dc 15
 
 两个 edition 的差异由数据决定：`Rules/combat/common/` 是通用部分，`Rules/combat/2014/`、`Rules/combat/2024/` 是各 edition 特有的内容。`srd/` 与 `srd-*` 覆盖属于 SRD 层；FULL 先加载 SRD 层，再加载已解锁的完整书内容包，最后加载 `<edition>/` 下其余手写内容与冒险/战役覆盖。引擎读存档清单里的 `ruleset` 自动选择。
 
-战斗 AI 默认沿用原有 legacy heuristic。v1.2 的战术效用规划器与有界搜索只作为库 API 显式 opt-in，v1.3 / v1.4 未改默认；质量基准在合成团队战看到回退，所以玩家不需要设置。自动化开关与知识 API 也不改变战斗 AI。
+v1.5 的四组战斗规则按需查：`docs/combat-actions.md`（擒抱、推撞、徒手打击、双武器战斗、额外攻击与攻击动作预算）、`docs/combat-conditions.md`（血怒、力竭、魅惑、恐惧）、`docs/combat-ready.md`（准备动作与触发）、`docs/combat-senses.md`（黑暗视觉、盲视、震颤感知、真实视觉与光照/遮蔽）。四组都按存档 `ruleset` 使用 2014 或 2024 数据。
+
+战斗 AI 默认沿用原有 legacy heuristic。v1.2 的战术效用规划器与有界搜索只作为库 API 显式 opt-in，v1.3 / v1.4 / v1.5 未改默认；质量基准在合成团队战看到回退，所以玩家不需要设置。自动化开关、知识 API 与 v1.5 战斗规则也不改变战斗 AI。
 
 ## 更新到新版本
 
@@ -207,11 +209,11 @@ $CS roll 1d20+5 --adv --dc 15
    - 把旧存档的 `ruleset: "2014"` / `"2024"` 分别迁移为 `5e-srd` / `5.5e-srd`（只改这一行，保留其他字段与注释）；
    - 原先使用完整书内容的存档需要把 `ruleset` 重选为 `5e-full` / `5.5e-full`，并解锁对应完整书 pack。
 
-自动化开关不需要预先设置：不配置时按章程默认，要改随时用 `bin/talkdnd settings automation ...`，说明见 `docs/automation.md`。v1.4 没有新的存档结构变化，schema 仍为 9；知识 API 只读、不需要额外设置，书籍/冒险索引缺失时搜索返回空结果，可先运行 `bin/talkdnd adventure index build --book "<书名>"`。四规则集和完整书 pack 的用法与 v1.2.0 相同。
+自动化开关不需要预先设置：不配置时按章程默认，要改随时用 `bin/talkdnd settings automation ...`，说明见 `docs/automation.md`。v1.5 没有新的存档结构变化，schema 仍为 9，战斗状态仍是 schema 1；旧 `combat/*.state.json` 直接加载，不需要迁移。四组新战斗规则没有额外设置，玩法说明见 `docs/combat-actions.md`、`docs/combat-conditions.md`、`docs/combat-ready.md`、`docs/combat-senses.md`；知识 API 只读、不需要额外设置，书籍/冒险索引缺失时搜索返回空结果，可先运行 `bin/talkdnd adventure index build --book "<书名>"`。四规则集和完整书 pack 的用法与 v1.2.0 相同。
 
 完整书 pack 不在普通发布包内。需要时，从项目所有者另行提供的 `talkdnd-full-packs-<标签>.tar.gz` 解压到 `Rules/packs/`，把匹配 PDF 放进 `Rules/<edition>/` 后用 `bin/talkdnd library scan` 解锁；没有它也能用 5e SRD / 5.5e SRD 完整游玩。
 
-发布包里**没有**任何用户数据：存档（只有 `Saves/README.md`）、规则书和冒险书（只有 README）、本地导入、`fixes/`、资料图登记表、你自己的规则裁定都不会被覆盖，打包时会自动检查。确认迁移没问题后，`Saves/_backups/` 里的备份可以自行删除。每个版本改了什么见仓库里的 `CHANGELOG.md`；v1.4.0 的已知限制（知识索引需要先构建、`--include-hidden` 是 DM 视图、AI 默认策略、完整书 pack）也在那里。
+发布包里**没有**任何用户数据：存档（只有 `Saves/README.md`）、规则书和冒险书（只有 README）、本地导入、`fixes/`、资料图登记表、你自己的规则裁定都不会被覆盖，打包时会自动检查。确认迁移没问题后，`Saves/_backups/` 里的备份可以自行删除。每个版本改了什么见仓库里的 `CHANGELOG.md`；v1.5.0 的已知限制（双武器没有装备栏、准备法术预付不退、魔法黑暗与逐格光照未建模、AI 默认策略、完整书 pack）也在那里。
 
 ## 版权与许可
 
