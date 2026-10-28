@@ -189,3 +189,63 @@ fn real_library_layers_per_edition() {
         "2024 library check failed"
     );
 }
+
+#[test]
+fn spellcasting_rules_shape_loads_and_merges() {
+    use combat_sim::content::schema::{Rules, SpellcastingRules};
+
+    // Both shipped editions carry the field; 2024 overrides the common
+    // default with the edition-level rule.
+    let r14 = load("real-2014.yaml");
+    assert_eq!(
+        r14.rules
+            .spellcasting
+            .as_ref()
+            .and_then(|s| s.ritual.as_deref()),
+        Some("per-class")
+    );
+    let r24 = load("real-2024.yaml");
+    assert_eq!(
+        r24.rules
+            .spellcasting
+            .as_ref()
+            .and_then(|s| s.ritual.as_deref()),
+        Some("prepared")
+    );
+
+    // A rules file without the field keeps loading (the struct is
+    // deny_unknown_fields; the new field must stay optional).
+    let old: Rules = serde_norway::from_str("dying_conditions: [unconscious]").unwrap();
+    assert!(old.spellcasting.is_none());
+    let with: Rules = serde_norway::from_str("spellcasting: {ritual: per-class}").unwrap();
+    assert_eq!(
+        with.spellcasting.as_ref().and_then(|s| s.ritual.as_deref()),
+        Some("per-class")
+    );
+    let err = serde_norway::from_str::<Rules>("spellcasting: {ritual: per-class, nope: 1}");
+    assert!(err.is_err(), "unknown spellcasting keys must be refused");
+
+    // Merge: a later source overrides the earlier value field-wise; an empty
+    // later source leaves the existing value in place.
+    let mut base = Rules {
+        spellcasting: Some(SpellcastingRules {
+            ritual: Some("per-class".into()),
+        }),
+        ..Default::default()
+    };
+    base.merge_from(Rules {
+        spellcasting: Some(SpellcastingRules {
+            ritual: Some("prepared".into()),
+        }),
+        ..Default::default()
+    });
+    assert_eq!(
+        base.spellcasting.as_ref().and_then(|s| s.ritual.as_deref()),
+        Some("prepared")
+    );
+    base.merge_from(Rules::default());
+    assert_eq!(
+        base.spellcasting.as_ref().and_then(|s| s.ritual.as_deref()),
+        Some("prepared")
+    );
+}

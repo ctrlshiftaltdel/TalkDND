@@ -14,7 +14,11 @@
 //! `LetsPlay/docs/narration.md`), 9 = per-save automation switches
 //! (`settings.automation`: fixed categories with `manual` / `assisted` /
 //! `auto` levels, save defaults plus scene and encounter overrides; see
-//! [`Automation`] and `tools/talkdnd/docs/AUTOMATION.md`). `talkdnd start` and
+//! [`Automation`] and `tools/talkdnd/docs/AUTOMATION.md`), 10 = structured
+//! spell lists (`spells` block on every `sheets/<id>.yaml`, adopted precisely
+//! from `chargen.json` or the Markdown `## 法术` section, unmatched names kept
+//! in `legacy`; hand-edited (dirty) sheets are never rewritten — see
+//! `migrate_spells_10` and docs/SPELLCASTING.md §3.6). `talkdnd start` and
 //! `talkdnd migrate` back the whole save up into `Saves/_backups/` before
 //! writing, then run the migrations in order. A save from a newer talkdnd is
 //! refused: this binary cannot know its format.
@@ -36,7 +40,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "save-meta.yaml";
-pub const CURRENT_SCHEMA: u32 = 9;
+pub const CURRENT_SCHEMA: u32 = 10;
 pub const BACKUP_DIR: &str = "_backups";
 
 /// How far this save may deviate from the published adventure.
@@ -651,6 +655,15 @@ pub struct Report {
     /// 6→7: save files whose book paths were repointed to the
     /// one-folder-per-book library (paths relative to the save).
     pub books: Vec<String>,
+    /// 9→10: sheets that got a `spells` block ("id: summary" lines).
+    pub spell_sheets: Vec<String>,
+    /// 9→10: sheets that already carried a block (defaults filled only).
+    pub spell_kept: Vec<String>,
+    /// 9→10: dirty sheets left untouched (they stay flagged and keep their
+    /// content byte-for-byte; listed so the DM can adopt them by hand).
+    pub spell_dirty: Vec<String>,
+    /// 9→10: free-text entries that could not be mapped to ids ("id=名字").
+    pub spell_legacy: Vec<String>,
     pub log_text: Option<String>,
 }
 
@@ -710,6 +723,30 @@ impl Report {
                     self.books.join(", ")
                 ));
             }
+            if !self.spell_sheets.is_empty() {
+                v.push(format!(
+                    "会为角色卡添加 spells 法术列表块：{}",
+                    self.spell_sheets.join("，")
+                ));
+            }
+            if !self.spell_kept.is_empty() {
+                v.push(format!(
+                    "已有 spells 块的角色卡只补缺省字段（列表不动）：{}",
+                    self.spell_kept.join("，")
+                ));
+            }
+            if !self.spell_dirty.is_empty() {
+                v.push(format!(
+                    "手改过的角色卡不会被重写（保持原样、保持标记，法术列表之后用命令补）：{}",
+                    self.spell_dirty.join("，")
+                ));
+            }
+            if !self.spell_legacy.is_empty() {
+                v.push(format!(
+                    "无法映射到法术 id 的旧条目会进 legacy：{}",
+                    self.spell_legacy.join("，")
+                ));
+            }
             for w in &self.warnings {
                 v.push(format!("注意：{w}"));
             }
@@ -762,6 +799,30 @@ impl Report {
                 self.books.join(", ")
             ));
         }
+        if !self.spell_sheets.is_empty() {
+            v.push(format!(
+                "已为角色卡添加 spells 法术列表块：{}",
+                self.spell_sheets.join("；")
+            ));
+        }
+        if !self.spell_kept.is_empty() {
+            v.push(format!(
+                "已有 spells 块的角色卡只补了缺省字段（列表未动）：{}",
+                self.spell_kept.join("，")
+            ));
+        }
+        if !self.spell_dirty.is_empty() {
+            v.push(format!(
+                "手改过的角色卡未被重写（保持原样，法术列表之后用命令补）：{}",
+                self.spell_dirty.join("，")
+            ));
+        }
+        if !self.spell_legacy.is_empty() {
+            v.push(format!(
+                "无法映射到法术 id 的旧条目已进 legacy：{}",
+                self.spell_legacy.join("；")
+            ));
+        }
         for w in &self.warnings {
             v.push(format!("注意：{w}"));
         }
@@ -810,6 +871,23 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         if from < 7 {
             report.books = repoint_names(save, &crate::library::plan_repoint(root, save));
         }
+        if from < 10 {
+            let no_baseline = combat_sim::integrity::load(save)?.is_none();
+            let dirty = integrity_dirty(save)?;
+            let mut plan = plan_spells_10(save, root, &dirty)?;
+            if no_baseline && !plan.dirty.is_empty() {
+                plan.warnings.push(no_baseline_warning());
+            }
+            report.spell_sheets = plan.sheets.iter().map(|(id, _)| id.clone()).collect();
+            report.spell_kept = plan.kept;
+            report.spell_dirty = plan.dirty;
+            report.spell_legacy = plan
+                .legacy
+                .iter()
+                .map(|(id, name)| format!("{id}={name}"))
+                .collect();
+            report.warnings.extend(plan.warnings);
+        }
         return Ok(report);
     }
 
@@ -819,14 +897,23 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     // Files the DM already edited (or added/removed) are not rewritten by the
     // migration: a serde round-trip would drop unknown fields, comments and
     // formatting. They stay on disk exactly as they are and keep loading
-    // because version 0 is accepted.
-    let dirty: BTreeSet<String> = match combat_sim::integrity::load(save)? {
-        Some(manifest) => combat_sim::integrity::changes_against(&manifest, &before)
+    // because version 0 is accepted. Sheets stay untouched too (schema 10:
+    // see `migrate_spells_10`) — a serde round-trip would drop their hand
+    // edits just the same.
+    let manifest = combat_sim::integrity::load(save)?;
+    let mut dirty: BTreeSet<String> = match &manifest {
+        Some(manifest) => combat_sim::integrity::changes_against(manifest, &before)
             .into_iter()
             .map(|change| change.path().to_string())
             .collect(),
         None => BTreeSet::new(),
     };
+    if manifest.is_none() {
+        // Fail closed for the sheet rewrite (schema 10): without a
+        // baseline every sheet counts as hand-edited and keeps its bytes
+        // (a serde round-trip would drop unknown fields and comments).
+        dirty.extend(sheet_yaml_paths(save));
+    }
     let slot = save
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -852,6 +939,23 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         let plan = crate::library::plan_repoint(root, save);
         report.books = repoint_names(save, &plan);
         apply_repoint(&plan)?;
+    }
+
+    if from < 10 {
+        let mut plan = plan_spells_10(save, root, &dirty)?;
+        if manifest.is_none() && !plan.dirty.is_empty() {
+            plan.warnings.push(no_baseline_warning());
+        }
+        apply_spells_10(save, &plan)?;
+        report.spell_sheets = plan.sheets.iter().map(|(id, _)| id.clone()).collect();
+        report.spell_kept = plan.kept;
+        report.spell_dirty = plan.dirty;
+        report.spell_legacy = plan
+            .legacy
+            .iter()
+            .map(|(id, name)| format!("{id}={name}"))
+            .collect();
+        report.warnings.extend(plan.warnings);
     }
 
     let mut meta = load(save)?.unwrap_or_default();
@@ -929,6 +1033,14 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             backup: backup.clone(),
         });
     }
+    if from < 10 {
+        meta.migrations.push(Migration {
+            from: from.max(9),
+            to: 10,
+            date: date.clone(),
+            backup: backup.clone(),
+        });
+    }
     write_meta(save, &meta)?;
 
     let deviation_note = if from < 4 {
@@ -961,8 +1073,13 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     } else {
         format!("；书本路径改到一书一文件夹：{}", report.books.join("，"))
     };
+    let spells_note = if from < 10 {
+        "；角色卡新增 spells 法术列表块"
+    } else {
+        ""
+    };
     let text = format!(
-        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{style_note}{automation_note}{companion_note}{books_note}",
+        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{style_note}{automation_note}{companion_note}{books_note}{spells_note}",
         chrono::Local::now().format("%H:%M")
     );
     if let Some(log) = save::latest_log(save) {
@@ -1448,6 +1565,228 @@ fn add_versions(save: &Path, dirty: &BTreeSet<String>) -> Result<()> {
     Ok(())
 }
 
+// ---------- 9→10: structured spell lists ----------
+
+/// Relative `sheets/*.yaml` paths, sorted. Serves as the fail-safe dirty
+/// set when a save carries no integrity manifest at all.
+fn sheet_yaml_paths(save: &Path) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let Ok(rd) = fs::read_dir(save.join("sheets")) else {
+        return out;
+    };
+    for p in rd.filter_map(|e| e.ok().map(|e| e.path())) {
+        if p.extension().is_some_and(|x| x == "yaml") {
+            if let Some(stem) = p.file_stem() {
+                out.insert(format!("sheets/{}.yaml", stem.to_string_lossy()));
+            }
+        }
+    }
+    out
+}
+
+/// Files the integrity manifest flags as changed (or added/removed) against
+/// its baseline. Read-only; shared by the dry-run plan and the migration.
+/// Fail-safe: with no manifest there is no way to tell hand edits from tool
+/// writes, so every sheet counts as dirty and the schema-10 step reports it
+/// instead of serde-rewriting (a round-trip would drop unknown fields,
+/// comments and formatting).
+fn integrity_dirty(save: &Path) -> Result<BTreeSet<String>> {
+    let before = combat_sim::integrity::snapshot(save);
+    Ok(match combat_sim::integrity::load(save)? {
+        Some(manifest) => combat_sim::integrity::changes_against(&manifest, &before)
+            .into_iter()
+            .map(|change| change.path().to_string())
+            .collect(),
+        None => sheet_yaml_paths(save),
+    })
+}
+
+/// Warning for saves without an integrity baseline: the schema-10 spells
+/// step skipped every sheet.
+fn no_baseline_warning() -> String {
+    "没有 integrity 基线：所有 sheets/*.yaml 视为手改，spells 迁移已跳过（不重写）；".to_string()
+        + "先运行 `talkdnd check` 建立基线，再重跑迁移"
+}
+
+/// The planned schema-10 `spells` blocks for every structured sheet.
+#[derive(Default)]
+struct SpellsPlan {
+    /// (sheet id, CharFile with the block set) for sheets to write.
+    sheets: Vec<(String, charsheet::CharFile)>,
+    /// Sheets that already carried a block (defaults filled only).
+    kept: Vec<String>,
+    /// Dirty sheets: never rewritten, reported instead.
+    dirty: Vec<String>,
+    /// (sheet id, unmapped free-text name) pairs, kept verbatim in `legacy`.
+    legacy: Vec<(String, String)>,
+    warnings: Vec<String>,
+}
+
+/// Plan the 9→10 spells migration (read-only). For every `sheets/*.yaml`:
+/// dirty sheets are listed and skipped (a serde round-trip would drop their
+/// hand edits); sheets with a block only get missing defaults; the rest get
+/// a block adopted precisely (D-9) from `chargen.json` when it belongs to
+/// this sheet, else from the Markdown `## 法术` section — exact id or
+/// slug-of-name only, everything else lands in `legacy`. Combat blocks and
+/// refs are never touched.
+fn plan_spells_10(save: &Path, root: &Path, dirty: &BTreeSet<String>) -> Result<SpellsPlan> {
+    let mut plan = SpellsPlan::default();
+    let creation = chargen_state(save);
+    // Sheets per class: the free text in chargen.json may only be adopted
+    // when it unambiguously belongs to one sheet.
+    let mut class_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut files: Vec<PathBuf> = fs::read_dir(save.join("sheets"))
+        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
+        .unwrap_or_default();
+    files.sort();
+    for f in &files {
+        let class = fs::read_to_string(f)
+            .ok()
+            .and_then(|t| serde_norway::from_str::<charsheet::CharFile>(&t).ok())
+            .and_then(|cf| cf.info.get("class").cloned())
+            .map(|c| crate::chargen::slug(&c));
+        if let Some(c) = class {
+            *class_counts.entry(c).or_default() += 1;
+        }
+    }
+    let mut books: BTreeMap<String, crate::classdata::Book> = BTreeMap::new();
+    for f in files {
+        if f.extension().is_none_or(|x| x != "yaml") {
+            continue;
+        }
+        let Some(id) = f.file_stem().map(|s| s.to_string_lossy().to_string()) else {
+            continue;
+        };
+        let rel = format!("sheets/{id}.yaml");
+        if dirty.contains(&rel) {
+            plan.dirty.push(id);
+            continue;
+        }
+        let text = fs::read_to_string(&f)?;
+        let mut cf: charsheet::CharFile = match serde_norway::from_str(&text) {
+            Ok(cf) => cf,
+            Err(e) => {
+                plan.warnings
+                    .push(format!("{id}: 角色卡无法解析（{e}），已跳过，请人工处理"));
+                continue;
+            }
+        };
+        if let Some(existing) = &mut cf.spells {
+            existing.fill_defaults();
+            plan.kept.push(id.clone());
+            plan.sheets.push((id, cf));
+            continue;
+        }
+        let rs = cf.ruleset.clone();
+        let class = cf.info.get("class").map(|c| crate::chargen::slug(c));
+        let book = match books.entry(rs.clone()) {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(crate::classdata::Book::load(&rs, Some(root))?);
+                books.get(&rs).expect("just inserted")
+            }
+            std::collections::btree_map::Entry::Occupied(o) => o.into_mut(),
+        };
+        let cd = class.as_deref().and_then(|c| book.class(c));
+        if cd.is_none() {
+            if let Some(cls) = &class {
+                plan.warnings.push(format!(
+                    "{id}: class `{cls}` 没有职业数据（{rs}），spells 块留空；本地数据缺失时先导入再重跑迁移"
+                ));
+            }
+        }
+        let (mode, ability, universe) = match cd {
+            Some(cd) => (
+                crate::classdata::spell_mode(cd).unwrap_or_default(),
+                cd.spell_ability
+                    .clone()
+                    .or_else(|| {
+                        class
+                            .as_deref()
+                            .and_then(crate::data::class)
+                            .and_then(|c| c.spell_ability)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default(),
+                crate::classdata::spell_universe(book, cd),
+            ),
+            None => (String::new(), String::new(), BTreeMap::new()),
+        };
+        // Adopt source: chargen.json when it unambiguously belongs to this
+        // sheet, else the Markdown 法术 section. Old spell-slot resources and
+        // the Markdown body itself stay untouched.
+        let texts = chargen_spells_for(&creation, &class, &class_counts)
+            .unwrap_or_else(|| crate::chargen::markdown_spells(&cf.body_md));
+        let (mapped, unmapped) = crate::chargen::map_spell_texts(&texts, &universe);
+        let mut lists = charsheet::SpellLists {
+            version: 1,
+            mode: mode.clone(),
+            ability,
+            ..Default::default()
+        };
+        for sid in mapped {
+            let level = universe.get(&sid).copied().unwrap_or(0);
+            if level == 0 {
+                lists.cantrips.push(sid);
+            } else {
+                match mode.as_str() {
+                    "known" => lists.known.push(sid),
+                    "spellbook" => lists.book.push(sid),
+                    _ => lists.prepared.push(sid),
+                }
+            }
+        }
+        for name in &unmapped {
+            plan.legacy.push((id.clone(), name.clone()));
+        }
+        lists.legacy = unmapped;
+        cf.spells = Some(lists);
+        plan.sheets.push((id, cf));
+    }
+    Ok(plan)
+}
+
+/// `chargen.json` if it exists and parses; `None` otherwise (it is an
+/// optional adopt source, never a hard requirement).
+fn chargen_state(save: &Path) -> Option<crate::chargen::Creation> {
+    let p = crate::chargen::state_path(save);
+    if !p.is_file() {
+        return None;
+    }
+    serde_json::from_str(&fs::read_to_string(&p).ok()?).ok()
+}
+
+/// The free-text spells in `chargen.json`, but only when they unambiguously
+/// belong to this sheet: same class, and exactly one sheet of that class in
+/// the save (otherwise the Markdown is used instead).
+fn chargen_spells_for(
+    creation: &Option<crate::chargen::Creation>,
+    class: &Option<String>,
+    class_counts: &BTreeMap<String, usize>,
+) -> Option<Vec<String>> {
+    let c = creation.as_ref()?;
+    if c.spells.is_empty() {
+        return None;
+    }
+    let cls = class.as_deref()?;
+    if c.class.as_deref() != Some(cls) {
+        return None;
+    }
+    if class_counts.get(cls).copied() != Some(1) {
+        return None;
+    }
+    Some(c.spells.clone())
+}
+
+/// Write the planned blocks. Per-sheet atomic; a failure leaves the save
+/// consistent (schema stays 9 until the meta write, so a re-run converges:
+/// already-written sheets take the `kept` path).
+fn apply_spells_10(save: &Path, plan: &SpellsPlan) -> Result<()> {
+    for (_, cf) in &plan.sheets {
+        charsheet::store(save, cf)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1487,11 +1826,11 @@ mod tests {
         let root = root("v1");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (1, 9));
+        assert_eq!((report.from, report.to), (1, CURRENT_SCHEMA));
         assert!(report.deviation_default);
         assert_eq!(report.sheets, vec!["hero".to_string()]);
         assert!(charsheet::path(&save, "hero").is_file());
-        assert_eq!(meta(&save).schema, 9);
+        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
         assert_eq!(meta(&save).deviation.scope, 0);
         assert_eq!(meta(&save).deviation.ratio, None);
         assert!(meta(&save)
@@ -1517,7 +1856,10 @@ mod tests {
         assert!(!backups[0].join("_backups").exists());
 
         let log = fs::read_to_string(save.join("Sessions/2030-01-01-session-00.md")).unwrap();
-        assert!(log.contains("存档结构迁移 schema 1→9"), "{log}");
+        assert!(
+            log.contains(&format!("存档结构迁移 schema 1→{CURRENT_SCHEMA}")),
+            "{log}"
+        );
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(combat_sim::integrity::changes(&save).unwrap().is_empty());
 
@@ -1541,7 +1883,7 @@ mod tests {
         let root = root("dry");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, true).unwrap();
-        assert_eq!((report.from, report.to), (1, 9));
+        assert_eq!((report.from, report.to), (1, CURRENT_SCHEMA));
         assert!(report.dry_run && report.sheets == vec!["hero".to_string()]);
         assert!(!path(&save).is_file());
         assert!(!charsheet::path(&save, "hero").is_file());
@@ -1570,8 +1912,8 @@ mod tests {
         fs::write(save.join("progress.yaml"), edited).unwrap();
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (2, 9));
-        assert!(meta(&save).schema == 9);
+        assert_eq!((report.from, report.to), (2, CURRENT_SCHEMA));
+        assert!(meta(&save).schema == CURRENT_SCHEMA);
         let changes = combat_sim::integrity::changes(&save).unwrap();
         assert!(
             changes
@@ -1664,20 +2006,20 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (3, 9));
+        assert_eq!((report.from, report.to), (3, CURRENT_SCHEMA));
         assert!(report.deviation_default);
         assert!(report
             .lines()
             .iter()
             .any(|l| l.contains("scope 0") && l.contains("偏离度")));
         let m = meta(&save);
-        assert_eq!(m.schema, 9);
+        assert_eq!(m.schema, CURRENT_SCHEMA);
         assert_eq!(m.deviation.scope, 0);
         assert_eq!(m.deviation.ratio, None);
         assert!(m.migrations.iter().any(|x| x.from == 3 && x.to == 4));
         assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
         let log = fs::read_to_string(save.join("Sessions/2030-04-05-session-00.md")).unwrap();
-        assert!(log.contains("schema 3→9"), "{log}");
+        assert!(log.contains(&format!("schema 3→{CURRENT_SCHEMA}")), "{log}");
         assert!(log.contains("scope 0"), "{log}");
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
             .unwrap()
@@ -1729,12 +2071,12 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (4, 9));
+        assert_eq!((report.from, report.to), (4, CURRENT_SCHEMA));
         assert!(!report.deviation_default);
         assert!(report.settings_default);
         assert!(report.style_default);
         let m = meta(&save);
-        assert_eq!(m.schema, 9);
+        assert_eq!(m.schema, CURRENT_SCHEMA);
         assert_eq!(m.deviation.scope, 2);
         assert_eq!(m.deviation.ratio, Some(15));
         assert!(m.settings.dice_display);
@@ -1744,11 +2086,12 @@ mod tests {
         assert!(m.migrations.iter().any(|x| x.from == 6 && x.to == 7));
         assert!(m.migrations.iter().any(|x| x.from == 7 && x.to == 8));
         assert!(m.migrations.iter().any(|x| x.from == 8 && x.to == 9));
-        assert_eq!(m.migrations.len(), 5);
+        assert!(m.migrations.iter().any(|x| x.from == 9 && x.to == 10));
+        assert_eq!(m.migrations.len(), 6);
         assert_eq!(m.settings.automation, Automation::default());
         let log = fs::read_to_string(save.join("Sessions/2030-04-06-session-00.md")).unwrap();
         assert!(
-            log.contains("schema 4→9") && log.contains("骰子显示默认开"),
+            log.contains(&format!("schema 4→{CURRENT_SCHEMA}")) && log.contains("骰子显示默认开"),
             "{log}"
         );
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
@@ -1833,13 +2176,13 @@ mod tests {
         let kel_before = fs::read_to_string(save.join("NPCs/Kel-Stone.md")).unwrap();
 
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (5, 9));
+        assert_eq!((dry.from, dry.to), (5, CURRENT_SCHEMA));
         assert_eq!(dry.companions.len(), 3, "{:?}", dry.companions);
         assert!(save.join("NPCs/Kel-Stone.md").is_file());
         assert!(!root.join("Saves").join(BACKUP_DIR).exists());
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (5, 9));
+        assert_eq!((report.from, report.to), (5, CURRENT_SCHEMA));
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         for f in ["Kel-Stone.md", "mo.md", "_party.md"] {
             assert!(save.join("Characters").join(f).is_file(), "{f}");
@@ -1855,7 +2198,9 @@ mod tests {
         );
         assert!(kel.contains("- **操控**：DM 操控的同伴"));
         let sheet = fs::read_to_string(save.join("sheets/kel.yaml")).unwrap();
-        assert!(sheet.starts_with("# TalkDND character data\n"), "{sheet}");
+        // Schema 10 stores the sheet through the canonical writer.
+        assert!(sheet.starts_with("# TalkDND character data"), "{sheet}");
+        assert!(sheet.contains("spells:"), "{sheet}");
         assert!(
             sheet.contains("file: Characters/Kel-Stone.md\ncontroller: dm\n"),
             "{sheet}"
@@ -1870,7 +2215,7 @@ mod tests {
         // The structured file still loads and resolves.
         let cf: charsheet::CharFile = serde_norway::from_str(&sheet).unwrap();
         assert_eq!(cf.controller(), charsheet::DM);
-        assert_eq!(meta(&save).schema, 9);
+        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
         assert!(meta(&save)
             .migrations
             .iter()
@@ -1884,7 +2229,8 @@ mod tests {
         assert!(backups[0].join("NPCs/Kel-Stone.md").is_file());
         let log = fs::read_to_string(save.join("Sessions/2030-05-01-session-00.md")).unwrap();
         assert!(
-            log.contains("schema 5→9") && log.contains("Characters/Kel-Stone.md"),
+            log.contains(&format!("schema 5→{CURRENT_SCHEMA}"))
+                && log.contains("Characters/Kel-Stone.md"),
             "{log}"
         );
 
@@ -1956,7 +2302,7 @@ mod tests {
         )
         .unwrap();
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (6, 9));
+        assert_eq!((dry.from, dry.to), (6, CURRENT_SCHEMA));
         assert_eq!(dry.books, vec!["dm-plan.md".to_string()]);
         let report = ensure(&save, &root, false).unwrap();
         assert_eq!(report.books, vec!["dm-plan.md".to_string()]);
@@ -1971,7 +2317,7 @@ mod tests {
         assert!(fs::read_to_string(save.join("combat/campaign.yaml"))
             .unwrap()
             .contains("Adventures/keys-from-the-golden-vault/combat"));
-        assert_eq!(meta(&save).schema, 9);
+        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
         assert!(meta(&save)
             .migrations
             .iter()
@@ -2015,20 +2361,20 @@ mod tests {
         let save = v7_save(&root, "2030-06-01-01");
 
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (7, 9));
+        assert_eq!((dry.from, dry.to), (7, CURRENT_SCHEMA));
         assert!(dry.style_default);
         assert!(!path(&save).is_file() || meta(&save).schema == 7);
         assert!(!root.join("Saves").join(BACKUP_DIR).exists());
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (7, 9));
+        assert_eq!((report.from, report.to), (7, CURRENT_SCHEMA));
         assert!(report.style_default);
         assert!(report
             .backup
             .as_deref()
             .is_some_and(|b| b.starts_with("Saves/_backups/")));
         let m = meta(&save);
-        assert_eq!(m.schema, 9);
+        assert_eq!(m.schema, CURRENT_SCHEMA);
         // The rest of settings is untouched by the schema bump.
         assert!(!m.settings.dice_display);
         // The style fields arrive with the contract defaults.
@@ -2058,7 +2404,7 @@ mod tests {
 
         // The backup path and the style default are written to the log.
         let log = fs::read_to_string(save.join("Sessions/2030-06-01-session-00.md")).unwrap();
-        assert!(log.contains("schema 7→9"), "{log}");
+        assert!(log.contains(&format!("schema 7→{CURRENT_SCHEMA}")), "{log}");
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(log.contains("桌面风格默认"), "{log}");
         assert!(log.contains("自动化设置默认"), "{log}");
@@ -2090,8 +2436,8 @@ mod tests {
         assert_eq!(meta(&save).settings.style, Style::default());
         // And the old save is still usable: the retry migrates normally.
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (7, 9));
-        assert_eq!(meta(&save).schema, 9);
+        assert_eq!((report.from, report.to), (7, CURRENT_SCHEMA));
+        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2128,8 +2474,8 @@ mod tests {
         assert!(backup_meta.contains("schema: 8"), "{backup_meta}");
         // Retry on the repaired save completes the migration.
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (8, 9));
-        assert_eq!(meta(&save).schema, 9);
+        assert_eq!((report.from, report.to), (8, CURRENT_SCHEMA));
+        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
         let _ = fs::remove_dir_all(&root);
     }
 

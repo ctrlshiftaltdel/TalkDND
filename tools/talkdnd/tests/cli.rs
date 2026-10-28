@@ -312,7 +312,7 @@ fn deviation_is_validated_locked_and_tamper_checked() {
     let save = r.join("Saves/2030-01-03-01");
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     assert!(
-        meta.contains("schema: 9") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
+        meta.contains("schema: 10") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
         "{meta}"
     );
     let out = ok(&r, &["original", "status"]);
@@ -397,13 +397,13 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     let out = ok(&r, &["start"]);
     assert!(out.contains("存档结构"), "{out}");
     assert!(
-        out.contains("schema 1 → 9") || out.contains("schema 1→9"),
+        out.contains("schema 1 → 10") || out.contains("schema 1→10"),
         "{out}"
     );
     assert!(save.join("sheets/hero.yaml").is_file());
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     assert!(
-        meta.contains("schema: 9") && meta.contains("scope: 0"),
+        meta.contains("schema: 10") && meta.contains("scope: 0"),
         "{meta}"
     );
     let backups: Vec<PathBuf> = fs::read_dir(r.join("Saves/_backups"))
@@ -413,7 +413,7 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     assert_eq!(backups.len(), 1);
     assert!(backups[0].join("Characters/hero.md").is_file());
     let log = fs::read_to_string(save.join("Sessions/2030-06-07-session-00-setup.md")).unwrap();
-    assert!(log.contains("存档结构迁移 schema 1→9"), "{log}");
+    assert!(log.contains("存档结构迁移 schema 1→10"), "{log}");
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
     assert!(ok(&r, &["start"]).contains("无需迁移"));
     assert_eq!(fs::read_dir(r.join("Saves/_backups")).unwrap().count(), 1);
@@ -468,7 +468,7 @@ fn migration_does_not_launder_a_hand_edit() {
     fs::write(&p, text).unwrap();
     let out = ok(&r, &["start"]);
     assert!(
-        out.contains("schema 2 → 9") || out.contains("schema 2→9"),
+        out.contains("schema 2 → 10") || out.contains("schema 2→10"),
         "{out}"
     );
     let out = ok(&r, &["check"]);

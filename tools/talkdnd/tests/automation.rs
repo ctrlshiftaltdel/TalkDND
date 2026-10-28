@@ -87,7 +87,7 @@ const CATEGORIES: [&str; 6] = [
 fn defaults_follow_the_charter_and_show_their_source() {
     let (r, save) = new_save("defaults");
     let text = meta(&save);
-    assert!(text.contains("schema: 9"), "{text}");
+    assert!(text.contains("schema: 10"), "{text}");
     for want in [
         "automation:",
         "version: 1",
@@ -626,7 +626,7 @@ fn hand_edited_automation_fails_closed() {
 }
 
 #[test]
-fn migration_8_to_9_backs_up_logs_and_keeps_old_saves_equivalent() {
+fn migration_8_to_current_backs_up_logs_and_keeps_old_saves_equivalent() {
     let (r, save) = new_save("migrate");
     let old_meta = "# old save\nschema: 8\ntool: 1.2.0\ndeviation: {scope: 1, ratio: 10}\nsettings:\n  dice_display: false\n  style:\n    narration: short\n    detail: high\n    pace: fast\n    npc_voice: neutral\n    options: none\nmigrations: []\n";
     fs::write(save.join("save-meta.yaml"), old_meta).unwrap();
@@ -651,16 +651,16 @@ fn migration_8_to_9_backs_up_logs_and_keeps_old_saves_equivalent() {
     assert!(meta(&save).contains("schema: 8"));
 
     let dry = ok(&r, &["migrate", "--dry-run"]);
-    assert!(dry.contains("dry-run") && dry.contains("8 → 9"), "{dry}");
+    assert!(dry.contains("dry-run") && dry.contains("8 → 10"), "{dry}");
     assert!(dry.contains("自动化"), "{dry}");
     assert!(meta(&save).contains("schema: 8"));
     assert!(!r.join("Saves/_backups").exists());
 
     let out = ok(&r, &["migrate"]);
-    assert!(out.contains("迁移完成") && out.contains("8 → 9"), "{out}");
+    assert!(out.contains("迁移完成") && out.contains("8 → 10"), "{out}");
     assert!(out.contains("Saves/_backups/"), "{out}");
     let text = meta(&save);
-    assert!(text.contains("schema: 9"), "{text}");
+    assert!(text.contains("schema: 10"), "{text}");
     // The old dice switch and style survive unchanged.
     assert!(text.contains("dice_display: false"), "{text}");
     assert!(text.contains("narration: short"), "{text}");
@@ -688,7 +688,7 @@ fn migration_8_to_9_backs_up_logs_and_keeps_old_saves_equivalent() {
 
     // Migration is logged, and the effective settings are unchanged.
     let log = latest_log(&save);
-    assert!(log.contains("schema 8→9"), "{log}");
+    assert!(log.contains("schema 8→10"), "{log}");
     assert!(log.contains("Saves/_backups/"), "{log}");
     assert!(log.contains("自动化设置默认"), "{log}");
     let after = ok(&r, &["settings", "automation", "show"]);
@@ -714,12 +714,12 @@ fn a_newer_schema_is_still_refused() {
     let (r, save) = new_save("newer");
     fs::write(
         save.join("save-meta.yaml"),
-        "schema: 10\ntool: future\nsettings: {automation: {version: 1}}\n",
+        "schema: 11\ntool: future\nsettings: {automation: {version: 1}}\n",
     )
     .unwrap();
     let (good, out) = run(&r, &["settings", "automation", "show"]);
     assert!(
-        !good && out.contains("10") && out.contains("update talkdnd"),
+        !good && out.contains("11") && out.contains("update talkdnd"),
         "{out}"
     );
     let _ = fs::remove_dir_all(&r);

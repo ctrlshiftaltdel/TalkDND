@@ -89,6 +89,11 @@ pub struct Creation {
     pub equipment: Vec<String>,
     #[serde(default)]
     pub spells: Vec<String>,
+    /// Structured spell lists (v1.6 T2; [`crate::charsheet::SpellLists`]).
+    /// Filled by the T3 `set spells`/`spells adopt` paths from the free
+    /// text; when present, validation counts these instead of the free text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spell_lists: Option<crate::charsheet::SpellLists>,
     #[serde(default)]
     pub spells_done: bool,
     pub name: Option<String>,
@@ -770,11 +775,36 @@ pub fn validate(c: &Creation) -> Report {
         }
     }
 
-    // Spell counts against class resources at the chosen level.
+    // Spell counts against class resources at the chosen level. Structured
+    // lists (v1.6 T2) win when present; the old free text stays as the
+    // legacy fallback with its cantrip heuristic.
     if c.spells_done {
         let g = crate::classdata::generate(c, &crate::classdata::Book::srd(&rs), None);
-        let cantrips = c.spells.iter().filter(|s| data::is_cantrip(s)).count() as i32;
-        let leveled = c.spells.len() as i32 - cantrips;
+        let (cantrips, leveled, kind) = match &c.spell_lists {
+            Some(lists) => {
+                // Design §3.3: known mode counts the known list; prepared
+                // and spellbook modes both count `prepared` against the
+                // prepare limit — `book` is the spellbook contents and
+                // usually larger than the limit.
+                let (counted, kind) = match lists.mode.as_str() {
+                    "known" => (lists.known.len(), "已知法术"),
+                    _ => (lists.prepared.len(), "可准备法术"),
+                };
+                (lists.cantrips.len() as i32, counted as i32, kind)
+            }
+            None => {
+                let kind = match g.spells {
+                    Some((k, _)) => k,
+                    None => "可准备法术",
+                };
+                (
+                    c.spells.iter().filter(|s| data::is_cantrip(s)).count() as i32,
+                    c.spells.len() as i32
+                        - c.spells.iter().filter(|s| data::is_cantrip(s)).count() as i32,
+                    kind,
+                )
+            }
+        };
         if let Some(exp) = g.cantrips {
             if cantrips > exp {
                 e.push(format!("too many cantrips: {cantrips} (allowed {exp})"));
@@ -782,7 +812,7 @@ pub fn validate(c: &Creation) -> Report {
                 w.push(format!("cantrips: {cantrips} of {exp}"));
             }
         }
-        if let Some((kind, exp)) = g.spells {
+        if let Some((_, exp)) = g.spells {
             if leveled > exp {
                 e.push(format!("too many {kind}: {leveled} (allowed {exp})"));
             } else if leveled < exp {
@@ -861,6 +891,69 @@ pub fn valid_id(s: &str) -> bool {
     s.len() <= 80
         && (first.is_ascii_lowercase() || first.is_ascii_digit())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Precise free-text → spell-id mapping (D-9): the text is either already an
+/// id, or its slug equals an id ("Magic Missile" → magic-missile). No fuzzy
+/// matching — anything else goes to `legacy` for the DM to map.
+pub fn map_spell_text(text: &str, universe: &BTreeMap<String, u8>) -> Option<String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if universe.contains_key(t) {
+        return Some(t.to_string());
+    }
+    let s = slug(t);
+    if universe.contains_key(&s) {
+        return Some(s);
+    }
+    None
+}
+
+/// Map a whole free-text list; returns the mapped ids in input order and the
+/// unmatched originals (for `legacy`).
+pub fn map_spell_texts(
+    texts: &[String],
+    universe: &BTreeMap<String, u8>,
+) -> (Vec<String>, Vec<String>) {
+    let mut mapped = Vec::new();
+    let mut legacy = Vec::new();
+    for t in texts {
+        match map_spell_text(t, universe) {
+            Some(id) => {
+                if !mapped.contains(&id) {
+                    mapped.push(id);
+                }
+            }
+            None => legacy.push(t.clone()),
+        }
+    }
+    (mapped, legacy)
+}
+
+/// The `- <name>` lines of a Markdown sheet's `## 法术` section (the
+/// generated `- 无` placeholder skipped). Used by the schema-10 migration;
+/// T3's `spells adopt` reuses it.
+pub fn markdown_spells(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut at = false;
+    for l in body.lines() {
+        let t = l.trim();
+        if t.starts_with("## ") {
+            at = t == "## 法术";
+            continue;
+        }
+        if at {
+            if let Some(name) = t.strip_prefix("- ") {
+                let name = name.trim();
+                if !name.is_empty() && name != "无" {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out
 }
 
 fn yaml_str(s: &str) -> String {

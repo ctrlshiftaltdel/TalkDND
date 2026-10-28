@@ -1,6 +1,10 @@
 # SRD 5.1 (2014) class progression, CC-BY-4.0. Feature names plus short summaries in our own words.
 # features: [level, name, summary]. asi: levels with Ability Score Improvement.
 # resources: by_level (20 values, index = level-1) or formula (level|5*level|prof|<ability>), from = first level.
+# v1.6 spell lists (TASK-0123): spells = base class list, id → level (0 = cantrip;
+# generated from upstream 5e-database 2014 spells[].classes, 2026-10-28, SRD spells only);
+# ritual = none|known|prepared|book (2014 class-level ritual casting); subclasses.spells
+# carry grants per docs/SPELLCASTING.md §3.9 (always_prepared / class_list / any_class).
 ruleset: "2014"
 classes:
   barbarian:
@@ -31,6 +35,128 @@ classes:
           - [10, Intimidating Presence, 动作恐吓一名生物（感知豁免）]
           - [14, Retaliation, 被 5 尺内生物伤害时可用反应近战反击]
   bard:
+    # 基础职业法术表（只收 SRD 法术），生成自上游 5e-database
+    # 2014 spells[].classes（2026-10-28，TASK-0123）.
+    spells:
+      animal-friendship: 1
+      animal-messenger: 2
+      animate-objects: 5
+      arcane-sword: 7
+      awaken: 5
+      bane: 1
+      bestow-curse: 3
+      blindness-deafness: 2
+      calm-emotions: 2
+      charm-person: 1
+      clairvoyance: 3
+      comprehend-languages: 1
+      compulsion: 4
+      confusion: 4
+      cure-wounds: 1
+      dancing-lights: 0
+      detect-magic: 1
+      detect-thoughts: 2
+      dimension-door: 4
+      disguise-self: 1
+      dispel-magic: 3
+      dominate-monster: 8
+      dominate-person: 5
+      dream: 5
+      enhance-ability: 2
+      enthrall: 2
+      etherealness: 7
+      eyebite: 6
+      fear: 3
+      feather-fall: 1
+      feeblemind: 8
+      find-the-path: 6
+      forcecage: 7
+      foresight: 9
+      freedom-of-movement: 4
+      geas: 5
+      glibness: 8
+      glyph-of-warding: 3
+      greater-invisibility: 4
+      greater-restoration: 5
+      guards-and-wards: 6
+      hallucinatory-terrain: 4
+      healing-word: 1
+      heat-metal: 2
+      heroism: 1
+      hideous-laughter: 1
+      hold-monster: 5
+      hold-person: 2
+      hypnotic-pattern: 3
+      identify: 1
+      illusory-script: 1
+      invisibility: 2
+      irresistible-dance: 6
+      knock: 2
+      legend-lore: 5
+      lesser-restoration: 2
+      light: 0
+      locate-animals-or-plants: 2
+      locate-creature: 4
+      locate-object: 2
+      longstrider: 1
+      mage-hand: 0
+      magic-mouth: 2
+      magnificent-mansion: 7
+      major-image: 3
+      mass-cure-wounds: 5
+      mass-suggestion: 6
+      mending: 0
+      message: 0
+      mind-blank: 8
+      minor-illusion: 0
+      mirage-arcane: 7
+      mislead: 5
+      modify-memory: 5
+      nondetection: 3
+      planar-binding: 5
+      plant-growth: 3
+      polymorph: 4
+      power-word-kill: 9
+      power-word-stun: 8
+      prestidigitation: 0
+      programmed-illusion: 6
+      project-image: 7
+      raise-dead: 5
+      regenerate: 7
+      resurrection: 7
+      scrying: 5
+      see-invisibility: 2
+      seeming: 5
+      sending: 3
+      shatter: 2
+      silence: 2
+      silent-image: 1
+      sleep: 1
+      speak-with-animals: 1
+      speak-with-dead: 3
+      speak-with-plants: 3
+      stinking-cloud: 3
+      suggestion: 2
+      symbol: 7
+      teleport: 7
+      teleportation-circle: 5
+      thunderwave: 1
+      tiny-hut: 3
+      tongues: 3
+      true-polymorph: 9
+      true-seeing: 6
+      true-strike: 0
+      unseen-servant: 1
+      vicious-mockery: 0
+      zone-of-truth: 2
+    # 2014 仪式资格按职业（2024 走 edition 级 rules.spellcasting.ritual）。
+    ritual: known
+    # Magical Secrets（职业特性）。
+    features_grants:
+      # 10/14/18 级各 2 个，计入已知（docs/SPELLCASTING.md §3.9）。
+      - {grant: any_class, from_level: 10, count: 2, counts: true}
+      - {grant: any_class, from_level: 14, count: 2, counts: true}
+      - {grant: any_class, from_level: 18, count: 2, counts: true}
     caster: full
     weapons: [simple, hand-crossbow, longsword, rapier, shortsword]
     cantrips: [2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4]
@@ -50,6 +176,9 @@ classes:
       - {id: bardic-inspiration, name: Bardic Inspiration, recharge: long, formula: cha, notes: "d6（5 级 d8，10 级 d10，15 级 d12）；5 级起短休恢复", short_from: 5}
     subclasses:
       lore:
+        # 2014 附加魔法奥秘：6 级从任意职业学 2 个，不计入已知（docs/SPELLCASTING.md §3.9）。
+        spells:
+          - {grant: any_class, from_level: 6, count: 2, counts: false}
         name: College of Lore
         features:
           - [3, Bonus Proficiencies, 额外三项技能熟练]
@@ -57,6 +186,116 @@ classes:
           - [6, Additional Magical Secrets, 从任意职业学两个法术]
           - [14, Peerless Skill, 自己的属性检定可用激励骰]
   cleric:
+    # 基础职业法术表（只收 SRD 法术），生成自上游 5e-database
+    # 2014 spells[].classes（2026-10-28，TASK-0123）.
+    spells:
+      aid: 2
+      animate-dead: 3
+      antimagic-field: 8
+      arcane-eye: 4
+      astral-projection: 9
+      augury: 2
+      bane: 1
+      banishment: 4
+      beacon-of-hope: 3
+      bestow-curse: 3
+      blade-barrier: 6
+      bless: 1
+      blindness-deafness: 2
+      calm-emotions: 2
+      clairvoyance: 3
+      command: 1
+      commune: 5
+      conjure-celestial: 7
+      contagion: 5
+      continual-flame: 2
+      control-water: 4
+      control-weather: 8
+      create-food-and-water: 3
+      create-or-destroy-water: 1
+      create-undead: 6
+      cure-wounds: 1
+      daylight: 3
+      death-ward: 4
+      detect-evil-and-good: 1
+      detect-magic: 1
+      detect-poison-and-disease: 1
+      dispel-evil-and-good: 5
+      dispel-magic: 3
+      divine-word: 7
+      earthquake: 8
+      enhance-ability: 2
+      etherealness: 7
+      find-the-path: 6
+      find-traps: 2
+      fire-storm: 7
+      flame-strike: 5
+      forbiddance: 6
+      freedom-of-movement: 4
+      gate: 9
+      geas: 5
+      gentle-repose: 2
+      glyph-of-warding: 3
+      greater-restoration: 5
+      guardian-of-faith: 4
+      guidance: 0
+      guiding-bolt: 1
+      hallow: 5
+      harm: 6
+      heal: 6
+      healing-word: 1
+      heroes-feast: 6
+      hold-person: 2
+      holy-aura: 8
+      inflict-wounds: 1
+      insect-plague: 5
+      legend-lore: 5
+      lesser-restoration: 2
+      light: 0
+      locate-creature: 4
+      locate-object: 2
+      magic-circle: 3
+      mass-cure-wounds: 5
+      mass-heal: 9
+      mass-healing-word: 3
+      meld-into-stone: 3
+      mending: 0
+      planar-ally: 6
+      planar-binding: 5
+      plane-shift: 7
+      prayer-of-healing: 2
+      protection-from-energy: 3
+      protection-from-evil-and-good: 1
+      protection-from-poison: 2
+      purify-food-and-drink: 1
+      raise-dead: 5
+      regenerate: 7
+      remove-curse: 3
+      resistance: 0
+      resurrection: 7
+      revivify: 3
+      sacred-flame: 0
+      sanctuary: 1
+      scrying: 5
+      sending: 3
+      shield-of-faith: 1
+      silence: 2
+      spare-the-dying: 0
+      speak-with-dead: 3
+      spirit-guardians: 3
+      spiritual-weapon: 2
+      stone-shape: 4
+      symbol: 7
+      thaumaturgy: 0
+      tongues: 3
+      true-resurrection: 9
+      true-seeing: 6
+      warding-bond: 2
+      water-walk: 3
+      word-of-recall: 6
+      zone-of-truth: 2
+    # 2014 仪式资格按职业（2024 走 edition 级 rules.spellcasting.ritual）。
+    ritual: prepared
     caster: full
     weapons: [simple]
     cantrips: [3,3,3,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5,5]
@@ -73,6 +312,17 @@ classes:
       - {id: channel-divinity, name: Channel Divinity, recharge: short, from: 2, by_level: [0,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3]}
     subclasses:
       life:
+        # 2014 生命领域法术（始终准备；SRD 文本）。5e-database 子职 pack 的 data.spells。
+        spells:
+          - {id: bless, level: 1, grant: always_prepared, from_level: 1}
+          - {id: cure-wounds, level: 1, grant: always_prepared, from_level: 1}
+          - {id: lesser-restoration, level: 2, grant: always_prepared, from_level: 3}
+          - {id: spiritual-weapon, level: 2, grant: always_prepared, from_level: 3}
+          - {id: beacon-of-hope, level: 3, grant: always_prepared, from_level: 5}
+          - {id: revivify, level: 3, grant: always_prepared, from_level: 5}
+          - {id: death-ward, level: 4, grant: always_prepared, from_level: 7}
+          - {id: mass-cure-wounds, level: 5, grant: always_prepared, from_level: 9}
+          - {id: raise-dead, level: 5, grant: always_prepared, from_level: 9}
         name: Life Domain
         armor_proficiency: [heavy]
         features:
@@ -83,6 +333,117 @@ classes:
           - [8, Divine Strike, 每回合一次武器命中额外光耀伤害]
           - [17, Supreme Healing, 治疗骰取最大值]
   druid:
+    # 基础职业法术表（只收 SRD 法术），生成自上游 5e-database
+    # 2014 spells[].classes（2026-10-28，TASK-0123）.
+    spells:
+      animal-friendship: 1
+      animal-messenger: 2
+      animal-shapes: 8
+      antilife-shell: 5
+      antipathy-sympathy: 8
+      awaken: 5
+      barkskin: 2
+      blight: 4
+      call-lightning: 3
+      charm-person: 1
+      commune-with-nature: 5
+      confusion: 4
+      conjure-animals: 3
+      conjure-elemental: 5
+      conjure-fey: 6
+      conjure-minor-elementals: 4
+      conjure-woodland-beings: 4
+      contagion: 5
+      control-water: 4
+      control-weather: 8
+      create-food-and-water: 3
+      create-or-destroy-water: 1
+      cure-wounds: 1
+      darkvision: 2
+      daylight: 3
+      detect-magic: 1
+      detect-poison-and-disease: 1
+      dispel-magic: 3
+      divination: 4
+      dominate-beast: 4
+      druidcraft: 0
+      earthquake: 8
+      enhance-ability: 2
+      entangle: 1
+      faerie-fire: 1
+      feeblemind: 8
+      find-the-path: 6
+      find-traps: 2
+      fire-storm: 7
+      flame-blade: 2
+      flaming-sphere: 2
+      fog-cloud: 1
+      foresight: 9
+      freedom-of-movement: 4
+      geas: 5
+      giant-insect: 4
+      goodberry: 1
+      greater-restoration: 5
+      guidance: 0
+      gust-of-wind: 2
+      hallucinatory-terrain: 4
+      heal: 6
+      healing-word: 1
+      heat-metal: 2
+      heroes-feast: 6
+      hold-person: 2
+      ice-storm: 4
+      insect-plague: 5
+      jump: 1
+      lesser-restoration: 2
+      locate-animals-or-plants: 2
+      locate-creature: 4
+      locate-object: 2
+      longstrider: 1
+      mass-cure-wounds: 5
+      mending: 0
+      mirage-arcane: 7
+      moonbeam: 2
+      move-earth: 6
+      pass-without-trace: 2
+      planar-binding: 5
+      plane-shift: 7
+      plant-growth: 3
+      poison-spray: 0
+      polymorph: 4
+      produce-flame: 0
+      protection-from-energy: 3
+      protection-from-poison: 2
+      purify-food-and-drink: 1
+      regenerate: 7
+      reincarnate: 5
+      resistance: 0
+      reverse-gravity: 7
+      scrying: 5
+      shapechange: 9
+      shillelagh: 0
+      sleet-storm: 3
+      speak-with-animals: 1
+      speak-with-plants: 3
+      spike-growth: 2
+      stone-shape: 4
+      stoneskin: 4
+      storm-of-vengeance: 9
+      sunbeam: 6
+      sunburst: 8
+      thunderwave: 1
+      transport-via-plants: 6
+      tree-stride: 5
+      true-resurrection: 9
+      wall-of-fire: 4
+      wall-of-stone: 5
+      wall-of-thorns: 6
+      water-breathing: 3
+      water-walk: 3
+      wind-walk: 6
+      wind-wall: 3
+    # 2014 仪式资格按职业（2024 走 edition 级 rules.spellcasting.ritual）。
+    ritual: prepared
     caster: full
     weapons: [club, dagger, dart, javelin, mace, quarterstaff, scimitar, sickle, sling, spear]
     cantrips: [2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4]
@@ -100,6 +461,64 @@ classes:
       - {id: wild-shape, name: Wild Shape, recharge: short, from: 2, by_level: [0,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,99]}
     subclasses:
       land:
+        # 2014 土地圈法术（始终准备，按地形；SRD 文本）。
+        spells:
+          - {id: hold-person, level: 2, grant: always_prepared, from_level: 3, terrain: arctic}
+          - {id: spike-growth, level: 2, grant: always_prepared, from_level: 3, terrain: arctic}
+          - {id: sleet-storm, level: 3, grant: always_prepared, from_level: 5, terrain: arctic}
+          - {id: slow, level: 3, grant: always_prepared, from_level: 5, terrain: arctic}
+          - {id: freedom-of-movement, level: 4, grant: always_prepared, from_level: 7, terrain: arctic}
+          - {id: ice-storm, level: 4, grant: always_prepared, from_level: 7, terrain: arctic}
+          - {id: commune-with-nature, level: 5, grant: always_prepared, from_level: 9, terrain: arctic}
+          - {id: cone-of-cold, level: 5, grant: always_prepared, from_level: 9, terrain: arctic}
+          - {id: mirror-image, level: 2, grant: always_prepared, from_level: 3, terrain: coast}
+          - {id: misty-step, level: 2, grant: always_prepared, from_level: 3, terrain: coast}
+          - {id: water-breathing, level: 3, grant: always_prepared, from_level: 5, terrain: coast}
+          - {id: water-walk, level: 3, grant: always_prepared, from_level: 5, terrain: coast}
+          - {id: control-water, level: 4, grant: always_prepared, from_level: 7, terrain: coast}
+          - {id: freedom-of-movement, level: 4, grant: always_prepared, from_level: 7, terrain: coast}
+          - {id: conjure-elemental, level: 5, grant: always_prepared, from_level: 9, terrain: coast}
+          - {id: scrying, level: 5, grant: always_prepared, from_level: 9, terrain: coast}
+          - {id: blur, level: 2, grant: always_prepared, from_level: 3, terrain: desert}
+          - {id: silence, level: 2, grant: always_prepared, from_level: 3, terrain: desert}
+          - {id: create-food-and-water, level: 3, grant: always_prepared, from_level: 5, terrain: desert}
+          - {id: protection-from-energy, level: 3, grant: always_prepared, from_level: 5, terrain: desert}
+          - {id: blight, level: 4, grant: always_prepared, from_level: 7, terrain: desert}
+          - {id: hallucinatory-terrain, level: 4, grant: always_prepared, from_level: 7, terrain: desert}
+          - {id: insect-plague, level: 5, grant: always_prepared, from_level: 9, terrain: desert}
+          - {id: wall-of-stone, level: 5, grant: always_prepared, from_level: 9, terrain: desert}
+          - {id: barkskin, level: 2, grant: always_prepared, from_level: 3, terrain: forest}
+          - {id: spider-climb, level: 2, grant: always_prepared, from_level: 3, terrain: forest}
+          - {id: call-lightning, level: 3, grant: always_prepared, from_level: 5, terrain: forest}
+          - {id: plant-growth, level: 3, grant: always_prepared, from_level: 5, terrain: forest}
+          - {id: divination, level: 4, grant: always_prepared, from_level: 7, terrain: forest}
+          - {id: freedom-of-movement, level: 4, grant: always_prepared, from_level: 7, terrain: forest}
+          - {id: commune-with-nature, level: 5, grant: always_prepared, from_level: 9, terrain: forest}
+          - {id: tree-stride, level: 5, grant: always_prepared, from_level: 9, terrain: forest}
+          - {id: invisibility, level: 2, grant: always_prepared, from_level: 3, terrain: grassland}
+          - {id: pass-without-trace, level: 2, grant: always_prepared, from_level: 3, terrain: grassland}
+          - {id: daylight, level: 3, grant: always_prepared, from_level: 5, terrain: grassland}
+          - {id: haste, level: 3, grant: always_prepared, from_level: 5, terrain: grassland}
+          - {id: divination, level: 4, grant: always_prepared, from_level: 7, terrain: grassland}
+          - {id: freedom-of-movement, level: 4, grant: always_prepared, from_level: 7, terrain: grassland}
+          - {id: dream, level: 5, grant: always_prepared, from_level: 9, terrain: grassland}
+          - {id: insect-plague, level: 5, grant: always_prepared, from_level: 9, terrain: grassland}
+          - {id: spider-climb, level: 2, grant: always_prepared, from_level: 3, terrain: mountain}
+          - {id: spike-growth, level: 2, grant: always_prepared, from_level: 3, terrain: mountain}
+          - {id: lightning-bolt, level: 3, grant: always_prepared, from_level: 5, terrain: mountain}
+          - {id: meld-into-stone, level: 3, grant: always_prepared, from_level: 5, terrain: mountain}
+          - {id: stone-shape, level: 4, grant: always_prepared, from_level: 7, terrain: mountain}
+          - {id: stoneskin, level: 4, grant: always_prepared, from_level: 7, terrain: mountain}
+          - {id: passwall, level: 5, grant: always_prepared, from_level: 9, terrain: mountain}
+          - {id: wall-of-stone, level: 5, grant: always_prepared, from_level: 9, terrain: mountain}
+          - {id: acid-arrow, level: 2, grant: always_prepared, from_level: 3, terrain: swamp}
+          - {id: darkness, level: 2, grant: always_prepared, from_level: 3, terrain: swamp}
+          - {id: water-walk, level: 3, grant: always_prepared, from_level: 5, terrain: swamp}
+          - {id: stinking-cloud, level: 3, grant: always_prepared, from_level: 5, terrain: swamp}
+          - {id: freedom-of-movement, level: 4, grant: always_prepared, from_level: 7, terrain: swamp}
+          - {id: locate-creature, level: 4, grant: always_prepared, from_level: 7, terrain: swamp}
+          - {id: insect-plague, level: 5, grant: always_prepared, from_level: 9, terrain: swamp}
+          - {id: scrying, level: 5, grant: always_prepared, from_level: 9, terrain: swamp}
         name: Circle of the Land
         features:
           - [2, Bonus Cantrip, 额外一个德鲁伊戏法]
@@ -166,6 +585,42 @@ classes:
           - [11, Tranquility, 长休后获得庇护所效果]
           - [17, Quivering Palm, 震颤掌：之后可令目标体质豁免，失败降到 0 HP]
   paladin:
+    # 基础职业法术表（只收 SRD 法术），生成自上游 5e-database
+    # 2014 spells[].classes（2026-10-28，TASK-0123）.
+    spells:
+      aid: 2
+      banishment: 4
+      bless: 1
+      branding-smite: 2
+      command: 1
+      create-food-and-water: 3
+      cure-wounds: 1
+      daylight: 3
+      death-ward: 4
+      detect-evil-and-good: 1
+      detect-magic: 1
+      detect-poison-and-disease: 1
+      dispel-evil-and-good: 5
+      dispel-magic: 3
+      divine-favor: 1
+      find-steed: 2
+      geas: 5
+      heroism: 1
+      lesser-restoration: 2
+      locate-creature: 4
+      locate-object: 2
+      magic-circle: 3
+      magic-weapon: 2
+      protection-from-evil-and-good: 1
+      protection-from-poison: 2
+      purify-food-and-drink: 1
+      raise-dead: 5
+      remove-curse: 3
+      revivify: 3
+      shield-of-faith: 1
+      zone-of-truth: 2
+    # 2014 仪式资格按职业（2024 走 edition 级 rules.spellcasting.ritual）。
+    ritual: none
     caster: half
     weapons: [simple, martial]
     prepared: cha+half
@@ -188,6 +643,18 @@ classes:
       - {id: channel-divinity, name: Channel Divinity, recharge: short, from: 3, by_level: [0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}
     subclasses:
       devotion:
+        # 2014 奉献圣誓法术（始终准备；SRD 文本）。
+        spells:
+          - {id: protection-from-evil-and-good, level: 1, grant: always_prepared, from_level: 3}
+          - {id: sanctuary, level: 1, grant: always_prepared, from_level: 3}
+          - {id: lesser-restoration, level: 2, grant: always_prepared, from_level: 5}
+          - {id: zone-of-truth, level: 2, grant: always_prepared, from_level: 5}
+          - {id: beacon-of-hope, level: 3, grant: always_prepared, from_level: 9}
+          - {id: dispel-magic, level: 3, grant: always_prepared, from_level: 9}
+          - {id: freedom-of-movement, level: 4, grant: always_prepared, from_level: 13}
+          - {id: guardian-of-faith, level: 4, grant: always_prepared, from_level: 13}
+          - {id: commune, level: 5, grant: always_prepared, from_level: 17}
+          - {id: flame-strike, level: 5, grant: always_prepared, from_level: 17}
         name: Oath of Devotion
         features:
           - [3, "Channel Divinity: Sacred Weapon", 武器攻击加魅力调整值并发光]
@@ -196,6 +663,48 @@ classes:
           - [15, Purity of Spirit, 常驻防护善恶效果]
           - [20, Holy Nimbus, 圣光：灼烧敌人、豁免优势]
   ranger:
+    # 基础职业法术表（只收 SRD 法术），生成自上游 5e-database
+    # 2014 spells[].classes（2026-10-28，TASK-0123）.
+    spells:
+      alarm: 1
+      animal-friendship: 1
+      animal-messenger: 2
+      barkskin: 2
+      commune-with-nature: 5
+      conjure-animals: 3
+      conjure-woodland-beings: 4
+      cure-wounds: 1
+      darkvision: 2
+      daylight: 3
+      detect-magic: 1
+      detect-poison-and-disease: 1
+      find-traps: 2
+      fog-cloud: 1
+      freedom-of-movement: 4
+      goodberry: 1
+      hunters-mark: 1
+      jump: 1
+      lesser-restoration: 2
+      locate-animals-or-plants: 2
+      locate-creature: 4
+      locate-object: 2
+      longstrider: 1
+      nondetection: 3
+      pass-without-trace: 2
+      plant-growth: 3
+      protection-from-energy: 3
+      protection-from-poison: 2
+      silence: 2
+      speak-with-animals: 1
+      speak-with-plants: 3
+      spike-growth: 2
+      stoneskin: 4
+      tree-stride: 5
+      water-breathing: 3
+      water-walk: 3
+      wind-wall: 3
+    # 2014 仪式资格按职业（2024 走 edition 级 rules.spellcasting.ritual）。
+    ritual: none
     caster: half
     weapons: [simple, martial]
     known: [0,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11]
@@ -247,6 +756,131 @@ classes:
           - [13, Use Magic Device, 无视魔法物品的职业/种族/等级要求]
           - [17, "Thief's Reflexes", 第一轮获得两个回合]
   sorcerer:
+    # 基础职业法术表（只收 SRD 法术），生成自上游 5e-database
+    # 2014 spells[].classes（2026-10-28，TASK-0123）.
+    spells:
+      acid-splash: 0
+      alter-self: 2
+      animate-objects: 5
+      banishment: 4
+      blight: 4
+      blindness-deafness: 2
+      blink: 3
+      blur: 2
+      burning-hands: 1
+      chain-lightning: 6
+      charm-person: 1
+      chill-touch: 0
+      circle-of-death: 6
+      clairvoyance: 3
+      cloudkill: 5
+      color-spray: 1
+      comprehend-languages: 1
+      cone-of-cold: 5
+      confusion: 4
+      counterspell: 3
+      creation: 5
+      dancing-lights: 0
+      darkness: 2
+      darkvision: 2
+      daylight: 3
+      delayed-blast-fireball: 7
+      detect-magic: 1
+      detect-thoughts: 2
+      dimension-door: 4
+      disguise-self: 1
+      disintegrate: 6
+      dispel-magic: 3
+      dominate-beast: 4
+      dominate-monster: 8
+      dominate-person: 5
+      earthquake: 8
+      enhance-ability: 2
+      enlarge-reduce: 2
+      etherealness: 7
+      expeditious-retreat: 1
+      eyebite: 6
+      false-life: 1
+      fear: 3
+      feather-fall: 1
+      finger-of-death: 7
+      fire-bolt: 0
+      fire-storm: 7
+      fireball: 3
+      fly: 3
+      fog-cloud: 1
+      gaseous-form: 3
+      gate: 9
+      globe-of-invulnerability: 6
+      greater-invisibility: 4
+      gust-of-wind: 2
+      haste: 3
+      hold-monster: 5
+      hold-person: 2
+      hypnotic-pattern: 3
+      ice-storm: 4
+      incendiary-cloud: 8
+      insect-plague: 5
+      invisibility: 2
+      jump: 1
+      knock: 2
+      levitate: 2
+      light: 0
+      lightning-bolt: 3
+      mage-armor: 1
+      mage-hand: 0
+      magic-missile: 1
+      major-image: 3
+      mass-suggestion: 6
+      mending: 0
+      message: 0
+      meteor-swarm: 9
+      minor-illusion: 0
+      mirror-image: 2
+      misty-step: 2
+      move-earth: 6
+      plane-shift: 7
+      poison-spray: 0
+      polymorph: 4
+      power-word-kill: 9
+      power-word-stun: 8
+      prestidigitation: 0
+      prismatic-spray: 7
+      protection-from-energy: 3
+      ray-of-frost: 0
+      reverse-gravity: 7
+      scorching-ray: 2
+      see-invisibility: 2
+      seeming: 5
+      shatter: 2
+      shield: 1
+      shocking-grasp: 0
+      silent-image: 1
+      sleep: 1
+      sleet-storm: 3
+      slow: 3
+      spider-climb: 2
+      stinking-cloud: 3
+      stoneskin: 4
+      suggestion: 2
+      sunbeam: 6
+      sunburst: 8
+      telekinesis: 5
+      teleport: 7
+      teleportation-circle: 5
+      thunderwave: 1
+      time-stop: 9
+      tongues: 3
+      true-seeing: 6
+      true-strike: 0
+      wall-of-fire: 4
+      wall-of-stone: 5
+      water-breathing: 3
+      water-walk: 3
+      web: 2
+      wish: 9
+    # 2014 仪式资格按职业（2024 走 edition 级 rules.spellcasting.ritual）。
+    ritual: none
     caster: full
     weapons: [dagger, dart, sling, quarterstaff, light-crossbow]
     cantrips: [4,4,4,5,5,5,5,5,5,6,6,6,6,6,6,6,6,6,6,6]
@@ -270,6 +904,77 @@ classes:
           - [14, Dragon Wings, 长出龙翼获得飞行速度]
           - [18, Draconic Presence, 花 5 点发出畏惧或敬畏光环]
   warlock:
+    # 基础职业法术表（只收 SRD 法术），生成自上游 5e-database
+    # 2014 spells[].classes（2026-10-28，TASK-0123）.
+    spells:
+      astral-projection: 9
+      banishment: 4
+      blight: 4
+      charm-person: 1
+      chill-touch: 0
+      circle-of-death: 6
+      comprehend-languages: 1
+      conjure-fey: 6
+      contact-other-plane: 5
+      counterspell: 3
+      create-undead: 6
+      darkness: 2
+      demiplane: 8
+      dimension-door: 4
+      dispel-magic: 3
+      dominate-monster: 8
+      dream: 5
+      eldritch-blast: 0
+      enthrall: 2
+      etherealness: 7
+      expeditious-retreat: 1
+      eyebite: 6
+      fear: 3
+      feeblemind: 8
+      finger-of-death: 7
+      flesh-to-stone: 6
+      fly: 3
+      forcecage: 7
+      foresight: 9
+      gaseous-form: 3
+      glibness: 8
+      hallucinatory-terrain: 4
+      hellish-rebuke: 1
+      hold-monster: 5
+      hold-person: 2
+      hypnotic-pattern: 3
+      illusory-script: 1
+      imprisonment: 9
+      invisibility: 2
+      mage-hand: 0
+      magic-circle: 3
+      major-image: 3
+      mass-suggestion: 6
+      minor-illusion: 0
+      mirror-image: 2
+      misty-step: 2
+      plane-shift: 7
+      poison-spray: 0
+      power-word-kill: 9
+      power-word-stun: 8
+      prestidigitation: 0
+      protection-from-evil-and-good: 1
+      ray-of-enfeeblement: 2
+      remove-curse: 3
+      scrying: 5
+      shatter: 2
+      spider-climb: 2
+      suggestion: 2
+      tongues: 3
+      true-polymorph: 9
+      true-seeing: 6
+      true-strike: 0
+      unseen-servant: 1
+      vampiric-touch: 3
+    # 2014 仪式资格按职业（2024 走 edition 级 rules.spellcasting.ritual）。
+    ritual: none
+    # Mystic Arcanum：11/13/15/17 级解锁 arcanum-6..9（长休各 1 次）。
+    arcanum: true
     caster: pact
     weapons: [simple]
     cantrips: [2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4]
@@ -284,6 +989,18 @@ classes:
       - [20, Eldritch Master, 花 1 分钟恢复全部契约法术位，每长休一次]
     subclasses:
       fiend:
+        # 2014 邪魔扩表（加入术士列表的可选项，不自动已知；SRD 文本）。
+        spells:
+          - {id: burning-hands, level: 1, grant: class_list, from_level: 1}
+          - {id: command, level: 1, grant: class_list, from_level: 1}
+          - {id: blindness-deafness, level: 2, grant: class_list, from_level: 3}
+          - {id: scorching-ray, level: 2, grant: class_list, from_level: 3}
+          - {id: fireball, level: 3, grant: class_list, from_level: 5}
+          - {id: stinking-cloud, level: 3, grant: class_list, from_level: 5}
+          - {id: fire-shield, level: 4, grant: class_list, from_level: 7}
+          - {id: wall-of-fire, level: 4, grant: class_list, from_level: 7}
+          - {id: flame-strike, level: 5, grant: class_list, from_level: 9}
+          - {id: hallow, level: 5, grant: class_list, from_level: 9}
         name: The Fiend
         features:
           - [1, "Dark One's Blessing", 敌对生物降到 0 HP 时获得临时 HP（魅力 + 等级）]
@@ -291,6 +1008,218 @@ classes:
           - [10, Fiendish Resilience, 短休后选择一种伤害类型获得抗性]
           - [14, Hurl Through Hell, 命中后把目标扔进下层位面，每长休一次]
   wizard:
+    # 基础职业法术表（只收 SRD 法术），生成自上游 5e-database
+    # 2014 spells[].classes（2026-10-28，TASK-0123）.
+    spells:
+      acid-arrow: 2
+      acid-splash: 0
+      alarm: 1
+      alter-self: 2
+      animate-dead: 3
+      animate-objects: 5
+      antimagic-field: 8
+      antipathy-sympathy: 8
+      arcane-eye: 4
+      arcane-hand: 5
+      arcane-lock: 2
+      arcane-sword: 7
+      arcanists-magic-aura: 2
+      astral-projection: 9
+      banishment: 4
+      bestow-curse: 3
+      black-tentacles: 4
+      blight: 4
+      blindness-deafness: 2
+      blink: 3
+      blur: 2
+      burning-hands: 1
+      chain-lightning: 6
+      charm-person: 1
+      chill-touch: 0
+      circle-of-death: 6
+      clairvoyance: 3
+      clone: 8
+      cloudkill: 5
+      color-spray: 1
+      comprehend-languages: 1
+      cone-of-cold: 5
+      confusion: 4
+      conjure-elemental: 5
+      conjure-minor-elementals: 4
+      contact-other-plane: 5
+      contingency: 6
+      continual-flame: 2
+      control-water: 4
+      control-weather: 8
+      counterspell: 3
+      create-undead: 6
+      creation: 5
+      dancing-lights: 0
+      darkness: 2
+      darkvision: 2
+      delayed-blast-fireball: 7
+      demiplane: 8
+      detect-magic: 1
+      detect-thoughts: 2
+      dimension-door: 4
+      disguise-self: 1
+      disintegrate: 6
+      dispel-magic: 3
+      dominate-monster: 8
+      dominate-person: 5
+      dream: 5
+      enlarge-reduce: 2
+      etherealness: 7
+      expeditious-retreat: 1
+      eyebite: 6
+      fabricate: 4
+      faithful-hound: 4
+      false-life: 1
+      fear: 3
+      feather-fall: 1
+      feeblemind: 8
+      find-familiar: 1
+      finger-of-death: 7
+      fire-bolt: 0
+      fire-shield: 4
+      fireball: 3
+      flaming-sphere: 2
+      flesh-to-stone: 6
+      floating-disk: 1
+      fly: 3
+      fog-cloud: 1
+      forcecage: 7
+      foresight: 9
+      freezing-sphere: 6
+      gaseous-form: 3
+      gate: 9
+      geas: 5
+      gentle-repose: 2
+      globe-of-invulnerability: 6
+      glyph-of-warding: 3
+      grease: 1
+      greater-invisibility: 4
+      guards-and-wards: 6
+      gust-of-wind: 2
+      hallucinatory-terrain: 4
+      haste: 3
+      hideous-laughter: 1
+      hold-monster: 5
+      hold-person: 2
+      hypnotic-pattern: 3
+      ice-storm: 4
+      identify: 1
+      illusory-script: 1
+      imprisonment: 9
+      incendiary-cloud: 8
+      instant-summons: 6
+      invisibility: 2
+      irresistible-dance: 6
+      jump: 1
+      knock: 2
+      legend-lore: 5
+      levitate: 2
+      light: 0
+      lightning-bolt: 3
+      locate-creature: 4
+      locate-object: 2
+      longstrider: 1
+      mage-armor: 1
+      mage-hand: 0
+      magic-circle: 3
+      magic-jar: 6
+      magic-missile: 1
+      magic-mouth: 2
+      magic-weapon: 2
+      magnificent-mansion: 7
+      major-image: 3
+      mass-suggestion: 6
+      maze: 8
+      mending: 0
+      message: 0
+      meteor-swarm: 9
+      mind-blank: 8
+      minor-illusion: 0
+      mirage-arcane: 7
+      mirror-image: 2
+      mislead: 5
+      misty-step: 2
+      modify-memory: 5
+      move-earth: 6
+      nondetection: 3
+      passwall: 5
+      phantasmal-killer: 4
+      phantom-steed: 3
+      planar-binding: 5
+      plane-shift: 7
+      poison-spray: 0
+      polymorph: 4
+      power-word-kill: 9
+      power-word-stun: 8
+      prestidigitation: 0
+      prismatic-spray: 7
+      prismatic-wall: 9
+      private-sanctum: 4
+      programmed-illusion: 6
+      project-image: 7
+      protection-from-energy: 3
+      protection-from-evil-and-good: 1
+      ray-of-enfeeblement: 2
+      ray-of-frost: 0
+      remove-curse: 3
+      resilient-sphere: 4
+      reverse-gravity: 7
+      rope-trick: 2
+      scorching-ray: 2
+      scrying: 5
+      secret-chest: 4
+      see-invisibility: 2
+      seeming: 5
+      sending: 3
+      sequester: 7
+      shapechange: 9
+      shatter: 2
+      shield: 1
+      shocking-grasp: 0
+      silent-image: 1
+      simulacrum: 7
+      sleep: 1
+      sleet-storm: 3
+      slow: 3
+      spider-climb: 2
+      stinking-cloud: 3
+      stone-shape: 4
+      stoneskin: 4
+      suggestion: 2
+      sunbeam: 6
+      sunburst: 8
+      symbol: 7
+      telekinesis: 5
+      telepathic-bond: 5
+      teleport: 7
+      teleportation-circle: 5
+      thunderwave: 1
+      time-stop: 9
+      tiny-hut: 3
+      tongues: 3
+      true-polymorph: 9
+      true-seeing: 6
+      true-strike: 0
+      unseen-servant: 1
+      vampiric-touch: 3
+      wall-of-fire: 4
+      wall-of-force: 5
+      wall-of-ice: 6
+      wall-of-stone: 5
+      water-breathing: 3
+      web: 2
+      weird: 9
+      wish: 9
+    # 2014 仪式资格按职业（2024 走 edition 级 rules.spellcasting.ritual）。
+    ritual: book
+    book: true
+    # 抄书成本（SRD：每法术环级 2 小时 + 50 gp）。
+    scribe: {hours_per_level: 2, cost_gp_per_level: 50}
     caster: full
     weapons: [dagger, dart, sling, quarterstaff, light-crossbow]
     cantrips: [3,3,3,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5,5]
