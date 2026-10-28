@@ -1,6 +1,11 @@
 # 2024 (SRD 5.2.1): surprised creatures roll initiative with Disadvantage.
 rules:
   surprise: {initiative_disadvantage: true}
+  # 2024 (SRD 5.2.1): ritual casting is an edition-level rule — a prepared
+  # spell with the Ritual tag can be cast as a ritual, no class feature
+  # needed. Wizard's Ritual Adept (book spells, unprepared) lives in the
+  # class pack as ritual_adept.
+  spellcasting: {ritual: prepared}
   combat_actions:
     unarmed_strike: {damage: "1d3+{str}"}
     grapple:

@@ -93,14 +93,14 @@ fn older_schema_checkpoint(save: &Path) -> String {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 9", "schema: 6"),
+        meta.replace("schema: 10", "schema: 6"),
     )
     .unwrap();
     let id = snapshot(save, None);
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 6", "schema: 9"),
+        meta.replace("schema: 6", "schema: 10"),
     )
     .unwrap();
     id
@@ -488,7 +488,7 @@ fn restore_of_an_older_schema_runs_the_normal_migration() {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 9", "schema: 6"),
+        meta.replace("schema: 10", "schema: 6"),
     )
     .unwrap();
     let id = snapshot(&save, None);
@@ -498,13 +498,13 @@ fn restore_of_an_older_schema_runs_the_normal_migration() {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 6", "schema: 9"),
+        meta.replace("schema: 6", "schema: 10"),
     )
     .unwrap();
     restore(&save, &id, true).unwrap();
     // Restore first, then the normal migration: the save is current again.
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
-    assert!(meta.contains("schema: 9"), "{meta}");
+    assert!(meta.contains("schema: 10"), "{meta}");
     assert!(
         meta.contains("from: 6"),
         "migration must be recorded: {meta}"
@@ -520,7 +520,7 @@ fn restore_of_an_older_schema_runs_the_normal_migration() {
     );
     let log = fs::read_to_string(save.join("Sessions/2030-01-02-session-00-setup.md")).unwrap();
     assert!(log.contains("恢复检查点"), "{log}");
-    assert!(log.contains("schema 6→9"), "{log}");
+    assert!(log.contains("schema 6→10"), "{log}");
     let _ = fs::remove_dir_all(&root);
 }
 

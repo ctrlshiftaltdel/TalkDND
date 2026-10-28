@@ -2,6 +2,10 @@
 # act on their first turn (and no reactions until it ends).
 rules:
   surprise: {initiative_disadvantage: false, condition: surprised}
+  # 2014 (SRD 5.1): ritual casting is a class feature (Bard = known,
+  # Cleric/Druid = prepared, Wizard = book; the class pack carries
+  # classes.<id>.ritual). Warlock rituals via invocations are out of scope.
+  spellcasting: {ritual: per-class}
   combat_actions:
     unarmed_strike: {damage: "1+{str}"}
     grapple:

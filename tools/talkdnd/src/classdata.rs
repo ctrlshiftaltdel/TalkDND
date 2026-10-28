@@ -121,6 +121,57 @@ pub struct Sub {
     /// Armor proficiencies granted by this subclass (e.g. 2014 Life: heavy).
     #[serde(default)]
     pub armor_proficiency: Vec<String>,
+    /// Subclass spell grants (v1.6 T2; semantics per docs/SPELLCASTING.md
+    /// §3.9). The grant type follows each subclass's own text: Life/Devotion/
+    /// Land (2014) and the 2024 domain/patron lists are `always_prepared`,
+    /// the 2014 Fiend list is `class_list`, feature-granted choices are
+    /// `any_class` / `multi_list`. Never flattened to one type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spells: Vec<SpellGrant>,
+}
+
+/// One spell granted outside the base class list — either a fixed spell
+/// (`always_prepared` / `class_list`) or a choice grant
+/// (`any_class` / `multi_list`, where the player picks `count` spells).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpellGrant {
+    /// Fixed grant: the spell id (matches the combat content id). Choice
+    /// grants have no fixed id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Fixed grant: spell level (0 = cantrip).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<u8>,
+    /// Grant semantics: `always_prepared` (fixed list, auto-prepared, not
+    /// counted), `class_list` (joins the class list as a choice),
+    /// `any_class` (choice from any class list) or `multi_list` (choice
+    /// limited to `from`).
+    pub grant: String,
+    /// Class level when the spell is granted.
+    #[serde(default)]
+    pub from_level: i32,
+    /// How many spells may be chosen from this grant (choice grants).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<i32>,
+    /// Whether chosen spells count against the known/prepared limits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub counts: bool,
+    /// `multi_list`: the source class tables.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from: Vec<String>,
+    /// Circle of the Land: the terrain these spells belong to (the player
+    /// picks one terrain; T3 commands resolve it, migration leaves them out).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrain: Option<String>,
+}
+
+/// Copying a spell into a spellbook (SRD numbers; `talkdnd char … scribe`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct Scribe {
+    /// Hours per spell level.
+    pub hours_per_level: i32,
+    /// Gold cost per spell level (gp).
+    pub cost_gp_per_level: i32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -154,6 +205,38 @@ pub struct ClassDef {
     pub resources: Vec<Res>,
     #[serde(default)]
     pub subclasses: BTreeMap<String, Sub>,
+    // ---- v1.6 spell lists (docs/SPELLCASTING.md §3; T2) ----
+    /// Base class spell list, id → level (0 = cantrip). SRD spells only;
+    /// generated from the upstream 5e-database `spells[].classes` (see the
+    /// TASK-0123 PR for source and date).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub spells: BTreeMap<String, u8>,
+    /// 2014 class-level ritual casting: none|known|prepared|book. 2024 is
+    /// edition-level (`rules.spellcasting.ritual`) and does not set this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ritual: Option<String>,
+    /// 2024 wizard Ritual Adept: book spells can be ritual-cast unprepared.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ritual_adept: bool,
+    /// The class keeps a spellbook (wizard); the sheet's list mode is
+    /// `spellbook` and `book` holds the prepared-from source.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub book: bool,
+    /// Copying a spell into the book (SRD numbers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scribe: Option<Scribe>,
+    /// Mystic Arcanum (warlock): `arcanum-6..9` resources unlock at levels
+    /// 11/13/15/17 (same in both editions, verified against the packs).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub arcanum: bool,
+    /// When cantrips can be replaced: `level_up` or `long_rest` (2024
+    /// data; T3 enforces it). 2014 has no cantrip replacement in the SRD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cantrip_replace: Option<String>,
+    /// Class-level feature grants (Magical Secrets): choices outside the
+    /// base list, granted by a class feature rather than a subclass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features_grants: Vec<SpellGrant>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -283,9 +366,12 @@ impl Book {
                             e.armor_proficiency = s.armor_proficiency;
                         }
                         e.features.extend(s.features);
+                        e.spells.extend(s.spells);
                     }
                     have.features.extend(c.features);
                     have.resources.extend(c.resources);
+                    have.spells.extend(c.spells);
+                    have.features_grants.extend(c.features_grants);
                 }
                 None => {
                     self.local_ids.push(id.clone());
@@ -310,6 +396,55 @@ impl Book {
     pub fn class(&self, id: &str) -> Option<&ClassDef> {
         self.classes.get(id)
     }
+}
+
+/// The sheet list mode for a class: `spellbook` (wizard), else `known`
+/// (2014 Bard/Ranger/Sorcerer/Warlock) or `prepared` (everything else),
+/// mirroring docs/SPELLCASTING.md §3.2. `None` for non-casters.
+pub fn spell_mode(cd: &ClassDef) -> Option<String> {
+    if cd.book {
+        Some("spellbook".into())
+    } else if cd.known.is_some() {
+        Some("known".into())
+    } else if !matches!(cd.prepared, Count::None) {
+        Some("prepared".into())
+    } else {
+        None
+    }
+}
+
+/// Every spell id the class may take with its level (0 = cantrip): the base
+/// table, all fixed grants, and — for choice grants — the source class
+/// tables (`any_class`: every class in the book; `multi_list`: only the
+/// listed ones). Migration adopt and the T3 commands use this as the "known
+/// universe" for precise matching.
+pub fn spell_universe(book: &Book, cd: &ClassDef) -> BTreeMap<String, u8> {
+    fn add_choice(m: &mut BTreeMap<String, u8>, book: &Book, from: &[String]) {
+        let classes: Box<dyn Iterator<Item = &ClassDef>> = if from.is_empty() {
+            Box::new(book.classes.values())
+        } else {
+            Box::new(from.iter().filter_map(|c| book.class(c)))
+        };
+        for other in classes {
+            for (id, lvl) in &other.spells {
+                m.entry(id.clone()).or_insert(*lvl);
+            }
+        }
+    }
+    let mut m = cd.spells.clone();
+    for g in cd
+        .features_grants
+        .iter()
+        .chain(cd.subclasses.values().flat_map(|s| s.spells.iter()))
+    {
+        match (&g.id, g.from.as_slice()) {
+            (Some(id), _) => {
+                m.entry(id.clone()).or_insert(g.level.unwrap_or(0));
+            }
+            (None, src) => add_choice(&mut m, book, src),
+        }
+    }
+    m
 }
 
 /// The exact command(s) a DM agent should run when local data is missing.
@@ -887,6 +1022,26 @@ pub fn generate(c: &Creation, book: &Book, root: Option<&Path>) -> Generated {
         Some("pact") => g.pact = Some(pact(lvl)),
         Some(t) => g.slots = slots(t, rs, lvl),
         None => {}
+    }
+    // Mystic Arcanum (warlock): one long-rest resource per unlocked ring,
+    // 6..=9 at levels 11/13/15/17 (same in both editions). Independent of
+    // spell slots; `spells sync` overrides the ref cost with `arcanum-N`.
+    if cl.arcanum {
+        for (ring, unlock) in [(6, 11), (7, 13), (8, 15), (9, 17)] {
+            if lvl < unlock {
+                continue;
+            }
+            g.resources.push(ResOut {
+                id: format!("arcanum-{ring}"),
+                name: format!("Mystic Arcanum ({ring} 环)"),
+                max: 1,
+                recharge: "long".into(),
+                short_regain: None,
+                notes: Some(format!(
+                    "每长休施放一次 {ring} 环法术；不占法术位（{unlock} 级解锁）"
+                )),
+            });
+        }
     }
     g.cantrips = cl.cantrips.as_ref().map(|t| at(t, lvl)).filter(|n| *n > 0);
     let sa = data::class(&cid)

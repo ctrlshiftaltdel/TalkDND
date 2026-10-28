@@ -485,6 +485,32 @@ pub struct Rules {
     /// `rules` means a later edition difference is data, not an engine branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready: Option<ReadyRule>,
+    /// Spellcasting data rules (v1.6 T2). Only the data shape lives here:
+    /// `ritual` is `prepared` (edition rule: prepared + ritual tag) for 2024
+    /// or `per-class` (lookup `classes.<id>.ritual` in the class pack) for
+    /// 2014. The engine never reads this; `talkdnd` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spellcasting: Option<SpellcastingRules>,
+}
+
+/// Spellcasting rules supplied by data. Deliberately minimal (v1.6 T2): the
+/// engine does not resolve rituals; this only tells `talkdnd` how ritual
+/// eligibility is decided for this edition.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpellcastingRules {
+    /// `prepared` (edition rule: prepared + ritual tag, 2024) or
+    /// `per-class` (2014: looked up per class in the class pack).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ritual: Option<String>,
+}
+
+impl SpellcastingRules {
+    fn merge_from(&mut self, other: Self) {
+        if other.ritual.is_some() {
+            self.ritual = other.ritual;
+        }
+    }
 }
 
 /// Surprise handling. 2024: initiative with disadvantage. 2014: normal
@@ -549,6 +575,12 @@ impl Rules {
             match &mut self.ready {
                 Some(existing) => existing.merge_from(ready),
                 slot @ None => *slot = Some(ready),
+            }
+        }
+        if let Some(other) = other.spellcasting {
+            match &mut self.spellcasting {
+                Some(existing) => existing.merge_from(other),
+                slot @ None => *slot = Some(other),
             }
         }
     }

@@ -23,6 +23,8 @@
 
 自动化开关存在 `save-meta.yaml` 的 `settings.automation`：每个存档一组默认，场景与遭遇按 id 覆盖，生效顺序是 **遭遇 > 场景 > 存档默认**。DM 用 `talkdnd settings automation` 查看/修改，每个值的来源和每次改动都会写明；详见 `docs/automation.md`。
 
+角色卡的结构化数据 `sheets/<id>.yaml` 在 `save-meta.yaml` 的 `schema: 10` 起多一个 `spells` 块：职业施法模式（`mode: known|prepared|spellbook`）、施法属性与 `cantrips` / `prepared` / `known` / `book` / `always_prepared` / `arcanum` / `legacy` 列表（全部存法术 id）。它是法术列表的唯一数据源，角色卡 Markdown 的 `## 法术` 段只是展示。旧存档迁移（schema 9→10）先整份备份到 `Saves/_backups/`，再从 `chargen.json` 或正文精确对号入座，对不上的进 `legacy`；手改过的角色卡不会被重写。字段与校验规则见 `docs/character-data.md`「法术列表」。
+
 ## 规则集（`ruleset`）
 
 每个存档在 `combat/campaign.yaml` 里只选一个规则集；开档后不要换 edition。

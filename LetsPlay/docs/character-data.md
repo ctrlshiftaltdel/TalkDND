@@ -13,6 +13,24 @@
 
 combat-sim 仍从角色卡的 `combat yaml` 块读数据，从 `party-state.yaml` 读当前值，所以两边始终一致：战斗里扣的 HP，`char` 能看到；`char` 治疗或长休，下一场战斗也会用到。
 
+## 法术列表（schema 10）
+
+`sheets/<id>.yaml` 的 `spells` 块（存档 `schema: 10` 起）是法术列表的**唯一数据源**；角色卡 Markdown 的 `## 法术` 段只是展示：
+
+| 字段 | 含义 |
+|------|------|
+| `version` | 块格式版本，当前 1 |
+| `mode` | 施法模式：`known`（已知）、`prepared`（准备）、`spellbook`（法术书）；来自职业数据，2014 吟游诗人/游侠/术士/邪术师是 `known`，2024 都是 `prepared`，法师两版都是 `spellbook` |
+| `ability` | 施法属性（审计副本；与职业数据不一致时命令会拒绝） |
+| `cantrips` / `prepared` / `known` / `book` | 各列表，存法术 id |
+| `always_prepared` | 子职常备法术（如 2014 生命领域、2024 邪魔庇主）：不占准备数量、不能被取消准备 |
+| `arcanum` | Mystic Arcanum（邪术师 11/13/15/17 级解锁 6/7/8/9 环，每环至多一个，不占法术位） |
+| `legacy` | 无法映射到法术 id 的旧自由文本条目，原样保留 |
+
+- **来源与校验**：法术 id 必须属于基础职业法术表（`classes-<版本>.yaml` 的 `spells`）或该职业数据里声明的授予来源（子职常备/扩表、特性授予）——授予语义按各子职自己的 SRD 文本区分，不合并处理。数量校验沿用建卡的职业表：过多报错，过少警告。
+- **迁移（schema 9→10）**：`talkdnd start` / `talkdnd migrate` 会先整份备份到 `Saves/_backups/<存档>-<时间>-schema9`，再给每张角色卡补 `spells` 块：优先从 `chargen.json` 精确对号，其次从角色卡正文的 `## 法术` 段按「法术 id 或名字的 slug」精确匹配；对不上的进 `legacy`，不猜测。重复迁移不二次改写；DM 手改过的角色卡（校验清单标记 dirty）保持原样不重写，法术列表之后用命令补。恢复备份即可回退。
+- 旧的 `spell-slot-*` 法术位资源不改名、不重算当前值，仍由 `combat/party-state.yaml` 管。
+
 ## 角色卡怎么生成
 
 `Characters/<名字>.md` = 上半部分（身份、属性、技能、特性等可读内容，来自建卡或迁移前的原卡）+ 程序生成部分（`<!-- talkdnd:char … -->` 到 `<!-- /talkdnd:char -->`：角色选项、当前状态、物品栏、笔记、DM 备注、combat 数据块）+ 尾部（升级记录）。

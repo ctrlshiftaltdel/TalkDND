@@ -116,6 +116,73 @@ pub struct CharFile {
     /// The combat-sim block (single copy; rendered into the sheet).
     #[serde(default)]
     pub combat: Value,
+    /// Structured spell lists (schema 10; docs/SPELLCASTING.md §3.5). The
+    /// sheet's `spells` block is the only source of the character's lists;
+    /// the Markdown `## 法术` section is a rendering, never the source.
+    /// `None` on sheets written before schema 10; see
+    /// [`crate::migrate`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spells: Option<SpellLists>,
+}
+
+/// The `spells` block of a character sheet: mode, ability and the id lists
+/// (schema 10). `version` is the block format (currently 1); ids match the
+/// combat content ids. `CharFile.version` stays 1 — old binaries refuse the
+/// whole save at `save-meta` (schema 10) before they could drop this block.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SpellLists {
+    /// Block format version (currently 1).
+    #[serde(default)]
+    pub version: u32,
+    /// How the class casts: `known`, `prepared` or `spellbook`.
+    #[serde(default)]
+    pub mode: String,
+    /// Spellcasting ability (`wis`, ...). Audit copy of the class data;
+    /// commands fail closed when it disagrees with `classes-<edition>.yaml`.
+    #[serde(default)]
+    pub ability: String,
+    #[serde(default)]
+    pub cantrips: Vec<String>,
+    /// Prepared spells (prepared/spellbook modes).
+    #[serde(default)]
+    pub prepared: Vec<String>,
+    /// Known spells (known mode).
+    #[serde(default)]
+    pub known: Vec<String>,
+    /// Spellbook contents (spellbook mode; prepare from this).
+    #[serde(default)]
+    pub book: Vec<String>,
+    /// Subclass grants: always prepared, not counted, not unpreparable.
+    #[serde(default)]
+    pub always_prepared: Vec<String>,
+    /// Mystic Arcanum (warlock): one spell per unlocked ring 6..=9.
+    #[serde(default)]
+    pub arcanum: Vec<String>,
+    /// Old free-text entries that could not be mapped to ids (kept verbatim;
+    /// the DM maps them with `spells adopt --map`, T3).
+    #[serde(default)]
+    pub legacy: Vec<String>,
+}
+
+impl SpellLists {
+    /// The list that `mode` reads from: `known` for known mode, `book` for
+    /// spellbook mode, else `prepared`.
+    pub fn mode_list(&self) -> &Vec<String> {
+        match self.mode.as_str() {
+            "known" => &self.known,
+            "spellbook" => &self.book,
+            _ => &self.prepared,
+        }
+    }
+
+    /// Fill the format version and keep every list present. Used by the
+    /// schema-10 migration for sheets that already carry a block: the
+    /// player's lists are never touched, only missing defaults are added.
+    pub fn fill_defaults(&mut self) {
+        if self.version == 0 {
+            self.version = 1;
+        }
+    }
 }
 
 /// `controller` value for a player's character.

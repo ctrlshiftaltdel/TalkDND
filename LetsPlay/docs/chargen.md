@@ -24,7 +24,7 @@
 | 职业起始装备 | 把选项念给玩家。2014：每组选一项（字母按组顺序），或改掷起始金币；2024：A/B（战士有 C），最后一项是纯金币。物品与金币自动加入；`{martial weapon}` 这类占位项由玩家说具体武器 | `$T chargen set class-equipment a,b,a,a` / `gold`（掷骰记日志）/ `A`；再 `$T chargen set equipment greatsword` |
 | 其他装备 | 额外购买的物品；护甲和盾牌可单列。**职业（含子职）不熟练的护甲或盾牌会让 `validate` 报错** | `$T chargen set armor chain-mail`、`$T chargen set shield yes`、`$T chargen set equipment "mace; holy symbol"` |
 | 武器精通（仅 2024，野蛮人/战士/圣武士/游侠/盗贼） | 持有武器多于可选数量时由玩家选 | `$T chargen set masteries longsword,javelin` |
-| 法术 | 施法职业按书选戏法和法术；非施法职业写 none。程序按职业数据核对**戏法数**与**已知/可准备法术数**（2014 准备施法者 = 施法属性调整值 + 等级，至少 1；2024 用表格）：过多报错，过少只警告 | `$T chargen set spells "sacred flame, cure wounds"` |
+| 法术 | 施法职业按书选戏法和法术；非施法职业写 none。程序按职业数据核对**戏法数**与**已知/可准备法术数**（2014 准备施法者 = 施法属性调整值 + 等级，至少 1；2024 用表格）：过多报错，过少只警告。schema 10 起确认后的角色卡带 `spells` 法术列表块，见 `docs/character-data.md`「法术列表」 | `$T chargen set spells "sacred flame, cure wounds"` |
 | 名字 | 名字 | `$T chargen set name Bruni` |
 | 性格四项与阵营 | 性格特点、理想、牵绊、缺点（可参考背景的建议表，由玩家定）、阵营 | `$T chargen set traits "..."`、`set ideals`、`set bonds`、`set flaws`、`set alignment "混乱善良"` |
 | 确认 | 生成角色卡给玩家看，玩家说可以再确认 | `$T chargen validate` → `$T chargen sheet --player <玩家名>` → `$T chargen confirm` |
@@ -38,7 +38,7 @@
 - **种族特性**：黑暗视觉、伤害抗性、速度、种族特性概括会自动写进角色卡，并同步到 `combat yaml` 的 `senses` / `resistances`。
 - `sheet` 写 `Characters/<名字>.md`，人类可读部分和 `combat yaml` 数据块用同一组数值生成，并把角色加进 `combat/campaign.yaml` 的 `party`。程序生成：
   - **攻击**：装备里的武器（命中 = 属性调整值 + 熟练（熟练时）；灵巧取力量/敏捷较高者；远程用敏捷；武僧武器用武术骰），外加徒手打击；2024 带武器精通。
-  - **资源**：生命骰、法术位（全/半施法者、契约魔法）、戏法数、已知/可准备法术数，以及狂暴、吟游激励、引导神力、荒野变形、回气、动作如潮、不屈、气/功力、术法点、圣疗、奥术回复等次数与恢复方式。
+  - **资源**：生命骰、法术位（全/半施法者、契约魔法）、戏法数、已知/可准备法术数，以及狂暴、吟游激励、引导神力、荒野变形、回气、动作如潮、不屈、气/功力、术法点、圣疗、奥术回复等次数与恢复方式；邪术师 11/13/15/17 级另有 Mystic Arcanum（`arcanum-6..9`，长休各 1 次，不占法术位）。
   - **职业特性**：到当前等级为止的职业与子职特性（名称 + 一句话概括）、属性提升等级；偷袭骰数等随等级的数值。
   - 有 combat-sim 引用的（偷袭、灵巧动作、回气、生命门徒）自动写进数据块；其他特性由 DM 按书裁定。
   - **战斗风格**：程序直接改数据块，combat-sim 自动结算——巨武器战斗（双手/可双手近战武器；2014 伤害骰 1、2 重掷一次，2024 视为 3；可双手武器另生成 `<武器>-2h` 双手攻击）、防御（穿护甲 AC +1）、对决（单手近战伤害 +2）、箭术（远程攻击 +2）。其余风格写进角色卡，由 DM 按书裁定。

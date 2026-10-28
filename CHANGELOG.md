@@ -4,6 +4,19 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v1.6.0 — 未发布
+
+### 更新说明 / 迁移
+
+- **存档 schema 9 → 10（TASK-0123，T2）**：`sheets/<id>.yaml` 新增 `spells` 法术列表块（模式/施法属性与 `cantrips` / `prepared` / `known` / `book` / `always_prepared` / `arcanum` / `legacy` 列表），是法术列表的唯一数据源。首次 `talkdnd start` / `talkdnd migrate` 会先把整份存档备份到 `Saves/_backups/<存档>-<时间>-schema9`，再给每张角色卡补块：优先从 `chargen.json`、其次从角色卡正文 `## 法术` 段**精确**对号（法术 id 或名字的 slug；对不上的进 `legacy`，不猜测）。迁移幂等，重复执行不二次改写；DM 手改过的角色卡（校验清单标记 dirty）保持原样不被重写。回退：恢复对应备份目录。升级后旧版 talkdnd 会在 `save-meta` 拒绝读取 schema 10 的存档（失败关闭）。
+- **职业数据与规则形状（TASK-0123，T2）**：两版 8 个 SRD 施法职业新增基础法术表（生成自上游 5e-database `spells[].classes`，只收 SRD 法术）、子职法术授予（按各自 SRD 文本区分 always_prepared / class_list / any_class / multi_list）、2014 职业级仪式资格与 2024 edition 级 `rules.spellcasting.ritual`（combat-sim 新增可选形状，旧 rules 数据照常加载，战斗行为不变）、2024 法师 Ritual Adept 与抄书数值、邪术师 Mystic Arcanum（11/13/15/17 级解锁 `arcanum-6..9` 资源）。建卡的数量校验新增结构化法术列表路径（旧自由文本仍可用）。
+
+### 已知限制
+
+- v1.6 施法**命令面尚未交付**（T3）：`spells` / `prepare` / `unprepare` / `learn` / `scribe` / `ritual` / `adopt` / `sync` 命令、`set spells` 对结构化列表的自动填充、角色卡法术 refs 都还没有；本版本只有数据层、存档块与迁移。
+- 施法结算（升环、成分、契约槽位按覆盖成本、仪式校验）是 T4/T5 的交付；`rules.spellcasting` 目前只是数据形状，引擎不读它。
+- 土地圈（2014 Land）按地形常备的法术在迁移中不自动填入（需要玩家选地形，后续由命令处理）。
+
 ## v1.5.0 — 2026-10-28
 
 ### 新功能
