@@ -207,7 +207,7 @@ $CS roll 1d20+5 --adv --dc 15
    - 把旧存档的 `ruleset: "2014"` / `"2024"` 分别迁移为 `5e-srd` / `5.5e-srd`（只改这一行，保留其他字段与注释）；
    - 原先使用完整书内容的存档需要把 `ruleset` 重选为 `5e-full` / `5.5e-full`，并解锁对应完整书 pack。
 
-自动化开关不需要预先设置：不配置时按章程默认，要改随时用 `bin/talkdnd settings automation ...`，说明见 `docs/automation.md`。v1.4 没有新的存档结构变化，schema 仍为 9，知识 API 只读且不需要预先建索引；书籍/冒险检索需要先运行 `bin/talkdnd adventure index build --book "<书名>"`。四规则集和完整书 pack 的用法与 v1.2.0 相同。
+自动化开关不需要预先设置：不配置时按章程默认，要改随时用 `bin/talkdnd settings automation ...`，说明见 `docs/automation.md`。v1.4 没有新的存档结构变化，schema 仍为 9；知识 API 只读、不需要额外设置，书籍/冒险索引缺失时搜索返回空结果，可先运行 `bin/talkdnd adventure index build --book "<书名>"`。四规则集和完整书 pack 的用法与 v1.2.0 相同。
 
 完整书 pack 不在普通发布包内。需要时，从项目所有者另行提供的 `talkdnd-full-packs-<标签>.tar.gz` 解压到 `Rules/packs/`，把匹配 PDF 放进 `Rules/<edition>/` 后用 `bin/talkdnd library scan` 解锁；没有它也能用 5e SRD / 5.5e SRD 完整游玩。
 
