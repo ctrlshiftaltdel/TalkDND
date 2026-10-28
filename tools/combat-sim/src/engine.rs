@@ -120,6 +120,30 @@ pub enum ReadyOutcome {
     Expired,
 }
 
+/// Which parts of an ability's cost the caller has already settled. Normal
+/// commands use the default (spend the action, pay the cost, begin
+/// concentration). A readied ability is prepaid at Ready setup, so its release
+/// uses `prepaid()` and only resolves the effects.
+#[derive(Debug, Clone, Copy, Default)]
+struct AbilitySettlement {
+    /// The action was already spent by the caller (AI, nested effect, ready).
+    action_spent: bool,
+    /// The ability cost/resource was already paid (ready setup).
+    cost_paid: bool,
+    /// Concentration was already started (ready setup).
+    concentration_started: bool,
+}
+
+impl AbilitySettlement {
+    fn prepaid() -> Self {
+        Self {
+            action_spent: true,
+            cost_paid: true,
+            concentration_started: true,
+        }
+    }
+}
+
 /// Which outcome a successful shove chooses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShoveMode {
@@ -2931,7 +2955,10 @@ pub fn use_planned_ability(
         &options,
         option,
         slot_level,
-        false,
+        AbilitySettlement {
+            action_spent: false,
+            ..AbilitySettlement::default()
+        },
         rng,
         log,
     )?;
@@ -3208,7 +3235,10 @@ fn resolve_named_entry(
         options,
         None,
         None,
-        auto,
+        AbilitySettlement {
+            action_spent: auto,
+            ..AbilitySettlement::default()
+        },
         rng,
         log,
     )
@@ -5594,7 +5624,10 @@ fn apply_effect(
                 &AttackOptions::default(),
                 context.option,
                 context.source.as_ref().and_then(|source| source.slot_level),
-                true,
+                AbilitySettlement {
+                    action_spent: true,
+                    ..AbilitySettlement::default()
+                },
                 rng,
                 log,
             )
@@ -6845,7 +6878,7 @@ fn use_resolved_ability(
     options: &AttackOptions,
     option: Option<usize>,
     slot_level: Option<i32>,
-    auto: bool,
+    settlement: AbilitySettlement,
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
@@ -6955,7 +6988,7 @@ fn use_resolved_ability(
         }
     }
     if let Some(cost) = &ability.cost {
-        if !can_afford(state, actor, cost) {
+        if !settlement.cost_paid && !can_afford(state, actor, cost) {
             bail!(
                 "`{}` cannot afford {} {}",
                 state.combatants[actor].name,
@@ -6964,13 +6997,15 @@ fn use_resolved_ability(
             );
         }
     }
-    if !auto {
+    if !settlement.action_spent {
         spend_action(state, actor, ability.activation, log)?;
     }
     if let Some(cost) = &ability.cost {
-        let _ = spend_cost(state, actor, cost, log)?;
+        if !settlement.cost_paid {
+            let _ = spend_cost(state, actor, cost, log)?;
+        }
     }
-    if ability.concentration {
+    if ability.concentration && !settlement.concentration_started {
         begin_concentration(state, actor, ability, log);
     }
     if let Some(manual) = &ability.manual {
@@ -7180,7 +7215,10 @@ pub fn use_ability(
         &attack_options,
         options.option,
         options.slot_level,
-        false,
+        AbilitySettlement {
+            action_spent: false,
+            ..AbilitySettlement::default()
+        },
         rng,
         log,
     )?;
@@ -7227,7 +7265,36 @@ pub fn ready(
     }
     let description = normalize_ready_description(&options.description)?;
     validate_ready_response(state, index, &options.response)?;
-    spend_action(state, index, Activation::Action, log)?;
+    let ready_ability = ready_ability(state, index, &options.response)?;
+
+    // RAW: setting Ready casts/holds the spell. Pay its cost now, then spend
+    // the action; a failed payment or action spend leaves no partial state.
+    if let Some(resolved) = &ready_ability {
+        if let Some(cost) = &resolved.ability.cost {
+            if !spend_cost(state, index, cost, log)? {
+                bail!(
+                    "`{}` cannot afford {} {}",
+                    state.combatants[index].name,
+                    cost.amount,
+                    cost.resource
+                );
+            }
+        }
+    }
+    if let Err(error) = spend_action(state, index, Activation::Action, log) {
+        if let Some(resolved) = &ready_ability {
+            if let Some(cost) = &resolved.ability.cost {
+                refund_cost(state, index, cost);
+            }
+        }
+        return Err(error);
+    }
+    if let Some(resolved) = &ready_ability {
+        if resolved.ability.concentration {
+            begin_concentration(state, index, &resolved.ability, log);
+        }
+    }
+
     let expires_round = next_named_turn_round(state, &name);
     let summary = describe_ready_response(&options.response);
     state.combatants[index].ready = Some(ReadyState {
@@ -7242,6 +7309,38 @@ pub fn ready(
         options.trigger.as_str()
     ));
     Ok(())
+}
+
+fn ready_ability(
+    state: &EncounterState,
+    holder: usize,
+    response: &ReadyResponse,
+) -> Result<Option<ResolvedAbility>> {
+    let ReadyResponse::Ability { ability, .. } = response else {
+        return Ok(None);
+    };
+    Ok(Some(
+        state.combatants[holder].find_owned_ability(&state.content, ability)?,
+    ))
+}
+
+fn ready_ability_concentration_active(
+    state: &EncounterState,
+    holder: usize,
+    ability: &str,
+) -> bool {
+    state
+        .concentration
+        .get(&state.combatants[holder].name)
+        .and_then(|concentration| concentration.ability.as_deref())
+        .is_some_and(|active| active.eq_ignore_ascii_case(ability))
+}
+
+fn refund_cost(state: &mut EncounterState, owner: usize, cost: &AbilityCost) {
+    if let Some(resource) = state.combatants[owner].resources.get_mut(&cost.resource) {
+        let amount = i32::try_from(cost.amount).unwrap_or(i32::MAX);
+        resource.current = resource.current.saturating_add(amount).min(resource.max);
+    }
 }
 
 /// Fires the holder's prepared response explicitly (DM trigger). A legal
@@ -7288,10 +7387,12 @@ fn clear_ready_if_any(
     log: &mut dyn LogSink,
 ) -> bool {
     let name = state.combatants[index].name.clone();
-    if state.combatants[index].ready.take().is_some() {
+    if state.combatants[index].ready.is_some() {
         log.log(format_args!(
             "{name}'s readied action is cleared ({reason})"
         ));
+        end_ready_concentration(state, index, reason, log);
+        state.combatants[index].ready = None;
         true
     } else {
         false
@@ -7300,14 +7401,57 @@ fn clear_ready_if_any(
 
 fn expire_ready(state: &mut EncounterState, index: usize, log: &mut dyn LogSink) -> bool {
     let name = state.combatants[index].name.clone();
-    if state.combatants[index].ready.take().is_some() {
+    if state.combatants[index].ready.is_some() {
         log.log(format_args!(
             "{name}'s readied action expires (start of their next turn)"
         ));
+        end_ready_concentration(state, index, "start of their next turn", log);
+        state.combatants[index].ready = None;
         true
     } else {
         false
     }
+}
+
+/// Ends the concentration that a readied spell started, but only when the
+/// holder is still concentrating on that exact ability. A replacement or a
+/// different concentration is left untouched.
+fn end_ready_concentration(
+    state: &mut EncounterState,
+    index: usize,
+    reason: &str,
+    log: &mut dyn LogSink,
+) {
+    let name = state.combatants[index].name.clone();
+    let Some(ability) =
+        state.combatants[index]
+            .ready
+            .as_ref()
+            .and_then(|ready| match &ready.response {
+                ReadyResponse::Ability { ability, .. } => Some(ability.clone()),
+                _ => None,
+            })
+    else {
+        return;
+    };
+    let Ok(resolved) = state.combatants[index].find_owned_ability(&state.content, &ability) else {
+        return;
+    };
+    if !resolved.ability.concentration {
+        return;
+    }
+    let active = state
+        .concentration
+        .get(&name)
+        .and_then(|concentration| concentration.ability.as_deref())
+        .is_some_and(|active| active.eq_ignore_ascii_case(&ability));
+    if !active {
+        return;
+    }
+    log.log(format_args!(
+        "{name}'s readied spell concentration ends ({reason})"
+    ));
+    break_concentration(state, index, log);
 }
 
 fn normalize_ready_description(text: &str) -> Result<String> {
@@ -7608,6 +7752,11 @@ fn execute_ready_response(
             for target in &targets {
                 ensure_not_charmed_target(state, holder, *target, damaging)?;
             }
+            if resolved.ability.concentration
+                && !ready_ability_concentration_active(state, holder, ability)
+            {
+                bail!("the readied spell's concentration is no longer active");
+            }
             use_resolved_ability(
                 state,
                 holder,
@@ -7618,7 +7767,7 @@ fn execute_ready_response(
                 &AttackOptions::default(),
                 None,
                 None,
-                true,
+                AbilitySettlement::prepaid(),
                 rng,
                 log,
             )?;
@@ -7914,6 +8063,7 @@ fn begin_concentration(
     log: &mut dyn LogSink,
 ) {
     let name = state.combatants[actor].name.clone();
+    clear_ready_lost_to_concentration(state, actor, ability, log);
     if state.concentration.contains_key(&name) {
         break_concentration(state, actor, log);
     }
@@ -7946,6 +8096,39 @@ fn begin_concentration(
         "{name} is concentrating on {}",
         ability.display_name()
     ));
+}
+
+/// A new concentration replaces a held readied spell's concentration. The
+/// readied spell is lost (its slot/resource is not refunded), so the ready is
+/// cleared instead of leaving an unusable response behind.
+fn clear_ready_lost_to_concentration(
+    state: &mut EncounterState,
+    actor: usize,
+    ability: &Ability,
+    log: &mut dyn LogSink,
+) {
+    let Some(ready_ability) = state.combatants[actor]
+        .ready
+        .as_ref()
+        .and_then(|ready| match &ready.response {
+            ReadyResponse::Ability { ability, .. } => Some(ability.clone()),
+            _ => None,
+        })
+    else {
+        return;
+    };
+    let Ok(resolved) = state.combatants[actor].find_owned_ability(&state.content, &ready_ability)
+    else {
+        return;
+    };
+    if !resolved.ability.concentration {
+        return;
+    }
+    let reason = format!(
+        "a new concentration ({}) replaced the readied spell",
+        ability.id
+    );
+    clear_ready_if_any(state, actor, &reason, log);
 }
 
 /// A creature that dies stops concentrating and loses the conditions that came
@@ -8152,6 +8335,9 @@ fn apply_damage_rolls(
                 String::new()
             }
         ));
+    }
+    if state.combatants[target].hp <= 0 {
+        clear_ready_if_any(state, target, "0 HP", log);
     }
 
     // Massive damage.

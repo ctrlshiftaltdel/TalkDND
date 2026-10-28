@@ -15,7 +15,8 @@ use combat_sim::engine::{
     self, AddConditionOptions, AttackOptions, MoveTarget, ReadyOptions, ReadyOutcome, UseOptions,
 };
 use combat_sim::state::{
-    EncounterState, NewEncounter, ReadyResponse, ReadyState, ReadyTrigger, STATE_SCHEMA_VERSION,
+    ConcentrationState, EncounterState, NewEncounter, ReadyResponse, ReadyState, ReadyTrigger,
+    STATE_SCHEMA_VERSION,
 };
 use serde_json::Value;
 
@@ -91,7 +92,8 @@ impl DiceRng for ScriptedRng {
 fn conditions_block(edition: &str) -> &'static str {
     match edition {
         "2014" => {
-            r#"  - id: incapacitated
+            r#"  - id: concentrating
+  - id: incapacitated
     flags: [incapacitated]
   - id: no-reactions
     flags: [no_reactions]
@@ -103,7 +105,8 @@ fn conditions_block(edition: &str) -> &'static str {
 "#
         }
         "2024" => {
-            r#"  - id: incapacitated
+            r#"  - id: concentrating
+  - id: incapacitated
     flags: [incapacitated]
   - id: no-reactions
     flags: [no_reactions]
@@ -121,6 +124,7 @@ fn conditions_block(edition: &str) -> &'static str {
 fn content_yaml(edition: &str, max_responses: u32) -> String {
     let text = r##"rules:
   dying_conditions: [unconscious]
+  concentration_condition: concentrating
   ready:
     max_responses: __MAX__
     expires: start_of_next_turn
@@ -138,6 +142,8 @@ creatures:
     prof: 2
     abilities: {str: 16, dex: 14, con: 12, int: 10, wis: 10, cha: 10}
     skills: {athletics: 5, perception: 3}
+    resources:
+      spell-slot-1: {max: 2, recharge: long}
     attacks:
       - {id: sword, name: Sword, kind: melee, ability: str, to_hit: 5, damage: [{dice: "1d8+3", type: slashing}], reach: 5}
     actions:
@@ -145,6 +151,30 @@ creatures:
         name: Damaging Bolt
         activation: action
         target: {type: creature, side: any, count: 1}
+        effects:
+          - damage: {dice: "1d6", type: fire}
+      - id: arcane-bolt
+        name: Arcane Bolt
+        activation: action
+        target: {type: creature, side: any, count: 1}
+        range: 60
+        cost: {resource: spell-slot-1, amount: 1}
+        effects:
+          - damage: {dice: "1d8", type: fire}
+      - id: blessing-aura
+        name: Blessing Aura
+        activation: action
+        concentration: true
+        target: {type: self}
+        effects:
+          - note: "held blessing"
+      - id: hex-bolt
+        name: Hex Bolt
+        activation: action
+        concentration: true
+        target: {type: creature, side: any, count: 1}
+        range: 60
+        cost: {resource: spell-slot-1, amount: 1}
         effects:
           - damage: {dice: "1d6", type: fire}
       - id: self-shield
@@ -250,6 +280,21 @@ fn make_state(edition: &str) -> EncounterState {
 
 fn index(state: &EncounterState, name: &str) -> usize {
     state.find_index(name).expect("combatant exists")
+}
+
+fn slot(state: &EncounterState, name: &str) -> i32 {
+    state.combatants[index(state, name)]
+        .resources
+        .get("spell-slot-1")
+        .map(|resource| resource.current)
+        .unwrap_or(-1)
+}
+
+fn has_condition(state: &EncounterState, name: &str, condition: &str) -> bool {
+    state.combatants[index(state, name)]
+        .conditions
+        .iter()
+        .any(|active| active.condition.eq_ignore_ascii_case(condition))
 }
 
 fn attack_response(attack: &str, target: Option<&str>) -> ReadyResponse {
@@ -587,6 +632,562 @@ fn explicit_trigger_executes_the_attack_and_spends_one_reaction() {
             "{edition}: {error}"
         );
     }
+}
+
+#[test]
+fn ready_ability_pays_the_slot_at_setup_and_not_again_on_trigger() {
+    for edition in ["2014", "2024"] {
+        let mut state = make_state(edition);
+        state.round = 1;
+        let hero = index(&state, "Hero");
+        let source = index(&state, "Source");
+        assert_eq!(slot(&state, "Hero"), 2, "{edition}: fixture slot");
+        set_ready(
+            &mut state,
+            "Hero",
+            ReadyTrigger::Manual,
+            ReadyResponse::Ability {
+                ability: "arcane-bolt".to_string(),
+                target: Some("Source".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(slot(&state, "Hero"), 1, "{edition}: paid at setup");
+        assert!(state.combatants[hero].action_used, "{edition}: action");
+        assert!(
+            !state.concentration.contains_key("Hero"),
+            "{edition}: non-concentration ability does not concentrate"
+        );
+
+        let mut log = Vec::new();
+        let outcome = engine::trigger_ready(
+            &mut state,
+            "Hero",
+            Some("Source"),
+            &mut ScriptedRng::new(&[5]),
+            &mut log,
+        )
+        .unwrap();
+        assert_eq!(outcome, ReadyOutcome::Triggered, "{edition}");
+        assert_eq!(
+            slot(&state, "Hero"),
+            1,
+            "{edition}: trigger must not pay again"
+        );
+        assert_eq!(state.combatants[source].hp, 25, "{edition}: 1d8=5");
+        assert!(state.combatants[hero].ready.is_none());
+    }
+}
+
+#[test]
+fn ready_concentration_begins_at_setup_and_does_not_rebegin_on_trigger() {
+    for edition in ["2014", "2024"] {
+        let mut state = make_state(edition);
+        state.round = 1;
+        state.initiative = vec![index(&state, "Hero"), index(&state, "Source")];
+        state.turn = 0;
+        let hero = index(&state, "Hero");
+        set_ready(
+            &mut state,
+            "Hero",
+            ReadyTrigger::Manual,
+            ReadyResponse::Ability {
+                ability: "blessing-aura".to_string(),
+                target: None,
+            },
+        )
+        .unwrap();
+        let concentration = state
+            .concentration
+            .get("Hero")
+            .expect("concentration begins at setup");
+        assert_eq!(concentration.ability.as_deref(), Some("blessing-aura"));
+        assert_eq!(concentration.round, 1, "{edition}: setup round");
+        assert!(has_condition(&state, "Hero", "concentrating"));
+
+        state.round = 2;
+        state.turn = 1;
+        let mut log = Vec::new();
+        let outcome = engine::trigger_ready(
+            &mut state,
+            "Hero",
+            None,
+            &mut ScriptedRng::new(&[]),
+            &mut log,
+        )
+        .unwrap();
+        assert_eq!(outcome, ReadyOutcome::Triggered, "{edition}");
+        let concentration = state
+            .concentration
+            .get("Hero")
+            .expect("concentration survives release");
+        assert_eq!(
+            concentration.ability.as_deref(),
+            Some("blessing-aura"),
+            "{edition}"
+        );
+        assert_eq!(
+            concentration.round, 1,
+            "{edition}: trigger must not re-begin concentration"
+        );
+        assert_eq!(
+            state.combatants[hero]
+                .conditions
+                .iter()
+                .filter(|condition| condition.condition == "concentrating")
+                .count(),
+            1,
+            "{edition}: one concentration marker"
+        );
+        assert!(state.combatants[hero].ready.is_none());
+    }
+}
+
+#[test]
+fn expired_or_cleared_ready_does_not_refund_the_slot() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "arcane-bolt".to_string(),
+            target: Some("Source".to_string()),
+        },
+    )
+    .unwrap();
+    assert_eq!(slot(&state, "Hero"), 1);
+
+    let mut log = Vec::new();
+    assert!(engine::clear_ready(&mut state, "Hero", "test clear", &mut log).unwrap());
+    assert_eq!(slot(&state, "Hero"), 1, "clear does not refund");
+    assert!(state.combatants[hero].ready.is_none());
+    assert!(log.iter().any(|line| line.contains("cleared")));
+
+    state.combatants[hero].action_used = false;
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "arcane-bolt".to_string(),
+            target: Some("Source".to_string()),
+        },
+    )
+    .unwrap();
+    assert_eq!(slot(&state, "Hero"), 0);
+    state.initiative = vec![hero, index(&state, "Source")];
+    state.turn = 0;
+    engine::next_turn(&mut state, &mut ScriptedRng::new(&[]), &mut Vec::new()).unwrap();
+    engine::next_turn(&mut state, &mut ScriptedRng::new(&[]), &mut log).unwrap();
+    assert!(state.combatants[hero].ready.is_none());
+    assert_eq!(slot(&state, "Hero"), 0, "expiry does not refund");
+    assert!(log.iter().any(|line| line.contains("expires")));
+}
+
+#[test]
+fn concentration_ready_ends_only_its_own_concentration_on_clear() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "blessing-aura".to_string(),
+            target: None,
+        },
+    )
+    .unwrap();
+    assert!(state.concentration.contains_key("Hero"));
+    let mut log = Vec::new();
+    assert!(engine::clear_ready(&mut state, "Hero", "test clear", &mut log).unwrap());
+    assert!(
+        !state.concentration.contains_key("Hero"),
+        "the readied concentration ends"
+    );
+    assert!(!has_condition(&state, "Hero", "concentrating"));
+    assert!(
+        log.iter().any(|line| line.contains("concentration ends")),
+        "{log:?}"
+    );
+
+    // A different concentration must survive clearing a stale ready.
+    state.combatants[hero].action_used = false;
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "blessing-aura".to_string(),
+            target: None,
+        },
+    )
+    .unwrap();
+    state.concentration.insert(
+        "Hero".to_string(),
+        ConcentrationState {
+            ability: Some("unrelated-spell".to_string()),
+            round: 1,
+        },
+    );
+    assert!(engine::clear_ready(&mut state, "Hero", "stale clear", &mut log).unwrap());
+    assert_eq!(
+        state
+            .concentration
+            .get("Hero")
+            .and_then(|concentration| concentration.ability.as_deref()),
+        Some("unrelated-spell"),
+        "an unrelated concentration is not broken"
+    );
+}
+
+#[test]
+fn ready_concentration_replaces_an_existing_concentration_per_raw() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Hero",
+        "blessing-aura",
+        &UseOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(
+        state
+            .concentration
+            .get("Hero")
+            .and_then(|concentration| concentration.ability.as_deref()),
+        Some("blessing-aura")
+    );
+    state.combatants[hero].action_used = false;
+    state.round = 2;
+    let log = set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "blessing-aura".to_string(),
+            target: None,
+        },
+    )
+    .unwrap();
+    assert!(
+        log.iter().any(|line| line.contains("concentration ends")),
+        "old concentration is interrupted: {log:?}"
+    );
+    assert!(
+        log.iter().any(|line| line.contains("is concentrating")),
+        "new concentration starts: {log:?}"
+    );
+    let concentration = state.concentration.get("Hero").expect("new concentration");
+    assert_eq!(concentration.ability.as_deref(), Some("blessing-aura"));
+    assert_eq!(concentration.round, 2, "setup round");
+    assert!(state.combatants[hero].action_used);
+}
+
+#[test]
+fn expiry_ends_the_ready_concentration_without_refund() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    state.initiative = vec![hero, index(&state, "Source")];
+    state.turn = 0;
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "blessing-aura".to_string(),
+            target: None,
+        },
+    )
+    .unwrap();
+    assert!(state.concentration.contains_key("Hero"));
+
+    let mut log = Vec::new();
+    engine::next_turn(&mut state, &mut ScriptedRng::new(&[]), &mut log).unwrap();
+    engine::next_turn(&mut state, &mut ScriptedRng::new(&[]), &mut log).unwrap();
+    assert!(state.combatants[hero].ready.is_none());
+    assert!(
+        !state.concentration.contains_key("Hero"),
+        "expiry ends the ready concentration"
+    );
+    assert!(!has_condition(&state, "Hero", "concentrating"));
+    assert!(log.iter().any(|line| line.contains("expires")), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("concentration ends")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn zero_hp_clears_a_ready_and_ends_its_concentration_without_refund() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "hex-bolt".to_string(),
+            target: Some("Source".to_string()),
+        },
+    )
+    .unwrap();
+    assert_eq!(slot(&state, "Hero"), 1);
+    assert!(state.concentration.contains_key("Hero"));
+
+    let mut log = Vec::new();
+    engine::damage(
+        &mut state,
+        "Hero",
+        "40",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(state.combatants[hero].hp, 0);
+    assert!(state.combatants[hero].ready.is_none());
+    assert!(
+        !state.concentration.contains_key("Hero"),
+        "0 HP ends the ready concentration"
+    );
+    assert_eq!(slot(&state, "Hero"), 1, "0 HP does not refund");
+    assert!(log.iter().any(|line| line.contains("0 HP")), "{log:?}");
+}
+
+#[test]
+fn insufficient_resource_or_illegal_response_fails_before_action_spend() {
+    let mut state = make_state("2024");
+    let hero = index(&state, "Hero");
+    state.combatants[hero]
+        .resources
+        .get_mut("spell-slot-1")
+        .unwrap()
+        .current = 0;
+    let error = set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "arcane-bolt".to_string(),
+            target: Some("Source".to_string()),
+        },
+    )
+    .expect_err("no slot");
+    assert!(error.to_string().contains("afford"), "{error}");
+    assert_eq!(slot(&state, "Hero"), 0);
+    assert!(!state.combatants[hero].action_used);
+    assert!(state.combatants[hero].ready.is_none());
+    assert!(!state.concentration.contains_key("Hero"));
+
+    state.combatants[hero]
+        .resources
+        .get_mut("spell-slot-1")
+        .unwrap()
+        .current = 2;
+    let error = set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "arcane-bolt".to_string(),
+            target: Some("Nobody".to_string()),
+        },
+    )
+    .expect_err("unknown target");
+    assert!(error.to_string().contains("Nobody"), "{error}");
+    assert_eq!(slot(&state, "Hero"), 2, "legality failure does not pay");
+    assert!(!state.combatants[hero].action_used);
+    assert!(state.combatants[hero].ready.is_none());
+}
+
+#[test]
+fn a_new_concentration_clears_a_held_ready_spell_without_refund() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "hex-bolt".to_string(),
+            target: Some("Source".to_string()),
+        },
+    )
+    .unwrap();
+    assert_eq!(slot(&state, "Hero"), 1);
+    assert_eq!(
+        state
+            .concentration
+            .get("Hero")
+            .and_then(|concentration| concentration.ability.as_deref()),
+        Some("hex-bolt")
+    );
+
+    state.combatants[hero].action_used = false;
+    let mut log = Vec::new();
+    engine::use_ability(
+        &mut state,
+        "Hero",
+        "blessing-aura",
+        &UseOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    assert!(
+        log.iter()
+            .any(|line| line.contains("replaced the readied spell")),
+        "{log:?}"
+    );
+    assert!(state.combatants[hero].ready.is_none());
+    assert_eq!(slot(&state, "Hero"), 1, "the held slot is not refunded");
+    assert_eq!(
+        state
+            .concentration
+            .get("Hero")
+            .and_then(|concentration| concentration.ability.as_deref()),
+        Some("blessing-aura"),
+        "the new concentration is active"
+    );
+}
+
+#[test]
+fn refused_trigger_keeps_the_paid_slot_and_concentration() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "hex-bolt".to_string(),
+            target: Some("Source".to_string()),
+        },
+    )
+    .unwrap();
+    assert_eq!(slot(&state, "Hero"), 1);
+    assert!(state.concentration.contains_key("Hero"));
+    state.combatants[hero].reaction_round = Some(1);
+
+    let mut log = Vec::new();
+    let outcome = engine::trigger_ready(
+        &mut state,
+        "Hero",
+        Some("Source"),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    match outcome {
+        ReadyOutcome::Refused(reason) => assert!(reason.contains("reaction"), "{reason}"),
+        other => panic!("expected refusal, got {other:?}"),
+    }
+    assert_eq!(slot(&state, "Hero"), 1, "refusal does not refund");
+    assert!(state.combatants[hero].ready.is_some());
+    assert!(state.concentration.contains_key("Hero"));
+
+    assert!(engine::clear_ready(&mut state, "Hero", "after refusal", &mut log).unwrap());
+    assert_eq!(slot(&state, "Hero"), 1);
+    assert!(!state.concentration.contains_key("Hero"));
+}
+
+#[test]
+fn refused_dead_target_keeps_the_paid_slot_and_concentration() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "hex-bolt".to_string(),
+            target: Some("Source".to_string()),
+        },
+    )
+    .unwrap();
+    assert_eq!(slot(&state, "Hero"), 1);
+    assert!(state.concentration.contains_key("Hero"));
+    engine::damage(
+        &mut state,
+        "Source",
+        "999",
+        Some("slashing"),
+        false,
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    let mut log = Vec::new();
+    let outcome = engine::trigger_ready(
+        &mut state,
+        "Hero",
+        Some("Source"),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    match outcome {
+        ReadyOutcome::Refused(reason) => assert!(reason.contains("dead"), "{reason}"),
+        other => panic!("expected refusal, got {other:?}"),
+    }
+    assert_eq!(slot(&state, "Hero"), 1, "refusal does not refund");
+    assert!(state.combatants[hero].ready.is_some());
+    assert!(state.concentration.contains_key("Hero"));
+    assert_eq!(state.combatants[hero].reaction_round, None);
+}
+
+#[test]
+fn a_broken_ready_concentration_refuses_the_trigger_without_refund() {
+    let mut state = make_state("2024");
+    state.round = 1;
+    let hero = index(&state, "Hero");
+    let source = index(&state, "Source");
+    set_ready(
+        &mut state,
+        "Hero",
+        ReadyTrigger::Manual,
+        ReadyResponse::Ability {
+            ability: "hex-bolt".to_string(),
+            target: Some("Source".to_string()),
+        },
+    )
+    .unwrap();
+    state.concentration.remove("Hero");
+
+    let mut log = Vec::new();
+    let outcome = engine::trigger_ready(
+        &mut state,
+        "Hero",
+        Some("Source"),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap();
+    match outcome {
+        ReadyOutcome::Refused(reason) => assert!(reason.contains("concentration"), "{reason}"),
+        other => panic!("expected refusal, got {other:?}"),
+    }
+    assert_eq!(slot(&state, "Hero"), 1, "no refund");
+    assert_eq!(state.combatants[source].hp, 30, "no free release");
+    assert!(state.combatants[hero].ready.is_some());
+    assert_eq!(state.combatants[hero].reaction_round, None);
 }
 
 #[test]
