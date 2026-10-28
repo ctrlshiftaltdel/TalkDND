@@ -90,15 +90,30 @@ response). A move that starts inside the reach does not count as entering it.
 ## Timing and cleanup
 
 - Setting Ready spends the holder's action and stores exactly one response.
-- A trigger spends the holder's reaction exactly once; a reaction already used
-  this round refuses the trigger and keeps the ready.
+- Setting an **ability** response also pays its `Ability.cost` (spell slot or
+  resource) immediately and, when the ability requires concentration, begins
+  that concentration immediately. This is RAW: setting Ready casts and holds
+  the spell. A failed affordability/legality check spends no action, cost or
+  concentration.
+- A trigger releases the held ability without paying its cost again or
+  starting concentration again; it spends the holder's reaction exactly once.
+  A reaction already used this round refuses the trigger and keeps the ready.
 - Expiry is at the start of the holder's next turn. `start_turn` clears the
   ready before the new turn's triggers run.
 - `ready-clear` clears it immediately.
 - Death, 0 HP, incapacitation and dormancy clear it. The death path logs the
   loss before concentration cleanup.
+- An untriggered, expired or cleared ready never refunds the slot/resource.
+  If the Ready started concentration, clearing/expiry/death/0 HP/incapacitation/
+  dormancy ends **that** concentration (matched by ability id); an unrelated
+  concentration is left untouched.
+- Starting another concentration replaces a held readied spell's concentration
+  and clears the ready (no refund), because the new concentration ends the old
+  one. A concentration broken by damage leaves the stored spell unusable: the
+  trigger is refused and the slot/resource is still not refunded.
 - A legal refusal (dead target, spent reaction, out-of-range target, stale
-  expiry) logs the reason and keeps the ready; no reaction is spent.
+  expiry) logs the reason and keeps the ready, its paid resource and its
+  concentration; no reaction is spent.
 - If a readied move is blocked by a locked door or wall, the existing movement
   path stops at the blocker and logs it. The response counts as triggered and
   spends the reaction; the creature simply stops where the route ended.
@@ -113,9 +128,10 @@ The response never teleports and never bypasses a normal check:
 - **Unarmed Strike** builds the same unarmed profile as the Attack action and
   resolves through `resolve_attack`.
 - **Ability** resolves through the normal `use_resolved_ability` path with the
-  action spend suppressed (the ready already spent the action). Activation must
-  be `action`; bonus-action, reaction, passive and free abilities are refused
-  when the ready is set.
+  action spend suppressed (the ready already spent the action) and with the
+  cost/concentration marked as prepaid. Activation must be `action`;
+  bonus-action, reaction, passive and free abilities are refused when the ready
+  is set. Target, area, self and range checks still run at release.
 - **Movement** uses `move_to_at`, so step costs, opportunity attacks, frightened
   movement restrictions and scene triggers are unchanged.
 
@@ -141,6 +157,11 @@ combatant and expiry at the holder's next turn start. `content check` rejects
 ## Compatibility
 
 - `STATE_SCHEMA_VERSION` stays **1**; `ready` is additive and serde-defaulted.
+- No new persistent field is needed for prepayment: the stored ability id
+  identifies the concentration that belongs to the ready, and the cost is paid
+  when the ready is written. A released state has no ready field; only a state
+  written by the pre-RAW revision of this unmerged change could contain an
+  unpaid ready, and re-setting that ready is enough.
 - Old combat states load with no ready.
 - Old `attack --force` and `use` behavior is unchanged; the automatic hooks do
   nothing when no combatant has a ready.
@@ -151,9 +172,10 @@ combatant and expiry at the holder's next turn start. `content check` rejects
 
 ## Known limits
 
-- A readied spell's slot and concentration are resolved at trigger time, not
-  when the ready is set. Holding a spell's energy and losing the slot on expiry
-  is therefore not modeled; the engine treats the trigger as the cast.
+- A readied spell is prepaid at setup. If its concentration is broken or
+  replaced before release, the stored spell cannot be released and the slot or
+  resource is not refunded; a replacement clears the ready, while a broken
+  concentration leaves it until expiry and refuses every trigger.
 - Ready only stores actions, not bonus actions or reactions.
 - Nested ready chains are deliberately suppressed to keep resolution bounded.
 - The engine has no `remove combatant` command; death and `ready-clear` cover
@@ -171,4 +193,9 @@ no action/incapacitated/no reactions, expiry at turn start and by expiry round,
 explicit trigger, all four automatic triggers, reaction already spent, dead and
 out-of-range targets, blocked movement, movement execution, death/incapacitation/
 dormancy cleanup, old state/schema, old `attack --force`/`use`, CLI help and
-JSON round-trip, and `rules.ready` validation.
+JSON round-trip, `rules.ready` validation, slot/resource payment at setup with
+no double payment at release, no refund on clear/expiry/0 HP, concentration at
+setup with no re-begin at release, concentration cleanup on clear/expiry,
+replacement by a new concentration, insufficient resource/illegal response
+before spending, and refused triggers keeping the paid resource and
+concentration.
