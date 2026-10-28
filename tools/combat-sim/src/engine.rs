@@ -118,6 +118,10 @@ pub struct ShoveOptions {
     pub mode: ShoveMode,
 }
 
+/// Prefix for per-turn Attack action slots stored in `CombatantState::once_used`.
+/// The `turn:` prefix is cleared by the existing turn-start reset.
+const ATTACK_SLOT_PREFIX: &str = "turn:attack-action:slot:";
+
 /// Ability/use command options.
 #[derive(Debug, Clone, Default)]
 pub struct UseOptions {
@@ -2727,8 +2731,9 @@ pub fn attack_at(
         .find_attack(attack_name)
         .ok()
         .map(AttackProfile::from_attack);
-    spend_action(state, attacker_index, Activation::Action, log)?;
     if let Some(profile) = profile {
+        let attacks = begin_attack_slots(state, attacker_index)?;
+        consume_attack_slots(state, attacker_index, attacks);
         let used_in_melee = profile.kind == AttackKind::Melee
             || (profile.kind == AttackKind::MeleeOrRanged
                 && ensure_melee_reachable(state, attacker_index, target_index, profile.reach)
@@ -2739,7 +2744,6 @@ pub fn attack_at(
                 state.round,
             );
         }
-        let attacks = 1 + extra_attack_count(state, attacker_index);
         if attacks > 1 {
             log.log(format_args!(
                 "{}'s Extra Attack: {attacks} attacks with {}",
@@ -2771,6 +2775,7 @@ pub fn attack_at(
             )?;
         }
     } else {
+        spend_action(state, attacker_index, Activation::Action, log)?;
         resolve_named_entry(
             state,
             attacker_index,
@@ -2837,6 +2842,10 @@ fn spend_action(
                     state.combatants[index].name
                 );
             }
+            // A whole-action path cannot inherit stale Attack action slots.
+            state.combatants[index]
+                .once_used
+                .retain(|key, _| !key.starts_with(ATTACK_SLOT_PREFIX));
             state.combatants[index].action_used = true;
         }
         Activation::Bonus => {
@@ -2868,6 +2877,64 @@ fn spend_reaction(state: &mut EncounterState, index: usize, _log: &mut dyn LogSi
     }
     state.combatants[index].reaction_round = Some(state.round);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Attack action budget
+// ---------------------------------------------------------------------------
+
+fn attack_slots_used(state: &EncounterState, index: usize) -> u32 {
+    u32::try_from(
+        state.combatants[index]
+            .once_used
+            .iter()
+            .filter(|(key, round)| key.starts_with(ATTACK_SLOT_PREFIX) && **round == state.round)
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+/// Starts or continues the Attack action and returns how many attacks remain.
+///
+/// A creature that has not used an action this turn starts the Attack action
+/// and gets `1 + extra_attacks` slots. A creature in the middle of that Attack
+/// action (marked with `turn:attack-action:slot:*`) gets the remaining slots.
+/// Any other action already used this turn fails closed.
+fn begin_attack_slots(state: &mut EncounterState, index: usize) -> Result<u32> {
+    let total = 1u32.saturating_add(extra_attack_count(state, index));
+    let used = attack_slots_used(state, index);
+    let name = state.combatants[index].name.clone();
+    if state.combatants[index].action_used {
+        if used == 0 {
+            bail!("`{name}` has already used an action this turn");
+        }
+        if used >= total {
+            bail!("`{name}` has no Attack action attacks left this turn");
+        }
+        return Ok(total - used);
+    }
+    if used > 0 {
+        // A manual action reset opened a new turn without the normal start-of-
+        // turn cleanup; discard the stale slots from the previous action.
+        state.combatants[index]
+            .once_used
+            .retain(|key, _| !key.starts_with(ATTACK_SLOT_PREFIX));
+    }
+    state.combatants[index].action_used = true;
+    Ok(total)
+}
+
+fn consume_attack_slot(state: &mut EncounterState, index: usize) {
+    let used = attack_slots_used(state, index);
+    state.combatants[index]
+        .once_used
+        .insert(format!("{ATTACK_SLOT_PREFIX}{}", used + 1), state.round);
+}
+
+fn consume_attack_slots(state: &mut EncounterState, index: usize, count: u32) {
+    for _ in 0..count {
+        consume_attack_slot(state, index);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3118,22 +3185,27 @@ fn choose_save_ability(
     Ok(chosen)
 }
 
+enum ActionDefense {
+    Contest {
+        skill: String,
+        defense: String,
+    },
+    Save {
+        ability: AbilityName,
+        dc: i32,
+        formula: String,
+    },
+}
+
 fn resolve_action_contest(
     state: &mut EncounterState,
     attacker: usize,
     target: usize,
-    attacker_skill: Option<&str>,
-    defender_skills: Option<&[String]>,
-    requested: Option<&str>,
+    attacker_skill: &str,
+    defense: &str,
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<bool> {
-    let attacker_skill = attacker_skill.ok_or_else(|| {
-        anyhow!("combat action contest is missing `attacker_skill`; run `content check`")
-    })?;
-    let defender_skills = defender_skills.ok_or_else(|| {
-        anyhow!("combat action contest is missing `defender_skills`; run `content check`")
-    })?;
     let attacker_base = state.combatants[attacker].skill_bonus(attacker_skill);
     let (mode, advantages, disadvantages) = check_modifiers(state, attacker, None, attacker_skill);
     let attacker_roll = roll_d20(
@@ -3146,9 +3218,8 @@ fn resolve_action_contest(
         disadvantages,
         rng,
     );
-    let defense = choose_contest_defense(state, target, defender_skills, requested, log)?;
-    let target_base = state.combatants[target].skill_bonus(&defense);
-    let (mode, advantages, disadvantages) = check_modifiers(state, target, None, &defense);
+    let target_base = state.combatants[target].skill_bonus(defense);
+    let (mode, advantages, disadvantages) = check_modifiers(state, target, None, defense);
     let target_roll = roll_d20(
         state,
         target,
@@ -3166,7 +3237,7 @@ fn resolve_action_contest(
         skill_label(attacker_skill),
         attacker_roll.text(),
         state.combatants[target].name,
-        skill_label(&defense),
+        skill_label(defense),
         target_roll.text(),
         if success { "PASS" } else { "FAIL" }
     ));
@@ -3190,19 +3261,13 @@ fn action_dc(
 
 fn resolve_action_save(
     state: &mut EncounterState,
-    attacker: usize,
     target: usize,
-    save_abilities: Option<&[AbilityName]>,
-    dc: Option<&ExprValue>,
-    requested: Option<&str>,
+    ability: AbilityName,
+    dc: i32,
+    formula: &str,
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<bool> {
-    let save_abilities = save_abilities.ok_or_else(|| {
-        anyhow!("combat action save is missing `save_abilities`; run `content check`")
-    })?;
-    let (dc, formula) = action_dc(state, attacker, dc)?;
-    let ability = choose_save_ability(state, target, save_abilities, requested, log)?;
     let (mode, bonuses, advantages, disadvantages, auto_fail) = save_modifiers(
         state,
         target,
@@ -3336,36 +3401,48 @@ pub fn grapple(
     ensure_melee_reachable(state, attacker, target, reach)?;
 
     let resolution = rule.resolution.unwrap_or_default();
-    let (success, dc) = match resolution {
+    let defense = match resolution {
         ActionResolution::Contest => {
-            spend_action(state, attacker, Activation::Action, log)?;
-            let success = resolve_action_contest(
-                state,
-                attacker,
-                target,
-                rule.attacker_skill.as_deref(),
-                rule.defender_skills.as_deref(),
-                options.defense.as_deref(),
-                rng,
-                log,
-            )?;
-            (success, None)
+            let skill = rule.attacker_skill.clone().ok_or_else(|| {
+                anyhow!("combat action contest is missing `attacker_skill`; run `content check`")
+            })?;
+            let skills = rule.defender_skills.as_deref().ok_or_else(|| {
+                anyhow!("combat action contest is missing `defender_skills`; run `content check`")
+            })?;
+            let defense =
+                choose_contest_defense(state, target, skills, options.defense.as_deref(), log)?;
+            ActionDefense::Contest { skill, defense }
         }
         ActionResolution::Save => {
-            let (dc, _) = action_dc(state, attacker, rule.dc.as_ref())?;
-            spend_action(state, attacker, Activation::Action, log)?;
-            let success = resolve_action_save(
-                state,
-                attacker,
-                target,
-                rule.save_abilities.as_deref(),
-                rule.dc.as_ref(),
-                options.defense.as_deref(),
-                rng,
-                log,
-            )?;
-            (success, Some(dc))
+            let abilities = rule.save_abilities.as_deref().ok_or_else(|| {
+                anyhow!("combat action save is missing `save_abilities`; run `content check`")
+            })?;
+            let (dc, formula) = action_dc(state, attacker, rule.dc.as_ref())?;
+            let ability =
+                choose_save_ability(state, target, abilities, options.defense.as_deref(), log)?;
+            ActionDefense::Save {
+                ability,
+                dc,
+                formula,
+            }
         }
+    };
+
+    begin_attack_slots(state, attacker)?;
+    consume_attack_slot(state, attacker);
+    let success = match &defense {
+        ActionDefense::Contest { skill, defense } => {
+            resolve_action_contest(state, attacker, target, skill, defense, rng, log)?
+        }
+        ActionDefense::Save {
+            ability,
+            dc,
+            formula,
+        } => resolve_action_save(state, target, *ability, *dc, formula, rng, log)?,
+    };
+    let dc = match &defense {
+        ActionDefense::Save { dc, .. } => Some(*dc),
+        ActionDefense::Contest { .. } => None,
     };
 
     let attacker_label = state.combatants[attacker].name.clone();
@@ -3438,36 +3515,44 @@ pub fn shove(
     ensure_melee_reachable(state, attacker, target, reach)?;
 
     let resolution = rule.resolution.unwrap_or_default();
-    let (success, _dc) = match resolution {
+    let defense = match resolution {
         ActionResolution::Contest => {
-            spend_action(state, attacker, Activation::Action, log)?;
-            let success = resolve_action_contest(
-                state,
-                attacker,
-                target,
-                rule.attacker_skill.as_deref(),
-                rule.defender_skills.as_deref(),
-                options.defense.as_deref(),
-                rng,
-                log,
-            )?;
-            (success, None)
+            let skill = rule.attacker_skill.clone().ok_or_else(|| {
+                anyhow!("combat action contest is missing `attacker_skill`; run `content check`")
+            })?;
+            let skills = rule.defender_skills.as_deref().ok_or_else(|| {
+                anyhow!("combat action contest is missing `defender_skills`; run `content check`")
+            })?;
+            let defense =
+                choose_contest_defense(state, target, skills, options.defense.as_deref(), log)?;
+            ActionDefense::Contest { skill, defense }
         }
         ActionResolution::Save => {
-            let (dc, _) = action_dc(state, attacker, rule.dc.as_ref())?;
-            spend_action(state, attacker, Activation::Action, log)?;
-            let success = resolve_action_save(
-                state,
-                attacker,
-                target,
-                rule.save_abilities.as_deref(),
-                rule.dc.as_ref(),
-                options.defense.as_deref(),
-                rng,
-                log,
-            )?;
-            (success, Some(dc))
+            let abilities = rule.save_abilities.as_deref().ok_or_else(|| {
+                anyhow!("combat action save is missing `save_abilities`; run `content check`")
+            })?;
+            let (dc, formula) = action_dc(state, attacker, rule.dc.as_ref())?;
+            let ability =
+                choose_save_ability(state, target, abilities, options.defense.as_deref(), log)?;
+            ActionDefense::Save {
+                ability,
+                dc,
+                formula,
+            }
         }
+    };
+
+    begin_attack_slots(state, attacker)?;
+    consume_attack_slot(state, attacker);
+    let success = match &defense {
+        ActionDefense::Contest { skill, defense } => {
+            resolve_action_contest(state, attacker, target, skill, defense, rng, log)?
+        }
+        ActionDefense::Save {
+            ability,
+            dc,
+            formula,
+        } => resolve_action_save(state, target, *ability, *dc, formula, rng, log)?,
     };
 
     let attacker_label = state.combatants[attacker].name.clone();
@@ -3610,9 +3695,9 @@ pub fn attack_unarmed(
     }
     let profile = unarmed_profile(state, attacker)?;
     ensure_melee_reachable(state, attacker, target, profile.reach)?;
-    spend_action(state, attacker, Activation::Action, log)?;
+    let attacks = begin_attack_slots(state, attacker)?;
+    consume_attack_slots(state, attacker, attacks);
 
-    let attacks = 1 + extra_attack_count(state, attacker);
     if attacks > 1 {
         log.log(format_args!(
             "{}'s Extra Attack: {attacks} Unarmed Strikes",

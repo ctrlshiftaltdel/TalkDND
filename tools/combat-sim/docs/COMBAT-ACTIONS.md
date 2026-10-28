@@ -92,15 +92,35 @@ attacks are logged as skipped.
 
 | Action | Cost | Requirement |
 |--------|------|-------------|
-| Grapple | action | target in reach, size legal, not immune |
-| Shove | action | target in reach, size legal; condition immunity only for knock-down |
-| Unarmed Strike | action | target in reach |
+| Grapple | one attack of the Attack action | target in reach, size legal, not immune |
+| Shove | one attack of the Attack action | target in reach, size legal; condition immunity only for knock-down |
+| Unarmed Strike | one attack of the Attack action (or the remaining attacks) | target in reach |
 | Two-Weapon Fighting | bonus action | a prior Light melee main-hand Attack action and a different Light melee weapon |
-| Extra Attack | part of the Attack action | `extra_attacks` data and an available action |
+| Extra Attack | remaining slots of the Attack action | `extra_attacks` data |
 
-Every command validates the target, reach, size, immunity and resource before
-spending the action or bonus action. A failed contest or save still spends the
-resource (the attempt happened); a rejected attempt does not.
+Every command validates the target, reach, size, immunity, the requested
+defense and the resource before spending the action or bonus action. An invalid
+defense is rejected before the action starts. A failed contest or save still
+spends the attack (the attempt happened); a rejected attempt does not.
+
+### Attack action budget
+
+The engine stores Attack action slots in the existing per-turn `once_used` map
+under `turn:attack-action:slot:<n>`; no state field or schema version is added.
+The turn-start reset already clears every `turn:` key and resets `action_used`.
+
+- The first `attack`, `attack --unarmed`, `grapple` or `shove` this turn starts
+  the Attack action and gets `1 + extra_attacks` slots.
+- Grapple and Shove consume exactly one slot. If slots remain, the Attack action
+  stays open and a later `attack`/`attack --unarmed` resolves the remaining
+  attacks.
+- `attack` and `attack --unarmed` consume every remaining slot and resolve them
+  in one command.
+- `--offhand` is a bonus action and never consumes an attack slot.
+- `--multi` and `use` are whole-action paths. They cannot be used while an
+  Attack action is open, and they clear any stale slots when they start.
+- A creature with one attack has one slot; after a grapple/shove it cannot take
+  a second action that turn.
 
 ## CLI
 
@@ -113,7 +133,8 @@ combat-sim shove <actor> <target> [--mode knock-down|away]
 ```
 
 `--defense` is optional; when omitted the target uses its best legal defense and
-the log says which one. `shove --mode away` uses the existing forced-movement
+the log says which one. A value that is not legal for the edition is rejected
+before the action is spent. `shove --mode away` uses the existing forced-movement
 path: it spends no Speed, provokes no opportunity attack, and stops at a wall,
 occupied space, a drop or the scene boundary with the blocking reason logged.
 
@@ -129,10 +150,9 @@ occupied space, a drop or the scene boundary with the blocking reason logged.
 
 ## Limits
 
-- Grapple and Shove resolve as the Attack action's attack. A creature with
-  Extra Attack can use the `attack` or `--unarmed` sequence for its additional
-  attacks; the dedicated grapple/shove command does not carry an attack budget
-  across commands.
+- Grapple, Shove and Unarmed Strike resolve against the same target for the
+  whole command; a target that drops is skipped and the remaining attacks are
+  logged. Switching targets between attacks is a later task.
 - 2024 grapple/shove are the Unarmed Strike options and use the save form. They
   do not roll a separate attack.
 - The engine has no equipment inventory: Two-Weapon Fighting checks the

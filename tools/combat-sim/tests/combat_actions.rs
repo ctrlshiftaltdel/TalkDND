@@ -364,6 +364,14 @@ fn has_condition(state: &EncounterState, name: &str, condition: &str) -> bool {
         .any(|active| active.condition.eq_ignore_ascii_case(condition))
 }
 
+fn attack_slot_count(state: &EncounterState, name: &str) -> usize {
+    state.combatants[index(state, name)]
+        .once_used
+        .keys()
+        .filter(|key| key.starts_with("turn:attack-action:"))
+        .count()
+}
+
 fn make_large(state: &mut EncounterState, name: &str) {
     let target = index(state, name);
     Arc::make_mut(&mut state.combatants[target].creature).size = Some(Size::Huge);
@@ -609,6 +617,59 @@ fn shove_push_uses_forced_movement_and_stops_at_a_wall() {
             .any(|line| line.contains("stops") && line.contains("wall")),
         "{log:?}"
     );
+}
+
+#[test]
+fn invalid_defense_does_not_spend_the_action_or_bonus_action() {
+    for (edition, defense) in [
+        ("2014", "foo"),
+        ("2014", "str"),
+        ("2024", "foo"),
+        ("2024", "athletics"),
+    ] {
+        let mut grapple = state(edition, "zones-fight", &["grappler"]);
+        let error = engine::grapple(
+            &mut grapple,
+            "Grappler",
+            "Target",
+            &GrappleOptions {
+                defense: Some(defense.to_string()),
+            },
+            &mut ScriptedRng::new(&[]),
+            &mut Vec::new(),
+        )
+        .expect_err("invalid grapple defense");
+        assert!(
+            error.to_string().contains("not a legal"),
+            "{edition} {defense}: {error}"
+        );
+        let grappler = index(&grapple, "Grappler");
+        assert!(!grapple.combatants[grappler].action_used);
+        assert!(!grapple.combatants[grappler].bonus_action_used);
+        assert!(!has_condition(&grapple, "Target", "grappled"));
+
+        let mut shove = state(edition, "zones-fight", &["grappler"]);
+        let error = engine::shove(
+            &mut shove,
+            "Grappler",
+            "Target",
+            &ShoveOptions {
+                defense: Some(defense.to_string()),
+                mode: ShoveMode::KnockDown,
+            },
+            &mut ScriptedRng::new(&[]),
+            &mut Vec::new(),
+        )
+        .expect_err("invalid shove defense");
+        assert!(
+            error.to_string().contains("not a legal"),
+            "{edition} {defense}: {error}"
+        );
+        let grappler = index(&shove, "Grappler");
+        assert!(!shove.combatants[grappler].action_used);
+        assert!(!shove.combatants[grappler].bonus_action_used);
+        assert!(!has_condition(&shove, "Target", "prone"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -867,6 +928,287 @@ fn extra_attack_can_come_from_a_passive_feature_and_not_from_use_or_off_hand() {
         1,
         "{log:?}"
     );
+}
+
+#[test]
+fn extra_attack_budget_allows_grapple_then_attack() {
+    let mut state = state("2014", "extra-fight", &[]);
+    engine::grapple(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        &GrappleOptions::default(),
+        &mut ScriptedRng::new(&[15, 5]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let fighter = index(&state, "Extra Fighter");
+    assert!(state.combatants[fighter].action_used);
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 1);
+    assert!(has_condition(&state, "Target", "grappled"));
+
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4, 15, 5]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 3);
+    assert_eq!(
+        log.iter()
+            .filter(|line| line.contains("attacks Target with Long Sword"))
+            .count(),
+        2,
+        "{log:?}"
+    );
+    assert!(
+        log.iter().any(|line| line.contains("attack 1/2")),
+        "{log:?}"
+    );
+    assert_eq!(hp(&state, "Target"), 85);
+}
+
+#[test]
+fn extra_attack_budget_allows_shove_then_attack() {
+    let mut state = state("2014", "extra-fight", &[]);
+    engine::shove(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        &ShoveOptions {
+            mode: ShoveMode::KnockDown,
+            ..ShoveOptions::default()
+        },
+        &mut ScriptedRng::new(&[15, 5]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 1);
+    assert!(has_condition(&state, "Target", "prone"));
+
+    let mut log = Vec::new();
+    engine::attack(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4, 15, 5]),
+        &mut log,
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 3);
+    assert_eq!(
+        log.iter()
+            .filter(|line| line.contains("attacks Target with Long Sword"))
+            .count(),
+        2,
+        "{log:?}"
+    );
+}
+
+#[test]
+fn single_attack_creature_cannot_act_twice_after_grapple() {
+    let mut state = state("2014", "zones-fight", &["grappler"]);
+    engine::grapple(
+        &mut state,
+        "Grappler",
+        "Target",
+        &GrappleOptions::default(),
+        &mut ScriptedRng::new(&[15, 5]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let grappler = index(&state, "Grappler");
+    assert!(state.combatants[grappler].action_used);
+    assert_eq!(attack_slot_count(&state, "Grappler"), 1);
+
+    let error = engine::attack(
+        &mut state,
+        "Grappler",
+        "Target",
+        "shortsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .expect_err("no attack slot after a single-attack grapple");
+    assert!(
+        error.to_string().contains("no Attack action attacks left"),
+        "{error}"
+    );
+}
+
+#[test]
+fn creature_with_no_attack_slots_left_cannot_start_another_action() {
+    let mut state = state("2014", "extra-fight", &[]);
+    engine::attack(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4, 15, 5, 15, 6]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 3);
+
+    let error = engine::attack(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .expect_err("no attack slot");
+    assert!(
+        error.to_string().contains("no Attack action attacks left"),
+        "{error}"
+    );
+
+    let error = engine::grapple(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        &GrappleOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .expect_err("no attack slot for grapple");
+    assert!(
+        error.to_string().contains("no Attack action attacks left"),
+        "{error}"
+    );
+}
+
+#[test]
+fn open_attack_action_blocks_use() {
+    let mut state = state("2014", "feature-fight", &[]);
+    engine::grapple(
+        &mut state,
+        "Feature Fighter",
+        "Target",
+        &GrappleOptions::default(),
+        &mut ScriptedRng::new(&[15, 5]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Feature Fighter"), 1);
+
+    let error = engine::use_ability(
+        &mut state,
+        "Feature Fighter",
+        "test-strike",
+        &UseOptions {
+            targets: vec!["Target".to_string()],
+            ..UseOptions::default()
+        },
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .expect_err("use after an open Attack action");
+    assert!(
+        error.to_string().contains("already used an action"),
+        "{error}"
+    );
+}
+
+#[test]
+fn off_hand_after_attack_uses_bonus_action_without_an_attack_slot() {
+    let mut state = state("2014", "zones-fight", &["grappler"]);
+    let grappler = index(&state, "Grappler");
+    Arc::make_mut(&mut state.combatants[grappler].creature).extra_attacks = Some(1);
+    engine::attack(
+        &mut state,
+        "Grappler",
+        "Target",
+        "shortsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4, 15, 5]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(attack_slot_count(&state, "Grappler"), 2);
+    assert!(state.combatants[grappler].action_used);
+
+    engine::attack_offhand(
+        &mut state,
+        "Grappler",
+        "Target",
+        "dagger",
+        &mut ScriptedRng::new(&[15, 4]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(state.combatants[grappler].bonus_action_used);
+    assert!(state.combatants[grappler].action_used);
+    assert_eq!(attack_slot_count(&state, "Grappler"), 2);
+
+    let error = engine::attack(
+        &mut state,
+        "Grappler",
+        "Target",
+        "shortsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[]),
+        &mut Vec::new(),
+    )
+    .expect_err("off-hand did not free an attack slot");
+    assert!(
+        error.to_string().contains("no Attack action attacks left"),
+        "{error}"
+    );
+}
+
+#[test]
+fn attack_budget_resets_at_turn_start() {
+    let mut state = state("2014", "extra-fight", &[]);
+    let fighter = index(&state, "Extra Fighter");
+    let target = index(&state, "Target");
+    state.initiative = vec![fighter, target];
+    state.turn = 0;
+    state.round = 1;
+
+    engine::attack(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4, 15, 5, 15, 6]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(state.combatants[fighter].action_used);
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 3);
+
+    let mut rng = ScriptedRng::new(&[]);
+    engine::next_turn(&mut state, &mut rng, &mut Vec::new()).unwrap();
+    engine::next_turn(&mut state, &mut rng, &mut Vec::new()).unwrap();
+
+    assert_eq!(state.round, 2);
+    assert!(!state.combatants[fighter].action_used);
+    assert_eq!(attack_slot_count(&state, "Extra Fighter"), 0);
+
+    engine::attack(
+        &mut state,
+        "Extra Fighter",
+        "Target",
+        "longsword",
+        &AttackOptions::default(),
+        &mut ScriptedRng::new(&[15, 4, 15, 5, 15, 6]),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(state.combatants[fighter].action_used);
 }
 
 // ---------------------------------------------------------------------------
