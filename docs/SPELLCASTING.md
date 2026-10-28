@@ -3,7 +3,7 @@
 > **状态：设计稿，未实现。** 本文只定义目标、边界、数据模型、命令面与实现拆分，不代表任何能力已经交付。
 > 任务：TASK-0120 / Issue #236（第 4 轮修订：2024 仪式资格修正为 edition 级规则——已准备 + Ritual 标签即可，不依赖职业特性，数据放 `rules.spellcasting.ritual`；第 3 轮：仪式资格来源改为 class pack 优先、Warlock 魔祈仪式列为非目标 D-12、Magical Secrets 数量与 id 修正、Mystic Arcanum 等级由 pack 核实、2014 同回合限制表述修正）。
 > 本文的改动范围只有 `docs/SPELLCASTING.md` 与 `docs/PLAN.md` 的设计目标；不修改代码、测试、规则数据、存档 schema、Cargo/CI 或发布文件。
-> 带「待所有者决定」的条目是产品决定，本设计只给选项与推荐，不替项目所有者拍板。
+> 产品决定由项目所有者拍板，本设计只给选项与推荐。**2026-10-28 更新：D-1..D-12 已由项目所有者全部决定并写入章程（见 §7）；下文仍描述 v1.6 目标行为，均未实现。**
 
 ## 0. 摘要
 
@@ -12,8 +12,8 @@
 - **列表模型**：在 `sheets/<id>.yaml` 增加 `spells` 块，区分 `known` / `prepared` / `book` / `cantrips` / `always_prepared` / `arcanum` / `legacy`；职业模式与数量来自 `tools/talkdnd/data/classes-<edition>.yaml` 与现有 `classdata::generate`，不按职业名写死在引擎里。法术来源与授予语义（基础职业表 / 子职始终准备 / 子职扩展列表 / 特性授予 / DM 授权）见 §3.9，不是所有子职条目都是 always_prepared。
 - **契约施法者与 Mystic Arcanum**：Warlock 只有一个 `spell-slot-<L>` 资源（L = 契约槽等级，上限 5）。设计规定 `spells sync` 为契约施法者把法术 ref 的 `AbilityRef.cost` 覆盖为 `spell-slot-<L>`（现有 `resolve_ability` 支持 ref 成本覆盖），法术一律按 L 环施放，`--slot` 拒绝；Mystic Arcanum 6–9 环建模为独立 `arcanum-<N>` 资源（长休恢复、不占槽、每级 1 次），见 §3.10 与 §5.5。
 - **仪式（两版分开）**：2024 是 edition 级规则——已准备 + Ritual 标签即可仪式施放，不依赖任何职业特性（`rule-2024-rules-glossary-ritual` 原文已核实）；Ritual Adept（wizard）另允许书内未准备。2014 是职业特性（class pack 已核实）：Bard=known、Cleric/Druid=prepared、Wizard=book——wizard 不要求已准备；PDF 只用于 pack 未覆盖的逐字差异。数据按 edition 分层：`rules.spellcasting.ritual`（2024 覆盖为 `prepared`；2014 为 `per-class`，查 `classes-2014.yaml` 的 `classes.<id>.ritual: none|known|prepared|book`）+ 2024 wizard 的 `ritual_adept`，不用单一布尔；Warlock 经魔祈（Book of Ancient Secrets 等）获得的仪式施法不在 v1.6 数据模型内（非目标 D-12）。仪式施法时间 = 正常施法时间 + 10 分钟；仪式不占槽、不升环；`talkdnd` 只校验与记录，`combat-sim` 不结算仪式。见 §5.3。
-- **同回合限制与长施法**：2014 附赠动作法术的同回合限制、2024 每回合一个法术位法术的限制、以及超过一个动作的长施法（逐回合动作 + 专注、中断失败且不扣槽）不在 v1.6 引擎强制范围内，列为所有者决策 D-11（选项与推荐见 §7）；分钟/小时施法时间在战斗内由 `cast` 失败关闭拒绝，理由是战斗轮内无法完成施法，不是 D-5（战斗外结算）。
-- **存档 schema**：推荐 `save-meta` 9 → 10 并带整档备份迁移；如果所有者选择维持 9，则必须把角色卡 `CharFile.version` 升到 2，否则旧版 `talkdnd` 在重写角色卡时会静默丢掉新字段。迁移必须新增 dirty-sheet 保护（现有 `migrate.rs::ensure` 的 dirty 跳过只覆盖台账文件，不含 `sheets/*.yaml`）。见 D-1 与 §3.6。
+- **同回合限制与长施法**：2014 附赠动作法术的同回合限制、2024 每回合一个法术位法术的限制、以及超过一个动作的长施法（逐回合动作 + 专注、中断失败且不扣槽）不在 v1.6 引擎强制范围内——D-11 已决定 A（2026-10-28，见 §7 与章程）；分钟/小时施法时间在战斗内由 `cast` 失败关闭拒绝，理由是战斗轮内无法完成施法，不是 D-5（战斗外结算）。
+- **存档 schema**：D-1 已决定 B（2026-10-28，见 §7 与章程）：`save-meta` 9 → 10 + 整档备份迁移 + dirty-sheet 保护，`CharFile.version` 保持 1。迁移必须新增 dirty-sheet 保护（现有 `migrate.rs::ensure` 的 dirty 跳过只覆盖台账文件，不含 `sheets/*.yaml`）。见 D-1 与 §3.6。
 - **唯一执行器**：机械效果只由 `combat-sim` 的 `cast`/`use` 解析；`talkdnd` 只管理列表、成分声明、仪式校验与法术位记录，绝不复制一套施法结算；仪式永远不经 `combat-sim` 结算。
 - **多职业施法是明确非目标**：2024 的多职业合并槽位/多模式无法用单一 `mode/ability/prepared` 表达，v1.6 不做（见 §3.1 与 §7）。
 - **任务拆分**：5 个任务，每个都带 Issue 模板要求的五个结构化场景字段（`invariants` / `negative_cases` / `migration_cases` / `integration_paths` / `unverified_assumptions`）。T1 元数据与导入；T2 列表模型与迁移；T3 列表命令与角色卡 refs；T4 施法结算（成分/升环/契约）；T5 常见法术数据、DM 文档与章程。T1 后可并行 T2 与 T4 的代码工作；T3 依赖 T2；T5 最后合并。
@@ -371,7 +371,7 @@ pub struct CantripScaling {
 | 抄书 | 不适用 | 不适用 | 只有 wizard：把法术加入书；花费 `rules.spellcasting.scribe` 的时间/金币；不自动准备 | 不适用 | 需要 DM 确认来源（卷轴/书）；`talkdnd char <name> scribe` |
 | 仪式 | 2014 Bard（`ritual: known`）可仪式施放已知法术 | `ritual: prepared` 的职业（2014 Cleric/Druid）可仪式施放已准备法术；2024 所有施法职业按 edition 级规则仪式施放已准备法术（见 §5.3） | 2014 Wizard（`ritual: book`）书内未准备也可施放；2024 Wizard 由 Ritual Adept 覆盖（`ritual_adept: true`） | 不适用（戏法无仪式） | 时长 = 正常施法时间 + 10 分钟；不消耗法术位、不升环；战斗外；`talkdnd char <name> ritual` 只校验与记录 |
 
-**准备时机**：RAW 是长休时替换准备列表。工具不强制“必须刚长休”，但会在 `prepare`/`unprepare` 时写一条日志并提示“这是长休时的选择”；如果存档有世界时间，可建议 `talkdnd time` 记录。是否强制长休门禁是 D-8。
+**准备时机**：RAW 是长休时替换准备列表。工具不强制“必须刚长休”，但会在 `prepare`/`unprepare` 时写一条日志并提示“这是长休时的选择”；如果存档有世界时间，可建议 `talkdnd time` 记录。D-8 已决定 A（2026-10-28，见 §7）：不强制刚长休，靠提示与日志。
 
 **升级**：`progress.rs::rebuild_class_derived` 已经在新等级重算资源上限、法术位、`spellcasting` 攻击/DC，并保留当前值（按新上限截断）。v1.6 需要在同一路径增加“列表数量/新增选择”的检查；`level-up` 不应静默删除玩家已有的法术。
 
@@ -399,17 +399,17 @@ spells:
 
 - **唯一数据源**：`sheets/<id>.yaml` 的 `spells` 块是列表的唯一来源；Markdown 的 `## 法术` 是生成物/展示，不是数据源。
 - **当前值仍在 `party-state.yaml`**：`spell-slot-N` 的 `current`/`max` 继续由 `combat/party-state.yaml` 管；`spells` 块只存“列表与选择”，不存当前法术位。这个分工与 `LetsPlay/docs/character-data.md` 的现有约定一致。
-- **`CharFile.version`**：如果 `save-meta` 升 10，`CharFile.version` 可以保持 1（旧二进制在 `save-meta` 就被拒绝）；如果 `save-meta` 保持 9，则必须升 `CharFile.version` 到 2，否则旧版 `charsheet::store` 会重写 YAML 并丢掉 `spells` 块。见 D-1。
+- **`CharFile.version`**：如果 `save-meta` 升 10，`CharFile.version` 可以保持 1（旧二进制在 `save-meta` 就被拒绝）；如果 `save-meta` 保持 9，则必须升 `CharFile.version` 到 2，否则旧版 `charsheet::store` 会重写 YAML 并丢掉 `spells` 块。D-1 已决定 B（2026-10-28，见 §7）：`save-meta` 升 10，`CharFile.version` 保持 1。
 - **`chargen.json`**：继续是“建卡中”的状态；确认后 `sheets` 是来源。`Creation.spells` 保留为旧输入兼容，新增 `Creation.spell_lists` 由 `set spells` 自动填充/由 `spells adopt` 填充。
 
-### 3.6 存档 schema：保持 9 还是升 10
+### 3.6 存档 schema：升 10（D-1 已决定 B，2026-10-28）
 
 | 选项 | 做法 | 优点 | 缺点 | 结论 |
 |------|------|------|------|------|
-| A：保持 9，additive | `spells` 块可选；不迁移 | 无迁移、无备份；旧存档直接加载 | 旧版 `talkdnd` 会忽略未知字段，并在 `charsheet::store` 重写时**静默丢失** `spells`；没有全档门禁；需要把 `CharFile.version` 升 2 才能失败关闭 | 不推荐 |
-| B：升 10，带迁移 | `CURRENT_SCHEMA = 10`；整档备份；给每个 sheet 加空 `spells` 块或从 `chargen.json`/正文精确 adopt；写迁移记录 | 旧二进制在 `save-meta` 直接拒绝；整档备份可回退；与 `docs/versioning.md` 的“结构变化 → 次版本 + 迁移”一致 | 迁移代码与测试；需要更新 `docs/PROJECT-CHARTER.md`、`LetsPlay/docs/layout.md`、`CHANGELOG`；`migrate.rs` 的测试期望从 9 改 10 | **推荐** |
+| A：保持 9，additive | `spells` 块可选；不迁移 | 无迁移、无备份；旧存档直接加载 | 旧版 `talkdnd` 会忽略未知字段，并在 `charsheet::store` 重写时**静默丢失** `spells`；没有全档门禁；需要把 `CharFile.version` 升 2 才能失败关闭 | 未选择（2026-10-28 决定为 B） |
+| B：升 10，带迁移 | `CURRENT_SCHEMA = 10`；整档备份；给每个 sheet 加空 `spells` 块或从 `chargen.json`/正文精确 adopt；写迁移记录 | 旧二进制在 `save-meta` 直接拒绝；整档备份可回退；与 `docs/versioning.md` 的“结构变化 → 次版本 + 迁移”一致 | 迁移代码与测试；需要更新 `docs/PROJECT-CHARTER.md`、`LetsPlay/docs/layout.md`、`CHANGELOG`；`migrate.rs` 的测试期望从 9 改 10 | **已决定（2026-10-28，D-1=B）** |
 
-推荐 B 的迁移步骤（实现任务 T2）：
+已决定 B（2026-10-28）的迁移步骤（实现任务 T2，未实现）：
 
 1. `talkdnd migrate --dry-run` 报告 schema 9 → 10、备份位置、将处理的 sheet。
 2. 整档备份到 `Saves/_backups/<slot>-<时间>-schema9`（沿用 `migrate.rs::backup_save` 的命名/去重规则）。
@@ -462,7 +462,7 @@ spells:
 - 2024 子职 pack **没有** `spells` 数组（已核实 `content.subclasses` 的 12 个子职均无该字段）；2024 子职法术只能手写并对照 SRD 文本（U-8）。
 - Magical Secrets 两个版本都在 class pack 里有特性文本与 id（2014 class 级 `magical-secrets-1/2/3` 与 Lore 子职 `additional-magical-secrets`、2024 `bard-magical-secrets`）；来源范围在特性原文中有 prose 表述（any class / Bard-Cleric-Druid-Wizard，均已核实），但 pack 无结构化字段——来源范围与计入/不计入语义由 `classes-*.yaml` 的授予声明按原文表达。
 
-**失败关闭**：`prepare`/`learn`/`scribe` 校验“该法术 id 属于基础职业表 **或** 该角色职业数据里任一 grant 规则覆盖的法术集合”；没有任何来源数据（`classes.<id>.spells` 缺失且无 grant 声明）时拒绝并提示 D-2 未决。来源数据与授予类型错误（例如把 Fiend 写成 always_prepared）按数据 bug 处理，`content check`/`talkdnd` 不猜。
+**失败关闭**：`prepare`/`learn`/`scribe` 校验“该法术 id 属于基础职业表 **或** 该角色职业数据里任一 grant 规则覆盖的法术集合”；没有任何来源数据（`classes.<id>.spells` 缺失且无 grant 声明）时拒绝并提示来源数据缺失——D-2 已决定 A（2026-10-28，见 §7）：v1.6 收录 8 个基础职业表 + 子职授予 + Magical Secrets，完整书职业表不承诺。来源数据与授予类型错误（例如把 Fiend 写成 always_prepared）按数据 bug 处理，`content check`/`talkdnd` 不猜。
 
 ### 3.10 契约施法者（Warlock）与 Mystic Arcanum
 
@@ -557,7 +557,7 @@ spells:
 - 战斗外机械结算（治疗、伤害、条件）当前没有 `--state` 就无法走 `combat-sim cast`。v1.6 推荐：
   - 叙述/效用法术：`talkdnd char <名字> use slotN` 扣法术位 + DM 叙述；需要治疗/条件时用现有 `talkdnd char heal`/`condition` 手动记录；
   - 仪式：`talkdnd char <名字> ritual <法术>` 只校验与记日志，不自动推进时间；
-  - 如果所有者要求“战斗外也自动结算”，另开任务让 `combat-sim` 用临时 state 跑 `use_ability`，不在 `talkdnd` 里写第二套效果。见 D-5。
+  - D-5 已决定 A（2026-10-28，见 §7）：v1.6 战斗外施法手动记录，不自动结算；若将来要求战斗外自动结算，另开任务让 `combat-sim` 用临时 state 跑 `use_ability`，不在 `talkdnd` 里写第二套效果。
 - 这条边界是**有意的**：v1.6 的目标是“施法核心”，不是“所有场景都能自动结算”。
 
 ### 4.5 无第二执行器检查清单
@@ -692,7 +692,7 @@ spells:
 
 这些都要单独任务、单独验收，不能塞进“施法核心”。
 
-### 5.9 同回合限制与长施法（范围决策 D-11）
+### 5.9 同回合限制与长施法（范围决策 D-11，已决定 A）
 
 这两组规则真实存在且属于施法语义，v1.6 不实现引擎强制，但必须在范围上显式表态（这是对上一轮“只谈战斗外结算”的范围修正）：
 
@@ -702,12 +702,12 @@ spells:
 - **2024 同回合限制**：每个回合只能用一个法术位施放一个法术（cantrip 不受此限）。
 - **长施法（施法时间超过 1 动作，分钟/小时级）**：施法者必须在其后每个回合用一个动作继续施法并全程维持专注；若专注被打断或放弃，施法失败且**不消耗法术位**；重新尝试须从头开始。2014 与 2024 语义一致（细节措辞以文本核对为准）。
 
-**v1.6 范围**（选项与推荐见 §7 D-11）：
+**v1.6 范围**（D-11 已决定 A，2026-10-28，见 §7 与章程）：
 
 - 引擎不建立“本回合已施法术”记账，也不实现长施法的跨回合状态机。
 - `combat-sim cast` 对 `spell.casting_time.unit` 为 `minute`/`hour` 的法术**失败关闭拒绝**——理由是“战斗轮内无法完成施法”，属于施法时间语义，与战斗外结算决策 D-5 无关。
 - 同回合限制与跨回合长施法由 DM 手动结算；`LetsPlay/docs/spellcasting.md`（T5）写明这两条规则的 DM 指引与典型例子。
-- 若所有者选择引擎强制（D-11 选 B/C），另立任务：需要回合级施法记账（状态机 + 测试），并在章程记录行为变化。T4 的 AC 按 D-11 条件化（见 §6.2 T4）。
+- D-11 已决定 A（2026-10-28）：引擎不强制同回合限制与长施法；若将来要求引擎强制（原选项 B/C 方向），另立任务：需要回合级施法记账（状态机 + 测试），并在章程记录行为变化。T4 的 AC 按 D-11 已选分支定稿（见 §6.2 T4）。
 
 ## 6. 任务拆分
 
@@ -973,7 +973,7 @@ T1 ──┬─> T2 ──> T3 ──┐
 - **T2 与 T4 的代码可并行**：T2 在 `talkdnd`，T4 在 `combat-sim`；文件不重叠。
 - **T3 依赖 T2**：同 crate、同文件（`lib.rs`/`charsheet.rs`），不能并行。
 - **T5 最后**：依赖 T1/T3/T4 的行为与数据；数据编写可提前，但 `content check` 需要 T1/T4。
-- **合并串行**：T2/T3/T4/T5 若都更新 `docs/PROJECT-CHARTER.md`，同一路径锁冲突，不能并行合并。可以并行“实现 + 测试”，但合并顺序必须串行；或者所有者授权把章程更新集中到 T5（见 D-10）。这不改变代码并行的事实，只是合并队列。
+- **合并串行**：T2/T3/T4/T5 若都更新 `docs/PROJECT-CHARTER.md`，同一路径锁冲突，不能并行合并。可以并行“实现 + 测试”，但合并顺序必须串行。D-10 已决定 A（2026-10-28，见 §7）：每个行为 PR 各自更新章程、串行合并，不集中到 T5。这不改变代码并行的事实，只是合并队列。
 
 ### 6.4 合并门与证据
 
@@ -984,7 +984,7 @@ T1 ──┬─> T2 ──> T3 ──┐
 - **G3**：基于最新 `main`；T2 的 schema 迁移与 T3 的 CLI 不能跨任务“先合并后补”。
 - **G4**：`cargo test` 对应 crate；T5 还要两版 `content check`。
 - **G5**：测试/命令/退出码绑定当前 head SHA；迁移测试要证明备份、幂等与 dirty-sheet 保护。
-- **G6（READY 门控统一口径）**：任务进入 `READY` 前，该任务 AC 引用的**所有** D 项必须已由所有者决定并写入章程 Decision Log；条件化 AC（“若 D-x 选 …”）按已选分支取值，不得保留未决分支。各任务门控集合：
+- **G6（READY 门控统一口径）**：任务进入 `READY` 前，该任务 AC 引用的**所有** D 项必须已由所有者决定并写入章程 Decision Log；条件化 AC（“若 D-x 选 …”）按已选分支取值，不得保留未决分支。**D-1..D-12 已于 2026-10-28 全部决定并写入章程（见 §7）**；各任务门控集合：
   - T1：无 D 门控（设计已闭合）。
   - T2：D-1（schema/版本策略）、D-2（职业表与子职来源范围）、D-7（仪式资格）、D-9（adopt 策略）、D-12（魔祈仪式非目标）。
   - T3：D-2、D-7、D-8（准备时机）、D-12。
@@ -992,24 +992,24 @@ T1 ──┬─> T2 ──> T3 ──┐
   - T5：D-2、D-3、D-6、D-7、D-11、D-12（数据与文档按最终决定写）。
   - 风险项：schema 迁移（数据丢失）、材料/成分行为变化、旧数据兼容、`--slot` 行为修复——按 G6 深度要求写最坏后果与额外复核。
 
-## 7. 待所有者决定
+## 7. 所有者决定（D-1..D-12，已决定 2026-10-28）
 
-以下条目**不由本设计拍板**。未决时，相关实现任务不得进入 `READY`；所有者决定后写入 `docs/PROJECT-CHARTER.md` 的 Decision Log，并在受影响章节同步。
+以下条目已由项目所有者于 **2026-10-28** 逐项决定，并原样记录到 [docs/PROJECT-CHARTER.md](PROJECT-CHARTER.md) 的 Decision Log（条目「2026-10-28 — v1.6 施法核心的所有者决定 D-1..D-12（TASK-0121）」，下称“章程 D-n”）。下表保留原问题、选项与影响作为设计依据；**「决定」列为最终结果**（决定日期 2026-10-28），行内的「推荐」列只是决定前的设计建议。这些决定描述 v1.6 目标行为，**均未实现**：实现随 T1–T5 与另立任务交付（“另立任务”尚未登记，不构成本文排期）。
 
-| ID | 问题 | 选项 | 推荐 | 影响 |
-|----|------|------|------|------|
-| D-1 | `save-meta` 保持 9 还是升 10？ | A：9 + additive + `CharFile.version` 2；B：10 + 迁移 | **B**（10 + 整档备份迁移） | T2；旧二进制兼容；发布说明 |
-| D-2 | 法术来源范围：基础职业表之外，v1.6 收录哪些授予来源？ | A：8 个基础职业表 + 子职授予（§3.9 的 always_prepared/class_list，2014 数据可由子职 pack 辅助生成）+ Magical Secrets；B：只做基础职业表，子职/特性授予另立任务；C：再加完整书职业表 | **A**（§3.9 的 grant 语义；Fiend 等 class_list 不压成 always_prepared；完整书 v1.6 不承诺） | T2/T3/T5；准备校验的覆盖面 |
-| D-3 | 材料跟踪深度：只声明、库存自动检查、还是手部/器材模型？ | A：声明 + DM 裁定；B：读 `sheets` 物品栏自动检查；C：完整手部/器材 | **A**（v1.6 只声明；B/C 另开任务） | T4/T5；误判与桌规 |
-| D-4 | 成分不满足时硬失败还是 warning？谁可越权？ | A：昂贵/消耗硬失败，V/S warning；B：全部 warning；C：全部硬失败 | **A**；`--ignore-components` 仅 DM 且写日志 | T4 |
-| D-5 | 战斗外施法：手动 `talkdnd char`，还是给 `combat-sim` 临时 state？ | A：手动（v1.6）；B：临时 state 走 `use_ability`；C：`talkdnd` 内结算 | **A**；B 另开任务；**绝不 C** | T3/T5 |
-| D-6 | 升环范围：只扣槽/上下文，还是逐级骰表？戏法成长是否同版？ | A：槽位 + `upcast` 骰表 + 戏法表；B：只扣槽；C：全部 manual | **A**（主伤害/治疗；其他 manual） | T4/T5 |
-| D-7 | 仪式：两版资格语义（§5.3 的 edition 级 `rules.spellcasting.ritual`——2024 = `prepared`、2014 = `per-class` 查 `classes.<id>.ritual`——+ 2024 wizard `ritual_adept`）与战斗外边界是否确认？ | A：按 §5.3 建模，战斗外，`talkdnd` 只校验/记录，`combat-sim` 不结算；B：简化成单一布尔（无法表达两版差异，不推荐）；C：战斗内也允许仪式 | **A** | T2/T3/T5 |
-| D-8 | 准备/替换是否强制“刚长休”？ | A：工具提示 + 日志，不强制；B：强制最近长休；C：完全不管 | **A**（v1.6 不强制；靠日志与桌规） | T2/T3 |
-| D-9 | 旧自由文本 adopt：自动精确匹配，还是全手动？ | A：精确 id/slug/name + `legacy`；B：模糊匹配；C：全手动 | **A**；不做模糊匹配 | T2 |
-| D-10 | 章程更新：每个行为 PR 各自更新，还是集中到 T5？并行合并如何排队？ | A：各自更新、串行合并；B：所有者授权集中 T5 | **A**（符合 LIVING CHARTER）；若要并行合并选 B 并明确授权 | 所有任务；路径锁/合并队列 |
-| D-11 | 同回合限制与长施法的支持范围（§5.9）？ | A（推荐，v1.6）：引擎不强制；分钟/小时施法在战斗内失败关闭拒绝；同回合限制与跨回合长施法由 DM 手动（T5 写 DM 指引）；B：v1.6 引擎强制同回合限制（2014 附赠动作规则 + 2024 每回合一个法术位法术），长施法仍手动；C：同回合限制 + 长施法状态机（逐回合动作 + 专注、中断失败不扣槽）都强制 | **A**；选 B/C 时另立任务并更新章程 | T4 AC 条件化；T5 DM 文档；规则支持范围 |
-| D-12 | 特性/魔祈授予的仪式施法是否进入 v1.6 数据模型（§5.3）？2014 Warlock 可经魔祈获得仪式资格（Book of Ancient Secrets / Pact of the Chain，pack 原文已核实） | A（推荐，v1.6）：非目标——不建模魔祈选择，Warlock 数据 `ritual: none`，此类角色由 DM 手动裁定并记日志，另立任务引入角色级 `ritual_grants`（来源限定为 invocation 文本）；B：v1.6 增加 `ritual_grants` 模型与魔祈选择数据 | **A** | T2/T3 的 ritual 拒绝路径；T5 DM 文档；规则支持范围 |
+| ID | 问题 | 选项 | 推荐 | 决定（2026-10-28） | 影响 |
+|----|------|------|------|------|------|
+| D-1 | `save-meta` 保持 9 还是升 10？ | A：9 + additive + `CharFile.version` 2；B：10 + 迁移 | **B**（10 + 整档备份迁移） | 已决定：B（章程 D-1） | T2；旧二进制兼容；发布说明 |
+| D-2 | 法术来源范围：基础职业表之外，v1.6 收录哪些授予来源？ | A：8 个基础职业表 + 子职授予（§3.9 的 always_prepared/class_list，2014 数据可由子职 pack 辅助生成）+ Magical Secrets；B：只做基础职业表，子职/特性授予另立任务；C：再加完整书职业表 | **A**（§3.9 的 grant 语义；Fiend 等 class_list 不压成 always_prepared；完整书 v1.6 不承诺） | 已决定：A（章程 D-2） | T2/T3/T5；准备校验的覆盖面 |
+| D-3 | 材料跟踪深度：只声明、库存自动检查、还是手部/器材模型？ | A：声明 + DM 裁定；B：读 `sheets` 物品栏自动检查；C：完整手部/器材 | **A**（v1.6 只声明；B/C 另开任务） | 已决定：A（章程 D-3） | T4/T5；误判与桌规 |
+| D-4 | 成分不满足时硬失败还是 warning？谁可越权？ | A：昂贵/消耗硬失败，V/S warning；B：全部 warning；C：全部硬失败 | **A**；`--ignore-components` 仅 DM 且写日志 | 已决定：A（章程 D-4） | T4 |
+| D-5 | 战斗外施法：手动 `talkdnd char`，还是给 `combat-sim` 临时 state？ | A：手动（v1.6）；B：临时 state 走 `use_ability`；C：`talkdnd` 内结算 | **A**；B 另开任务；**绝不 C** | 已决定：A（章程 D-5） | T3/T5 |
+| D-6 | 升环范围：只扣槽/上下文，还是逐级骰表？戏法成长是否同版？ | A：槽位 + `upcast` 骰表 + 戏法表；B：只扣槽；C：全部 manual | **A**（主伤害/治疗；其他 manual） | 已决定：A（章程 D-6） | T4/T5 |
+| D-7 | 仪式：两版资格语义（§5.3 的 edition 级 `rules.spellcasting.ritual`——2024 = `prepared`、2014 = `per-class` 查 `classes.<id>.ritual`——+ 2024 wizard `ritual_adept`）与战斗外边界是否确认？ | A：按 §5.3 建模，战斗外，`talkdnd` 只校验/记录，`combat-sim` 不结算；B：简化成单一布尔（无法表达两版差异，不推荐）；C：战斗内也允许仪式 | **A** | 已决定：A（章程 D-7） | T2/T3/T5 |
+| D-8 | 准备/替换是否强制“刚长休”？ | A：工具提示 + 日志，不强制；B：强制最近长休；C：完全不管 | **A**（v1.6 不强制；靠日志与桌规） | 已决定：A（章程 D-8） | T2/T3 |
+| D-9 | 旧自由文本 adopt：自动精确匹配，还是全手动？ | A：精确 id/slug/name + `legacy`；B：模糊匹配；C：全手动 | **A**；不做模糊匹配 | 已决定：A（章程 D-9） | T2 |
+| D-10 | 章程更新：每个行为 PR 各自更新，还是集中到 T5？并行合并如何排队？ | A：各自更新、串行合并；B：所有者授权集中 T5 | **A**（符合 LIVING CHARTER）；若要并行合并选 B 并明确授权 | 已决定：A（章程 D-10） | 所有任务；路径锁/合并队列 |
+| D-11 | 同回合限制与长施法的支持范围（§5.9）？ | A（推荐，v1.6）：引擎不强制；分钟/小时施法在战斗内失败关闭拒绝；同回合限制与跨回合长施法由 DM 手动（T5 写 DM 指引）；B：v1.6 引擎强制同回合限制（2014 附赠动作规则 + 2024 每回合一个法术位法术），长施法仍手动；C：同回合限制 + 长施法状态机（逐回合动作 + 专注、中断失败不扣槽）都强制 | **A**；选 B/C 时另立任务并更新章程 | 已决定：A（章程 D-11） | T4 AC 条件化；T5 DM 文档；规则支持范围 |
+| D-12 | 特性/魔祈授予的仪式施法是否进入 v1.6 数据模型（§5.3）？2014 Warlock 可经魔祈获得仪式资格（Book of Ancient Secrets / Pact of the Chain，pack 原文已核实） | A（推荐，v1.6）：非目标——不建模魔祈选择，Warlock 数据 `ritual: none`，此类角色由 DM 手动裁定并记日志，另立任务引入角色级 `ritual_grants`（来源限定为 invocation 文本）；B：v1.6 增加 `ritual_grants` 模型与魔祈选择数据 | **A** | 已决定：A（章程 D-12） | T2/T3 的 ritual 拒绝路径；T5 DM 文档；规则支持范围 |
 
 ## 8. 待探测 / 未验证假设
 
