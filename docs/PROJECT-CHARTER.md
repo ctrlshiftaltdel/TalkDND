@@ -36,6 +36,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 - Keep the legacy combat AI as the default. A tactical utility or bounded-search planner stays opt-in until a quality gate on real or non-dummy content shows no regression in team combat, target completion or latency.
 - Let each save set DM automation defaults for a fixed category set, with scene and encounter overrides, so mechanical resolution can stay automatic while player choices and reactions stay with the players.
 - Give the DM agent one read-only knowledge API across rulings, the save, player books, the SRD, the adventure and original content, with stable ids, source labels and a player-known default.
+- Resolve the shared core combat actions — Grapple, Shove, Unarmed Strike, Two-Weapon Fighting and Extra Attack — through the existing action economy, conditions and forced-movement kernel, with the 2014/2024 differences supplied by data rather than class or creature names.
 
 ## Non-goals
 
@@ -71,6 +72,8 @@ Each save picks exactly one of four player-visible rulesets. The save manifest f
 The engine still selects the on-disk layer with the edition (`2014` or `2024`) and ignores the other edition's directory. SRD is always the base layer. `*-srd` loads the whole edition layer (`common/` plus `2014/` or `2024/`) in its existing order. `*-full` loads `common/` plus `<edition>/srd/` and SRD-only `<edition>/**/srd-*` overlays (for example `2024/monsters/srd-spatial.yaml`) as the SRD base, then the unlocked full packs, then the rest of `<edition>/` (monsters, spells and other hand-written files), then adventure and character overrides. A FULL save requires at least one unlocked full pack for its edition: when the pack is missing, locked or invalid, `talkdnd start` and `combat-sim content check` fail explicitly, name the missing book and explain how to add the PDF/pack. They never silently fall back to SRD. One save never mixes editions.
 
 The migration is idempotent: it preserves every other manifest field and the player's comments, rewrites only the `ruleset` line, and records the old/new values in a comment next to it. Shared rulings are `LetsPlay/Rules/rulings.md`. Version differences are `LetsPlay/Rules/rulings-2014.md` and `LetsPlay/Rules/rulings-2024.md`; the file names use the edition, not the player option.
+
+The editions also differ inside `rules.combat_actions`: 2014 resolves Grapple and Shove as Athletics contests, while 2024 resolves them as Unarmed Strike options with a Strength or Dexterity save against `8 + Strength modifier + proficiency`. Unarmed damage is `1 + Strength` in 2014 and `1d3 + Strength` in 2024. The common layer holds the shared shape and each edition file overrides its own fields; the engine reads the merged rules, never the save-visible option name.
 
 Tracked combat data comes only from the SRD (CC-BY-4.0). Attribution is in `NOTICE`. Data that exists only in a non-SRD book stays in ignored local files.
 
@@ -141,6 +144,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - Automation switches are per save: fixed categories resolve as encounter > scene > save default, unknown categories/levels/ids fail closed, every change is audited, and `player_choice` / `reaction` can never be `auto`.
 - As of v1.3.0, a schema-8 save opens without manual steps: the first `start` / `migrate` / `settings` write backs up the whole save, writes the charter automation defaults, preserves `dice_display` / `style`, and records the 8 → 9 migration; the pre-migration backup is the rollback.
 - As of v1.4.0, `talkdnd knowledge search|get|cite|context|related` answers across `ruling`, `save`, `book`, `srd`, `adventure` and `original` with stable ids and deterministic ordering; the default view hides `dm-secrets.md`, unrevealed original hidden faces, ahead/DM-only adventure content and unidentified names, and `--include-hidden` labels DM-only results `visibility: dm` without ever emitting `dm-secrets.md`. The command is read-only: it does not change the save schema (still 9), write `integrity.yaml`, build a persistent index, add a dependency, or make a network call.
+- Grapple, Shove, Unarmed Strike, Two-Weapon Fighting and Extra Attack resolve for both editions; every attempt checks target, reach, size, condition immunity and the action/bonus-action resource before spending it, failed checks still spend the attempt, and forced movement uses the existing spatial kernel with its blocking reason logged. Extra Attack is read from `extra_attacks` data on the creature or a passive feature, never from a class name; a creature without the data keeps one attack. Old combat state loads with `STATE_SCHEMA_VERSION` 1 and no migration.
 
 ## Architecture decisions
 
@@ -168,6 +172,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 - Spatial rules have one kernel. A save with explicit P1 spatial fields (a pose, vertical state, `SpatialState`, `cell_height_ft` or terrain) resolves reach, line of sight, cover, areas and movement through `space.rs`; a save without them keeps the legacy 2D queries. `GridCell.height_ft` is a solid obstacle above the cell floor and `cell_height_ft` is a ceiling above the local floor. `combat-sim fly` owns altitude changes and `combat-sim fall` owns R-09 and liquid check rolling; losing flight support through a condition drops the creature. Liquid landing is only used when a caller supplies a `FallMap` with a liquid column, because the grid scene has no water flag.
 - Combat AI defaults to the legacy heuristic. The P6 utility planner (`AiStrategy::Utility`) and P7 bounded search (`AiStrategy::Search`) are explicit library opt-ins, with search falling back to utility and then legacy; the P8 quality gate keeps this default because the synthetic benchmark improved target completion but regressed team-combat wins.
 - The agent knowledge surface is one read-only module, `talkdnd knowledge`, over the existing ledgers and indexes. Authority values are fixed source labels (`ruling`, `save`, `book`, `srd`, `adventure`, `original`), not a global precedence; the save's `Rules/rulings*.md` remains the table authority. Ids encode the source and anchor, results carry `id`, `authority`, `title`, `citation`, `excerpt`, `known` and `visibility`, and the default view is player-known. A relation is DM-only when either endpoint is `dm_only`; secret filtering reuses `guard`'s read-only term collection without writing the cache. `--include-hidden` widens save/adventure/original to the DM view and marks it `dm`; `dm-secrets.md` is never an output source. No save schema, persistent index, dependency, network call or engine change is added.
+- Core combat actions are data-driven. `rules.combat_actions` holds the shared shape plus edition overrides for grapple/shove resolution, unarmed damage, size limit and two-weapon rules. The engine resolves them through the existing action, bonus-action, condition and forced-movement paths; it never hard-codes a creature, class or condition id. Extra Attack uses the highest `extra_attacks` value from the creature or a passive feature. New optional fields skip serialization when empty, so content-pack hashes and old state files stay stable; combat state remains schema version 1.
 
 ## Open decisions
 
@@ -180,6 +185,22 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-10-28 — v1.5a core combat actions (TASK-0115)
+
+The owner's v1.5 release train adds the first group of core combat actions: Grapple, Shove, Unarmed Strike, Two-Weapon Fighting and Extra Attack. They run through the existing action, bonus-action, condition, forced-movement and spatial paths. The rules are data-driven in `rules.combat_actions`: the common layer supplies the shared shape, `2014/rules.yaml` supplies the Athletics-contest form and `2024/rules.yaml` supplies the Unarmed Strike save form with `8 + Strength modifier + proficiency`. Unarmed damage is `1 + Strength` in 2014 and `1d3 + Strength` in 2024. The engine reads the merged data, not the save-visible ruleset name or a class/creature name.
+
+Grapple and Shove validate target, reach, size, condition immunity and the action before spending it. A failed contest/save still spends the attempt; a rejected attempt does not. Success applies the condition with its source, permanent duration and escape note; 2024 also links the grappled condition to the grappler so the existing "attack a target other than the grappler" modifier works. Shove's distance option calls the existing forced-movement path, so it spends no Speed, provokes no opportunity attack, and stops at a wall, occupied space, drop or boundary with the reason logged.
+
+Two-Weapon Fighting spends the bonus action only after a Light melee main-hand Attack action and a different Light melee weapon; off-hand damage removes a positive ability modifier in both editions. Extra Attack uses the highest `extra_attacks` value from the creature or a passive feature, never a class name or level; a creature without the data keeps the legacy one-attack behavior. Extra attacks apply to the `attack`/`--unarmed` Attack action, not to `--offhand`, `--multi` or `use`.
+
+No save-schema, `STATE_SCHEMA_VERSION`, loader, AI-default or dependency change is made. The new fields are optional and skipped when empty, so old states and content packs load unchanged and pack hashes stay stable. Old `attack`/`use` results are unchanged when the new data is absent.
+
+The same PR adds `tools/combat-sim/docs/COMBAT-ACTIONS.md`, `LetsPlay/docs/combat-actions.md`, the DM-guide pointer, this decision and the `docs/PLAN.md` design goal.
+
+Known limits: the dedicated grapple/shove command resolves the Attack action's attack but does not carry an attack budget across commands, so a creature with Extra Attack uses `attack`/`--unarmed` for its additional attacks. The engine has no equipment inventory, so Two-Weapon Fighting checks the creature's Light melee attack entries rather than hand slots; a 2024 Fighting Style that adds the off-hand ability modifier remains a later explicit data switch (`add_positive_ability_modifier`).
+
+Alternatives considered: hard-coding edition branches in the engine (rejected: `rules.combat_actions` is already the project's edition-data layer); adding a persisted state field for the two-weapon prerequisite (rejected: the existing per-turn `once_used` map holds the marker without a schema bump); bumping the state schema (rejected: the fields are additive, optional and defaulted); implementing the actions as generic abilities (rejected: they need action-economy checks and condition metadata before any roll).
 
 ### 2026-10-28 — v1.4.0 release (TASK-0114)
 

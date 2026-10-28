@@ -8,6 +8,7 @@
 
 - 让玩家在聊天里跑完一场 D&D：AI DM 负责叙述、NPC、选项与自由输入，玩家扮演自己的角色，存档可跨会话继续。
 - 所有骰子都由 `combat-sim` 的同一套 Rust 引擎产生并完整显示；战斗（攻击、伤害、条件、专注、移动、借机攻击）由该引擎结算，不靠模型口算。
+- 战斗核心动作（擒抱、推撞、徒手打击、双武器战斗、额外攻击）用同一套动作/附赠动作经济、条件与强制移动内核结算；2014 与 2024 的对抗方式、徒手伤害与额外攻击数据由 `rules.combat_actions` 和生物/被动特性数据决定，不按职业或生物名硬编码。
 - 空间规则只走一个内核：触及按目标体积、视线与掩护按同一组障碍体积、范围效果与目标体积求交、移动逐步校验；飞行与坠落是显式引擎命令，旧存档未启用空间字段时保持旧结果。
 - 支持 5.5e 与 5e 两套规则，玩家可选 **5.5e FULL / 5e FULL / 5.5e SRD / 5e SRD**，一档一版；SRD 只用该 edition 的 SRD 层，FULL 在 SRD 层之后加载已解锁的完整书内容包。
 - 把玩家自备的规则书、冒险书、个人存档和 DM 秘密留在本机；仓库只收程序、原创文档、SRD 5.1 / 5.2.1 内容包和 SRD 派生的战斗数据。
@@ -57,6 +58,7 @@
 - 存档的 `ruleset` 是四个值之一：`*-srd` 只加载对应 edition 的 SRD 层，`*-full` 要求同 edition 至少一本已解锁完整书，另一版目录不被读取；旧值 `2014` / `2024` 可读并在下次写入时迁移。
 - `uv run --no-project python scripts/validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 在无书籍、无存档的干净树上通过。
 - 三个 crate 的 `cargo test`、`cargo fmt --check`、`cargo clippy -D warnings` 通过。
+- 战斗核心动作在 2014/2024 下都按 `rules.combat_actions` 结算；擒抱/推撞失败不消耗错误资源，推撞走强制移动并记录阻挡，额外攻击只由数据决定；旧 combat state 仍以 schema 1 加载。
 - `talkdnd knowledge` 的五个只读命令对同一输入给出稳定 id 与确定性排序；默认不泄露 `dm-secrets.md`、未揭示原创隐藏面、DM-only 冒险内容或未识别名字；`--include-hidden` 的结果标 `visibility: dm`。
 - AgentOrch 完整套件 `unittest discover -s tests` 通过；`check_drift` 只报告 `docs/PROJECT.md` 中列出的预期漂移。
 - 发布自动化产出章程列出的三个平台制品；发布包只含已跟踪的 `LetsPlay/` 内容与二进制。完整书 pack 作为独立发布资产由本地构建产生，仓库、LetsPlay 包与 CI 日志都不含书籍正文或扫描页。

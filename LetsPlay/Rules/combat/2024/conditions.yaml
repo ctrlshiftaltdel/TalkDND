@@ -6,7 +6,7 @@ conditions:
     flags: [speed_zero]
     modifiers:
       - {applies: attack_roll, effect: disadvantage, when: {not: {linked_is_target: true}}}
-    manual: "Grappler can drag/carry it (speed halved). Escape: action, Athletics/Acrobatics vs escape DC."
+    manual: "Escape DC = the grapple DC: action, Athletics or Acrobatics check. The grappler can drag/carry it (Speed halved)."
   - id: incapacitated
     flags: [incapacitated]
     manual: "No actions, bonus actions or reactions; concentration ends; can't speak; disadvantage on initiative."

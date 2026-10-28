@@ -2,3 +2,13 @@
 # act on their first turn (and no reactions until it ends).
 rules:
   surprise: {initiative_disadvantage: false, condition: surprised}
+  combat_actions:
+    unarmed_strike: {damage: "1+{str}"}
+    grapple:
+      resolution: contest
+      attacker_skill: athletics
+      defender_skills: [athletics, acrobatics]
+    shove:
+      resolution: contest
+      attacker_skill: athletics
+      defender_skills: [athletics, acrobatics]

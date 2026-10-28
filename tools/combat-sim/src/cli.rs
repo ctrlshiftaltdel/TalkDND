@@ -15,7 +15,10 @@ use serde::Serialize;
 use crate::ai::Ai;
 use crate::content::{self, ContentSources, ItemKind, ShownItem};
 use crate::dice::{self, DiceRng, RollMode};
-use crate::engine::{self, AddConditionOptions, AttackOptions, FallOptions, RestKind, UseOptions};
+use crate::engine::{
+    self, AddConditionOptions, AttackOptions, FallOptions, GrappleOptions, RestKind, ShoveMode,
+    ShoveOptions, UnarmedOptions, UseOptions,
+};
 use crate::sim::{self, SimulationConfig};
 use crate::space::FallAbility;
 use crate::state::{
@@ -127,23 +130,63 @@ pub enum Command {
     /// Show the current encounter.
     Status,
 
-    /// Resolve one attack or multiattack.
+    /// Resolve one attack or multiattack. Extra Attack data resolves every
+    /// attack in the Attack action; use `--unarmed` or `--offhand` for the
+    /// special attack forms.
     Attack {
         attacker: String,
         target: String,
-        attack: String,
+        /// Attack id or name (omit with --unarmed).
+        #[arg(required_unless_present = "unarmed")]
+        attack: Option<String>,
         #[arg(long)]
         adv: bool,
         #[arg(long)]
         dis: bool,
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["unarmed", "offhand"])]
         multi: bool,
         #[arg(long)]
         no_reactions: bool,
         /// Knock out instead of kill if a melee attack drops the target to 0 HP (2024 PHB).
         #[arg(long)]
         nonlethal: bool,
+        /// Unarmed Strike: 1 + STR (2014) or 1d3 + STR (2024), bludgeoning,
+        /// without weapon properties or masteries.
+        #[arg(long, conflicts_with = "offhand")]
+        unarmed: bool,
+        /// Two-Weapon Fighting: attack with a different Light melee weapon
+        /// using the bonus action after a Light main-hand Attack action.
+        #[arg(long)]
+        offhand: bool,
         /// Attack outside your turn (readied attack, DM ruling).
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Grapple a creature in reach (2014 Athletics contest, 2024 STR/DEX save).
+    Grapple {
+        attacker: String,
+        target: String,
+        /// Target's defense: 2014 `athletics`/`acrobatics`, 2024 `str`/`dex`.
+        /// Omit to let the target use its best legal defense (logged).
+        #[arg(long, value_name = "DEFENSE")]
+        defense: Option<String>,
+        /// Act outside your turn (readied action, DM ruling).
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Shove a creature in reach: knock it down or move it 5 ft away.
+    Shove {
+        attacker: String,
+        target: String,
+        /// `knock-down` or `away` (default: knock-down).
+        #[arg(long, value_enum, default_value_t = ShoveModeArg::KnockDown)]
+        mode: ShoveModeArg,
+        /// Target's defense: 2014 `athletics`/`acrobatics`, 2024 `str`/`dex`.
+        #[arg(long, value_name = "DEFENSE")]
+        defense: Option<String>,
+        /// Act outside your turn (readied action, DM ruling).
         #[arg(long)]
         force: bool,
     },
@@ -556,6 +599,21 @@ impl From<UntilArg> for crate::content::schema::DurationUntil {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ShoveModeArg {
+    KnockDown,
+    Away,
+}
+
+impl From<ShoveModeArg> for ShoveMode {
+    fn from(value: ShoveModeArg) -> Self {
+        match value {
+            ShoveModeArg::KnockDown => Self::KnockDown,
+            ShoveModeArg::Away => Self::Away,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum PartyCommand {
     /// Print current HP, resources and conditions of every party member.
@@ -730,6 +788,8 @@ fn run_cli() -> Result<()> {
             multi,
             no_reactions,
             nonlethal,
+            unarmed,
+            offhand,
             force,
         } => {
             let path = state_path(&sources, state.as_deref());
@@ -737,6 +797,30 @@ fn run_cli() -> Result<()> {
                 let attacker = canonical_name(state, &attacker)?;
                 check_action_turn(state, &attacker, force, lines)?;
                 let target = canonical_name(state, &target)?;
+                if unarmed {
+                    let options = UnarmedOptions {
+                        advantage: adv,
+                        disadvantage: dis,
+                        no_reactions,
+                        nonlethal,
+                    };
+                    return engine::attack_unarmed(state, &attacker, &target, &options, rng, lines);
+                }
+                let attack = attack.ok_or_else(|| {
+                    anyhow!("attack requires an attack id/name unless --unarmed is used")
+                })?;
+                if offhand {
+                    let options = AttackOptions {
+                        advantage: adv,
+                        disadvantage: dis,
+                        multi: false,
+                        no_reactions,
+                        nonlethal,
+                    };
+                    return engine::attack_offhand_with_options(
+                        state, &attacker, &target, &attack, &options, rng, lines,
+                    );
+                }
                 let options = AttackOptions {
                     advantage: adv,
                     disadvantage: dis,
@@ -745,6 +829,40 @@ fn run_cli() -> Result<()> {
                     nonlethal,
                 };
                 engine::attack(state, &attacker, &target, &attack, &options, rng, lines)
+            })
+        }
+        Command::Grapple {
+            attacker,
+            target,
+            defense,
+            force,
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
+                let attacker = canonical_name(state, &attacker)?;
+                check_action_turn(state, &attacker, force, lines)?;
+                let target = canonical_name(state, &target)?;
+                let options = GrappleOptions { defense };
+                engine::grapple(state, &attacker, &target, &options, rng, lines)
+            })
+        }
+        Command::Shove {
+            attacker,
+            target,
+            mode,
+            defense,
+            force,
+        } => {
+            let path = state_path(&sources, state.as_deref());
+            run_state_command(&path, save.as_deref(), seed, |state, rng, lines| {
+                let attacker = canonical_name(state, &attacker)?;
+                check_action_turn(state, &attacker, force, lines)?;
+                let target = canonical_name(state, &target)?;
+                let options = ShoveOptions {
+                    defense,
+                    mode: mode.into(),
+                };
+                engine::shove(state, &attacker, &target, &options, rng, lines)
             })
         }
         Command::Damage {

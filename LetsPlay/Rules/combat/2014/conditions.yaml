@@ -4,7 +4,7 @@ conditions:
     manual: "2014: 6 levels. 1 disadv. ability checks; 2 speed halved; 3 disadv. attacks & saves; 4 HP max halved; 5 speed 0; 6 death. Track level manually."
   - id: grappled
     flags: [speed_zero]
-    manual: "2014: speed 0 only (no attack penalty). Escape: action, Athletics/Acrobatics contest vs grappler's Athletics."
+    manual: "2014: speed 0 only (no attack penalty). Escape: action, Athletics/Acrobatics contest vs grappler's Athletics. The grappler can drag/carry it (speed halved)."
   - id: incapacitated
     flags: [incapacitated]
     manual: "2014: can't take actions or reactions."

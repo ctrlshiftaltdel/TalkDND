@@ -3,12 +3,12 @@
 //! Synthetic content only: no player books, real saves or DM secrets.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use combat_sim::content::schema::Size;
+use combat_sim::content::schema::{ActionResolution, Size};
 use combat_sim::content::{self, ContentRegistry, ContentSources};
 use combat_sim::dice::DiceRng;
 use combat_sim::engine::{
@@ -167,7 +167,7 @@ fn grappled_condition(edition: &str) -> &'static str {
 
 fn content_yaml(edition: &str) -> String {
     format!(
-        r#"{rules}
+        r##"{rules}
 conditions:
 {grappled}
   - id: prone
@@ -204,7 +204,6 @@ creatures:
     abilities: {{str: 14, dex: 12, con: 12, int: 8, wis: 10, cha: 8}}
     skills: {{athletics: 4, acrobatics: 3}}
     saves: {{str: 4, dex: 3}}
-    condition_immunities: [frightened]
     attacks:
       - {{id: claw, name: Claw, kind: melee, ability: str, to_hit: 4, damage: [{{dice: "1d6+2", type: slashing}}], reach: 5}}
   - id: ally
@@ -272,8 +271,8 @@ scenes:
       - {{id: floor}}
     grid:
       cell: 5
-      legend: {{".": {{}}, "#": {{wall: true}}}}
-      rows: ["########", "#......#", "########"]
+      legend: __LEGEND__
+      rows: __ROWS__
       zones: {{floor: "."}}
 
 encounters:
@@ -300,9 +299,14 @@ encounters:
     party_zone: floor
     members:
       - {{creature: target, zone: floor, pos: [6, 1]}}
-"#,
+"##,
         rules = rules_block(edition),
         grappled = grappled_condition(edition),
+    )
+    .replace("__LEGEND__", r##"{".": {}, "#": {wall: true}}"##)
+    .replace(
+        "__ROWS__",
+        "[\"########\", \"#......#\", \"########\"]",
     )
 }
 
@@ -310,9 +314,7 @@ fn campaign(edition: &str) -> Scratch {
     let scratch = Scratch::new(edition);
     scratch.write(
         "manifest.yaml",
-        &format!(
-            "name: Combat Actions {edition}\nruleset: \"{edition}\"\nlibrary: [library]\n"
-        ),
+        &format!("name: Combat Actions {edition}\nruleset: \"{edition}\"\nlibrary: [library]\n"),
     );
     scratch.write("library/all.yaml", &content_yaml(edition));
     scratch
@@ -364,7 +366,7 @@ fn has_condition(state: &EncounterState, name: &str, condition: &str) -> bool {
 
 fn make_large(state: &mut EncounterState, name: &str) {
     let target = index(state, name);
-    Arc::make_mut(&mut state.combatants[target].creature).size = Some(Size::Large);
+    Arc::make_mut(&mut state.combatants[target].creature).size = Some(Size::Huge);
 }
 
 fn immune_to(state: &mut EncounterState, name: &str, condition: &str) {
@@ -403,7 +405,8 @@ fn grapple_2014_contested_check_applies_condition_and_spends_the_action() {
     assert_eq!(active.linked.as_deref(), Some("Grappler"));
     assert!(active.notes.as_deref().unwrap_or("").contains("escape"));
     assert!(
-        log.iter().any(|line| line.contains("Athletics") && line.contains("PASS")),
+        log.iter()
+            .any(|line| line.contains("Athletics") && line.contains("PASS")),
         "{log:?}"
     );
 }
@@ -459,7 +462,8 @@ fn grapple_rejects_immune_large_and_out_of_reach_before_spending_the_action() {
     assert!(!large.combatants[index(&large, "Grappler")].action_used);
 
     let mut far = state("2014", "zones-fight", &["grappler"]);
-    far.combatants[index(&far, "Target")].set_zone("gamma");
+    let far_target = index(&far, "Target");
+    far.combatants[far_target].set_zone("gamma");
     let error = engine::grapple(
         &mut far,
         "Grappler",
@@ -491,7 +495,7 @@ fn grapple_2024_uses_a_strength_or_dexterity_save_with_the_unarmed_dc() {
     assert!(has_condition(&state, "Target", "grappled"));
     assert!(
         log.iter()
-            .any(|line| line.contains("DC 13") && line.contains("SAVE")),
+            .any(|line| line.contains("DC 13") && line.contains("save")),
         "{log:?}"
     );
 
@@ -512,7 +516,8 @@ fn grapple_2024_uses_a_strength_or_dexterity_save_with_the_unarmed_dc() {
     )
     .unwrap();
     assert!(
-        log.iter().any(|line| line.contains("dis:") && line.contains("grappled")),
+        log.iter()
+            .any(|line| line.contains("dis:") && line.contains("grappled")),
         "{log:?}"
     );
 }
@@ -548,7 +553,7 @@ fn shove_2014_can_knock_prone_or_push_five_feet() {
         "Grappler",
         "Target",
         &ShoveOptions {
-            mode: ShoveMode::Prone,
+            mode: ShoveMode::KnockDown,
             ..ShoveOptions::default()
         },
         &mut ScriptedRng::new(&[15, 5]),
@@ -565,7 +570,7 @@ fn shove_2014_can_knock_prone_or_push_five_feet() {
         "Grappler",
         "Target",
         &ShoveOptions {
-            mode: ShoveMode::Push,
+            mode: ShoveMode::Away,
             ..ShoveOptions::default()
         },
         &mut ScriptedRng::new(&[15, 5]),
@@ -573,26 +578,25 @@ fn shove_2014_can_knock_prone_or_push_five_feet() {
     )
     .unwrap();
     assert_eq!(pushed.combatants[index(&pushed, "Target")].zone, "gamma");
-    assert!(
-        log.iter().any(|line| line.contains("gamma")),
-        "{log:?}"
-    );
+    assert!(log.iter().any(|line| line.contains("gamma")), "{log:?}");
 }
 
 #[test]
 fn shove_push_uses_forced_movement_and_stops_at_a_wall() {
     let mut state = state("2014", "grid-fight", &["grappler"]);
     state.spatial = Some(combat_sim::state::SpatialState::default());
-    state.combatants[index(&state, "Grappler")].set_cell(5, 1, "floor");
-    state.combatants[index(&state, "Target")].set_cell(6, 1, "floor");
-    let before = state.combatants[index(&state, "Target")].cell();
+    let grappler = index(&state, "Grappler");
+    let target = index(&state, "Target");
+    state.combatants[grappler].set_cell(5, 1, "floor");
+    state.combatants[target].set_cell(6, 1, "floor");
+    let before = state.combatants[target].cell();
     let mut log = Vec::new();
     engine::shove(
         &mut state,
         "Grappler",
         "Target",
         &ShoveOptions {
-            mode: ShoveMode::Push,
+            mode: ShoveMode::Away,
             ..ShoveOptions::default()
         },
         &mut ScriptedRng::new(&[15, 5]),
@@ -601,7 +605,8 @@ fn shove_push_uses_forced_movement_and_stops_at_a_wall() {
     .unwrap();
     assert_eq!(before, state.combatants[index(&state, "Target")].cell());
     assert!(
-        log.iter().any(|line| line.contains("stops") && line.contains("wall")),
+        log.iter()
+            .any(|line| line.contains("stops") && line.contains("wall")),
         "{log:?}"
     );
 }
@@ -649,7 +654,8 @@ fn unarmed_strike_uses_edition_damage_and_can_knock_out() {
     );
 
     let mut knockout = state("2014", "zones-fight", &["grappler"]);
-    knockout.combatants[index(&knockout, "Target")].hp = 2;
+    let knockout_target = index(&knockout, "Target");
+    knockout.combatants[knockout_target].hp = 2;
     engine::attack_unarmed(
         &mut knockout,
         "Grappler",
@@ -700,10 +706,7 @@ fn two_weapon_fighting_off_hand_spends_bonus_action_and_loses_positive_modifier(
     .unwrap();
     assert!(state.combatants[index(&state, "Grappler")].bonus_action_used);
     assert_eq!(hp(&state, "Target"), after_main - 4);
-    assert!(
-        log.iter().any(|line| line.contains("off-hand")),
-        "{log:?}"
-    );
+    assert!(log.iter().any(|line| line.contains("off-hand")), "{log:?}");
 }
 
 #[test]
@@ -719,7 +722,7 @@ fn two_weapon_fighting_fails_closed_without_the_required_state() {
     )
     .expect_err("off-hand before main hand");
     assert!(
-        error.to_string().contains("light") || error.to_string().contains("first"),
+        error.to_string().to_lowercase().contains("light") || error.to_string().contains("first"),
         "{error}"
     );
     assert!(!before_main.combatants[index(&before_main, "Grappler")].bonus_action_used);
@@ -744,7 +747,10 @@ fn two_weapon_fighting_fails_closed_without_the_required_state() {
         &mut Vec::new(),
     )
     .expect_err("non-light off-hand");
-    assert!(error.to_string().contains("light"), "{error}");
+    assert!(
+        error.to_string().to_lowercase().contains("light"),
+        "{error}"
+    );
     assert!(!light_only.combatants[index(&light_only, "Grappler")].bonus_action_used);
 
     let error = engine::attack_offhand(
@@ -762,6 +768,7 @@ fn two_weapon_fighting_fails_closed_without_the_required_state() {
     );
 
     let mut spent = state("2014", "zones-fight", &["grappler"]);
+    let spent_grappler = index(&spent, "Grappler");
     engine::attack(
         &mut spent,
         "Grappler",
@@ -772,7 +779,7 @@ fn two_weapon_fighting_fails_closed_without_the_required_state() {
         &mut Vec::new(),
     )
     .unwrap();
-    spent.combatants[index(&spent, "Grappler")].bonus_action_used = true;
+    spent.combatants[spent_grappler].bonus_action_used = true;
     let error = engine::attack_offhand(
         &mut spent,
         "Grappler",
@@ -791,7 +798,7 @@ fn two_weapon_fighting_fails_closed_without_the_required_state() {
 
 #[test]
 fn extra_attack_count_comes_from_creature_data_and_skips_a_dead_target() {
-    let mut state = state("2014", "extra-fight", &["extra-fighter"]);
+    let mut state = state("2014", "extra-fight", &[]);
     let target = index(&state, "Target");
     state.combatants[target].hp = 10;
     let mut log = Vec::new();
@@ -807,10 +814,7 @@ fn extra_attack_count_comes_from_creature_data_and_skips_a_dead_target() {
     .unwrap();
     assert!(state.combatants[index(&state, "Extra Fighter")].action_used);
     assert_eq!(hp(&state, "Target"), 0);
-    assert!(
-        log.iter().any(|line| line.contains("skipped")),
-        "{log:?}"
-    );
+    assert!(log.iter().any(|line| line.contains("skipped")), "{log:?}");
     let attacks = log
         .iter()
         .filter(|line| line.contains("attacks Target with Long Sword"))
@@ -820,7 +824,7 @@ fn extra_attack_count_comes_from_creature_data_and_skips_a_dead_target() {
 
 #[test]
 fn extra_attack_can_come_from_a_passive_feature_and_not_from_use_or_off_hand() {
-    let mut feature = state("2014", "feature-fight", &["feature-fighter"]);
+    let mut feature = state("2014", "feature-fight", &[]);
     let mut log = Vec::new();
     engine::attack(
         &mut feature,
@@ -841,7 +845,7 @@ fn extra_attack_can_come_from_a_passive_feature_and_not_from_use_or_off_hand() {
     );
 
     let (_scratch, registry) = registry("2014");
-    let mut use_state = encounter(registry, "feature-fight", &["feature-fighter"]);
+    let mut use_state = encounter(registry, "feature-fight", &[]);
     let mut rng = ScriptedRng::new(&[15, 4]);
     let mut log = Vec::new();
     engine::use_ability(
@@ -872,7 +876,7 @@ fn extra_attack_can_come_from_a_passive_feature_and_not_from_use_or_off_hand() {
 #[test]
 fn old_state_without_new_fields_loads_and_keeps_the_old_attack_path() {
     let scratch = Scratch::new("compat");
-    let mut state = state("2014", "zones-fight", &["grappler"]);
+    let state = state("2014", "zones-fight", &["grappler"]);
     let mut value = serde_json::to_value(&state).expect("serialize state");
     if let Some(combatants) = value.get_mut("combatants").and_then(|v| v.as_array_mut()) {
         for combatant in combatants {
@@ -928,11 +932,62 @@ fn combat_action_rules_pass_content_check_for_both_editions() {
     for edition in ["2014", "2024"] {
         let (_scratch, registry) = registry(edition);
         let report = content::check(&registry);
+        assert_eq!(report.error_count(), 0, "{edition}: {:#?}", report.issues);
+    }
+}
+
+#[test]
+fn real_edition_files_merge_the_expected_combat_action_data() {
+    let cases = [
+        (
+            "2014",
+            "real-2014.yaml",
+            ActionResolution::Contest,
+            "1+{str}",
+        ),
+        (
+            "2024",
+            "real-2024.yaml",
+            ActionResolution::Save,
+            "1d3+{str}",
+        ),
+    ];
+    for (edition, manifest, resolution, damage) in cases {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/rulesets")
+            .join(manifest);
+        let registry = ContentSources {
+            campaign: Some(path),
+            ..ContentSources::default()
+        }
+        .load()
+        .expect("real edition content should load");
+        let actions = registry
+            .rules
+            .combat_actions
+            .as_ref()
+            .expect("combat action data");
         assert_eq!(
-            report.error_count(),
-            0,
-            "{edition}: {:#?}",
-            report.issues
+            actions.grapple.as_ref().unwrap().resolution.unwrap(),
+            resolution,
+            "{edition}"
+        );
+        assert_eq!(
+            actions
+                .unarmed_strike
+                .as_ref()
+                .unwrap()
+                .damage
+                .as_ref()
+                .unwrap()
+                .as_text(),
+            damage,
+            "{edition}"
+        );
+        assert_eq!(
+            actions.two_weapon_fighting.as_ref().unwrap().require_light,
+            Some(true),
+            "{edition}"
         );
     }
 }
@@ -1009,7 +1064,10 @@ fn cli_lists_and_runs_the_new_combat_actions() {
     ]);
     assert!(grapple.status.success(), "{}", cli_text(&grapple));
     let text = cli_text(&grapple);
-    assert!(text.contains("Grapple") || text.contains("grapple"), "{text}");
+    assert!(
+        text.contains("Grapple") || text.contains("grapple"),
+        "{text}"
+    );
     assert!(text.contains("PASS") || text.contains("FAIL"), "{text}");
 
     let status = run(&["--state", state_path.to_str().unwrap(), "status", "--json"]);

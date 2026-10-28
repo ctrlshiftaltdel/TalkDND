@@ -13,12 +13,13 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::content::expr::ExprContext;
 use crate::content::schema::{
-    Ability, AbilityCost, AbilityEntry, AbilityName, Activation, Attack, AttackEffect, AttackKind,
-    AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag, Cover, CritMode,
-    DamageEffect, DamagePart, Direction, Duration, DurationUntil, Effect, EndsOn, ExprValue,
-    ForcedMoveEffect, Light, Modifier, ModifierApplies, ModifierEffect, ModifierFilter, OncePer,
-    Predicate, Recharge, SaveEffect, SaveEndsAt, SceneMode, Size, TargetRef, TargetSide,
-    TargetType, ToggleTriggerEffect, Trigger, TriggerWhen,
+    Ability, AbilityCost, AbilityEntry, AbilityName, ActionResolution, Activation, Attack,
+    AttackEffect, AttackKind, AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag,
+    Cover, CritMode, DamageEffect, DamagePart, DamageType, Direction, Duration, DurationUntil,
+    Effect, EndsOn, ExprValue, ForcedMoveEffect, GrappleRule, Light, Modifier, ModifierApplies,
+    ModifierEffect, ModifierFilter, OncePer, Predicate, Recharge, SaveEffect, SaveEndsAt,
+    SceneMode, ShoveRule, Size, TargetRef, TargetSide, TargetType, ToggleTriggerEffect, Trigger,
+    TriggerWhen, TwoWeaponRule, UnarmedStrikeRule,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
@@ -82,6 +83,39 @@ pub struct AttackOptions {
     pub no_reactions: bool,
     /// Knock the target out instead of killing it if this melee attack drops it to 0 HP.
     pub nonlethal: bool,
+}
+
+/// Unarmed Strike options (the attack itself, not the 2024 grapple/shove
+/// replacements).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnarmedOptions {
+    pub advantage: bool,
+    pub disadvantage: bool,
+    pub no_reactions: bool,
+    pub nonlethal: bool,
+}
+
+/// Which outcome a successful shove chooses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShoveMode {
+    #[default]
+    KnockDown,
+    Away,
+}
+
+/// Grapple options. `defense` is the target's chosen defense: an Athletics or
+/// Acrobatics skill in 2014, or `str` / `dex` in 2024. `None` lets the target
+/// use its best legal defense and is logged.
+#[derive(Debug, Clone, Default)]
+pub struct GrappleOptions {
+    pub defense: Option<String>,
+}
+
+/// Shove options. `defense` follows [`GrappleOptions`].
+#[derive(Debug, Clone, Default)]
+pub struct ShoveOptions {
+    pub defense: Option<String>,
+    pub mode: ShoveMode,
 }
 
 /// Ability/use command options.
@@ -1663,6 +1697,9 @@ struct AttackProfile {
     mastery: Option<String>,
     reroll_damage_below: Option<u32>,
     damage_die_min: Option<u32>,
+    /// Flat adjustment applied once to the first damage part (off-hand
+    /// attacks remove a positive ability modifier).
+    damage_modifier: i32,
     on_hit: Vec<Effect>,
     on_miss: Vec<Effect>,
     tags: Vec<String>,
@@ -1683,6 +1720,7 @@ impl AttackProfile {
             mastery: attack.mastery.clone(),
             reroll_damage_below: attack.reroll_damage_below,
             damage_die_min: attack.damage_die_min,
+            damage_modifier: 0,
             on_hit: attack.on_hit.clone(),
             on_miss: Vec::new(),
             tags: Vec::new(),
@@ -1708,6 +1746,7 @@ impl AttackProfile {
             mastery: effect.mastery.clone(),
             reroll_damage_below: None,
             damage_die_min: None,
+            damage_modifier: 0,
             on_hit: effect.on_hit.clone(),
             on_miss: effect.on_miss.clone(),
             tags: source.tags.clone(),
@@ -2684,17 +2723,65 @@ pub fn attack_at(
         return Ok(());
     }
 
+    let profile = state.combatants[attacker_index]
+        .find_attack(attack_name)
+        .ok()
+        .map(AttackProfile::from_attack);
     spend_action(state, attacker_index, Activation::Action, log)?;
-    resolve_named_entry(
-        state,
-        attacker_index,
-        target_index,
-        attack_name,
-        options,
-        true,
-        rng,
-        log,
-    )?;
+    if let Some(profile) = profile {
+        let used_in_melee = profile.kind == AttackKind::Melee
+            || (profile.kind == AttackKind::MeleeOrRanged
+                && ensure_melee_reachable(state, attacker_index, target_index, profile.reach)
+                    .is_ok());
+        if is_light_melee(&profile) && used_in_melee {
+            state.combatants[attacker_index].once_used.insert(
+                format!("turn:combat-actions:light-main:{}", profile.id),
+                state.round,
+            );
+        }
+        let attacks = 1 + extra_attack_count(state, attacker_index);
+        if attacks > 1 {
+            log.log(format_args!(
+                "{}'s Extra Attack: {attacks} attacks with {}",
+                state.combatants[attacker_index].name, profile.name
+            ));
+        }
+        for attack_number in 1..=attacks {
+            if state.combatants[target_index].is_dead() {
+                log.log(format_args!(
+                    "{} is already down; remaining attacks are skipped",
+                    state.combatants[target_index].name
+                ));
+                break;
+            }
+            if attacks > 1 {
+                log.log(format_args!("attack {attack_number}/{attacks}"));
+            }
+            resolve_attack(
+                state,
+                attacker_index,
+                target_index,
+                &profile,
+                None,
+                options,
+                rng,
+                log,
+                true,
+                false,
+            )?;
+        }
+    } else {
+        resolve_named_entry(
+            state,
+            attacker_index,
+            target_index,
+            attack_name,
+            options,
+            true,
+            rng,
+            log,
+        )?;
+    }
     log_outcome(state, log);
     Ok(())
 }
@@ -2780,6 +2867,896 @@ fn spend_reaction(state: &mut EncounterState, index: usize, _log: &mut dyn LogSi
         bail!("`{}` cannot use reactions", state.combatants[index].name);
     }
     state.combatants[index].reaction_round = Some(state.round);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Core combat actions: grapple, shove, unarmed strike, two-weapon fighting
+// ---------------------------------------------------------------------------
+
+fn unarmed_rule(state: &EncounterState) -> Result<&UnarmedStrikeRule> {
+    state
+        .content
+        .rules
+        .combat_actions
+        .as_ref()
+        .and_then(|actions| actions.unarmed_strike.as_ref())
+        .ok_or_else(|| {
+            anyhow!(
+                "this ruleset has no `combat_actions.unarmed_strike` data; load the edition rules and run `content check`"
+            )
+        })
+}
+
+fn grapple_rule(state: &EncounterState) -> Result<&GrappleRule> {
+    state
+        .content
+        .rules
+        .combat_actions
+        .as_ref()
+        .and_then(|actions| actions.grapple.as_ref())
+        .ok_or_else(|| {
+            anyhow!(
+                "this ruleset has no `combat_actions.grapple` data; load the edition rules and run `content check`"
+            )
+        })
+}
+
+fn shove_rule(state: &EncounterState) -> Result<&ShoveRule> {
+    state
+        .content
+        .rules
+        .combat_actions
+        .as_ref()
+        .and_then(|actions| actions.shove.as_ref())
+        .ok_or_else(|| {
+            anyhow!(
+                "this ruleset has no `combat_actions.shove` data; load the edition rules and run `content check`"
+            )
+        })
+}
+
+fn two_weapon_rule(state: &EncounterState) -> Result<&TwoWeaponRule> {
+    state
+        .content
+        .rules
+        .combat_actions
+        .as_ref()
+        .and_then(|actions| actions.two_weapon_fighting.as_ref())
+        .ok_or_else(|| {
+            anyhow!(
+                "this ruleset has no `combat_actions.two_weapon_fighting` data; load the edition rules and run `content check`"
+            )
+        })
+}
+
+fn extra_attack_count(state: &EncounterState, index: usize) -> u32 {
+    let combatant = &state.combatants[index];
+    let mut extra = combatant.creature.extra_attacks.unwrap_or(0);
+    for entry in combatant.creature.features.iter().flatten() {
+        let ability = match entry {
+            AbilityEntry::Inline(ability) => ability.as_ref(),
+            AbilityEntry::Ref(reference) => {
+                let Some(ability) = state.content.abilities.get(&reference.reference) else {
+                    continue;
+                };
+                ability
+            }
+        };
+        if ability.activation == Activation::Passive {
+            if let Some(value) = ability.extra_attacks {
+                extra = extra.max(value);
+            }
+        }
+    }
+    extra
+}
+
+fn is_light_melee(profile: &AttackProfile) -> bool {
+    matches!(profile.kind, AttackKind::Melee | AttackKind::MeleeOrRanged)
+        && profile.properties.contains(&AttackProperty::Light)
+}
+
+fn skill_label(skill: &str) -> String {
+    let mut chars = skill.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn ensure_action_size(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+    max_size_difference: Option<i32>,
+) -> Result<()> {
+    let maximum = u8::try_from(max_size_difference.unwrap_or(1).max(0)).unwrap_or(u8::MAX);
+    let allowed = size_rank(state.combatants[attacker].creature.size()).saturating_add(maximum);
+    let actual = size_rank(state.combatants[target].creature.size());
+    if actual > allowed {
+        bail!(
+            "`{}` is too large to affect: target size {:?}, attacker size {:?} (at most {} size larger)",
+            state.combatants[target].name,
+            state.combatants[target].creature.size(),
+            state.combatants[attacker].creature.size(),
+            maximum
+        );
+    }
+    Ok(())
+}
+
+fn ensure_melee_reachable(
+    state: &EncounterState,
+    attacker: usize,
+    target: usize,
+    reach: i32,
+) -> Result<()> {
+    let space = state
+        .space()
+        .ok_or_else(|| anyhow!("this state has no scene"))?;
+    let from = state.combatants[attacker].position_ref();
+    let to = state.combatants[target].position_ref();
+    let (from, to) = (from.as_ref(), to.as_ref());
+    let spatial = spatial_query_enabled(state);
+    let in_reach = if spatial {
+        spatial_can_reach(state, attacker, target, reach)
+            .unwrap_or_else(|| space.can_reach(from, to, reach))
+    } else {
+        space.can_reach(from, to, reach)
+    };
+    if !in_reach {
+        let distance = if spatial {
+            spatial_body_distance(state, attacker, target)
+        } else {
+            space.distance(from, to)
+        }
+        .unwrap_or(0);
+        bail!(
+            "`{}` is out of reach ({distance} ft; reach {reach})",
+            state.combatants[target].name
+        );
+    }
+    if spatial {
+        ensure_spatial_line_of_sight(state, attacker, target)?;
+    }
+    Ok(())
+}
+
+fn choose_contest_defense(
+    state: &EncounterState,
+    target: usize,
+    skills: &[String],
+    requested: Option<&str>,
+    log: &mut dyn LogSink,
+) -> Result<String> {
+    if skills.is_empty() {
+        bail!("grapple/shove contest has no defender skill");
+    }
+    let chosen = if let Some(requested) = requested {
+        let requested = requested.trim();
+        skills
+            .iter()
+            .find(|skill| skill.eq_ignore_ascii_case(requested))
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "`{requested}` is not a legal defense; choose one of {}",
+                    skills.join(", ")
+                )
+            })?
+    } else {
+        let mut best = skills[0].clone();
+        let mut best_bonus = state.combatants[target].skill_bonus(&best);
+        for skill in &skills[1..] {
+            let bonus = state.combatants[target].skill_bonus(skill);
+            if bonus > best_bonus {
+                best = skill.clone();
+                best_bonus = bonus;
+            }
+        }
+        log.log(format_args!(
+            "{} chooses {} ({best_bonus:+}) to defend",
+            state.combatants[target].name,
+            skill_label(&best)
+        ));
+        best
+    };
+    Ok(chosen)
+}
+
+fn choose_save_ability(
+    state: &EncounterState,
+    target: usize,
+    abilities: &[AbilityName],
+    requested: Option<&str>,
+    log: &mut dyn LogSink,
+) -> Result<AbilityName> {
+    if abilities.is_empty() {
+        bail!("grapple/shove save has no legal ability");
+    }
+    let chosen = if let Some(requested) = requested {
+        let requested = ability_from_text(requested).ok_or_else(|| {
+            anyhow!(
+                "`{requested}` is not a legal save ability; choose one of {}",
+                abilities
+                    .iter()
+                    .map(|ability| ability.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+        if !abilities.contains(&requested) {
+            bail!(
+                "`{}` is not a legal save ability; choose one of {}",
+                requested.as_str(),
+                abilities
+                    .iter()
+                    .map(|ability| ability.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        requested
+    } else {
+        let mut best = abilities[0];
+        let mut best_bonus = state.combatants[target].save_bonus(best);
+        for ability in &abilities[1..] {
+            let bonus = state.combatants[target].save_bonus(*ability);
+            if bonus > best_bonus {
+                best = *ability;
+                best_bonus = bonus;
+            }
+        }
+        log.log(format_args!(
+            "{} chooses a {} save ({best_bonus:+}) to defend",
+            state.combatants[target].name,
+            best.as_str().to_uppercase()
+        ));
+        best
+    };
+    Ok(chosen)
+}
+
+fn resolve_action_contest(
+    state: &mut EncounterState,
+    attacker: usize,
+    target: usize,
+    attacker_skill: Option<&str>,
+    defender_skills: Option<&[String]>,
+    requested: Option<&str>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<bool> {
+    let attacker_skill = attacker_skill.ok_or_else(|| {
+        anyhow!("combat action contest is missing `attacker_skill`; run `content check`")
+    })?;
+    let defender_skills = defender_skills.ok_or_else(|| {
+        anyhow!("combat action contest is missing `defender_skills`; run `content check`")
+    })?;
+    let attacker_base = state.combatants[attacker].skill_bonus(attacker_skill);
+    let (mode, advantages, disadvantages) = check_modifiers(state, attacker, None, attacker_skill);
+    let attacker_roll = roll_d20(
+        state,
+        attacker,
+        attacker_base,
+        mode,
+        Vec::new(),
+        advantages,
+        disadvantages,
+        rng,
+    );
+    let defense = choose_contest_defense(state, target, defender_skills, requested, log)?;
+    let target_base = state.combatants[target].skill_bonus(&defense);
+    let (mode, advantages, disadvantages) = check_modifiers(state, target, None, &defense);
+    let target_roll = roll_d20(
+        state,
+        target,
+        target_base,
+        mode,
+        Vec::new(),
+        advantages,
+        disadvantages,
+        rng,
+    );
+    let success = attacker_roll.total > target_roll.total;
+    log.log(format_args!(
+        "{} {} contest: {} vs {} {} contest: {} — {} (defender wins ties)",
+        state.combatants[attacker].name,
+        skill_label(attacker_skill),
+        attacker_roll.text(),
+        state.combatants[target].name,
+        skill_label(&defense),
+        target_roll.text(),
+        if success { "PASS" } else { "FAIL" }
+    ));
+    Ok(success)
+}
+
+fn action_dc(
+    state: &EncounterState,
+    attacker: usize,
+    value: Option<&ExprValue>,
+) -> Result<(i32, String)> {
+    let value =
+        value.ok_or_else(|| anyhow!("combat action save is missing `dc`; run `content check`"))?;
+    let context = score_context(&state.combatants[attacker]);
+    let (formula, expression) = evaluate_value(&context, value)?;
+    if !expression.terms.is_empty() {
+        bail!("combat action DC `{formula}` must be a flat number");
+    }
+    Ok((expression.modifier, formula))
+}
+
+fn resolve_action_save(
+    state: &mut EncounterState,
+    attacker: usize,
+    target: usize,
+    save_abilities: Option<&[AbilityName]>,
+    dc: Option<&ExprValue>,
+    requested: Option<&str>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<bool> {
+    let save_abilities = save_abilities.ok_or_else(|| {
+        anyhow!("combat action save is missing `save_abilities`; run `content check`")
+    })?;
+    let (dc, formula) = action_dc(state, attacker, dc)?;
+    let ability = choose_save_ability(state, target, save_abilities, requested, log)?;
+    let (mode, bonuses, advantages, disadvantages, auto_fail) = save_modifiers(
+        state,
+        target,
+        ability,
+        &score_context(&state.combatants[target]),
+        rng,
+    )?;
+    if auto_fail {
+        log.log(format_args!(
+            "{} automatically fails the {} save (DC {dc})",
+            state.combatants[target].name,
+            ability.as_str().to_uppercase()
+        ));
+        return Ok(false);
+    }
+    let base = state.combatants[target].save_bonus(ability);
+    let result = roll_d20(
+        state,
+        target,
+        base,
+        mode,
+        bonuses,
+        advantages,
+        disadvantages,
+        rng,
+    );
+    let success = result.total >= dc;
+    log.log(format_args!(
+        "{} {} save: {} vs DC {dc} ({formula}) {}",
+        state.combatants[target].name,
+        ability.as_str().to_uppercase(),
+        result.text(),
+        if success { "PASS" } else { "FAIL" }
+    ));
+    Ok(success)
+}
+
+fn action_condition_notes(state: &EncounterState, attacker: usize, dc: Option<i32>) -> String {
+    match dc {
+        Some(dc) => format!("escape DC {dc}: action, Athletics or Acrobatics check"),
+        None => {
+            let bonus = state.combatants[attacker].skill_bonus("athletics");
+            format!("escape: action, Athletics or Acrobatics contest vs Athletics {bonus:+}")
+        }
+    }
+}
+
+fn apply_action_condition(
+    state: &mut EncounterState,
+    target: usize,
+    condition: &str,
+    source: usize,
+    linked: bool,
+    notes: String,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let source_name = state.combatants[source].name.clone();
+    let duration = Duration {
+        rounds: None,
+        until: None,
+        minutes: None,
+        permanent: Some(true),
+        ends_on: Vec::new(),
+    };
+    apply_condition_internal(
+        state,
+        target,
+        condition,
+        Some(source),
+        linked.then(|| source_name.clone()),
+        Some(duration),
+        None,
+        None,
+        Vec::new(),
+        Some("combat-actions".to_string()),
+        false,
+        rng,
+        log,
+    )?;
+    if let Some(active) = state.combatants[target]
+        .conditions
+        .iter_mut()
+        .find(|active| active.condition.eq_ignore_ascii_case(condition))
+    {
+        active.notes = Some(notes);
+    }
+    Ok(())
+}
+
+/// The 2014/2024 grapple action.
+pub fn grapple(
+    state: &mut EncounterState,
+    attacker_name: &str,
+    target_name: &str,
+    options: &GrappleOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let attacker = state
+        .find_index(attacker_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let target = state
+        .find_index(target_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    ensure_can_act(state, attacker)?;
+    ensure_targetable(state, target)?;
+    if attacker == target {
+        bail!("a creature cannot grapple itself");
+    }
+    if !hostile_to(state, attacker, target) {
+        bail!(
+            "`{}` is not hostile to `{}`",
+            state.combatants[target].name,
+            state.combatants[attacker].name
+        );
+    }
+    let rule = grapple_rule(state)?.clone();
+    let condition = rule.condition.clone().ok_or_else(|| {
+        anyhow!("`combat_actions.grapple.condition` is missing; run `content check`")
+    })?;
+    let target_label = state.combatants[target].name.clone();
+    if state.combatants[target].has_condition(&state.content, &condition) {
+        bail!("`{target_label}` is already {condition}");
+    }
+    if state.combatants[target].is_immune_to_condition(&condition) {
+        bail!("`{target_label}` is immune to `{condition}`");
+    }
+    ensure_action_size(state, attacker, target, rule.max_size_difference)?;
+    let reach = unarmed_rule(state)?.reach.unwrap_or(5);
+    ensure_melee_reachable(state, attacker, target, reach)?;
+
+    let resolution = rule.resolution.unwrap_or_default();
+    let (success, dc) = match resolution {
+        ActionResolution::Contest => {
+            spend_action(state, attacker, Activation::Action, log)?;
+            let success = resolve_action_contest(
+                state,
+                attacker,
+                target,
+                rule.attacker_skill.as_deref(),
+                rule.defender_skills.as_deref(),
+                options.defense.as_deref(),
+                rng,
+                log,
+            )?;
+            (success, None)
+        }
+        ActionResolution::Save => {
+            let (dc, _) = action_dc(state, attacker, rule.dc.as_ref())?;
+            spend_action(state, attacker, Activation::Action, log)?;
+            let success = resolve_action_save(
+                state,
+                attacker,
+                target,
+                rule.save_abilities.as_deref(),
+                rule.dc.as_ref(),
+                options.defense.as_deref(),
+                rng,
+                log,
+            )?;
+            (success, Some(dc))
+        }
+    };
+
+    let attacker_label = state.combatants[attacker].name.clone();
+    if success {
+        let notes = action_condition_notes(state, attacker, dc);
+        apply_action_condition(
+            state,
+            target,
+            &condition,
+            attacker,
+            true,
+            notes.clone(),
+            rng,
+            log,
+        )?;
+        log.log(format_args!(
+            "{attacker_label} grapples {target_label}; {target_label} is {condition} ({notes})"
+        ));
+    } else {
+        log.log(format_args!(
+            "{attacker_label} fails to grapple {target_label}; no condition applied"
+        ));
+    }
+    log_outcome(state, log);
+    Ok(())
+}
+
+/// The 2014/2024 shove action.
+pub fn shove(
+    state: &mut EncounterState,
+    attacker_name: &str,
+    target_name: &str,
+    options: &ShoveOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let attacker = state
+        .find_index(attacker_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let target = state
+        .find_index(target_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    ensure_can_act(state, attacker)?;
+    ensure_targetable(state, target)?;
+    if attacker == target {
+        bail!("a creature cannot shove itself");
+    }
+    if !hostile_to(state, attacker, target) {
+        bail!(
+            "`{}` is not hostile to `{}`",
+            state.combatants[target].name,
+            state.combatants[attacker].name
+        );
+    }
+    let rule = shove_rule(state)?.clone();
+    let prone_condition = rule.prone_condition.clone().ok_or_else(|| {
+        anyhow!("`combat_actions.shove.prone_condition` is missing; run `content check`")
+    })?;
+    let target_label = state.combatants[target].name.clone();
+    if options.mode == ShoveMode::KnockDown {
+        if state.combatants[target].has_condition(&state.content, &prone_condition) {
+            bail!("`{target_label}` is already {prone_condition}");
+        }
+        if state.combatants[target].is_immune_to_condition(&prone_condition) {
+            bail!("`{target_label}` is immune to `{prone_condition}`");
+        }
+    }
+    ensure_action_size(state, attacker, target, rule.max_size_difference)?;
+    let reach = unarmed_rule(state)?.reach.unwrap_or(5);
+    ensure_melee_reachable(state, attacker, target, reach)?;
+
+    let resolution = rule.resolution.unwrap_or_default();
+    let (success, _dc) = match resolution {
+        ActionResolution::Contest => {
+            spend_action(state, attacker, Activation::Action, log)?;
+            let success = resolve_action_contest(
+                state,
+                attacker,
+                target,
+                rule.attacker_skill.as_deref(),
+                rule.defender_skills.as_deref(),
+                options.defense.as_deref(),
+                rng,
+                log,
+            )?;
+            (success, None)
+        }
+        ActionResolution::Save => {
+            let (dc, _) = action_dc(state, attacker, rule.dc.as_ref())?;
+            spend_action(state, attacker, Activation::Action, log)?;
+            let success = resolve_action_save(
+                state,
+                attacker,
+                target,
+                rule.save_abilities.as_deref(),
+                rule.dc.as_ref(),
+                options.defense.as_deref(),
+                rng,
+                log,
+            )?;
+            (success, Some(dc))
+        }
+    };
+
+    let attacker_label = state.combatants[attacker].name.clone();
+    if !success {
+        log.log(format_args!(
+            "{attacker_label} fails to shove {target_label}; no effect"
+        ));
+        log_outcome(state, log);
+        return Ok(());
+    }
+
+    match options.mode {
+        ShoveMode::KnockDown => {
+            let notes = format!("shoved down by {attacker_label}");
+            apply_action_condition(
+                state,
+                target,
+                &prone_condition,
+                attacker,
+                false,
+                notes.clone(),
+                rng,
+                log,
+            )?;
+            log.log(format_args!(
+                "{attacker_label} shoves {target_label} down: {target_label} is {prone_condition} ({notes})"
+            ));
+        }
+        ShoveMode::Away => {
+            let distance = rule.distance.ok_or_else(|| {
+                anyhow!("combat action shove is missing `distance`; run `content check`")
+            })?;
+            let before = state.combatants[target].position();
+            let context = EffectContext {
+                actor: attacker,
+                target: Some(target),
+                source: None,
+                attack: None,
+                option: None,
+                crit: false,
+                damage_dealt: 0,
+                damage_scale: 1.0,
+                has_advantage: false,
+                has_disadvantage: false,
+            };
+            apply_forced_move(
+                state,
+                &context,
+                &ForcedMoveEffect {
+                    distance,
+                    direction: Direction::Away,
+                    max_size: None,
+                },
+                rng,
+                log,
+            )?;
+            let after = state.combatants[target].position();
+            if before == after {
+                log.log(format_args!(
+                    "{target_label} cannot be pushed further (blocked by a wall, occupied space or the scene boundary)"
+                ));
+            } else {
+                log.log(format_args!(
+                    "{attacker_label} pushes {target_label} {distance} ft away"
+                ));
+            }
+        }
+    }
+    log_outcome(state, log);
+    Ok(())
+}
+
+fn unarmed_profile(state: &EncounterState, attacker: usize) -> Result<AttackProfile> {
+    let rule = unarmed_rule(state)?.clone();
+    let ability = rule.ability.unwrap_or(AbilityName::Str);
+    let proficient = rule.proficient.unwrap_or(true);
+    let modifier = state.combatants[attacker]
+        .creature
+        .ability_modifier(ability);
+    let to_hit = modifier
+        + if proficient {
+            state.combatants[attacker].creature.proficiency_bonus()
+        } else {
+            0
+        };
+    let damage = rule.damage.ok_or_else(|| {
+        anyhow!("`combat_actions.unarmed_strike.damage` is missing; run `content check`")
+    })?;
+    Ok(AttackProfile {
+        id: "unarmed-strike".to_string(),
+        name: "Unarmed Strike".to_string(),
+        kind: AttackKind::Melee,
+        ability: Some(ability),
+        to_hit: ExprValue::Number(i64::from(to_hit)),
+        damage: vec![DamagePart {
+            dice: damage,
+            damage_type: rule
+                .damage_type
+                .unwrap_or_else(|| DamageType("bludgeoning".to_string())),
+        }],
+        reach: rule.reach.unwrap_or(5),
+        range: None,
+        properties: Vec::new(),
+        mastery: None,
+        reroll_damage_below: None,
+        damage_die_min: None,
+        damage_modifier: 0,
+        on_hit: Vec::new(),
+        on_miss: Vec::new(),
+        tags: Vec::new(),
+    })
+}
+
+/// The Unarmed Strike attack action (both editions).
+pub fn attack_unarmed(
+    state: &mut EncounterState,
+    attacker_name: &str,
+    target_name: &str,
+    options: &UnarmedOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let attacker = state
+        .find_index(attacker_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let target = state
+        .find_index(target_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    ensure_can_act(state, attacker)?;
+    ensure_targetable(state, target)?;
+    if attacker == target {
+        bail!("a creature cannot attack itself");
+    }
+    if !hostile_to(state, attacker, target) {
+        bail!(
+            "`{}` is not hostile to `{}`",
+            state.combatants[target].name,
+            state.combatants[attacker].name
+        );
+    }
+    let profile = unarmed_profile(state, attacker)?;
+    ensure_melee_reachable(state, attacker, target, profile.reach)?;
+    spend_action(state, attacker, Activation::Action, log)?;
+
+    let attacks = 1 + extra_attack_count(state, attacker);
+    if attacks > 1 {
+        log.log(format_args!(
+            "{}'s Extra Attack: {attacks} Unarmed Strikes",
+            state.combatants[attacker].name
+        ));
+    }
+    let attack_options = AttackOptions {
+        advantage: options.advantage,
+        disadvantage: options.disadvantage,
+        multi: false,
+        no_reactions: options.no_reactions,
+        nonlethal: options.nonlethal,
+    };
+    for attack_number in 1..=attacks {
+        if state.combatants[target].is_dead() {
+            log.log(format_args!(
+                "{} is already down; remaining attacks are skipped",
+                state.combatants[target].name
+            ));
+            break;
+        }
+        if attacks > 1 {
+            log.log(format_args!("attack {attack_number}/{attacks}"));
+        }
+        resolve_attack(
+            state,
+            attacker,
+            target,
+            &profile,
+            None,
+            &attack_options,
+            rng,
+            log,
+            true,
+            false,
+        )?;
+    }
+    log_outcome(state, log);
+    Ok(())
+}
+
+/// The Two-Weapon Fighting bonus-action attack.
+pub fn attack_offhand(
+    state: &mut EncounterState,
+    attacker_name: &str,
+    target_name: &str,
+    attack_name: &str,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    attack_offhand_with_options(
+        state,
+        attacker_name,
+        target_name,
+        attack_name,
+        &AttackOptions::default(),
+        rng,
+        log,
+    )
+}
+
+/// [`attack_offhand`] with explicit attack options (advantage, non-lethal).
+pub fn attack_offhand_with_options(
+    state: &mut EncounterState,
+    attacker_name: &str,
+    target_name: &str,
+    attack_name: &str,
+    options: &AttackOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let attacker = state
+        .find_index(attacker_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let target = state
+        .find_index(target_name)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    ensure_can_act(state, attacker)?;
+    ensure_targetable(state, target)?;
+    if attacker == target {
+        bail!("a creature cannot attack itself");
+    }
+    if !hostile_to(state, attacker, target) {
+        bail!(
+            "`{}` is not hostile to `{}`",
+            state.combatants[target].name,
+            state.combatants[attacker].name
+        );
+    }
+    let attack = state.combatants[attacker]
+        .find_attack(attack_name)
+        .with_context(|| {
+            format!(
+                "`{}` cannot attack with `{attack_name}`",
+                state.combatants[attacker].name
+            )
+        })?
+        .clone();
+    let mut profile = AttackProfile::from_attack(&attack);
+    if !matches!(profile.kind, AttackKind::Melee | AttackKind::MeleeOrRanged) {
+        bail!("off-hand attack `{}` must be a melee weapon", profile.name);
+    }
+    let rule = two_weapon_rule(state)?.clone();
+    if rule.require_light.unwrap_or(true) && !profile.properties.contains(&AttackProperty::Light) {
+        bail!("off-hand attack `{}` is not a Light weapon", profile.name);
+    }
+    if state.combatants[attacker].bonus_action_used {
+        bail!(
+            "`{}` has already used a bonus action this turn",
+            state.combatants[attacker].name
+        );
+    }
+    let marker = "turn:combat-actions:light-main:";
+    let main_hand = state.combatants[attacker]
+        .once_used
+        .iter()
+        .find(|(key, round)| key.starts_with(marker) && **round == state.round)
+        .map(|(key, _)| key[marker.len()..].to_string());
+    let Some(main_hand) = main_hand else {
+        bail!(
+            "`{}` must first attack with a Light melee weapon using the Attack action before an off-hand attack",
+            state.combatants[attacker].name
+        );
+    };
+    if main_hand.eq_ignore_ascii_case(&profile.id) {
+        bail!(
+            "off-hand attack needs a different Light melee weapon; `{}` was already used in the main hand",
+            profile.name
+        );
+    }
+    ensure_melee_reachable(state, attacker, target, profile.reach)?;
+    spend_action(state, attacker, Activation::Bonus, log)?;
+    log.log(format_args!(
+        "{} uses a bonus action for an off-hand attack with {}",
+        state.combatants[attacker].name, profile.name
+    ));
+    let modifier = profile.attack_modifier(&state.combatants[attacker]);
+    if modifier > 0 && !rule.add_positive_ability_modifier.unwrap_or(false) {
+        profile.damage_modifier = -modifier;
+    }
+    resolve_attack(
+        state, attacker, target, &profile, None, options, rng, log, true, false,
+    )?;
+    log_outcome(state, log);
     Ok(())
 }
 
@@ -3610,6 +4587,18 @@ fn apply_attack_damage_parts(
         };
         rolls.push((record, part.damage_type.as_str().to_string()));
     }
+    if let Some(attack) = context.attack.as_ref() {
+        if attack.damage_modifier != 0 {
+            if let Some((record, _)) = rolls.first_mut() {
+                record.total += attack.damage_modifier;
+                if log.enabled() {
+                    record
+                        .text
+                        .push_str(&format!(" off-hand {:+}", attack.damage_modifier));
+                }
+            }
+        }
+    }
     if let Some(first) = parts.first() {
         if context.source.is_some() || has_modifier_sources(state, context.actor) {
             if let Some(bonus) = damage_roll_bonus(
@@ -4173,6 +5162,7 @@ impl AttackProfile {
                 mastery: self.mastery,
             })],
             triggers: Vec::new(),
+            extra_attacks: None,
             modifiers: Vec::new(),
             ai: None,
             manual: None,
