@@ -1326,10 +1326,16 @@ impl<'a> Walker<'a> {
     }
 
     /// Checks the optional `spell` metadata block against the fields it must
-    /// agree with. Abilities without the block are not touched: legacy content
-    /// keeps its exact behaviour and produces no new issues.
+    /// agree with. Abilities without the block are not touched beyond one
+    /// warning for legacy `spell` tags: old content stays runnable.
     fn spell_meta(&mut self, ability: &Ability) {
         let Some(spell) = &ability.spell else {
+            if ability.tags.iter().any(|tag| tag == "spell") {
+                self.warning(format!(
+                    "ability `{}` has a `spell` tag but no `spell` metadata; legacy content keeps working, fill the metadata when the data is next touched",
+                    ability.id
+                ));
+            }
             return;
         };
         let id = &ability.id;
@@ -1366,6 +1372,29 @@ impl<'a> Walker<'a> {
             if (material.cost_gp.is_some() || material.consumed) && material.text.is_empty() {
                 self.error(format!(
                     "ability `{id}` has a material component with cost or consumption but no text describing it"
+                ));
+            }
+        }
+        if let Some(scaling) = &spell.cantrip_scaling {
+            for key in scaling.dice_by_character_level.keys() {
+                if *key == 0 {
+                    self.error(format!(
+                        "ability `{id}` cantrip_scaling dice_by_character_level key 0 is invalid; keys must be character levels of at least 1"
+                    ));
+                }
+            }
+            let missing: Vec<u8> = [5, 11, 17]
+                .into_iter()
+                .filter(|level| !scaling.dice_by_character_level.contains_key(level))
+                .collect();
+            if !missing.is_empty() {
+                let list = missing
+                    .iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.warning(format!(
+                    "ability `{id}` cantrip_scaling does not cover character level(s) {list}; missing tiers stay on the lowest dice until filled"
                 ));
             }
         }

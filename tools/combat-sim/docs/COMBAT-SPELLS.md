@@ -77,18 +77,21 @@ spell:
 
 ## 4. `content check` 规则
 
-`content check`（`tools/combat-sim/src/content/check.rs`）只对**带 `spell` 块**的 ability 启用法术检查；没有 `spell` 的旧内容不产生任何新问题（0 error、0 warning）。错误等级：
+`content check`（`tools/combat-sim/src/content/check.rs`）对**带 `spell` 块**的 ability 启用法术检查；没有 `spell` 块的旧内容不产生 error，只有下面第一条 warning。错误等级：
 
 | 检查 | 等级 |
 |------|------|
+| 有 `spell` tag（精确等于 `spell`）但没有 `spell` 元数据块（旧数据缺口，不阻止运行） | warning |
 | `spell.level` 与 `slot_level` 不一致（cantrip 期望无 `slot_level` 或为 0） | **error** |
 | 有环法术的 `cost.resource` ≠ `spell-slot-{level}`，或缺失 `cost`（契约/特殊资源由角色卡 `AbilityRef.cost` 运行时覆盖表达，数据定义侧不豁免） | **error** |
 | `upcast.dice_by_level` 的 key < `level` 或 > 9 | **error** |
 | `components.material` 有 `cost_gp` 或 `consumed` 但 `text` 为空 | **error** |
+| `cantrip_scaling.dice_by_character_level` 的 key 为 0（key 必须 ≥ 1；设计未定义上限，不猜） | **error** |
+| `cantrip_scaling` 存在但未覆盖角色等级 5/11/17（缺哪个列哪个） | warning |
 | `spell.school` 与学派 tag 不一致（有学派 tag 且与 `school` 不同） | warning |
 | `spell.ritual` 与 `ritual` tag 不一致（两个方向都算） | warning |
 
-tag 是旧兼容层，不承担语义，所以不一致只给 warning；字段与执行语义相关，不一致是 error。
+tag 是旧兼容层，不承担语义，所以不一致只给 warning；字段与执行语义相关，不一致是 error。没有 `spell` tag 的普通能力完全不受这些检查影响；`cantrip_scaling` 不存在时不报覆盖缺口。
 
 ## 5. 与旧内容的关系
 

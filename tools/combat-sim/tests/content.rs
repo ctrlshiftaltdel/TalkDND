@@ -573,6 +573,10 @@ struct SpellLibrary {
 
 impl SpellLibrary {
     fn new(yaml: &str) -> Self {
+        // Hold the env lock while loading: with `campaign` unset, a load would
+        // otherwise race with tests that set COMBAT_SIM_CAMPAIGN and pick up
+        // their manifest instead of this private library.
+        let env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("cs-spell-{}-{count}", std::process::id()));
@@ -585,6 +589,7 @@ impl SpellLibrary {
         }
         .load()
         .expect("load spell library");
+        drop(env_guard);
         Self { dir, registry }
     }
 
@@ -797,6 +802,85 @@ spell:
     assert!(text.contains("dice_by_level"), "{text}");
     let reparsed: Ability = serde_norway::from_str(&text).expect("reparse");
     assert_eq!(ability, reparsed);
+}
+
+/// A cantrip with full metadata; cantrip-scaling tests mutate the table.
+const CANTRIP_ABILITY_YAML: &str = "abilities:
+  - id: test-spark
+    name: Test Spark
+    tags: [spell, cantrip, evocation]
+    activation: action
+    spell:
+      level: 0
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true}
+      ritual: false
+";
+
+#[test]
+fn spell_tag_without_metadata_warns_but_does_not_error() {
+    let yaml = "abilities:
+  - id: legacy-spell
+    name: Legacy Spell
+    tags: [spell]
+    activation: action
+";
+    let library = SpellLibrary::new(yaml);
+    let text = library.messages();
+    assert!(!text.contains("ERROR"), "{text}");
+    assert!(
+        text.contains("ability `legacy-spell` has a `spell` tag but no `spell` metadata"),
+        "{text}"
+    );
+    // Plain abilities without the `spell` tag stay quiet.
+    let yaml = "abilities:
+  - id: plain-feature
+    name: Plain Feature
+    activation: action
+";
+    let library = SpellLibrary::new(yaml);
+    assert_eq!(library.messages(), "");
+}
+
+#[test]
+fn cantrip_scaling_zero_key_is_an_error() {
+    let yaml = CANTRIP_ABILITY_YAML.replace(
+        "      ritual: false\n",
+        "      ritual: false\n      cantrip_scaling: {dice_by_character_level: {0: 1d6}}\n",
+    );
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(
+        text.contains("cantrip_scaling dice_by_character_level key 0 is invalid"),
+        "{text}"
+    );
+    assert!(text.contains("ERROR"), "{text}");
+}
+
+#[test]
+fn cantrip_scaling_missing_tiers_warn() {
+    let yaml = CANTRIP_ABILITY_YAML.replace(
+        "      ritual: false\n",
+        "      ritual: false\n      cantrip_scaling: {dice_by_character_level: {5: 2d6}}\n",
+    );
+    let library = SpellLibrary::new(&yaml);
+    let text = library.messages();
+    assert!(!text.contains("ERROR"), "{text}");
+    assert!(
+        text.contains("cantrip_scaling does not cover character level(s) 11, 17"),
+        "{text}"
+    );
+}
+
+#[test]
+fn cantrip_scaling_full_tiers_are_clean() {
+    let yaml = CANTRIP_ABILITY_YAML.replace(
+        "      ritual: false\n",
+        "      ritual: false\n      cantrip_scaling: {dice_by_character_level: {5: 2d6, 11: 3d6, 17: 4d6}}\n",
+    );
+    let library = SpellLibrary::new(&yaml);
+    assert_eq!(library.messages(), "");
 }
 
 #[test]
