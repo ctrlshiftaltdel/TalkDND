@@ -1266,6 +1266,7 @@ pub fn from_chargen(
         }
     };
     put(&mut cf, "class", &c.class);
+    put(&mut cf, "subclass", &c.subclass);
     put(&mut cf, "species", &c.species);
     put(&mut cf, "background", &c.background);
     put(&mut cf, "alignment", &c.alignment);
@@ -1365,6 +1366,11 @@ pub fn from_chargen(
             None => cf.inventory.push(it),
         }
     }
+    // Structured spell lists follow the creation state (schema 10 block);
+    // re-running the sheet without structured lists keeps the existing block.
+    if let Some(lists) = &c.spell_lists {
+        cf.spells = Some(lists.clone());
+    }
     if is_new {
         cf.ac_base = c.ac_unarmored();
         cf.ac_base_armored = false;
@@ -1376,6 +1382,1097 @@ pub fn from_chargen(
     Ok(cf)
 }
 
+// ---------- v1.6 T3: spell list commands (docs/SPELLCASTING.md §3.3/§3.4/§3.9/§4/§5.3) ----------
+
+/// Class context for the spell commands: the class data, the spell universe
+/// (§3.9) and the class-derived generation (slots, pact magic, arcanum) at
+/// the sheet's level.
+struct SpellClass<'a> {
+    class: String,
+    cd: &'a classdata::ClassDef,
+    universe: BTreeMap<String, u8>,
+    gen: classdata::Generated,
+    level: i32,
+}
+
+impl<'a> SpellClass<'a> {
+    /// Resolve the sheet's class. Fails closed for unknown classes,
+    /// non-casting classes and source-data gaps (§3.3/§3.9).
+    fn open(cf: &CharFile, book: &'a Book) -> Result<Self> {
+        let class = cf.class().ok_or_else(|| {
+            anyhow!(
+                "{} 没有职业（先 `talkdnd char {} set class <职业>`）",
+                cf.name,
+                cf.id
+            )
+        })?;
+        let cd = book.class(&class).ok_or_else(|| {
+            anyhow!(
+                "职业 `{class}` 在 {} 数据里没有定义：本地数据缺失时先 `talkdnd data import`",
+                cf.ruleset
+            )
+        })?;
+        if classdata::spell_mode(cd).is_none() {
+            bail!("职业 `{class}` 不是施法职业：没有法术列表命令");
+        }
+        // The block's ability is an audit copy (§3.5): fail closed on drift.
+        if let Some(lists) = &cf.spells {
+            if !lists.ability.is_empty() {
+                let eff = effective_ability(cd, &class);
+                if lists.ability != eff {
+                    bail!(
+                        "spells 块 ability `{}` 与职业数据 `{eff}` 不一致：fail closed（先修复角色卡或重新迁移）",
+                        lists.ability
+                    );
+                }
+            }
+        }
+        let subclass = subclass_of_cf(cf, cd);
+        let mut scores = BTreeMap::new();
+        if let Some(abilities) = cf.combat.get("abilities") {
+            for a in data::ABILITIES {
+                scores.insert(
+                    a.to_string(),
+                    abilities.get(a).and_then(Value::as_i64).unwrap_or(10) as i32,
+                );
+            }
+        }
+        let creation = crate::chargen::Creation {
+            ruleset: Some(cf.ruleset.clone()),
+            class: Some(class.clone()),
+            subclass,
+            level: cf.level(),
+            scores,
+            ..Default::default()
+        };
+        let gen = classdata::generate(&creation, book, None);
+        Ok(Self {
+            class,
+            cd,
+            universe: classdata::spell_universe(book, cd),
+            gen,
+            level: cf.level(),
+        })
+    }
+
+    /// Highest spell ring the character can currently cast: the pact slot
+    /// level for pact casters, else the highest non-empty slot ring.
+    fn max_castable(&self) -> i32 {
+        if let Some((_, l)) = self.gen.pact {
+            return l;
+        }
+        self.gen
+            .slots
+            .iter()
+            .rposition(|n| *n > 0)
+            .map(|i| i as i32 + 1)
+            .unwrap_or(0)
+    }
+
+    /// Prepared/known limit at this level (`g.spells`).
+    fn list_cap(&self) -> Option<usize> {
+        self.gen.spells.map(|(_, n)| n as usize)
+    }
+
+    fn cantrip_cap(&self) -> Option<usize> {
+        self.gen.cantrips.map(|n| n as usize)
+    }
+
+    /// Precise id resolution against the spell universe (D-9: exact id or
+    /// slug; no fuzzy matching). Fails closed with the §3.9 message.
+    fn source_resolve(&self, spell: &str) -> Result<String> {
+        let spell = spell.trim();
+        if self.universe.is_empty() {
+            bail!(
+                "职业 `{}` 没有法术来源数据（职业表与授予声明都缺失）：拒绝校验（docs/SPELLCASTING.md §3.9）",
+                self.class
+            );
+        }
+        crate::chargen::map_spell_text(spell, &self.universe).ok_or_else(|| {
+            anyhow!(
+                "「{spell}」不在 {} 的法术来源内（基础职业表/子职授予/Magical Secrets；本地数据缺失时先 `talkdnd data import`）",
+                self.class
+            )
+        })
+    }
+
+    /// Level of a universe id (0 = cantrip).
+    fn level_of(&self, id: &str) -> u8 {
+        self.universe.get(id).copied().unwrap_or(0)
+    }
+
+    fn cap_text(&self, n: usize, cap: Option<usize>) -> String {
+        match cap {
+            Some(max) => format!("{n}/{max}"),
+            None => format!("{n}"),
+        }
+    }
+}
+
+/// Effective spellcasting ability: the class data, else the built-in SRD
+/// class table (the classes-*.yaml files do not repeat it).
+fn effective_ability(cd: &classdata::ClassDef, class: &str) -> String {
+    cd.spell_ability
+        .clone()
+        .or_else(|| {
+            data::class(class)
+                .and_then(|c| c.spell_ability)
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+/// Subclass id of a sheet: `info["subclass"]` when present, else the
+/// `（<subclass>）` marker in the sheet header (same fallback as
+/// `progress::subclass_of`).
+fn subclass_of_cf(cf: &CharFile, cd: &classdata::ClassDef) -> Option<String> {
+    if let Some(s) = cf.info.get("subclass") {
+        let slug = crate::chargen::slug(s);
+        if !slug.is_empty() {
+            return Some(slug);
+        }
+    }
+    let header = cf
+        .body_md
+        .lines()
+        .find(|l| l.contains("**等级**") || l.to_lowercase().contains("**level**"))?;
+    let lower = header.to_lowercase();
+    cd.subclasses
+        .keys()
+        .find(|id| {
+            let id = id.to_lowercase();
+            lower.contains(&format!("({id})")) || lower.contains(&format!("（{id}）"))
+        })
+        .cloned()
+}
+
+/// The sheet's structured lists; every list command except `adopt` requires
+/// the schema-10 block and refuses to create it silently.
+fn spells_block_mut(cf: &mut CharFile) -> Result<&mut SpellLists> {
+    cf.spells.as_mut().ok_or_else(|| {
+        anyhow!(
+            "{} 还没有 spells 法术列表块（schema 10）：先运行 `talkdnd migrate`（整档迁移），或用 `spells adopt` 从正文采纳",
+            cf.name
+        )
+    })
+}
+
+/// A desired spell ref: target ability id plus the optional ref-level cost
+/// override (pact slots and Mystic Arcanum, §3.10).
+struct RefPlan {
+    id: String,
+    level: u8,
+    cost: Option<(String, i32)>,
+}
+
+/// The castable set per mode (§4.2): known mode casts from `known`,
+/// prepared/spellbook from `prepared` (the book itself is not castable),
+/// plus cantrips, subclass grants and arcanum in every mode. Sorted and
+/// de-duplicated.
+pub fn castable_ids(lists: &SpellLists) -> Vec<String> {
+    let mut ids: Vec<String> = lists.cantrips.clone();
+    ids.extend(match lists.mode.as_str() {
+        "known" => lists.known.clone(),
+        _ => lists.prepared.clone(),
+    });
+    ids.extend(lists.always_prepared.iter().cloned());
+    ids.extend(lists.arcanum.iter().cloned());
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// The ref-level cost override for a castable id (§3.10): arcanum spells
+/// cost their `arcanum-N` resource; other leveled spells of a pact caster
+/// cost one pact slot of level L. Cantrips never cost a slot.
+pub fn spell_ref_cost(
+    _id: &str,
+    level: u8,
+    is_arcanum: bool,
+    pact: Option<(i32, i32)>,
+) -> Option<(String, i32)> {
+    if is_arcanum && level >= 6 {
+        Some((format!("arcanum-{level}"), 1))
+    } else if level >= 1 {
+        pact.map(|(_, l)| (format!("spell-slot-{l}"), 1))
+    } else {
+        None
+    }
+}
+
+fn desired_refs(lists: &SpellLists, sc: Option<&SpellClass>) -> Vec<RefPlan> {
+    let pact = sc.and_then(|s| s.gen.pact);
+    let mut plan: Vec<RefPlan> = castable_ids(lists)
+        .into_iter()
+        .map(|id| {
+            let (level, is_arcanum) = match sc {
+                Some(sc) => (sc.level_of(&id), lists.arcanum.contains(&id)),
+                None => (0, lists.arcanum.contains(&id)),
+            };
+            let cost = spell_ref_cost(&id, level, is_arcanum, pact);
+            RefPlan { id, level, cost }
+        })
+        .collect();
+    plan.sort_by_key(|r| (r.level, r.id.clone()));
+    plan
+}
+
+/// The ref as a YAML mapping value (no list dashes) for direct insertion
+/// into a combat block sequence.
+fn ref_value(id: &str, cost: &Option<(String, i32)>) -> Value {
+    let line = match cost {
+        Some((res, amount)) => {
+            format!("{{ref: {id}, cost: {{resource: {res}, amount: {amount}}}}}")
+        }
+        None => format!("{{ref: {id}}}"),
+    };
+    serde_norway::from_str(&line).expect("ref yaml")
+}
+
+pub fn cost_ref_line(id: &str, cost: &Option<(String, i32)>) -> String {
+    match cost {
+        Some((res, amount)) => {
+            format!("  - {{ref: {id}, cost: {{resource: {res}, amount: {amount}}}}}")
+        }
+        None => format!("  - {{ref: {id}}}"),
+    }
+}
+
+/// Read-only text/JSON view for `spells` / `spells --json` (§4.3): fixed
+/// keys, lists sorted by (level, id), counts against the class limits.
+/// Never writes anything.
+pub fn spells_view(cf: &CharFile, ps: &PartyState, book: &Book, json: bool) -> Result<Vec<String>> {
+    let sc = SpellClass::open(cf, book)?;
+    let lists = cf.spells.as_ref().ok_or_else(|| {
+        anyhow!(
+            "{} 还没有 spells 法术列表块（schema 10）：先运行 `talkdnd migrate`（整档迁移），或用 `spells adopt` 从正文采纳",
+            cf.name
+        )
+    })?;
+    let sort_list = |v: &[String]| {
+        let mut v: Vec<String> = v.to_vec();
+        v.sort_by_key(|id| (sc.level_of(id), id.clone()));
+        v
+    };
+    let cantrips = sort_list(&lists.cantrips);
+    let known = sort_list(&lists.known);
+    let prepared = sort_list(&lists.prepared);
+    let book_list = sort_list(&lists.book);
+    let always = sort_list(&lists.always_prepared);
+    let mut arcanum: Vec<(u8, String)> = lists
+        .arcanum
+        .iter()
+        .map(|id| (sc.level_of(id), id.clone()))
+        .collect();
+    arcanum.sort();
+    let (mode_label, mode_list) = match lists.mode.as_str() {
+        "known" => ("已知", sort_list(&lists.known)),
+        "spellbook" => ("已准备", sort_list(&lists.prepared)),
+        _ => ("可准备", sort_list(&lists.prepared)),
+    };
+    let member = ps.members.get(&cf.id);
+    let slots: Vec<(String, i32, i32, String)> = member
+        .map(|m| {
+            m.resources
+                .iter()
+                .filter(|(k, _)| k.starts_with("spell-slot-") || k.starts_with("arcanum-"))
+                .map(|(k, r)| (k.clone(), r.current, r.max, r.recharge.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if json {
+        let j = serde_json::json!({
+            "mode": lists.mode,
+            "ability": lists.ability,
+            "cantrips": cantrips,
+            "known": known,
+            "prepared": prepared,
+            "book": book_list,
+            "always_prepared": always,
+            "arcanum": arcanum.iter().map(|(_, id)| id.clone()).collect::<Vec<_>>(),
+            "legacy": lists.legacy,
+            "slots": slots
+                .iter()
+                .map(|(id, cur, max, rc)| {
+                    serde_json::json!({ "id": id, "current": cur, "max": max, "recharge": rc })
+                })
+                .collect::<Vec<_>>(),
+            "counts": {
+                "cantrips": counts_obj(cantrips.len(), sc.cantrip_cap()),
+                "known": counts_obj(
+                    known.len(),
+                    sc.list_cap().filter(|_| lists.mode == "known"),
+                ),
+                "prepared": counts_obj(
+                    prepared.len(),
+                    sc.list_cap().filter(|_| lists.mode != "known"),
+                ),
+                "book": counts_obj(book_list.len(), None),
+                "always_prepared": counts_obj(always.len(), None),
+                "arcanum": counts_obj(arcanum.len(), None),
+                "legacy": counts_obj(lists.legacy.len(), None),
+            },
+        });
+        return Ok(vec![serde_json::to_string(&j).expect("json serializes")]);
+    }
+    let join = |v: &[String]| {
+        if v.is_empty() {
+            "—".to_string()
+        } else {
+            v.join("、")
+        }
+    };
+    let mut out = Vec::new();
+    out.push(format!(
+        "{}（{} {} 级）法术：mode={}，属性={}，可施法至 {} 环",
+        cf.name,
+        sc.class,
+        sc.level,
+        lists.mode,
+        lists.ability,
+        sc.max_castable()
+    ));
+    out.push(format!(
+        "戏法（{}）：{}",
+        sc.cap_text(cantrips.len(), sc.cantrip_cap()),
+        join(&cantrips)
+    ));
+    out.push(format!(
+        "{mode_label}（{}）：{}",
+        sc.cap_text(mode_list.len(), sc.list_cap()),
+        join(&mode_list)
+    ));
+    out.push(format!(
+        "法术书（{}）：{}",
+        book_list.len(),
+        join(&book_list)
+    ));
+    out.push(format!(
+        "始终准备（{}，子职授予，不计数量）：{}",
+        always.len(),
+        join(&always)
+    ));
+    let arc = if arcanum.is_empty() {
+        "—".to_string()
+    } else {
+        arcanum
+            .iter()
+            .map(|(l, id)| format!("{l}环:{id}"))
+            .collect::<Vec<_>>()
+            .join("　")
+    };
+    out.push(format!("奥术（Mystic Arcanum，每环一个）：{arc}"));
+    if lists.legacy.is_empty() {
+        out.push("旧文本（legacy）：—".to_string());
+    } else {
+        out.push(format!(
+            "旧文本（legacy，`spells adopt --map 原名=id` 采纳）：{}",
+            lists.legacy.join("、")
+        ));
+    }
+    if slots.is_empty() {
+        out.push("法术位：—".to_string());
+    } else {
+        let pact = sc.gen.pact;
+        let mut parts: Vec<String> = Vec::new();
+        for (id, cur, max, _) in &slots {
+            if let Some(level) = id.strip_prefix("spell-slot-") {
+                if pact.is_some_and(|(_, l)| l.to_string() == level) {
+                    parts.push(format!("契约法术位（{level} 环，短休）：{cur}/{max}"));
+                    continue;
+                }
+                parts.push(format!("{level}环 {cur}/{max}"));
+            } else {
+                parts.push(format!("{id} {cur}/{max}（长休）"));
+            }
+        }
+        out.push(format!("法术位：{}", parts.join("　")));
+    }
+    Ok(out)
+}
+
+fn counts_obj(n: usize, max: Option<usize>) -> serde_json::Value {
+    match max {
+        Some(max) => serde_json::json!({ "n": n, "max": max }),
+        None => serde_json::json!({ "n": n }),
+    }
+}
+
+/// `spells adopt` (D-9): precise matching only. Seeds the block from the
+/// sheet body's `## 法术` when it is missing (the sheet itself is never
+/// rewritten), applies `--map 原名=id` to legacy entries and re-maps the
+/// rest against the universe. Unmatched entries stay in `legacy`.
+fn spells_adopt(cf: &mut CharFile, book: &Book, maps: &[String]) -> Result<String> {
+    let sc = SpellClass::open(cf, book)?;
+    let newly = cf.spells.is_none();
+    if newly {
+        let mode = classdata::spell_mode(sc.cd).unwrap_or_default();
+        let texts = crate::chargen::markdown_spells(&cf.body_md);
+        cf.spells = Some(SpellLists {
+            version: 1,
+            mode: mode.clone(),
+            ability: effective_ability(sc.cd, &sc.class),
+            ..Default::default()
+        });
+        if texts.is_empty() {
+            return Ok(format!(
+                "已创建 spells 块（mode {mode}）；正文没有 `## 法术` 列表，无条目可采纳"
+            ));
+        }
+        // Seed legacy with the precise-mapping leftovers so the code below
+        // treats new and existing blocks the same way.
+        let (mapped, leftover) = crate::chargen::map_spell_texts(&texts, &sc.universe);
+        route_mapped(cf, &mapped, &sc)?;
+        cf.spells.as_mut().expect("just set").legacy = leftover;
+    }
+    let lists = cf.spells.as_mut().expect("block exists");
+    let mut legacy = std::mem::take(&mut lists.legacy);
+    let mut adopted = 0usize;
+    for m in maps {
+        let (orig, id) = m
+            .split_once('=')
+            .map(|(a, b)| (a.trim(), b.trim()))
+            .ok_or_else(|| anyhow!("--map 需要 `原名=spell-id`（得到 `{m}`）"))?;
+        if id.is_empty() || orig.is_empty() {
+            bail!("--map 需要 `原名=spell-id`（得到 `{m}`）");
+        }
+        let id = sc.source_resolve(id)?;
+        let pos = legacy
+            .iter()
+            .position(|t| t == orig || crate::chargen::slug(t) == crate::chargen::slug(orig))
+            .ok_or_else(|| {
+                anyhow!(
+                    "legacy 里没有「{orig}」（当前：{}）",
+                    if legacy.is_empty() {
+                        "—".to_string()
+                    } else {
+                        legacy.join("、")
+                    }
+                )
+            })?;
+        legacy.remove(pos);
+        adopted += 1;
+        route_one(lists, &sc, &id);
+    }
+    let (mapped, leftover) = crate::chargen::map_spell_texts(&legacy, &sc.universe);
+    adopted += mapped.len();
+    route_mapped(cf, &mapped, &sc)?;
+    let lists = cf.spells.as_mut().expect("block exists");
+    lists.legacy = leftover;
+    dedupe_lists(lists);
+    let lists = cf.spells.as_ref().expect("block exists");
+    let mode_list = match lists.mode.as_str() {
+        "known" => &lists.known,
+        "spellbook" => &lists.book,
+        _ => &lists.prepared,
+    };
+    Ok(format!(
+        "采纳 {adopted} 个（新建块：{}；cantrips {}，列表 {}，书 {}）；legacy 剩 {}：{}",
+        if newly { "是" } else { "否" },
+        lists.cantrips.len(),
+        mode_list.len(),
+        lists.book.len(),
+        lists.legacy.len(),
+        if lists.legacy.is_empty() {
+            "—".to_string()
+        } else {
+            lists.legacy.join("、")
+        }
+    ))
+}
+
+/// Route one universe id into the right list by level and mode (same
+/// routing as the schema-10 migration). Returns false when the id is
+/// already listed (the caller keeps the legacy entry clean anyway).
+fn route_one(lists: &mut SpellLists, sc: &SpellClass, id: &str) -> bool {
+    let level = sc.level_of(id);
+    let there = |v: &Vec<String>| v.iter().any(|s| s == id);
+    if there(&lists.cantrips)
+        || there(&lists.known)
+        || there(&lists.prepared)
+        || there(&lists.book)
+        || there(&lists.always_prepared)
+    {
+        return false;
+    }
+    let target = if level == 0 {
+        &mut lists.cantrips
+    } else {
+        match lists.mode.as_str() {
+            "known" => &mut lists.known,
+            "spellbook" => &mut lists.book,
+            _ => &mut lists.prepared,
+        }
+    };
+    target.push(id.to_string());
+    true
+}
+
+/// Route a batch of mapped ids, tolerating ones already present (they may
+/// have been adopted before).
+fn route_mapped(cf: &mut CharFile, mapped: &[String], sc: &SpellClass) -> Result<()> {
+    for id in mapped {
+        let lists = cf.spells.as_mut().expect("block exists");
+        let level = sc.level_of(id);
+        let there = |v: &Vec<String>| v.iter().any(|s| s == id);
+        if there(&lists.cantrips)
+            || there(&lists.known)
+            || there(&lists.prepared)
+            || there(&lists.book)
+            || there(&lists.always_prepared)
+        {
+            continue;
+        }
+        let target = if level == 0 {
+            &mut lists.cantrips
+        } else {
+            match lists.mode.as_str() {
+                "known" => &mut lists.known,
+                "spellbook" => &mut lists.book,
+                _ => &mut lists.prepared,
+            }
+        };
+        target.push(id.clone());
+    }
+    Ok(())
+}
+
+fn dedupe_lists(lists: &mut SpellLists) {
+    fn d(v: &mut Vec<String>) {
+        v.sort();
+        v.dedup();
+    }
+    d(&mut lists.cantrips);
+    d(&mut lists.known);
+    d(&mut lists.prepared);
+    d(&mut lists.book);
+    d(&mut lists.always_prepared);
+}
+
+/// `spells sync --dry-run`: rebuild the combat block's spell refs from the
+/// lists (§4.2). Only the managed set (ids in the list union) is added,
+/// refreshed or de-duplicated; unmanaged refs and inline definitions are
+/// kept and logged. Dry-run prints the plan without writing anything.
+fn spells_sync(
+    cf: &mut CharFile,
+    book: &Book,
+    save_dir: &Path,
+    dry_run: bool,
+    out: &mut Vec<String>,
+) -> Result<String> {
+    let sc = SpellClass::open(cf, book)?;
+    spells_block_mut(cf)?;
+    let plan = desired_refs(cf.spells.as_ref().expect("block exists"), Some(&sc));
+    let tag = if dry_run { "[dry-run] " } else { "" };
+    let mut refreshed = 0usize;
+    let mut deduped = 0usize;
+    let mut kept = 0usize;
+    // Best-effort registry: added refs are warned about when the content
+    // does not define them (U-7; content check stays the authority).
+    let registry = match load_save_registry(save_dir) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            out.push(format!(
+                "{tag}warning: 内容注册表不可用（{e}）；未校验 ref 目标是否存在"
+            ));
+            None
+        }
+    };
+    let known_ability = |id: &str| {
+        registry
+            .as_ref()
+            .is_some_and(|r| r.abilities.get(id).is_some())
+    };
+    let managed: std::collections::BTreeSet<String> = plan.iter().map(|r| r.id.clone()).collect();
+    let mut seen: std::collections::BTreeSet<String> = Default::default();
+    for key in ["actions", "features"] {
+        let Some(Value::Sequence(entries)) = cf.combat.get_mut(key) else {
+            continue;
+        };
+        let mut remove: Vec<usize> = Vec::new();
+        for (i, entry) in entries.iter_mut().enumerate() {
+            let target = entry.get("ref").and_then(Value::as_str);
+            let inline = entry.get("id").and_then(Value::as_str);
+            if let Some(target) = target {
+                if managed.contains(target) {
+                    if seen.contains(target) {
+                        remove.push(i);
+                        deduped += 1;
+                        out.push(format!("{tag}移除重复法术 ref：{target}（{key}[{i}]）"));
+                    } else {
+                        seen.insert(target.to_string());
+                        let desired = plan
+                            .iter()
+                            .find(|r| r.id == target)
+                            .and_then(|r| r.cost.clone());
+                        let actual = entry.get("cost").map(|c| {
+                            (
+                                c.get("resource")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                c.get("amount").and_then(Value::as_i64).unwrap_or(1) as i32,
+                            )
+                        });
+                        if actual != desired {
+                            refreshed += 1;
+                            out.push(format!(
+                                "{tag}刷新法术 ref：{target}（{}）",
+                                match &desired {
+                                    Some((res, amount)) => format!("成本覆盖 {res} ×{amount}"),
+                                    None => "恢复能力自带成本".to_string(),
+                                }
+                            ));
+                            if !dry_run {
+                                if let Some(cost) = &desired {
+                                    entry["cost"] = serde_norway::from_str::<Value>(&format!(
+                                        "{{resource: {res}, amount: {amount}}}",
+                                        res = cost.0,
+                                        amount = cost.1
+                                    ))
+                                    .expect("cost yaml");
+                                } else {
+                                    entry.as_mapping_mut().map(|o| o.remove("cost"));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    kept += 1;
+                    out.push(format!("{tag}未受管 ref，未修改：{target}"));
+                }
+            } else if let Some(inline) = inline {
+                if managed.contains(inline) {
+                    seen.insert(inline.to_string());
+                    out.push(format!(
+                        "{tag}inline 法术定义，未修改：{inline}（不再重复添加 ref）"
+                    ));
+                }
+            }
+        }
+        if !remove.is_empty() && !dry_run {
+            for i in remove.into_iter().rev() {
+                entries.remove(i);
+            }
+        }
+    }
+    let missing: Vec<&RefPlan> = plan.iter().filter(|r| !seen.contains(&r.id)).collect();
+    for r in &missing {
+        if !known_ability(&r.id) {
+            out.push(format!(
+                "{tag}warning: {} 不在内容注册表（施放前先 content check / 补数据）",
+                r.id
+            ));
+        }
+    }
+    let added = missing.len();
+    if !dry_run && !missing.is_empty() {
+        let new_entries: Vec<Value> = missing.iter().map(|r| ref_value(&r.id, &r.cost)).collect();
+        match cf.combat.get_mut("actions") {
+            Some(Value::Sequence(entries)) => {
+                entries.extend(new_entries);
+            }
+            _ => {
+                if let Value::Mapping(map) = &mut cf.combat {
+                    map.insert(
+                        Value::String("actions".into()),
+                        Value::Sequence(new_entries),
+                    );
+                }
+            }
+        }
+    }
+    Ok(format!(
+        "{tag}sync 完成：新增 {added}、刷新 {refreshed}、移除重复 {deduped}；未受管/inline 保留 {kept} 条{}",
+        if dry_run { "（未写入任何文件）" } else { "" }
+    ))
+}
+
+/// Remove every combat-block ref to `id` (actions and features). Returns
+/// how many entries were removed. Inline definitions are left alone.
+fn drop_spell_refs(cf: &mut CharFile, id: &str) -> usize {
+    let mut removed = 0;
+    for key in ["actions", "features"] {
+        let Some(Value::Sequence(entries)) = cf.combat.get_mut(key) else {
+            continue;
+        };
+        let before = entries.len();
+        entries.retain(|e| e.get("ref").and_then(Value::as_str) != Some(id));
+        removed += before - entries.len();
+    }
+    removed
+}
+
+/// The save's content registry via its campaign manifest (U-7). Fails when
+/// the manifest or the content is missing; callers degrade with a warning
+/// or fail closed, never silently.
+fn load_save_registry(save_dir: &Path) -> Result<combat_sim::content::ContentRegistry> {
+    combat_sim::content::ContentSources {
+        campaign: Some(save_dir.join("combat").join("campaign.yaml")),
+        ..Default::default()
+    }
+    .load()
+}
+
+/// `prepare`: add to the prepared list (§3.4/§3.9/§4.3; D-8 hints only).
+fn spells_prepare(
+    cf: &mut CharFile,
+    book: &Book,
+    spell: &str,
+    out: &mut Vec<String>,
+) -> Result<String> {
+    let sc = SpellClass::open(cf, book)?;
+    let lists = spells_block_mut(cf)?;
+    match lists.mode.as_str() {
+        "prepared" | "spellbook" => {}
+        "known" => bail!("{} 是已知法术（known）模式：用 `learn`", sc.class),
+        other => bail!("spells 块 mode `{other}` 无法识别（known|prepared|spellbook）"),
+    }
+    let id = sc.source_resolve(spell)?;
+    let level = sc.level_of(&id) as i32;
+    if level == 0 {
+        bail!("「{id}」是戏法，无需准备（戏法在建卡时选择）");
+    }
+    let max = sc.max_castable();
+    if level > max {
+        bail!("「{id}」是 {level} 环法术，高于当前可施法环级 {max}");
+    }
+    if lists.always_prepared.contains(&id) {
+        bail!("「{id}」是子职授予的 always_prepared，无需准备也不可 unprepare");
+    }
+    let cap = sc.list_cap();
+    if lists.prepared.contains(&id) {
+        return Ok(format!(
+            "已准备 {id}（prepared {}）",
+            sc.cap_text(lists.prepared.len(), cap)
+        ));
+    }
+    if lists.mode == "spellbook" && !lists.book.contains(&id) {
+        bail!(
+            "「{id}」不在法术书：先 `talkdnd char {} scribe {id}`",
+            cf.id
+        );
+    }
+    if let Some(cap) = cap {
+        if lists.prepared.len() >= cap {
+            bail!(
+                "超过可准备数量：{} 个（上限 {cap}）；先 `unprepare` 一个再准备",
+                lists.prepared.len()
+            );
+        }
+    }
+    lists.prepared.push(id.clone());
+    out.push(
+        "提示：按 RAW 准备/替换法术在长休时进行（工具不强制刚长休，D-8）；新法术施放前记得 `spells sync`。"
+            .into(),
+    );
+    Ok(format!(
+        "准备 {id}（prepared {}）",
+        sc.cap_text(lists.prepared.len(), cap)
+    ))
+}
+
+/// `unprepare`: remove from the prepared list. `always_prepared` refuses;
+/// removing an unprepared spell is an idempotent no-op (§4.3).
+fn spells_unprepare(cf: &mut CharFile, book: &Book, spell: &str) -> Result<String> {
+    let sc = SpellClass::open(cf, book)?;
+    let lists = spells_block_mut(cf)?;
+    match lists.mode.as_str() {
+        "prepared" | "spellbook" => {}
+        "known" => bail!("{} 是已知法术（known）模式：没有准备列表可取消", sc.class),
+        other => bail!("spells 块 mode `{other}` 无法识别（known|prepared|spellbook）"),
+    }
+    let wanted = spell.trim();
+    let slug = crate::chargen::slug(wanted);
+    if let Some(id) = lists
+        .prepared
+        .iter()
+        .find(|s| s.as_str() == wanted || crate::chargen::slug(s) == slug)
+        .cloned()
+    {
+        if lists.always_prepared.contains(&id) {
+            bail!("「{id}」是子职授予的 always_prepared，不可 unprepare");
+        }
+        lists.prepared.retain(|s| *s != id);
+        let count = sc.cap_text(lists.prepared.len(), sc.list_cap());
+        // §4.2-3: an unprepared spell must not stay castable through a stale
+        // ref — drop the spell's refs from the combat block in the same
+        // atomic sheet write. Hand-written refs for other spells are not
+        // touched here (spells sync is the ref builder).
+        let removed = drop_spell_refs(cf, &id);
+        let note = if removed > 0 {
+            format!("；同步移除 ref ×{removed}（未准备即不可施放）")
+        } else {
+            String::new()
+        };
+        return Ok(format!("取消准备 {id}（prepared {count}）{note}"));
+    }
+    if lists
+        .always_prepared
+        .iter()
+        .any(|s| s == wanted || crate::chargen::slug(s) == slug)
+    {
+        bail!("「{wanted}」是子职授予的 always_prepared，不可 unprepare");
+    }
+    Ok(format!(
+        "未准备 {wanted}（prepared {}）",
+        sc.cap_text(lists.prepared.len(), sc.list_cap())
+    ))
+}
+
+/// `learn`: add to the known list (known classes); Mystic Arcanum picks for
+/// warlock route to `arcanum` (one per unlocked ring, §3.10).
+fn spells_learn(cf: &mut CharFile, book: &Book, spell: &str) -> Result<String> {
+    let sc = SpellClass::open(cf, book)?;
+    let lists = spells_block_mut(cf)?;
+    match lists.mode.as_str() {
+        "known" | "prepared" | "spellbook" => {}
+        other => bail!("spells 块 mode `{other}` 无法识别（known|prepared|spellbook）"),
+    }
+    let id = sc.source_resolve(spell)?;
+    let level = sc.level_of(&id) as i32;
+    if sc.cd.arcanum && level >= 6 {
+        let unlock = [(6, 11), (7, 13), (8, 15), (9, 17)]
+            .iter()
+            .find(|(ring, _)| *ring == level)
+            .map(|(_, lvl)| *lvl)
+            .unwrap_or(0);
+        if sc.level < unlock {
+            bail!(
+                "Mystic Arcanum（{level} 环）{unlock} 级解锁（当前 {} 级）",
+                sc.level
+            );
+        }
+        if lists.arcanum.contains(&id) {
+            bail!("「{id}」已在奥术列表：每环至多一个（arcanum 重复，拒绝）");
+        }
+        if let Some(existing) = lists
+            .arcanum
+            .iter()
+            .find(|s| sc.level_of(s) as i32 == level)
+        {
+            bail!(
+                "arcanum-{level} 已有「{existing}」：每环至多一个（替换由 DM 处理，docs/SPELLCASTING.md §3.10）"
+            );
+        }
+        lists.arcanum.push(id.clone());
+        return Ok(format!(
+            "奥术 {id} → arcanum-{level}（每环至多一个，长休恢复；记得 `spells sync` 刷新 ref 成本）"
+        ));
+    }
+    match lists.mode.as_str() {
+        "known" => {}
+        m => bail!(
+            "{} 是 {} 模式：没有已知法术列表（用 `prepare`{}）",
+            sc.class,
+            m,
+            if m == "spellbook" {
+                "，抄录用 `scribe`"
+            } else {
+                ""
+            }
+        ),
+    }
+    if level == 0 {
+        bail!("戏法在建卡时选择（`chargen set spells`）；v1.6 不提供戏法替换命令");
+    }
+    let max = sc.max_castable();
+    if level > max {
+        bail!("「{id}」是 {level} 环法术，高于当前可施法环级 {max}");
+    }
+    let cap = sc.list_cap();
+    if lists.known.contains(&id) {
+        return Ok(format!(
+            "已学会 {id}（known {}）",
+            sc.cap_text(lists.known.len(), cap)
+        ));
+    }
+    if let Some(cap) = cap {
+        if lists.known.len() >= cap {
+            bail!("超过已知法术数量：{} 个（上限 {cap}）", lists.known.len());
+        }
+    }
+    lists.known.push(id.clone());
+    Ok(format!(
+        "学会 {id}（known {}）；记得 `spells sync` 刷新角色卡 refs",
+        sc.cap_text(lists.known.len(), cap)
+    ))
+}
+
+/// `scribe`: copy a spell into the wizard spellbook (§3.4): validates the
+/// source and level, pre-checks the purse, then spends gold. Never prepares.
+fn spells_scribe(
+    cf: &mut CharFile,
+    book: &Book,
+    save_dir: &Path,
+    spell: &str,
+    hours: Option<i32>,
+    cost_gp: Option<i64>,
+    out: &mut Vec<String>,
+) -> Result<String> {
+    let sc = SpellClass::open(cf, book)?;
+    let scribe = sc.cd.scribe.ok_or_else(|| {
+        anyhow!(
+            "只有 wizard 能抄录法术进书（{} 没有 scribe 数据）",
+            sc.class
+        )
+    })?;
+    {
+        let lists = spells_block_mut(cf)?;
+        if lists.mode != "spellbook" {
+            bail!("只有法术书模式（spellbook，wizard）能抄录法术");
+        }
+    }
+    let id = sc.source_resolve(spell)?;
+    let level = sc.level_of(&id) as i32;
+    if level == 0 {
+        bail!("「{id}」是戏法，不进法术书");
+    }
+    let max = sc.max_castable();
+    if level > max {
+        bail!("「{id}」是 {level} 环法术，高于当前可施法环级 {max}");
+    }
+    {
+        let lists = spells_block_mut(cf)?;
+        if lists.book.contains(&id) {
+            bail!("「{id}」已在法术书");
+        }
+    }
+    let hours = hours.unwrap_or(scribe.hours_per_level * level);
+    let gp = cost_gp.unwrap_or(i64::from(scribe.cost_gp_per_level) * i64::from(level));
+    if gp > 0 {
+        let cp = crate::progress::to_cp(0, gp, 0, 0, 0);
+        let p = crate::progress::Progress::load(save_dir)?;
+        let bal = p.purses.get(&cf.id).map(|x| x.cp).unwrap_or(0);
+        if bal < cp {
+            bail!(
+                "金币不足：抄录 {id}（{level} 环）需要 {gp} gp，钱包只有 {}",
+                crate::progress::coins(bal)
+            );
+        }
+        out.extend(
+            crate::progress::loot(
+                save_dir,
+                crate::progress::LootOp::Spend {
+                    from: &cf.id,
+                    cp,
+                    items: &[],
+                },
+                Some(&format!("抄录 {id} 进法术书")),
+            )?
+            .into_iter()
+            .take(1),
+        );
+    }
+    let lists = spells_block_mut(cf)?;
+    lists.book.push(id.clone());
+    Ok(format!(
+        "抄录 {id} → 法术书（book {}）；花费 {gp} gp、{hours} 小时；未准备",
+        lists.book.len()
+    ))
+}
+
+/// `ritual`: validate ritual casting per edition (§5.3) and log it. No slot
+/// is spent, no effect is resolved, the world time does not move; a 2014
+/// warlock (invocation-granted rituals, D-12) fails closed for the DM.
+fn spells_ritual(cf: &mut CharFile, book: &Book, save_dir: &Path, spell: &str) -> Result<String> {
+    let sc = SpellClass::open(cf, book)?;
+    let wanted = spell.trim();
+    let slug = crate::chargen::slug(wanted);
+    let edition = cf.ruleset.clone();
+    let (id, list_name) = {
+        let lists = spells_block_mut(cf)?;
+        let matches = |v: &str| v == wanted || crate::chargen::slug(v) == slug;
+        if edition == "2014" {
+            let (list, list_name): (&Vec<String>, &str) = match sc.cd.ritual.as_deref() {
+                Some("known") => {
+                    if lists.mode != "known" {
+                        bail!(
+                            "2014 {} 仪式资格是 known：与 spells 块 mode {} 不一致",
+                            sc.class,
+                            lists.mode
+                        );
+                    }
+                    (&lists.known, "已知法术")
+                }
+                Some("prepared") => {
+                    if lists.mode != "prepared" && lists.mode != "spellbook" {
+                        bail!(
+                            "2014 {} 仪式资格是 prepared：与 spells 块 mode {} 不一致",
+                            sc.class,
+                            lists.mode
+                        );
+                    }
+                    (&lists.prepared, "已准备法术")
+                }
+                Some("book") => {
+                    if lists.mode != "spellbook" {
+                        bail!(
+                            "2014 {} 仪式资格是 book：与 spells 块 mode {} 不一致",
+                            sc.class,
+                            lists.mode
+                        );
+                    }
+                    (&lists.book, "法术书")
+                }
+                other => bail!(
+                    "2014 {} 没有职业级仪式施法特性（ritual = {}；魔祈授予的仪式为非目标，D-12）：DM 手动裁定并记日志",
+                    sc.class,
+                    other.unwrap_or("none")
+                ),
+            };
+            let ritual_value = sc.cd.ritual.as_deref().unwrap_or("none");
+            let found = list.iter().find(|s| matches(s)).cloned().ok_or_else(|| {
+                anyhow!(
+                    "「{wanted}」不在{list_name}里：2014 {} 仪式要求法术在{list_name}（ritual = {ritual_value}）",
+                    sc.class
+                )
+            })?;
+            (found, list_name.to_string())
+        } else if let Some(found) = lists.prepared.iter().find(|s| matches(s)) {
+            (found.clone(), "已准备法术".to_string())
+        } else if sc.cd.ritual_adept {
+            let found = lists
+                .book
+                .iter()
+                .find(|s| matches(s))
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "「{wanted}」不在已准备或法术书里：2024 仪式要求法术已准备（Ritual Adept 另允许书内未准备）"
+                    )
+                })?;
+            (found, "法术书（Ritual Adept）".to_string())
+        } else {
+            bail!("「{wanted}」不在已准备法术里：2024 仪式要求法术已准备（Ritual 标签 + 已准备）");
+        }
+    };
+    let registry = load_save_registry(save_dir).map_err(|e| {
+        anyhow!(
+            "无法校验「{id}」是否为仪式法术（内容注册表不可用：{e}）：失败关闭；DM 可手动裁定并记日志"
+        )
+    })?;
+    let ability = registry.abilities.get(&id).ok_or_else(|| {
+        anyhow!(
+            "内容注册表没有法术「{id}」（先 `talkdnd start` 的 content check / `talkdnd data import`）"
+        )
+    })?;
+    let is_ritual = ability.spell.as_ref().map(|s| s.ritual).unwrap_or(false)
+        || ability.tags.iter().any(|t| t == "ritual");
+    if !is_ritual {
+        bail!(
+            "「{id}」没有仪式（Ritual）标签：仪式施放要求法术带 Ritual 标签（来源：{list_name}）"
+        );
+    }
+    if ability.spell.as_ref().map(|s| s.level).unwrap_or(0) == 0
+        && ability.tags.iter().any(|t| t == "cantrip")
+    {
+        bail!("「{id}」是戏法：戏法没有仪式");
+    }
+    Ok(format!(
+        "仪式 {id}（正常施法时间 + 10 分钟，不消耗法术位；效果由 DM 叙述）"
+    ))
+}
 // ---------- commands ----------
 
 #[derive(clap::Args, Clone, Debug, Default)]
@@ -1495,6 +2592,62 @@ pub enum Op {
     },
     /// Several changes at once: `batch "damage 7; use slot1; ammo arrows -2"`
     Batch { ops: Vec<String> },
+    /// Spell lists (v1.6 T3, docs/SPELLCASTING.md §4): `spells` shows them,
+    /// `spells --json` is the stable machine view, `spells adopt` maps old
+    /// free-text names precisely, `spells sync` rebuilds the combat block's
+    /// spell refs from the lists
+    Spells {
+        /// Stable JSON view (fixed keys, sorted lists); same as `spells show --json`
+        #[arg(long)]
+        json: bool,
+        #[command(subcommand)]
+        cmd: Option<SpellsCmd>,
+    },
+    /// Add a prepared spell: `prepare bless` (prepared/spellbook classes)
+    Prepare { spell: String },
+    /// Remove a prepared spell: `unprepare bless` (`always_prepared` refuses)
+    Unprepare { spell: String },
+    /// Add a known spell (known classes) or a Mystic Arcanum pick (warlock,
+    /// rings 6-9): `learn magic-missile`
+    Learn { spell: String },
+    /// Copy a spell into the wizard spellbook (costs gold/time; not prepared):
+    /// `scribe magic-missile` (override with `--hours N --cost-gp N`)
+    Scribe {
+        spell: String,
+        #[arg(long)]
+        hours: Option<i32>,
+        #[arg(long, allow_hyphen_values = true)]
+        cost_gp: Option<i64>,
+    },
+    /// Ritual-cast a spell (validated and logged; no slot spent, no effects):
+    /// `ritual detect-magic`
+    Ritual { spell: String },
+}
+
+/// Subcommands of `talkdnd char <name> spells`.
+#[derive(clap::Subcommand, Clone, Debug)]
+pub enum SpellsCmd {
+    /// Show the lists (default; read-only)
+    Show {
+        /// Stable JSON view (fixed keys, sorted lists)
+        #[arg(long)]
+        json: bool,
+    },
+    /// Adopt free-text names into the lists (D-9: exact id/slug/name match,
+    /// no fuzzy matching; unmatched entries stay in `legacy`):
+    /// `spells adopt --map "旧名字=magic-missile"`
+    Adopt {
+        /// Map a legacy entry to a spell id: `--map 原名=spell-id` (repeatable)
+        #[arg(long = "map")]
+        maps: Vec<String>,
+    },
+    /// Rebuild the combat block's spell refs from the lists (managed set
+    /// only; unmanaged refs are kept and logged): `spells sync --dry-run`
+    Sync {
+        /// Print the planned ref changes without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(clap::Parser)]
@@ -2243,6 +3396,29 @@ fn apply(
                 other => bail!("unknown field `{other}`"),
             }
         }
+        Op::Spells {
+            json: _,
+            cmd: Some(SpellsCmd::Adopt { maps }),
+        } => spells_adopt(cf, book, &maps)?,
+        Op::Spells {
+            json: _,
+            cmd: Some(SpellsCmd::Sync { dry_run }),
+        } => spells_sync(cf, book, save_dir, dry_run, out)?,
+        Op::Spells { json, cmd } => {
+            let json = json || matches!(cmd, Some(SpellsCmd::Show { json: true }));
+            let lines = spells_view(cf, ps, book, json)?;
+            out.extend(lines);
+            String::new()
+        }
+        Op::Prepare { spell } => spells_prepare(cf, book, &spell, out)?,
+        Op::Unprepare { spell } => spells_unprepare(cf, book, &spell)?,
+        Op::Learn { spell } => spells_learn(cf, book, &spell)?,
+        Op::Scribe {
+            spell,
+            hours,
+            cost_gp,
+        } => spells_scribe(cf, book, save_dir, &spell, hours, cost_gp, out)?,
+        Op::Ritual { spell } => spells_ritual(cf, book, save_dir, &spell)?,
         Op::Batch { .. } => bail!("batch cannot nest"),
     };
     Ok(msg)
@@ -2284,6 +3460,14 @@ pub fn run(save_dir: &Path, who: &str, op: Op, rng: &mut dyn DiceRng) -> Result<
         Op::Batch { ops } => parse_batch(&ops.join(" "))?,
         o => vec![o],
     };
+    // `spells` / `spells --json` is a read-only view (§4.3): it never
+    // writes the sheet, the party state or the rendered Markdown.
+    if let [Op::Spells { json, cmd }] = &ops[..] {
+        if !matches!(cmd, Some(SpellsCmd::Adopt { .. } | SpellsCmd::Sync { .. })) {
+            let json = *json || matches!(cmd, Some(SpellsCmd::Show { json: true }));
+            return spells_view(&cf, &ps, &book, json);
+        }
+    }
     let mut out = Vec::new();
     if migrated {
         out.push(format!(

@@ -969,6 +969,63 @@ pub fn level_up(
             new,
         );
     }
+    // v1.6 T3: recompute the list counts and prompt for the new choices.
+    // The lists themselves and the combat-block spell refs are never
+    // rewritten here (docs/SPELLCASTING.md §3.4: nothing is silently
+    // deleted).
+    let mut spell_hints: Vec<String> = Vec::new();
+    if let (Some(class), Some(lists)) = (
+        class.as_deref(),
+        structured_cf.as_ref().and_then(|cf| cf.spells.as_ref()),
+    ) {
+        let mut scores = BTreeMap::new();
+        if let Some(abilities) = block.get("abilities") {
+            for ability in data::ABILITIES {
+                let score = abilities.get(ability).and_then(Value::as_i64).unwrap_or(10);
+                scores.insert((*ability).to_string(), score as i32);
+            }
+        }
+        let creation = crate::chargen::Creation {
+            ruleset: Some(rs.clone()),
+            class: Some(class.to_string()),
+            subclass: subclass.clone(),
+            level: new,
+            scores,
+            ..Default::default()
+        };
+        let g = classdata::generate(&creation, &book, Some(root));
+        let (label, count) = match lists.mode.as_str() {
+            "known" => ("已知法术", lists.known.len()),
+            _ => ("可准备法术", lists.prepared.len()),
+        };
+        if let Some(cap) = g.spells.map(|(_, n)| n as usize) {
+            if count < cap {
+                spell_hints.push(format!(
+                    "spells: {label} {count}/{cap} — pick with `talkdnd char <who> {} <spell>` then `spells sync`",
+                    if lists.mode == "known" { "learn" } else { "prepare" }
+                ));
+            }
+        }
+        if let Some(ct) = g.cantrips {
+            if (lists.cantrips.len() as i32) < ct {
+                spell_hints.push(format!(
+                    "spells: cantrips {}/{ct} — chosen at creation (`chargen set spells`); a 2024 swap is the DM's call",
+                    lists.cantrips.len()
+                ));
+            }
+        }
+        if let Some(cd) = book.class(class) {
+            if cd.arcanum {
+                for (ring, unlock) in [(6, 11), (7, 13), (8, 15), (9, 17)] {
+                    if new == unlock {
+                        spell_hints.push(format!(
+                            "spells: Mystic Arcanum ({ring} 环) unlocked — pick one with `talkdnd char <who> learn <spell>` (one per ring)"
+                        ));
+                    }
+                }
+            }
+        }
+    }
     let stamp = chrono::Local::now().format("%Y-%m-%d");
     let note = format!(
         "- {stamp}：升到 {new} 级；HP +{gain}（d{die} {how}，体质 {con_mod:+}）→ {}；熟练 +{new_prof}",
@@ -1030,6 +1087,7 @@ pub fn level_up(
             );
         }
     }
+    r.lines.extend(spell_hints);
     r.lines.push(if rs == "2024" {
         "timing (2024 DMG ch.2): level up at a long rest or the end of a session; if it happens outside a long rest, current and max HP both rise but spent slots and resources are not restored".into()
     } else {
