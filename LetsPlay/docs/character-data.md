@@ -27,7 +27,8 @@ combat-sim 仍从角色卡的 `combat yaml` 块读数据，从 `party-state.yaml
 | `arcanum` | Mystic Arcanum（邪术师 11/13/15/17 级解锁 6/7/8/9 环，每环至多一个，不占法术位） |
 | `legacy` | 无法映射到法术 id 的旧自由文本条目，原样保留 |
 
-- **来源与校验**：法术 id 必须属于基础职业法术表（`classes-<版本>.yaml` 的 `spells`）或该职业数据里声明的授予来源（子职常备/扩表、特性授予）——授予语义按各子职自己的 SRD 文本区分，不合并处理。数量校验沿用建卡的职业表：过多报错，过少警告。
+- **来源与校验**：法术 id 必须属于基础职业法术表（`classes-<版本>.yaml` 的 `spells`）或该职业数据里声明的授予来源（子职常备/扩表、特性授予）——授予语义按各子职自己的 SRD 文本区分，不合并处理。Land 的地形法术只在你用 `spells terrain` 选定地形后进入来源，未选地形时拒绝并提示先选。数量校验沿用建卡的职业表：过多报错，过少警告。
+- **always_prepared 播种**：子职的 always_prepared 授予（2014 Life/Devotion/Land、2024 各领域/庇主）在建卡 `set spells` 与 `spells sync` 时按 `from_level`（和地形）自动播种进 `always_prepared` 列表——不占准备数量、不可 `unprepare`；已在任何列表里的法术不重复播种。T2 迁移出的空块由下一次 `spells sync` 补齐。
 - **迁移（schema 9→10）**：`talkdnd start` / `talkdnd migrate` 会先整份备份到 `Saves/_backups/<存档>-<时间>-schema9`，再给每张角色卡补 `spells` 块：优先从 `chargen.json` 精确对号，其次从角色卡正文的 `## 法术` 段按「法术 id 或名字的 slug」精确匹配；对不上的进 `legacy`，不猜测。重复迁移不二次改写；DM 手改过的角色卡（校验清单标记 dirty）保持原样不重写，法术列表之后用命令补。恢复备份即可回退。
 - 旧的 `spell-slot-*` 法术位资源不改名、不重算当前值，仍由 `combat/party-state.yaml` 管。
 
@@ -35,14 +36,15 @@ combat-sim 仍从角色卡的 `combat yaml` 块读数据，从 `party-state.yaml
 
 | 命令 | 作用 | 失败时 |
 |------|------|--------|
-| `char <名字> spells`（加 `--json` 出稳定 JSON） | 只读视图：mode、施法属性、各列表（按环级+id 排序）、数量 `n/max`、奥术、legacy、法术位（含契约槽与 arcanum） | 未知角色 / 非施法职业 / 缺 spells 块 → 明确错误 |
+| `char <名字> spells`（加 `--json` 出稳定 JSON） | 只读视图：mode、施法属性、地形（有地形授予的子职）、各列表（按环级+id 排序）、数量 `n/max`、奥术、legacy、法术位（含契约槽与 arcanum） | 未知角色 / 非施法职业 / 缺 spells 块 → 明确错误 |
 | `char <名字> prepare <法术>` | 加入准备列表（prepared/spellbook 职业；spellbook 要求已在书里）；校验来源、环级 ≤ 当前可施法环级、数量 | 幂等：已准备报 exit 0 不改文件 |
 | `char <名字> unprepare <法术>` | 从准备列表移除；同一次写入里移除该法术的 ref（未准备即不可施放） | `always_prepared`（子职授予）拒绝；未准备是幂等 no-op |
 | `char <名字> learn <法术>` | known 职业加入已知列表；邪术师 6–9 环法术自动进 `arcanum`（每环至多一个，未解锁报错） | prepared/spellbook 职业提示用 `prepare`；戏法在建卡时选 |
 | `char <名字> scribe <法术> [--hours N] [--cost-gp N]` | 法师抄书：加入 `book`，按 `scribe` 数据扣时间与金币（每环 2 小时 / 50 gp，可用参数覆盖）；不自动准备 | 非 wizard / 已在书 / 金币不足 → 错误且不写任何文件 |
 | `char <名字> ritual <法术>` | 仪式施法校验 + 日志（正常施法时间 + 10 分钟，不消耗法术位，不推进世界时间，效果由 DM 叙述） | 无 Ritual 标签 / 不在资格列表 / 内容数据不可用 / 2014 魔祈授予（D-12）→ 失败关闭 |
 | `char <名字> spells adopt [--map 原名=id]` | 把 legacy 精确采纳进列表（id 或 slug 精确匹配，无模糊）；缺 spells 块时从正文 `## 法术` 建块；不改正文 | 目标 id 不在职业来源内 / legacy 里没有该名字 → 错误 |
-| `char <名字> spells sync [--dry-run]` | 按"当前模式可施法集合"重建 combat 块的法术 refs（cantrips + known/prepared + always_prepared + arcanum） | 见下面的受管集合规则 |
+| `char <名字> spells sync [--dry-run]` | 按"当前模式可施法集合"重建 combat 块的法术 refs（cantrips + known/prepared + always_prepared + arcanum）；同时播种子职 always_prepared（dry-run 只报告不写入） | 见下面的受管集合规则 |
+| `char <名字> spells terrain <地形>` | 选定 Land 子职的地形（2014：arctic/coast/desert/forest/grassland/mountain/swamp；2024：arid/polar/temperate/tropical），同一原子写入里播种已解锁的该地形授予 | 职业/子职没有地形授予 / 地形不合法 → 错误并列出可选值 |
 
 **refs 与列表的关系**：combat-sim 的 `cast` 只认角色卡 combat 块 `actions` 里的法术 ref。 `spells sync` 新增缺失的 ref、刷新成本覆盖，并去掉同一目标的重复 ref；目标不在列表并集里的 ref（玩家手写的、历史遗留的）**保留不动**并在输出里逐条标注"未受管"。契约施法者（邪术师）的环级 ≥1 法术 ref 一律覆盖成本为 `spell-slot-L`（L=契约槽环级），`arcanum` 法术覆盖为 `arcanum-N`；戏法 ref 不带成本覆盖。内容注册表可用时还会校验新增 ref 的目标是否存在（缺数据给 warning，不阻断）。**不 prepare 就 sync，该法术没有 ref，`cast` 报 "has no ability matching"**；unprepare 则在同一原子写入里移除 ref。所有写操作走 `sheets/<id>.yaml` 原子写：任何校验失败都不改文件。
 

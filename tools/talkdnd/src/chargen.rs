@@ -830,6 +830,7 @@ pub fn validate(c: &Creation) -> Report {
                     cd,
                     c.subclass.as_deref(),
                     c.level.max(1),
+                    None,
                 );
                 for id in lists
                     .cantrips
@@ -979,7 +980,7 @@ pub fn spell_lists_from_text(
     let cd = book.class(class)?;
     let mode = crate::classdata::spell_mode(cd)?;
     let universe =
-        crate::classdata::spell_universe(book, cd, c.subclass.as_deref(), c.level.max(1));
+        crate::classdata::spell_universe(book, cd, c.subclass.as_deref(), c.level.max(1), None);
     let (mapped, legacy) = map_spell_texts(&c.spells, &universe);
     let mut lists = crate::charsheet::SpellLists {
         version: 1,
@@ -1009,6 +1010,23 @@ pub fn spell_lists_from_text(
         target.push(id);
     }
     lists.legacy = legacy;
+    // §3.9: the selected subclass's unlocked always_prepared grants seed the
+    // list at creation (no terrain yet at chargen — terrain-grouped grants
+    // need `spells terrain` + `spells sync` afterwards). Not counted, and a
+    // spell the player typed into `set spells` keeps its routed list.
+    for id in
+        crate::classdata::always_prepared_grants(cd, c.subclass.as_deref(), c.level.max(1), None)
+    {
+        if !lists.always_prepared.contains(&id)
+            && !lists.cantrips.contains(&id)
+            && !lists.known.contains(&id)
+            && !lists.prepared.contains(&id)
+            && !lists.book.contains(&id)
+            && !lists.arcanum.contains(&id)
+        {
+            lists.always_prepared.push(id);
+        }
+    }
     Some(lists)
 }
 
@@ -1437,7 +1455,15 @@ fn spell_refs_yaml(
         .class
         .as_deref()
         .and_then(|cls| book.class(cls))
-        .map(|cd| crate::classdata::spell_universe(book, cd, c.subclass.as_deref(), c.level.max(1)))
+        .map(|cd| {
+            crate::classdata::spell_universe(
+                book,
+                cd,
+                c.subclass.as_deref(),
+                c.level.max(1),
+                lists.terrain.as_deref(),
+            )
+        })
         .unwrap_or_default();
     let is_arcanum = |id: &str| lists.arcanum.iter().any(|s| s == id);
     let mut lines: Vec<String> = crate::charsheet::castable_ids(lists)

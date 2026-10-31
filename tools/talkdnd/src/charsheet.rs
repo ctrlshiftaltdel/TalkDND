@@ -158,6 +158,11 @@ pub struct SpellLists {
     /// Mystic Arcanum (warlock): one spell per unlocked ring 6..=9.
     #[serde(default)]
     pub arcanum: Vec<String>,
+    /// 2014/2024 Land: the chosen terrain for the subclass's terrain-grouped
+    /// always-prepared grants (serde default; additive within schema 10).
+    /// Set with `spells terrain <地形>`; seeding gates on it (§3.9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrain: Option<String>,
     /// Old free-text entries that could not be mapped to ids (kept verbatim;
     /// the DM maps them with `spells adopt --map`, T3).
     #[serde(default)]
@@ -1393,6 +1398,12 @@ struct SpellClass<'a> {
     universe: BTreeMap<String, u8>,
     gen: classdata::Generated,
     level: i32,
+    subclass: Option<String>,
+    /// Distinct terrains of the selected subclass's grants (empty without
+    /// terrain-grouped grants).
+    terrains: Vec<String>,
+    /// The character's chosen terrain (`lists.terrain`).
+    terrain: Option<String>,
 }
 
 impl<'a> SpellClass<'a> {
@@ -1428,10 +1439,19 @@ impl<'a> SpellClass<'a> {
             }
         }
         let subclass = subclass_of_cf(cf, cd);
+        let terrain = cf.spells.as_ref().and_then(|l| l.terrain.clone());
         // Subclass-aware universe (§3.9): only the selected subclass's
         // grants enter the sources; class-level features_grants always do,
-        // both only once their `from_level` is reached.
-        let universe = classdata::spell_universe(book, cd, subclass.as_deref(), cf.level());
+        // both only once their `from_level` is reached. Terrain-grouped
+        // grants (Land) additionally require the chosen terrain.
+        let universe = classdata::spell_universe(
+            book,
+            cd,
+            subclass.as_deref(),
+            cf.level(),
+            terrain.as_deref(),
+        );
+        let terrains = classdata::subclass_terrains(cd, subclass.as_deref());
         let mut scores = BTreeMap::new();
         if let Some(abilities) = cf.combat.get("abilities") {
             for a in data::ABILITIES {
@@ -1444,7 +1464,7 @@ impl<'a> SpellClass<'a> {
         let creation = crate::chargen::Creation {
             ruleset: Some(cf.ruleset.clone()),
             class: Some(class.clone()),
-            subclass,
+            subclass: subclass.clone(),
             level: cf.level(),
             scores,
             ..Default::default()
@@ -1456,6 +1476,9 @@ impl<'a> SpellClass<'a> {
             universe,
             gen,
             level: cf.level(),
+            subclass,
+            terrains,
+            terrain,
         })
     }
 
@@ -1492,12 +1515,46 @@ impl<'a> SpellClass<'a> {
                 self.class
             );
         }
-        crate::chargen::map_spell_text(spell, &self.universe).ok_or_else(|| {
-            anyhow!(
-                "「{spell}」不在 {} 的法术来源内（基础职业表/子职授予/Magical Secrets；本地数据缺失时先 `talkdnd data import`）",
-                self.class
-            )
-        })
+        if let Some(id) = crate::chargen::map_spell_text(spell, &self.universe) {
+            return Ok(id);
+        }
+        // Failed: give the terrain-specific errors before the generic one
+        // (§3.9 Land: terrain spells only enter the universe once a terrain
+        // is chosen).
+        let wanted = crate::chargen::slug(spell);
+        if let Some(g) = self
+            .subclass
+            .as_deref()
+            .and_then(|s| self.cd.subclasses.get(s))
+            .into_iter()
+            .flat_map(|s| s.spells.iter())
+            .find(|g| {
+                g.terrain.is_some()
+                    && g.id
+                        .as_deref()
+                        .is_some_and(|id| crate::chargen::slug(id) == wanted)
+            })
+        {
+            let gterrain = g.terrain.as_deref().unwrap_or_default();
+            if self.terrain.is_none() {
+                bail!(
+                    "「{spell}」是 {} 子职的地形法术（{gterrain}）：先 `spells terrain <地形>` 选定地形（可选：{}）",
+                    self.subclass.as_deref().unwrap_or_default(),
+                    self.terrains.join("、")
+                );
+            }
+            if gterrain != self.terrain.as_deref().unwrap_or_default() {
+                bail!(
+                    "「{spell}」属于 {} 子职的 {gterrain} 地形授予，与当前地形 {} 不符：`spells terrain <地形>` 可切换",
+                    self.subclass.as_deref().unwrap_or_default(),
+                    self.terrain.as_deref().unwrap_or_default()
+                );
+            }
+        }
+        bail!(
+            "「{spell}」不在 {} 的法术来源内（基础职业表/子职授予/Magical Secrets；本地数据缺失时先 `talkdnd data import`）",
+            self.class
+        )
     }
 
     /// Level of a universe id (0 = cantrip).
@@ -1559,6 +1616,29 @@ fn spells_block_mut(cf: &mut CharFile) -> Result<&mut SpellLists> {
             cf.name
         )
     })
+}
+
+/// §3.9 seed candidates: the selected subclass's unlocked always_prepared
+/// grants that are not yet in any list (add-only; a spell the player
+/// prepared by hand keeps its list and stays unpreparable). Read-only —
+/// callers decide whether to apply, so sync --dry-run can report without
+/// writing.
+fn pending_always_prepared(
+    sc: &SpellClass,
+    terrain: Option<&str>,
+    lists: &SpellLists,
+) -> Vec<String> {
+    classdata::always_prepared_grants(sc.cd, sc.subclass.as_deref(), sc.level, terrain)
+        .into_iter()
+        .filter(|id| {
+            !lists.always_prepared.contains(id)
+                && !lists.cantrips.contains(id)
+                && !lists.known.contains(id)
+                && !lists.prepared.contains(id)
+                && !lists.book.contains(id)
+                && !lists.arcanum.contains(id)
+        })
+        .collect()
 }
 
 /// A desired spell ref: target ability id plus the optional ref-level cost
@@ -1693,6 +1773,7 @@ pub fn spells_view(cf: &CharFile, ps: &PartyState, book: &Book, json: bool) -> R
             "prepared": prepared,
             "book": book_list,
             "always_prepared": always,
+            "terrain": lists.terrain,
             "arcanum": arcanum.iter().map(|(_, id)| id.clone()).collect::<Vec<_>>(),
             "legacy": lists.legacy,
             "slots": slots
@@ -1736,6 +1817,19 @@ pub fn spells_view(cf: &CharFile, ps: &PartyState, book: &Book, json: bool) -> R
         lists.ability,
         sc.max_castable()
     ));
+    if !sc.terrains.is_empty() {
+        match &lists.terrain {
+            Some(t) => out.push(format!(
+                "地形：{t}（`spells terrain <地形>` 可切换；可选：{}）",
+                sc.terrains.join("、")
+            )),
+            None => out.push(format!(
+                "地形：未选（{} 子职的法术按地形分组，先 `spells terrain <地形>`；可选：{}）",
+                sc.subclass.as_deref().unwrap_or_default(),
+                sc.terrains.join("、")
+            )),
+        }
+    }
     out.push(format!(
         "戏法（{}）：{}",
         sc.cap_text(cantrips.len(), sc.cantrip_cap()),
@@ -1969,8 +2063,33 @@ fn spells_sync(
 ) -> Result<String> {
     let sc = SpellClass::open(cf, book)?;
     spells_block_mut(cf)?;
-    let plan = desired_refs(cf.spells.as_ref().expect("block exists"), Some(&sc));
     let tag = if dry_run { "[dry-run] " } else { "" };
+    // §3.9 backfill: seed the selected subclass's unlocked always_prepared
+    // grants (T2 blocks migrate with the list empty). Dry-run includes the
+    // seeds in its plan but writes nothing.
+    let pending = {
+        let lists = cf.spells.as_ref().expect("block exists");
+        pending_always_prepared(&sc, sc.terrain.as_deref(), lists)
+    };
+    let plan = if dry_run {
+        let mut probe = cf.spells.clone().expect("block exists");
+        probe.always_prepared.extend(pending.iter().cloned());
+        desired_refs(&probe, Some(&sc))
+    } else {
+        if !pending.is_empty() {
+            cf.spells
+                .as_mut()
+                .expect("block exists")
+                .always_prepared
+                .extend(pending.iter().cloned());
+        }
+        desired_refs(cf.spells.as_ref().expect("block exists"), Some(&sc))
+    };
+    for id in &pending {
+        out.push(format!(
+            "{tag}播种子职 always_prepared：{id}（不占准备数量，不可 unprepare）"
+        ));
+    }
     let mut refreshed = 0usize;
     let mut deduped = 0usize;
     let mut removed = 0usize;
@@ -2247,6 +2366,59 @@ fn spells_unprepare(cf: &mut CharFile, book: &Book, spell: &str) -> Result<Strin
     Ok(format!(
         "未准备 {wanted}（prepared {}）",
         sc.cap_text(lists.prepared.len(), sc.list_cap())
+    ))
+}
+
+/// `spells terrain <地形>` (§3.9 Land): choose the terrain for the
+/// subclass's terrain-grouped always-prepared grants. The valid terrains
+/// come from the grant data (nothing hardcoded); the choice is stored in
+/// the spells block and the newly unlocked grants are seeded in the same
+/// atomic write.
+fn spells_terrain(cf: &mut CharFile, book: &Book, terrain: &str) -> Result<String> {
+    let sc = SpellClass::open(cf, book)?;
+    let lists = spells_block_mut(cf)?;
+    let wanted = crate::chargen::slug(terrain);
+    if sc.terrains.is_empty() {
+        let anywhere = sc
+            .cd
+            .subclasses
+            .values()
+            .any(|s| s.spells.iter().any(|g| g.terrain.is_some()));
+        if anywhere {
+            bail!(
+                "职业 `{}` 的地形法术按子职分组：当前子职没有地形授予；先选有地形授予的子职（如 land），再 `spells terrain <地形>`",
+                sc.class
+            );
+        }
+        bail!("职业 `{}` 没有按地形分组的授予法术：没有地形可选", sc.class);
+    }
+    if !sc.terrains.contains(&wanted) {
+        bail!(
+            "「{terrain}」不是 {} 的可选地形（可选：{}）",
+            sc.subclass.as_deref().unwrap_or_default(),
+            sc.terrains.join("、")
+        );
+    }
+    if lists.terrain.as_deref() == Some(wanted.as_str()) {
+        return Ok(format!(
+            "地形已是 {wanted}（无变化；可选：{}）",
+            sc.terrains.join("、")
+        ));
+    }
+    lists.terrain = Some(wanted.clone());
+    let seeded = pending_always_prepared(&sc, Some(&wanted), lists);
+    let note = if seeded.is_empty() {
+        String::new()
+    } else {
+        lists.always_prepared.extend(seeded.iter().cloned());
+        format!(
+            "；播种 always_prepared：{}（不占准备数量，施放前记得 `spells sync`）",
+            seeded.join("、")
+        )
+    };
+    Ok(format!(
+        "地形设为 {wanted}（可选：{}）{note}",
+        sc.terrains.join("、")
     ))
 }
 
@@ -2678,6 +2850,10 @@ pub enum SpellsCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Choose the terrain for a Land subclass's terrain-grouped
+    /// always-prepared spells (2014: arctic/coast/…; 2024: arid/polar/…):
+    /// `spells terrain arctic`
+    Terrain { terrain: String },
 }
 
 #[derive(clap::Parser)]
@@ -3434,6 +3610,10 @@ fn apply(
             json: _,
             cmd: Some(SpellsCmd::Sync { dry_run }),
         } => spells_sync(cf, book, save_dir, dry_run, out)?,
+        Op::Spells {
+            json: _,
+            cmd: Some(SpellsCmd::Terrain { terrain }),
+        } => spells_terrain(cf, book, &terrain)?,
         Op::Spells { json, cmd } => {
             let json = json || matches!(cmd, Some(SpellsCmd::Show { json: true }));
             let lines = spells_view(cf, ps, book, json)?;
@@ -3493,7 +3673,10 @@ pub fn run(save_dir: &Path, who: &str, op: Op, rng: &mut dyn DiceRng) -> Result<
     // `spells` / `spells --json` is a read-only view (§4.3): it never
     // writes the sheet, the party state or the rendered Markdown.
     if let [Op::Spells { json, cmd }] = &ops[..] {
-        if !matches!(cmd, Some(SpellsCmd::Adopt { .. } | SpellsCmd::Sync { .. })) {
+        if !matches!(
+            cmd,
+            Some(SpellsCmd::Adopt { .. } | SpellsCmd::Sync { .. } | SpellsCmd::Terrain { .. })
+        ) {
             let json = *json || matches!(cmd, Some(SpellsCmd::Show { json: true }));
             return spells_view(&cf, &ps, &book, json);
         }

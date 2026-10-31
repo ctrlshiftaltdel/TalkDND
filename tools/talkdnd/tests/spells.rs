@@ -598,19 +598,19 @@ fn class_data_2014_has_tables_ritual_and_grants() {
 
     // The universe for adopt/validation: base + class-level grants +
     // any_class (all class tables in the book).
-    let universe = classdata::spell_universe(&book, bard, None, 20);
+    let universe = classdata::spell_universe(&book, bard, None, 20, None);
     assert_eq!(universe.get("magic-missile"), Some(&1));
     assert!(
         universe.contains_key("spirit-guardians"),
         "any_class opens every table (cleric-only spell)"
     );
-    let universe = classdata::spell_universe(&book, warlock, Some("fiend"), 20);
+    let universe = classdata::spell_universe(&book, warlock, Some("fiend"), 20, None);
     assert!(
         universe.contains_key("fireball"),
         "Fiend class_list grants fireball"
     );
     assert!(
-        !classdata::spell_universe(&book, warlock, None, 20).contains_key("fireball"),
+        !classdata::spell_universe(&book, warlock, None, 20, None).contains_key("fireball"),
         "a warlock without the Fiend subclass has no expanded list"
     );
 }
@@ -666,7 +666,7 @@ fn class_data_2024_has_edition_ritual_and_handwritten_grants() {
 
     // The universe honours multi_list sources (class-level Magical Secrets,
     // valid without a subclass).
-    let universe = classdata::spell_universe(&book, bard, None, 20);
+    let universe = classdata::spell_universe(&book, bard, None, 20, None);
     assert!(
         universe.contains_key("mass-healing-word"),
         "cleric table reachable through bard Magical Secrets"
@@ -683,30 +683,50 @@ fn spell_universe_is_subclass_aware() {
     let book = Book::srd("2014");
     // 非 Fiend Warlock：Fiend 扩展表（class_list）不进入来源。
     let warlock = book.class("warlock").unwrap();
-    let no_fiend = classdata::spell_universe(&book, warlock, None, 20);
+    let no_fiend = classdata::spell_universe(&book, warlock, None, 20, None);
     assert!(
         !no_fiend.contains_key("fireball"),
         "unselected Fiend expanded list leaked: fireball present"
     );
     assert!(
-        classdata::spell_universe(&book, warlock, Some("fiend"), 20).contains_key("fireball"),
+        classdata::spell_universe(&book, warlock, Some("fiend"), 20, None).contains_key("fireball"),
         "a Fiend warlock keeps the expanded list"
     );
-    // 非 Land Druid：Land 地形法术（always_prepared）不进入来源。
+    // 非 Land Druid：Land 地形法术（always_prepared）不进入来源；选中
+    // Land 未选地形时同样不进入；选定地形后只拿该地形（R3）。
     let druid = book.class("druid").unwrap();
+    let land = &druid.subclasses["land"];
+    let terrain_of = |id: &str| {
+        land.spells
+            .iter()
+            .find(|g| g.id.as_deref() == Some(id))
+            .and_then(|g| g.terrain.clone())
+            .unwrap_or_default()
+    };
     for id in ["slow", "cone-of-cold", "mirror-image"] {
+        let t = terrain_of(id);
         assert!(
-            !classdata::spell_universe(&book, druid, None, 20).contains_key(id),
+            !classdata::spell_universe(&book, druid, None, 20, None).contains_key(id),
             "unselected Land grant leaked: {id} present"
         );
         assert!(
-            classdata::spell_universe(&book, druid, Some("land"), 20).contains_key(id),
-            "a Land druid keeps the terrain grants: {id}"
+            !classdata::spell_universe(&book, druid, Some("land"), 20, None).contains_key(id),
+            "no terrain chosen yet: {id} must stay out of the universe"
+        );
+        assert!(
+            classdata::spell_universe(&book, druid, Some("land"), 20, Some(&t)).contains_key(id),
+            "the chosen terrain keeps its grant: {id} ({t})"
         );
     }
+    // 其他地形仍被拒（slow 是 arctic 授予）。
+    assert!(
+        !classdata::spell_universe(&book, druid, Some("land"), 20, Some("forest"))
+            .contains_key("slow"),
+        "another terrain's grant leaked: slow present under forest"
+    );
     // 未选 Lore：class 级 Magical Secrets（features_grants）仍全部有效。
     let bard = book.class("bard").unwrap();
-    let no_lore = classdata::spell_universe(&book, bard, None, 20);
+    let no_lore = classdata::spell_universe(&book, bard, None, 20, None);
     assert!(
         no_lore.contains_key("spirit-guardians"),
         "class-level Magical Secrets must survive the subclass filter"
@@ -714,24 +734,26 @@ fn spell_universe_is_subclass_aware() {
     // 2014 Lore 的第 6 级 any_class 与 class 级 Magical Secrets 都开全部
     // 职业表，集合上重合；区分性由 warlock/druid 用例承担，
     // 这里断言选中 lore 不会减少来源。
-    let with_lore = classdata::spell_universe(&book, bard, Some("lore"), 20);
+    let with_lore = classdata::spell_universe(&book, bard, Some("lore"), 20, None);
     assert_eq!(no_lore, with_lore);
     // 2024：Land 的 fire-bolt 戏法只经子职授予进入；class 级
     // multi_list（bard/cleric/druid/wizard）不受子职过滤影响。
     let book24 = Book::srd("2024");
     let bard24 = book24.class("bard").unwrap();
     assert!(
-        classdata::spell_universe(&book24, bard24, None, 20).contains_key("mass-healing-word"),
+        classdata::spell_universe(&book24, bard24, None, 20, None)
+            .contains_key("mass-healing-word"),
         "2024 class-level Magical Secrets survive the filter"
     );
     let druid24 = book24.class("druid").unwrap();
     assert!(
-        !classdata::spell_universe(&book24, druid24, None, 20).contains_key("fire-bolt"),
+        !classdata::spell_universe(&book24, druid24, None, 20, None).contains_key("fire-bolt"),
         "unselected 2024 Land grant leaked: fire-bolt present"
     );
     assert!(
-        classdata::spell_universe(&book24, druid24, Some("land"), 20).contains_key("fire-bolt"),
-        "a 2024 Land druid keeps fire-bolt"
+        classdata::spell_universe(&book24, druid24, Some("land"), 20, Some("arid"))
+            .contains_key("fire-bolt"),
+        "a 2024 Land druid keeps fire-bolt (arid terrain)"
     );
 }
 
@@ -747,11 +769,11 @@ fn spell_universe_filters_grants_by_level() {
     let book = Book::srd("2014");
     let bard = book.class("bard").unwrap();
     assert!(
-        !classdata::spell_universe(&book, bard, None, 1).contains_key("bless"),
+        !classdata::spell_universe(&book, bard, None, 1, None).contains_key("bless"),
         "a level-1 bard got a level-10 Magical Secrets spell early"
     );
     assert!(
-        classdata::spell_universe(&book, bard, None, 10).contains_key("bless"),
+        classdata::spell_universe(&book, bard, None, 10, None).contains_key("bless"),
         "a level-10 bard reaches bless through Magical Secrets"
     );
 
@@ -759,17 +781,19 @@ fn spell_universe_filters_grants_by_level() {
     let book24 = Book::srd("2024");
     let druid24 = book24.class("druid").unwrap();
     assert!(
-        !classdata::spell_universe(&book24, druid24, Some("land"), 1).contains_key("fire-bolt"),
+        !classdata::spell_universe(&book24, druid24, Some("land"), 1, None)
+            .contains_key("fire-bolt"),
         "a level-1 Land druid got the level-3 subclass cantrip early"
     );
     assert!(
-        classdata::spell_universe(&book24, druid24, Some("land"), 3).contains_key("fire-bolt"),
-        "a level-3 Land druid has fire-bolt"
+        classdata::spell_universe(&book24, druid24, Some("land"), 3, Some("arid"))
+            .contains_key("fire-bolt"),
+        "a level-3 Land druid has fire-bolt (arid terrain)"
     );
 
     // 2014 Fiend Warlock：1 级即有 1 环扩表；3/5 环扩表等对应等级。
     let warlock = book.class("warlock").unwrap();
-    let l1 = classdata::spell_universe(&book, warlock, Some("fiend"), 1);
+    let l1 = classdata::spell_universe(&book, warlock, Some("fiend"), 1, None);
     assert!(
         l1.contains_key("burning-hands") && l1.contains_key("command"),
         "a level-1 Fiend keeps the ring-1 expanded list"
@@ -779,14 +803,14 @@ fn spell_universe_filters_grants_by_level() {
         "the ring-3 Fiend grant must wait for level 5"
     );
     assert!(
-        classdata::spell_universe(&book, warlock, Some("fiend"), 5).contains_key("fireball"),
+        classdata::spell_universe(&book, warlock, Some("fiend"), 5, None).contains_key("fireball"),
         "a level-5 Fiend warlock gains fireball"
     );
 
     // 基础职业表不按等级过滤：1 级术士的 3 环表内法术仍在来源里，
     // 高环由 max_castable 继续把关（见下一个测试）。
     assert!(
-        classdata::spell_universe(&book, warlock, None, 1).contains_key("counterspell"),
+        classdata::spell_universe(&book, warlock, None, 1, None).contains_key("counterspell"),
         "the base table is not level-filtered"
     );
 }
@@ -1827,19 +1851,55 @@ fn unselected_subclass_sources_are_refused_but_selected_work() {
         &[("wis", 16)],
         empty_lists("prepared", "wis"),
     );
-    let out = run_op(
+    // 选了 Land 未选地形：slow 被拒并提示先选地形（R3）。
+    let err = run_op(
         &save,
         "thorn",
         Op::Prepare {
             spell: "slow".into(),
         },
     )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("先 `spells terrain"), "{err}");
+    // 选定 arctic：arctic 授予自动播种（不占准备），slow 直接可用、
+    // 不可 unprepare；7 级的 freedom-of-movement 不提前。
+    let out = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "arctic".into(),
+            }),
+        },
+    )
     .unwrap();
-    let joined = out.join(" ");
-    assert!(joined.contains("slow"), "{joined}");
-    assert!(lists_of(&save, "thorn")
-        .prepared
-        .contains(&"slow".to_string()));
+    let joined = out.join("；");
+    assert!(
+        joined.contains("arctic") && joined.contains("播种"),
+        "{joined}"
+    );
+    let lists = lists_of(&save, "thorn");
+    assert_eq!(lists.terrain.as_deref(), Some("arctic"));
+    assert!(lists.always_prepared.contains(&"slow".to_string()));
+    assert!(lists.always_prepared.contains(&"hold-person".to_string()));
+    assert!(
+        !lists
+            .always_prepared
+            .contains(&"freedom-of-movement".to_string()),
+        "from_level 7 must not seed at level 5"
+    );
+    let err = run_op(
+        &save,
+        "thorn",
+        Op::Unprepare {
+            spell: "slow".into(),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("不可 unprepare"), "{err}");
 
     // 未选 Lore 的第 10 级 Bard 仍有 class 级 Magical Secrets
     // （features_grants 保留）：spirit-guardians 经它可达。
@@ -2806,5 +2866,514 @@ fn non_caster_and_missing_block_fail_with_clear_errors() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("talkdnd migrate"), "{err}");
+    let _ = fs::remove_dir_all(&root);
+}
+// ---------------------------------------------------------------------------
+// R3 修正（PR #245 退回 3）：子职 always_prepared 自动播种与 Land 地形过滤
+//（docs/SPELLCASTING.md §3.9）。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn always_prepared_grants_seed_at_chargen_and_sync_backfills() {
+    let book = Book::srd("2014");
+    let cd = book.class("cleric").unwrap();
+
+    // 建卡 set spells：1 级 Life 只播种 from_level 1 的 bless/cure-wounds。
+    let mut c = Creation {
+        ruleset: Some("2014".into()),
+        class: Some("cleric".into()),
+        subclass: Some("life".into()),
+        level: 1,
+        level_done: true,
+        spells_done: true,
+        spells: vec!["guidance".into()],
+        ..Default::default()
+    };
+    c.spell_lists = chargen::spell_lists_from_text(&c, Some(&book));
+    let lists = c.spell_lists.clone().unwrap();
+    assert!(lists.cantrips.contains(&"guidance".to_string()));
+    assert_eq!(
+        lists.always_prepared,
+        vec!["bless".to_string(), "cure-wounds".to_string()],
+        "level-1 Life seeds exactly the ring-1 grants in data order"
+    );
+    // 播种不占准备数量：基础表法术仍在来源，可准备满上限。
+    let universe = classdata::spell_universe(&book, cd, Some("life"), 1, None);
+    for s in ["shield-of-faith", "sanctuary", "command", "healing-word"] {
+        assert!(universe.contains_key(s), "base-table spell {s} expected");
+    }
+
+    // 5 级播种 6 个（beacon-of-hope/revivify 等 from_level 5 到位）。
+    c.level = 5;
+    c.spell_lists = chargen::spell_lists_from_text(&c, Some(&book));
+    let lists5 = c.spell_lists.clone().unwrap();
+    for id in [
+        "bless",
+        "cure-wounds",
+        "lesser-restoration",
+        "spiritual-weapon",
+        "beacon-of-hope",
+        "revivify",
+    ] {
+        assert!(lists5.always_prepared.contains(&id.to_string()), "{id}");
+    }
+    assert!(
+        !lists5.always_prepared.contains(&"death-ward".to_string()),
+        "from_level 7 must not seed at level 5"
+    );
+
+    // 未选子职：不播种。
+    let mut none = c.clone();
+    none.subclass = None;
+    none.spell_lists = chargen::spell_lists_from_text(&none, Some(&book));
+    assert!(
+        none.spell_lists.unwrap().always_prepared.is_empty(),
+        "no subclass, no always_prepared seeds"
+    );
+
+    // T2 旧块（always_prepared 为空）sync 后补齐并生成 refs。
+    let root = t3_root("seed-sync");
+    let save = t3_save(&root, "s");
+    write_caster(
+        &save,
+        "hero",
+        "cleric",
+        Some("life"),
+        "2014",
+        1,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    let out = run_op(
+        &save,
+        "hero",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Sync { dry_run: false }),
+        },
+    )
+    .unwrap();
+    let joined = out.join("；");
+    assert!(joined.contains("播种"), "{joined}");
+    let lists = lists_of(&save, "hero");
+    assert_eq!(
+        lists.always_prepared,
+        vec!["bless".to_string(), "cure-wounds".to_string()]
+    );
+    let refs: Vec<String> = ref_entries(&save, "hero")
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(refs.contains(&"bless".to_string()));
+    assert!(refs.contains(&"cure-wounds".to_string()));
+    assert!(
+        !lists.prepared.contains(&"bless".to_string()),
+        "seeding must not duplicate into prepared"
+    );
+
+    // dry-run：播种只进报告，sheet 逐字节不变。
+    let root2 = t3_root("seed-dry");
+    let save2 = t3_save(&root2, "s");
+    write_caster(
+        &save2,
+        "hero",
+        "cleric",
+        Some("life"),
+        "2014",
+        1,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    let before = sheet_text(&save2, "hero");
+    let out = run_op(
+        &save2,
+        "hero",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Sync { dry_run: true }),
+        },
+    )
+    .unwrap();
+    assert!(
+        out.join("；")
+            .contains("[dry-run] 播种子职 always_prepared"),
+        "{}",
+        out.join("；")
+    );
+    assert_eq!(before, sheet_text(&save2, "hero"), "dry-run must not write");
+    // 真正 sync 后 unprepare 播种条目被拒。
+    run_op(
+        &save2,
+        "hero",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Sync { dry_run: false }),
+        },
+    )
+    .unwrap();
+    let err = run_op(
+        &save2,
+        "hero",
+        Op::Unprepare {
+            spell: "bless".into(),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("不可 unprepare"), "{err}");
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&root2);
+}
+
+#[test]
+fn always_prepared_does_not_count_against_the_prepared_cap() {
+    let root = t3_root("seed-cap");
+    let save = t3_save(&root, "s");
+    write_caster(
+        &save,
+        "hero",
+        "cleric",
+        Some("life"),
+        "2014",
+        1,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    run_op(
+        &save,
+        "hero",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Sync { dry_run: false }),
+        },
+    )
+    .unwrap();
+    // 1 级 Life（wis 16）上限 4：播种 2 个之后仍能准备满 4 个。
+    for s in ["shield-of-faith", "sanctuary", "command", "healing-word"] {
+        run_op(&save, "hero", Op::Prepare { spell: s.into() })
+            .unwrap_or_else(|e| panic!("prepare {s}: {e}"));
+    }
+    let lists = lists_of(&save, "hero");
+    assert_eq!(lists.prepared.len(), 4, "seeds must not consume the cap");
+    assert_eq!(lists.always_prepared.len(), 2);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn seeded_2024_life_and_fiend_follow_from_level() {
+    let save_root = t3_root("seed-2024");
+    let save = t3_save(&save_root, "s");
+    // 2024 Life：1 级没有播种（from_level 3）。
+    write_caster(
+        &save,
+        "lumen",
+        "cleric",
+        Some("life"),
+        "2024",
+        1,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    run_op(
+        &save,
+        "lumen",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Sync { dry_run: false }),
+        },
+    )
+    .unwrap();
+    assert!(
+        lists_of(&save, "lumen").always_prepared.is_empty(),
+        "2024 Life has no grants before level 3"
+    );
+    // 2024 Fiend 3 级播种 1/2 环，5 级补 fireball。
+    write_caster(
+        &save,
+        "ash",
+        "warlock",
+        Some("fiend"),
+        "2024",
+        3,
+        &[("cha", 16)],
+        empty_lists("known", "cha"),
+    );
+    run_op(
+        &save,
+        "ash",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Sync { dry_run: false }),
+        },
+    )
+    .unwrap();
+    let lists = lists_of(&save, "ash");
+    assert!(lists.always_prepared.contains(&"burning-hands".to_string()));
+    assert!(lists.always_prepared.contains(&"command".to_string()));
+    assert!(
+        !lists.always_prepared.contains(&"fireball".to_string()),
+        "2024 Fiend fireball waits for level 5"
+    );
+    write_caster(
+        &save,
+        "ash",
+        "warlock",
+        Some("fiend"),
+        "2024",
+        5,
+        &[("cha", 16)],
+        empty_lists("known", "cha"),
+    );
+    run_op(
+        &save,
+        "ash",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Sync { dry_run: false }),
+        },
+    )
+    .unwrap();
+    assert!(lists_of(&save, "ash")
+        .always_prepared
+        .contains(&"fireball".to_string()));
+    // 2014 Fiend 是 class_list（扩表选项）：绝不播种 always_prepared。
+    let book14 = Book::srd("2014");
+    let mut c = Creation {
+        ruleset: Some("2014".into()),
+        class: Some("warlock".into()),
+        subclass: Some("fiend".into()),
+        level: 5,
+        level_done: true,
+        spells_done: true,
+        spells: vec![],
+        ..Default::default()
+    };
+    c.spell_lists = chargen::spell_lists_from_text(&c, Some(&book14));
+    assert!(c.spell_lists.unwrap().always_prepared.is_empty());
+    let _ = fs::remove_dir_all(&save_root);
+}
+
+#[test]
+fn terrain_command_validates_filters_and_displays() {
+    let root = t3_root("terrain");
+    let save = t3_save(&root, "s");
+
+    // 非 Land 子职（cleric life）：职业没有地形授予，拒绝。
+    write_caster(
+        &save,
+        "lifen",
+        "cleric",
+        Some("life"),
+        "2014",
+        5,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    let err = run_op(
+        &save,
+        "lifen",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "arctic".into(),
+            }),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("没有按地形分组"), "{err}");
+
+    // 未选子职的 druid：提示先选有地形授予的子职。
+    write_caster(
+        &save,
+        "oak",
+        "druid",
+        None,
+        "2014",
+        5,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    let err = run_op(
+        &save,
+        "oak",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "arctic".into(),
+            }),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("先选"), "{err}");
+
+    // Land + 非法地形：拒绝并列出可选值。
+    write_caster(
+        &save,
+        "thorn",
+        "druid",
+        Some("land"),
+        "2014",
+        5,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    let err = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "volcano".into(),
+            }),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("可选"), "{err}");
+
+    // 合法地形：写入 + 播种 arctic；视图文本与 JSON 显示地形。
+    let out = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "arctic".into(),
+            }),
+        },
+    )
+    .unwrap();
+    let joined = out.join("；");
+    assert!(joined.contains("地形设为 arctic"), "{joined}");
+    assert!(joined.contains("hold-person"), "{joined}");
+    let lists = lists_of(&save, "thorn");
+    assert_eq!(lists.terrain.as_deref(), Some("arctic"));
+    for id in ["hold-person", "spike-growth", "sleet-storm", "slow"] {
+        assert!(lists.always_prepared.contains(&id.to_string()), "{id}");
+    }
+    assert!(
+        !lists.always_prepared.contains(&"fireball".to_string()),
+        "other terrain grants must not seed"
+    );
+    let view = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: None,
+        },
+    )
+    .unwrap();
+    assert!(
+        view.iter().any(|l| l.contains("地形：arctic")),
+        "{}",
+        view.join(
+            "
+"
+        )
+    );
+    let json = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: true,
+            cmd: None,
+        },
+    )
+    .unwrap()
+    .join("");
+    assert!(json.contains("\"terrain\":\"arctic\""), "{json}");
+
+    // 重复设置同一地形是幂等 no-op。
+    let out = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "arctic".into(),
+            }),
+        },
+    )
+    .unwrap();
+    assert!(out.join("；").contains("无变化"), "{}", out.join("；"));
+
+    // 2024 Land（arid/polar/temperate/tropical）同样工作（独立 save，
+    // save 级 edition 取首张表）。
+    let root24 = t3_root("terrain-2024");
+    let save24 = t3_save(&root24, "s");
+    write_caster(
+        &save24,
+        "moss",
+        "druid",
+        Some("land"),
+        "2024",
+        5,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    run_op(
+        &save24,
+        "moss",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "arid".into(),
+            }),
+        },
+    )
+    .unwrap();
+    let lists = lists_of(&save24, "moss");
+    assert_eq!(lists.terrain.as_deref(), Some("arid"));
+    assert!(lists.always_prepared.contains(&"fire-bolt".to_string()));
+    assert!(lists.always_prepared.contains(&"blur".to_string()));
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&root24);
+}
+
+#[test]
+fn terrain_failures_and_views_write_nothing() {
+    let root = t3_root("terrain-readonly");
+    let save = t3_save(&root, "s");
+    write_caster(
+        &save,
+        "thorn",
+        "druid",
+        Some("land"),
+        "2014",
+        5,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    let before = sheet_text(&save, "thorn");
+    let err = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "volcano".into(),
+            }),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("可选"), "{err}");
+    let _ = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        before,
+        sheet_text(&save, "thorn"),
+        "failed/readonly ops must not write"
+    );
     let _ = fs::remove_dir_all(&root);
 }
