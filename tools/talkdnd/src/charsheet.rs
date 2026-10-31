@@ -1429,8 +1429,9 @@ impl<'a> SpellClass<'a> {
         }
         let subclass = subclass_of_cf(cf, cd);
         // Subclass-aware universe (§3.9): only the selected subclass's
-        // grants enter the sources; class-level features_grants always do.
-        let universe = classdata::spell_universe(book, cd, subclass.as_deref());
+        // grants enter the sources; class-level features_grants always do,
+        // both only once their `from_level` is reached.
+        let universe = classdata::spell_universe(book, cd, subclass.as_deref(), cf.level());
         let mut scores = BTreeMap::new();
         if let Some(abilities) = cf.combat.get("abilities") {
             for a in data::ABILITIES {

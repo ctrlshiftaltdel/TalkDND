@@ -1708,7 +1708,7 @@ fn plan_spells_10(save: &Path, root: &Path, dirty: &BTreeSet<String>) -> Result<
                             .map(str::to_string)
                     })
                     .unwrap_or_default(),
-                crate::classdata::spell_universe(book, cd, subclass.as_deref()),
+                crate::classdata::spell_universe(book, cd, subclass.as_deref(), cf.level()),
             ),
             None => (String::new(), String::new(), BTreeMap::new()),
         };

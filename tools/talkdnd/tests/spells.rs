@@ -598,19 +598,19 @@ fn class_data_2014_has_tables_ritual_and_grants() {
 
     // The universe for adopt/validation: base + class-level grants +
     // any_class (all class tables in the book).
-    let universe = classdata::spell_universe(&book, bard, None);
+    let universe = classdata::spell_universe(&book, bard, None, 20);
     assert_eq!(universe.get("magic-missile"), Some(&1));
     assert!(
         universe.contains_key("spirit-guardians"),
         "any_class opens every table (cleric-only spell)"
     );
-    let universe = classdata::spell_universe(&book, warlock, Some("fiend"));
+    let universe = classdata::spell_universe(&book, warlock, Some("fiend"), 20);
     assert!(
         universe.contains_key("fireball"),
         "Fiend class_list grants fireball"
     );
     assert!(
-        !classdata::spell_universe(&book, warlock, None).contains_key("fireball"),
+        !classdata::spell_universe(&book, warlock, None, 20).contains_key("fireball"),
         "a warlock without the Fiend subclass has no expanded list"
     );
 }
@@ -666,7 +666,7 @@ fn class_data_2024_has_edition_ritual_and_handwritten_grants() {
 
     // The universe honours multi_list sources (class-level Magical Secrets,
     // valid without a subclass).
-    let universe = classdata::spell_universe(&book, bard, None);
+    let universe = classdata::spell_universe(&book, bard, None, 20);
     assert!(
         universe.contains_key("mass-healing-word"),
         "cleric table reachable through bard Magical Secrets"
@@ -683,30 +683,30 @@ fn spell_universe_is_subclass_aware() {
     let book = Book::srd("2014");
     // 非 Fiend Warlock：Fiend 扩展表（class_list）不进入来源。
     let warlock = book.class("warlock").unwrap();
-    let no_fiend = classdata::spell_universe(&book, warlock, None);
+    let no_fiend = classdata::spell_universe(&book, warlock, None, 20);
     assert!(
         !no_fiend.contains_key("fireball"),
         "unselected Fiend expanded list leaked: fireball present"
     );
     assert!(
-        classdata::spell_universe(&book, warlock, Some("fiend")).contains_key("fireball"),
+        classdata::spell_universe(&book, warlock, Some("fiend"), 20).contains_key("fireball"),
         "a Fiend warlock keeps the expanded list"
     );
     // 非 Land Druid：Land 地形法术（always_prepared）不进入来源。
     let druid = book.class("druid").unwrap();
     for id in ["slow", "cone-of-cold", "mirror-image"] {
         assert!(
-            !classdata::spell_universe(&book, druid, None).contains_key(id),
+            !classdata::spell_universe(&book, druid, None, 20).contains_key(id),
             "unselected Land grant leaked: {id} present"
         );
         assert!(
-            classdata::spell_universe(&book, druid, Some("land")).contains_key(id),
+            classdata::spell_universe(&book, druid, Some("land"), 20).contains_key(id),
             "a Land druid keeps the terrain grants: {id}"
         );
     }
     // 未选 Lore：class 级 Magical Secrets（features_grants）仍全部有效。
     let bard = book.class("bard").unwrap();
-    let no_lore = classdata::spell_universe(&book, bard, None);
+    let no_lore = classdata::spell_universe(&book, bard, None, 20);
     assert!(
         no_lore.contains_key("spirit-guardians"),
         "class-level Magical Secrets must survive the subclass filter"
@@ -714,25 +714,122 @@ fn spell_universe_is_subclass_aware() {
     // 2014 Lore 的第 6 级 any_class 与 class 级 Magical Secrets 都开全部
     // 职业表，集合上重合；区分性由 warlock/druid 用例承担，
     // 这里断言选中 lore 不会减少来源。
-    let with_lore = classdata::spell_universe(&book, bard, Some("lore"));
+    let with_lore = classdata::spell_universe(&book, bard, Some("lore"), 20);
     assert_eq!(no_lore, with_lore);
     // 2024：Land 的 fire-bolt 戏法只经子职授予进入；class 级
     // multi_list（bard/cleric/druid/wizard）不受子职过滤影响。
     let book24 = Book::srd("2024");
     let bard24 = book24.class("bard").unwrap();
     assert!(
-        classdata::spell_universe(&book24, bard24, None).contains_key("mass-healing-word"),
+        classdata::spell_universe(&book24, bard24, None, 20).contains_key("mass-healing-word"),
         "2024 class-level Magical Secrets survive the filter"
     );
     let druid24 = book24.class("druid").unwrap();
     assert!(
-        !classdata::spell_universe(&book24, druid24, None).contains_key("fire-bolt"),
+        !classdata::spell_universe(&book24, druid24, None, 20).contains_key("fire-bolt"),
         "unselected 2024 Land grant leaked: fire-bolt present"
     );
     assert!(
-        classdata::spell_universe(&book24, druid24, Some("land")).contains_key("fire-bolt"),
+        classdata::spell_universe(&book24, druid24, Some("land"), 20).contains_key("fire-bolt"),
         "a 2024 Land druid keeps fire-bolt"
     );
+}
+
+// ---------------------------------------------------------------------------
+// R2 修正（PR #245 退回 2）：授予按 from_level 进入来源（docs/SPELLCASTING.md
+// §3.9）——低等级不得提前获得高等级特性授予的法术。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spell_universe_filters_grants_by_level() {
+    // 1 级 Bard：Magical Secrets（10 级 any_class）未到，cleric 的 bless
+    // 不在来源；10 级起经 Magical Secrets 进入。
+    let book = Book::srd("2014");
+    let bard = book.class("bard").unwrap();
+    assert!(
+        !classdata::spell_universe(&book, bard, None, 1).contains_key("bless"),
+        "a level-1 bard got a level-10 Magical Secrets spell early"
+    );
+    assert!(
+        classdata::spell_universe(&book, bard, None, 10).contains_key("bless"),
+        "a level-10 bard reaches bless through Magical Secrets"
+    );
+
+    // 2024 Land Druid：子职授予（fire-bolt 戏法）3 级才到位。
+    let book24 = Book::srd("2024");
+    let druid24 = book24.class("druid").unwrap();
+    assert!(
+        !classdata::spell_universe(&book24, druid24, Some("land"), 1).contains_key("fire-bolt"),
+        "a level-1 Land druid got the level-3 subclass cantrip early"
+    );
+    assert!(
+        classdata::spell_universe(&book24, druid24, Some("land"), 3).contains_key("fire-bolt"),
+        "a level-3 Land druid has fire-bolt"
+    );
+
+    // 2014 Fiend Warlock：1 级即有 1 环扩表；3/5 环扩表等对应等级。
+    let warlock = book.class("warlock").unwrap();
+    let l1 = classdata::spell_universe(&book, warlock, Some("fiend"), 1);
+    assert!(
+        l1.contains_key("burning-hands") && l1.contains_key("command"),
+        "a level-1 Fiend keeps the ring-1 expanded list"
+    );
+    assert!(
+        !l1.contains_key("fireball"),
+        "the ring-3 Fiend grant must wait for level 5"
+    );
+    assert!(
+        classdata::spell_universe(&book, warlock, Some("fiend"), 5).contains_key("fireball"),
+        "a level-5 Fiend warlock gains fireball"
+    );
+
+    // 基础职业表不按等级过滤：1 级术士的 3 环表内法术仍在来源里，
+    // 高环由 max_castable 继续把关（见下一个测试）。
+    assert!(
+        classdata::spell_universe(&book, warlock, None, 1).contains_key("counterspell"),
+        "the base table is not level-filtered"
+    );
+}
+
+#[test]
+fn grant_levels_gate_sources_but_rings_stay_with_max_castable() {
+    let root = t3_root("grant-level");
+    let save = t3_save(&root, "s");
+    // 1 级 Fiend Warlock（known 模式）：pact slot 1 环。
+    write_caster(
+        &save,
+        "war",
+        "warlock",
+        Some("fiend"),
+        "2014",
+        1,
+        &[("cha", 16)],
+        empty_lists("known", "cha"),
+    );
+    // 授予等级：2 环扩表 blindness-deafness 3 级才授予 → 来源拒绝。
+    let err = run_op(
+        &save,
+        "war",
+        Op::Learn {
+            spell: "blindness-deafness".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("不在 warlock 的法术来源内"),
+        "{err}"
+    );
+    // 环级：基础表 3 环 counterspell 在来源里，但 1 级 pact slot 只有 1 环。
+    let err = run_op(
+        &save,
+        "war",
+        Op::Learn {
+            spell: "counterspell".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("高于当前可施法环级"), "{err}");
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -1744,7 +1841,7 @@ fn unselected_subclass_sources_are_refused_but_selected_work() {
         .prepared
         .contains(&"slow".to_string()));
 
-    // 未选 Lore 的第 6 级 Bard 仍有 class 级 Magical Secrets
+    // 未选 Lore 的第 10 级 Bard 仍有 class 级 Magical Secrets
     // （features_grants 保留）：spirit-guardians 经它可达。
     write_caster(
         &save,
@@ -1752,7 +1849,7 @@ fn unselected_subclass_sources_are_refused_but_selected_work() {
         "bard",
         None,
         "2014",
-        6,
+        10,
         &[("cha", 16)],
         empty_lists("known", "cha"),
     );

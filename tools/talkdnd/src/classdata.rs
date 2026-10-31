@@ -418,9 +418,16 @@ pub fn spell_mode(cd: &ClassDef) -> Option<String> {
 /// grants of the character's **selected** subclass (`None` or an unknown id
 /// contributes no subclass grants), and — for choice grants — the source
 /// class tables (`any_class`: every class in the book; `multi_list`: only
-/// the listed ones). Migration adopt and the T3 commands use this as the
-/// "known universe" for precise matching (docs/SPELLCASTING.md §3.9).
-pub fn spell_universe(book: &Book, cd: &ClassDef, subclass: Option<&str>) -> BTreeMap<String, u8> {
+/// the listed ones). Only grants with `from_level <= level` enter the set;
+/// the base table is unfiltered (ring availability stays with the slot
+/// logic). Migration adopt and the T3 commands use this as the "known
+/// universe" for precise matching (docs/SPELLCASTING.md §3.9).
+pub fn spell_universe(
+    book: &Book,
+    cd: &ClassDef,
+    subclass: Option<&str>,
+    level: i32,
+) -> BTreeMap<String, u8> {
     fn add_choice(m: &mut BTreeMap<String, u8>, book: &Book, from: &[String]) {
         let classes: Box<dyn Iterator<Item = &ClassDef>> = if from.is_empty() {
             Box::new(book.classes.values())
@@ -440,6 +447,12 @@ pub fn spell_universe(book: &Book, cd: &ClassDef, subclass: Option<&str>) -> BTr
             .into_iter()
             .flat_map(|s| s.spells.iter()),
     ) {
+        // A grant arrives at its class level: before `from_level` the
+        // spell is not in the universe yet (§3.9; the base table and the
+        // slot rings are separate gates).
+        if g.from_level > level {
+            continue;
+        }
         match (&g.id, g.from.as_slice()) {
             (Some(id), _) => {
                 m.entry(id.clone()).or_insert(g.level.unwrap_or(0));
