@@ -1428,6 +1428,9 @@ impl<'a> SpellClass<'a> {
             }
         }
         let subclass = subclass_of_cf(cf, cd);
+        // Subclass-aware universe (§3.9): only the selected subclass's
+        // grants enter the sources; class-level features_grants always do.
+        let universe = classdata::spell_universe(book, cd, subclass.as_deref());
         let mut scores = BTreeMap::new();
         if let Some(abilities) = cf.combat.get("abilities") {
             for a in data::ABILITIES {
@@ -1449,7 +1452,7 @@ impl<'a> SpellClass<'a> {
         Ok(Self {
             class,
             cd,
-            universe: classdata::spell_universe(book, cd),
+            universe,
             gen,
             level: cf.level(),
         })
@@ -1525,7 +1528,7 @@ fn effective_ability(cd: &classdata::ClassDef, class: &str) -> String {
 /// Subclass id of a sheet: `info["subclass"]` when present, else the
 /// `（<subclass>）` marker in the sheet header (same fallback as
 /// `progress::subclass_of`).
-fn subclass_of_cf(cf: &CharFile, cd: &classdata::ClassDef) -> Option<String> {
+pub(crate) fn subclass_of_cf(cf: &CharFile, cd: &classdata::ClassDef) -> Option<String> {
     if let Some(s) = cf.info.get("subclass") {
         let slug = crate::chargen::slug(s);
         if !slug.is_empty() {
@@ -1949,10 +1952,13 @@ fn dedupe_lists(lists: &mut SpellLists) {
     d(&mut lists.always_prepared);
 }
 
-/// `spells sync --dry-run`: rebuild the combat block's spell refs from the
-/// lists (§4.2). Only the managed set (ids in the list union) is added,
-/// refreshed or de-duplicated; unmanaged refs and inline definitions are
-/// kept and logged. Dry-run prints the plan without writing anything.
+/// `spells sync`: rebuild the combat block's spell refs from the lists
+/// (§4.2). The managed set is the union of the lists (cantrips ∪ known ∪
+/// prepared ∪ always_prepared ∪ arcanum): a ref inside it that is no
+/// longer castable is removed, one that is castable is added, refreshed or
+/// de-duplicated. Refs outside the union (hand-written) and inline
+/// definitions are kept and logged. Dry-run prints the plan without
+/// writing anything.
 fn spells_sync(
     cf: &mut CharFile,
     book: &Book,
@@ -1966,6 +1972,7 @@ fn spells_sync(
     let tag = if dry_run { "[dry-run] " } else { "" };
     let mut refreshed = 0usize;
     let mut deduped = 0usize;
+    let mut removed = 0usize;
     let mut kept = 0usize;
     // Best-effort registry: added refs are warned about when the content
     // does not define them (U-7; content check stays the authority).
@@ -1983,7 +1990,22 @@ fn spells_sync(
             .as_ref()
             .is_some_and(|r| r.abilities.get(id).is_some())
     };
-    let managed: std::collections::BTreeSet<String> = plan.iter().map(|r| r.id.clone()).collect();
+    // §4.2: managed = cantrips ∪ known ∪ prepared ∪ always_prepared ∪
+    // arcanum — wider than the castable set, so a stale list entry (e.g. a
+    // leftover known-mode spell under prepared mode) still identifies its
+    // ref and gets removed instead of being kept as "unmanaged".
+    let lists_ref = cf.spells.as_ref().expect("block exists");
+    let mut managed: std::collections::BTreeSet<String> = Default::default();
+    for id in lists_ref
+        .cantrips
+        .iter()
+        .chain(lists_ref.known.iter())
+        .chain(lists_ref.prepared.iter())
+        .chain(lists_ref.always_prepared.iter())
+        .chain(lists_ref.arcanum.iter())
+    {
+        managed.insert(id.clone());
+    }
     let mut seen: std::collections::BTreeSet<String> = Default::default();
     for key in ["actions", "features"] {
         let Some(Value::Sequence(entries)) = cf.combat.get_mut(key) else {
@@ -1994,7 +2016,14 @@ fn spells_sync(
             let target = entry.get("ref").and_then(Value::as_str);
             let inline = entry.get("id").and_then(Value::as_str);
             if let Some(target) = target {
-                if managed.contains(target) {
+                if !plan.iter().any(|r| r.id == target) && managed.contains(target) {
+                    // In the list union but no longer castable: stale.
+                    remove.push(i);
+                    removed += 1;
+                    out.push(format!(
+                        "{tag}移除受管但不可施放的 stale ref：{target}（{key}[{i}]）"
+                    ));
+                } else if managed.contains(target) {
                     if seen.contains(target) {
                         remove.push(i);
                         deduped += 1;
@@ -2083,7 +2112,7 @@ fn spells_sync(
         }
     }
     Ok(format!(
-        "{tag}sync 完成：新增 {added}、刷新 {refreshed}、移除重复 {deduped}；未受管/inline 保留 {kept} 条{}",
+        "{tag}sync 完成：新增 {added}、刷新 {refreshed}、移除重复 {deduped}、移除 stale {removed}；未受管/inline 保留 {kept} 条{}",
         if dry_run { "（未写入任何文件）" } else { "" }
     ))
 }

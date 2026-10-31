@@ -596,18 +596,22 @@ fn class_data_2014_has_tables_ritual_and_grants() {
     assert_eq!((ams.from_level, ams.count), (6, Some(2)));
     assert!(!ams.counts, "Lore picks do not count toward known");
 
-    // The universe for adopt/validation: base + fixed grants + any_class
-    // (all class tables in the book).
-    let universe = classdata::spell_universe(&book, bard);
+    // The universe for adopt/validation: base + class-level grants +
+    // any_class (all class tables in the book).
+    let universe = classdata::spell_universe(&book, bard, None);
     assert_eq!(universe.get("magic-missile"), Some(&1));
     assert!(
         universe.contains_key("spirit-guardians"),
         "any_class opens every table (cleric-only spell)"
     );
-    let universe = classdata::spell_universe(&book, warlock);
+    let universe = classdata::spell_universe(&book, warlock, Some("fiend"));
     assert!(
         universe.contains_key("fireball"),
         "Fiend class_list grants fireball"
+    );
+    assert!(
+        !classdata::spell_universe(&book, warlock, None).contains_key("fireball"),
+        "a warlock without the Fiend subclass has no expanded list"
     );
 }
 
@@ -660,11 +664,74 @@ fn class_data_2024_has_edition_ritual_and_handwritten_grants() {
     assert_eq!(lore.spells[0].grant, "multi_list");
     assert_eq!(lore.spells[0].from, vec!["cleric", "druid", "wizard"]);
 
-    // The universe honours multi_list sources.
-    let universe = classdata::spell_universe(&book, bard);
+    // The universe honours multi_list sources (class-level Magical Secrets,
+    // valid without a subclass).
+    let universe = classdata::spell_universe(&book, bard, None);
     assert!(
         universe.contains_key("mass-healing-word"),
         "cleric table reachable through bard Magical Secrets"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R1 修正（PR #245 退回 1）：法术来源只含角色实际子职的授予
+//（docs/SPELLCASTING.md §3.9）。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spell_universe_is_subclass_aware() {
+    let book = Book::srd("2014");
+    // 非 Fiend Warlock：Fiend 扩展表（class_list）不进入来源。
+    let warlock = book.class("warlock").unwrap();
+    let no_fiend = classdata::spell_universe(&book, warlock, None);
+    assert!(
+        !no_fiend.contains_key("fireball"),
+        "unselected Fiend expanded list leaked: fireball present"
+    );
+    assert!(
+        classdata::spell_universe(&book, warlock, Some("fiend")).contains_key("fireball"),
+        "a Fiend warlock keeps the expanded list"
+    );
+    // 非 Land Druid：Land 地形法术（always_prepared）不进入来源。
+    let druid = book.class("druid").unwrap();
+    for id in ["slow", "cone-of-cold", "mirror-image"] {
+        assert!(
+            !classdata::spell_universe(&book, druid, None).contains_key(id),
+            "unselected Land grant leaked: {id} present"
+        );
+        assert!(
+            classdata::spell_universe(&book, druid, Some("land")).contains_key(id),
+            "a Land druid keeps the terrain grants: {id}"
+        );
+    }
+    // 未选 Lore：class 级 Magical Secrets（features_grants）仍全部有效。
+    let bard = book.class("bard").unwrap();
+    let no_lore = classdata::spell_universe(&book, bard, None);
+    assert!(
+        no_lore.contains_key("spirit-guardians"),
+        "class-level Magical Secrets must survive the subclass filter"
+    );
+    // 2014 Lore 的第 6 级 any_class 与 class 级 Magical Secrets 都开全部
+    // 职业表，集合上重合；区分性由 warlock/druid 用例承担，
+    // 这里断言选中 lore 不会减少来源。
+    let with_lore = classdata::spell_universe(&book, bard, Some("lore"));
+    assert_eq!(no_lore, with_lore);
+    // 2024：Land 的 fire-bolt 戏法只经子职授予进入；class 级
+    // multi_list（bard/cleric/druid/wizard）不受子职过滤影响。
+    let book24 = Book::srd("2024");
+    let bard24 = book24.class("bard").unwrap();
+    assert!(
+        classdata::spell_universe(&book24, bard24, None).contains_key("mass-healing-word"),
+        "2024 class-level Magical Secrets survive the filter"
+    );
+    let druid24 = book24.class("druid").unwrap();
+    assert!(
+        !classdata::spell_universe(&book24, druid24, None).contains_key("fire-bolt"),
+        "unselected 2024 Land grant leaked: fire-bolt present"
+    );
+    assert!(
+        classdata::spell_universe(&book24, druid24, Some("land")).contains_key("fire-bolt"),
+        "a 2024 Land druid keeps fire-bolt"
     );
 }
 
@@ -1484,6 +1551,221 @@ fn sync_adds_managed_refs_keeps_unmanaged_and_dry_run_writes_nothing() {
     // The inline definition survives next to the ref.
     let text = sheet_text(&save, "hero");
     assert!(text.contains("Bless inline"), "{text}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn sync_removes_stale_union_refs_and_keeps_unmanaged() {
+    let root = t3_root("sync-stale");
+    let save = t3_save(&root, "s");
+    let mut lists = empty_lists("prepared", "wis");
+    lists.cantrips.push("guidance".into());
+    lists.prepared.push("cure-wounds".into());
+    // Stale leftover: a known-mode entry under prepared mode. It sits inside
+    // the list union (managed) but is not castable, so its ref is removed
+    // instead of being kept as unmanaged (docs/SPELLCASTING.md §4.2).
+    lists.known.push("bless".into());
+    write_caster(
+        &save,
+        "hero",
+        "cleric",
+        None,
+        "2014",
+        1,
+        &[("wis", 16)],
+        lists,
+    );
+    // A hand-written ref outside the lists (unmanaged) next to the stale one.
+    let text = fs::read_to_string(charsheet::path(&save, "hero")).unwrap();
+    let mut cf: CharFile = serde_norway::from_str(&text).unwrap();
+    let entries = serde_norway::from_str::<serde_norway::Value>(
+        "- {ref: identify}
+- {ref: bless}
+",
+    )
+    .unwrap();
+    if let Some(actions) = cf
+        .combat
+        .get_mut("actions")
+        .and_then(|v| v.as_sequence_mut())
+    {
+        actions.extend(entries.as_sequence().unwrap().iter().cloned());
+    } else if let Some(map) = cf.combat.as_mapping_mut() {
+        map.insert(serde_norway::Value::String("actions".into()), entries);
+    }
+    charsheet::store(&save, &cf).unwrap();
+    let before = sheet_text(&save, "hero");
+
+    // Dry-run: logs the stale removal and the unmanaged ref, writes nothing.
+    let out = run_op(
+        &save,
+        "hero",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Sync { dry_run: true }),
+        },
+    )
+    .unwrap();
+    let joined = out.join(
+        "
+",
+    );
+    assert!(joined.contains("[dry-run]"), "{joined}");
+    assert!(joined.contains("stale ref：bless"), "{joined}");
+    assert!(joined.contains("未受管 ref，未修改：identify"), "{joined}");
+    assert_eq!(before, sheet_text(&save, "hero"), "dry-run must not write");
+
+    // Real sync: the stale bless ref is removed, identify survives, and the
+    // castable entries (guidance, cure-wounds) gain their refs.
+    let out = run_op(
+        &save,
+        "hero",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Sync { dry_run: false }),
+        },
+    )
+    .unwrap();
+    let joined = out.join(
+        "
+",
+    );
+    assert!(
+        joined.contains("移除受管但不可施放的 stale ref：bless"),
+        "{joined}"
+    );
+    assert!(joined.contains("未受管 ref，未修改：identify"), "{joined}");
+    let refs = ref_entries(&save, "hero");
+    assert!(!refs.iter().any(|(id, _)| id == "bless"), "{refs:?}");
+    assert!(refs.iter().any(|(id, _)| id == "identify"), "{refs:?}");
+    assert!(refs.iter().any(|(id, _)| id == "guidance"), "{refs:?}");
+    assert!(refs.iter().any(|(id, _)| id == "cure-wounds"), "{refs:?}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn unselected_subclass_sources_are_refused_but_selected_work() {
+    let root = t3_root("subclass-filter");
+    let save = t3_save(&root, "s");
+    // 非 Fiend Warlock 不能 learn fireball（Fiend class_list）；
+    // 选中 Fiend 后可以。
+    write_caster(
+        &save,
+        "wix",
+        "warlock",
+        None,
+        "2014",
+        5,
+        &[("cha", 16)],
+        empty_lists("known", "cha"),
+    );
+    let err = run_op(
+        &save,
+        "wix",
+        Op::Learn {
+            spell: "fireball".into(),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("不在 warlock 的法术来源内"), "{err}");
+    assert!(
+        !lists_of(&save, "wix")
+            .known
+            .contains(&"fireball".to_string()),
+        "a refused learn must not write the sheet"
+    );
+    write_caster(
+        &save,
+        "wix",
+        "warlock",
+        Some("fiend"),
+        "2014",
+        5,
+        &[("cha", 16)],
+        empty_lists("known", "cha"),
+    );
+    let out = run_op(
+        &save,
+        "wix",
+        Op::Learn {
+            spell: "fireball".into(),
+        },
+    )
+    .unwrap();
+    let joined = out.join(" ");
+    assert!(joined.contains("fireball"), "{joined}");
+    assert!(lists_of(&save, "wix")
+        .known
+        .contains(&"fireball".to_string()));
+
+    // 非 Land Druid 不能 prepare Land 地形法术；选中 Land 后可以。
+    write_caster(
+        &save,
+        "thorn",
+        "druid",
+        None,
+        "2014",
+        5,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    let err = run_op(
+        &save,
+        "thorn",
+        Op::Prepare {
+            spell: "slow".into(),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("不在 druid 的法术来源内"), "{err}");
+    write_caster(
+        &save,
+        "thorn",
+        "druid",
+        Some("land"),
+        "2014",
+        5,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    let out = run_op(
+        &save,
+        "thorn",
+        Op::Prepare {
+            spell: "slow".into(),
+        },
+    )
+    .unwrap();
+    let joined = out.join(" ");
+    assert!(joined.contains("slow"), "{joined}");
+    assert!(lists_of(&save, "thorn")
+        .prepared
+        .contains(&"slow".to_string()));
+
+    // 未选 Lore 的第 6 级 Bard 仍有 class 级 Magical Secrets
+    // （features_grants 保留）：spirit-guardians 经它可达。
+    write_caster(
+        &save,
+        "mel",
+        "bard",
+        None,
+        "2014",
+        6,
+        &[("cha", 16)],
+        empty_lists("known", "cha"),
+    );
+    let out = run_op(
+        &save,
+        "mel",
+        Op::Learn {
+            spell: "spirit-guardians".into(),
+        },
+    )
+    .unwrap();
+    let joined = out.join(" ");
+    assert!(joined.contains("spirit-guardians"), "{joined}");
     let _ = fs::remove_dir_all(&root);
 }
 #[test]

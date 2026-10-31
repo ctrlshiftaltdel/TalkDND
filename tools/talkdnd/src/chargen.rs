@@ -825,7 +825,7 @@ pub fn validate(c: &Creation) -> Report {
         if let Some(lists) = &c.spell_lists {
             let srd = crate::classdata::Book::srd(&rs);
             if let Some(cd) = c.class.as_deref().and_then(|cls| srd.class(cls)) {
-                let universe = crate::classdata::spell_universe(&srd, cd);
+                let universe = crate::classdata::spell_universe(&srd, cd, c.subclass.as_deref());
                 for id in lists
                     .cantrips
                     .iter()
@@ -973,7 +973,7 @@ pub fn spell_lists_from_text(
     let book = book.unwrap_or(&srd);
     let cd = book.class(class)?;
     let mode = crate::classdata::spell_mode(cd)?;
-    let universe = crate::classdata::spell_universe(book, cd);
+    let universe = crate::classdata::spell_universe(book, cd, c.subclass.as_deref());
     let (mapped, legacy) = map_spell_texts(&c.spells, &universe);
     let mut lists = crate::charsheet::SpellLists {
         version: 1,
@@ -1431,7 +1431,7 @@ fn spell_refs_yaml(
         .class
         .as_deref()
         .and_then(|cls| book.class(cls))
-        .map(|cd| crate::classdata::spell_universe(book, cd))
+        .map(|cd| crate::classdata::spell_universe(book, cd, c.subclass.as_deref()))
         .unwrap_or_default();
     let is_arcanum = |id: &str| lists.arcanum.iter().any(|s| s == id);
     let mut lines: Vec<String> = crate::charsheet::castable_ids(lists)
