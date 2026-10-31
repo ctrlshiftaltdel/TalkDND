@@ -24,7 +24,7 @@
 | 职业起始装备 | 把选项念给玩家。2014：每组选一项（字母按组顺序），或改掷起始金币；2024：A/B（战士有 C），最后一项是纯金币。物品与金币自动加入；`{martial weapon}` 这类占位项由玩家说具体武器 | `$T chargen set class-equipment a,b,a,a` / `gold`（掷骰记日志）/ `A`；再 `$T chargen set equipment greatsword` |
 | 其他装备 | 额外购买的物品；护甲和盾牌可单列。**职业（含子职）不熟练的护甲或盾牌会让 `validate` 报错** | `$T chargen set armor chain-mail`、`$T chargen set shield yes`、`$T chargen set equipment "mace; holy symbol"` |
 | 武器精通（仅 2024，野蛮人/战士/圣武士/游侠/盗贼） | 持有武器多于可选数量时由玩家选 | `$T chargen set masteries longsword,javelin` |
-| 法术 | 施法职业按书选戏法和法术；非施法职业写 none。程序按职业数据核对**戏法数**与**已知/可准备法术数**（2014 准备施法者 = 施法属性调整值 + 等级，至少 1；2024 用表格）：过多报错，过少只警告。schema 10 起确认后的角色卡带 `spells` 法术列表块，见 `docs/character-data.md`「法术列表」 | `$T chargen set spells "sacred flame, cure wounds"` |
+| 法术 | 施法职业按书选戏法和法术；非施法职业写 none。程序按职业数据核对**戏法数**与**已知/可准备法术数**（2014 准备施法者 = 施法属性调整值 + 等级，至少 1；2024 用表格）：过多报错，过少只警告。schema 10 起 `set spells` 会把自由文本**精确对号**成结构化 `spell_lists`（id 或名字 slug；对不上的进 `legacy`，职业未定或非施法职业则只存旧文本），`chargen validate` 优先按结构化列表核对；确认后的角色卡带 `spells` 块，且 sheet 生成时把当前可施法列表写成 combat 块的法术 refs（契约施法者带 `spell-slot-L` 成本覆盖，arcanum 带 `arcanum-N`），见 `docs/character-data.md`「法术列表」与「法术命令」 | `$T chargen set spells "sacred flame, cure wounds"` |
 | 名字 | 名字 | `$T chargen set name Bruni` |
 | 性格四项与阵营 | 性格特点、理想、牵绊、缺点（可参考背景的建议表，由玩家定）、阵营 | `$T chargen set traits "..."`、`set ideals`、`set bonds`、`set flaws`、`set alignment "混乱善良"` |
 | 确认 | 生成角色卡给玩家看，玩家说可以再确认 | `$T chargen validate` → `$T chargen sheet --player <玩家名>` → `$T chargen confirm` |

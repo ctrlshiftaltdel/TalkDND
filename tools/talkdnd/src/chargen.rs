@@ -819,6 +819,36 @@ pub fn validate(c: &Creation) -> Report {
                 w.push(format!("{kind}: {leveled} of {exp}"));
             }
         }
+        // Structured lists (v1.6 T3): ids outside the SRD sources are a
+        // warning here (local data or a DM grant); the list commands fail
+        // closed against the full universe (Book::load with local data).
+        if let Some(lists) = &c.spell_lists {
+            let srd = crate::classdata::Book::srd(&rs);
+            if let Some(cd) = c.class.as_deref().and_then(|cls| srd.class(cls)) {
+                let universe = crate::classdata::spell_universe(
+                    &srd,
+                    cd,
+                    c.subclass.as_deref(),
+                    c.level.max(1),
+                );
+                for id in lists
+                    .cantrips
+                    .iter()
+                    .chain(lists.known.iter())
+                    .chain(lists.prepared.iter())
+                    .chain(lists.book.iter())
+                    .chain(lists.always_prepared.iter())
+                    .chain(lists.arcanum.iter())
+                {
+                    if !universe.contains_key(id) {
+                        w.push(format!(
+                            "spell `{id}` is not in the SRD sources for `{}` (local data or a DM grant: the DM confirms it)",
+                            c.class.clone().unwrap_or_default()
+                        ));
+                    }
+                }
+            }
+        }
     }
     Report {
         errors: e,
@@ -930,6 +960,56 @@ pub fn map_spell_texts(
         }
     }
     (mapped, legacy)
+}
+
+/// Structured lists from the free-text `set spells` input (v1.6 T3): the
+/// precise D-9 mapping against the class universe; unmatched names go to
+/// `legacy`. `None` when the class is unset, has no data or is not a
+/// caster — the old free-text path keeps working in those cases.
+pub fn spell_lists_from_text(
+    c: &Creation,
+    book: Option<&crate::classdata::Book>,
+) -> Option<crate::charsheet::SpellLists> {
+    if !c.spells_done {
+        return None;
+    }
+    let class = c.class.as_deref()?;
+    let srd = crate::classdata::Book::srd(c.rs());
+    let book = book.unwrap_or(&srd);
+    let cd = book.class(class)?;
+    let mode = crate::classdata::spell_mode(cd)?;
+    let universe =
+        crate::classdata::spell_universe(book, cd, c.subclass.as_deref(), c.level.max(1));
+    let (mapped, legacy) = map_spell_texts(&c.spells, &universe);
+    let mut lists = crate::charsheet::SpellLists {
+        version: 1,
+        mode: mode.clone(),
+        ability: cd
+            .spell_ability
+            .clone()
+            .or_else(|| {
+                crate::data::class(class)
+                    .and_then(|c| c.spell_ability)
+                    .map(str::to_string)
+            })
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    for id in mapped {
+        let level = universe.get(&id).copied().unwrap_or(0);
+        let target = if level == 0 {
+            &mut lists.cantrips
+        } else {
+            match mode.as_str() {
+                "known" => &mut lists.known,
+                "spellbook" => &mut lists.book,
+                _ => &mut lists.prepared,
+            }
+        };
+        target.push(id);
+    }
+    lists.legacy = legacy;
+    Some(lists)
 }
 
 /// The `- <name>` lines of a Markdown sheet's `## 法术` section (the
@@ -1126,7 +1206,7 @@ pub fn sheet_with(
             8 + mods[a] + prof
         );
     }
-    y += &gen_yaml(&g);
+    y += &gen_yaml(&g, &spell_refs_yaml(c, &g, book));
     y += &format!(
         "notes: {}\n",
         yaml_str(&format!(
@@ -1256,7 +1336,7 @@ fn gen_md(g: &crate::classdata::Generated, _prof: i32) -> String {
     md
 }
 
-fn gen_yaml(g: &crate::classdata::Generated) -> String {
+fn gen_yaml(g: &crate::classdata::Generated, spell_refs: &str) -> String {
     let mut y = String::new();
     let mut res: Vec<String> = Vec::new();
     for r in &g.resources {
@@ -1323,7 +1403,7 @@ fn gen_yaml(g: &crate::classdata::Generated) -> String {
     let acts: Vec<_> = g.refs.iter().filter(|r| r.2).collect();
     let feats: Vec<_> = g.refs.iter().filter(|r| !r.2).collect();
     for (key, list) in [("actions", acts), ("features", feats)] {
-        if list.is_empty() {
+        if list.is_empty() && !(key == "actions" && !spell_refs.is_empty()) {
             continue;
         }
         y += &format!("{key}:\n");
@@ -1333,8 +1413,43 @@ fn gen_yaml(g: &crate::classdata::Generated) -> String {
                 None => y += &format!("  - {{ref: {r}}}\n"),
             }
         }
+        if key == "actions" {
+            // Structured spell lists (v1.6 T3) become spell action refs.
+            y += spell_refs;
+        }
     }
     y
+}
+
+/// Combat-yaml ref lines for the structured spell lists (v1.6 T3): the
+/// castable set per mode, sorted by level then id, with the pact-slot /
+/// arcanum cost overrides (docs/SPELLCASTING.md §4.2/§3.10). Empty for the
+/// free-text-only legacy input (the lists are the only source of refs).
+fn spell_refs_yaml(
+    c: &Creation,
+    g: &crate::classdata::Generated,
+    book: &crate::classdata::Book,
+) -> String {
+    let Some(lists) = &c.spell_lists else {
+        return String::new();
+    };
+    let universe = c
+        .class
+        .as_deref()
+        .and_then(|cls| book.class(cls))
+        .map(|cd| crate::classdata::spell_universe(book, cd, c.subclass.as_deref(), c.level.max(1)))
+        .unwrap_or_default();
+    let is_arcanum = |id: &str| lists.arcanum.iter().any(|s| s == id);
+    let mut lines: Vec<String> = crate::charsheet::castable_ids(lists)
+        .iter()
+        .map(|id| {
+            let level = universe.get(id).copied().unwrap_or(0);
+            let cost = crate::charsheet::spell_ref_cost(id, level, is_arcanum(id), g.pact);
+            crate::charsheet::cost_ref_line(id, &cost)
+        })
+        .collect();
+    lines.push(String::new());
+    lines.join("\n")
 }
 
 #[cfg(test)]

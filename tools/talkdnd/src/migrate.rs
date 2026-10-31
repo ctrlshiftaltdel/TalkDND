@@ -1694,6 +1694,7 @@ fn plan_spells_10(save: &Path, root: &Path, dirty: &BTreeSet<String>) -> Result<
                 ));
             }
         }
+        let subclass = cd.and_then(|cd| crate::charsheet::subclass_of_cf(&cf, cd));
         let (mode, ability, universe) = match cd {
             Some(cd) => (
                 crate::classdata::spell_mode(cd).unwrap_or_default(),
@@ -1707,7 +1708,7 @@ fn plan_spells_10(save: &Path, root: &Path, dirty: &BTreeSet<String>) -> Result<
                             .map(str::to_string)
                     })
                     .unwrap_or_default(),
-                crate::classdata::spell_universe(book, cd),
+                crate::classdata::spell_universe(book, cd, subclass.as_deref(), cf.level()),
             ),
             None => (String::new(), String::new(), BTreeMap::new()),
         };
