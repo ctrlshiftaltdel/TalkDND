@@ -7583,7 +7583,10 @@ fn plan_spell_cast(
     }
 
     // Validate the replacement dice now so a bad expression cannot fail
-    // after the slot was already spent.
+    // after the slot was already spent. The dice must also land on a main
+    // damage/heal effect; otherwise the replacement in use_resolved_ability
+    // would fail after the action and slot were already spent, so fail
+    // closed here before any state mutation.
     if let Some(dice) = &plan.main_dice {
         evaluate_for_actor(
             state,
@@ -7599,6 +7602,12 @@ fn plan_spell_cast(
                 ability.display_name()
             )
         })?;
+        if replace_main_dice(&ability.effects, dice).is_none() {
+            bail!(
+                "`{}` has no main damage or heal effect to scale with `{dice}`",
+                ability.display_name()
+            );
+        }
     }
     Ok(plan)
 }

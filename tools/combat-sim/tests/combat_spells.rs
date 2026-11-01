@@ -343,6 +343,24 @@ fn spell_abilities() -> Vec<Value> {
                 "upcast": {"text": "arcanum never adds dice", "dice_by_level": {"6": "5d6"}}
             }
         }),
+        // Upcast table but note-only effects: the dice have no main
+        // damage/heal to land on, so the cast must fail closed before the
+        // action, slot or concentration are touched.
+        json!({
+            "id": "note-veil", "name": "Note Veil", "tags": ["spell"],
+            "activation": "action",
+            "cost": {"resource": "spell-slot-1", "amount": 1},
+            "slot_level": 1,
+            "concentration": true,
+            "target": self_target(),
+            "effects": [{"note": "a veil of pure text"}],
+            "spell": {
+                "level": 1,
+                "casting_time": {"amount": 1, "unit": "action"},
+                "components": {"verbal": true},
+                "upcast": {"text": "higher", "dice_by_level": {"2": "2d6"}}
+            }
+        }),
     ]
 }
 
@@ -365,6 +383,7 @@ fn spell_creatures() -> Vec<Value> {
                 {"ref": "slow-ritual"}, {"ref": "hour-ward"}, {"ref": "quick-word"},
                 {"ref": "gem-cast"}, {"ref": "dust-cast"}, {"ref": "free-cast"},
                 {"ref": "test-hold"}, {"ref": "no-meta-bolt"},
+                {"ref": "note-veil"},
             ],
         }),
         json!({
@@ -593,6 +612,58 @@ fn upcast_without_table_entry_fails_closed() {
     // Fail closed: nothing was spent and the target is unharmed.
     assert_eq!(resource(&state, "Caster X", "spell-slot-3"), 2);
     assert_eq!(state.combatants[index(&state, "Brute B")].hp, 100);
+}
+
+#[test]
+fn upcast_without_main_damage_or_heal_fails_before_spending() {
+    // The spell has an upcast table but note-only effects, so the dice have
+    // no main damage/heal to land on. The failure must happen in the plan
+    // phase: action, slot and concentration all stay untouched (round-1
+    // review fix; note-veil is concentration so the old order would have
+    // started concentration before bailing).
+    let mut state = encounter_state(&["caster-x"]);
+    let mut log = Vec::new();
+    let error = engine::use_ability(
+        &mut state,
+        "Caster X",
+        "note-veil",
+        &cast_options("Caster X", Some(2), None, false),
+        &mut ScriptedRng::new(&[]),
+        &mut log,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("no main damage or heal effect to scale"),
+        "{error}"
+    );
+    assert!(
+        !state.combatants[index(&state, "Caster X")].action_used,
+        "the action was not spent"
+    );
+    assert_eq!(
+        resource(&state, "Caster X", "spell-slot-1"),
+        4,
+        "base slot untouched"
+    );
+    assert_eq!(
+        resource(&state, "Caster X", "spell-slot-2"),
+        3,
+        "no slot spent"
+    );
+    assert!(
+        !state.concentration.contains_key("Caster X"),
+        "concentration untouched"
+    );
+    assert!(
+        !log.iter().any(|line| line.contains("MANUAL")),
+        "no manual note: {log:?}"
+    );
+    assert!(
+        !log.iter().any(|line| line.contains("uses Note Veil")),
+        "no effect settlement: {log:?}"
+    );
 }
 
 #[test]
