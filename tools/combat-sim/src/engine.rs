@@ -183,6 +183,24 @@ pub struct UseOptions {
     pub no_reactions: bool,
     /// Knock out instead of kill on a melee attack that drops the target to 0 HP.
     pub nonlethal: bool,
+    /// Declared material component (v1.6 D-3: a verbatim declaration, never a
+    /// lookup). Required for spells whose material has a price gate or is
+    /// consumed; ignored for everything else.
+    pub material: Option<String>,
+    /// DM override that skips component declarations; logged as
+    /// `COMPONENTS IGNORED` (v1.6 D-4).
+    pub ignore_components: bool,
+}
+
+/// Spell-cast parameters carried into the shared executor
+/// (`use_resolved_ability`). There is exactly one spell executor; these
+/// parameters only steer slot payment, component declarations and the
+/// `{slot_level}` context inside it.
+#[derive(Debug, Clone, Default)]
+pub struct CastParams {
+    pub slot_level: Option<i32>,
+    pub material: Option<String>,
+    pub ignore_components: bool,
 }
 
 /// A character's condition-duration override supplied by the CLI.
@@ -2959,7 +2977,10 @@ pub fn use_planned_ability(
         center.as_ref(),
         &options,
         option,
-        slot_level,
+        &CastParams {
+            slot_level,
+            ..CastParams::default()
+        },
         AbilitySettlement {
             action_spent: false,
             ..AbilitySettlement::default()
@@ -3239,7 +3260,7 @@ fn resolve_named_entry(
         None,
         options,
         None,
-        None,
+        &CastParams::default(),
         AbilitySettlement {
             action_spent: auto,
             ..AbilitySettlement::default()
@@ -6095,7 +6116,10 @@ fn apply_effect(
                 zone_center.as_ref(),
                 &AttackOptions::default(),
                 context.option,
-                context.source.as_ref().and_then(|source| source.slot_level),
+                &CastParams {
+                    slot_level: context.source.as_ref().and_then(|source| source.slot_level),
+                    ..CastParams::default()
+                },
                 AbilitySettlement {
                     action_spent: true,
                     ..AbilitySettlement::default()
@@ -7341,6 +7365,295 @@ pub fn remove_condition(
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
+/// The slot level implied by a spell-slot-N cost resource name.
+fn cost_slot_level(resource: &str) -> Option<i32> {
+    resource.strip_prefix("spell-slot-")?.parse().ok()
+}
+
+/// The ring level implied by an arcanum-N cost resource name.
+fn cost_arcanum_level(resource: &str) -> Option<i32> {
+    resource.strip_prefix("arcanum-")?.parse().ok()
+}
+
+/// The settlement computed for one spell cast before any state mutation.
+///
+/// Built only for abilities that carry spell metadata; everything here is
+/// decided up front so a rejected cast leaves no partial state behind.
+#[derive(Debug, Default)]
+struct SpellCastPlan {
+    /// Resource actually charged (may be overridden by an explicit slot).
+    cost: Option<AbilityCost>,
+    /// Effective slot level for the slot-level context and SlotLevelMin.
+    slot_level: Option<i32>,
+    /// Replacement dice for the main damage/heal effect (upcast or cantrip
+    /// scaling), if the data provides one.
+    main_dice: Option<String>,
+    /// Component declaration lines logged after the cast is committed.
+    notes: Vec<String>,
+}
+
+/// Validates one spell cast against its spell metadata and computes the
+/// effective cost, slot context and main-dice replacement (v1.6 T4).
+///
+/// Runs before any state mutation. Fails closed on: long casting times
+/// (D-11), slots on cantrips/pact casters/Mystic Arcanum, slots below the
+/// base ring, missing upcast table entries (D-6), and costly or consumed
+/// materials declared without a material declaration (D-3/D-4).
+fn plan_spell_cast(
+    state: &EncounterState,
+    actor: usize,
+    resolved: &ResolvedAbility,
+    cast: &CastParams,
+    log: &mut dyn LogSink,
+) -> Result<SpellCastPlan> {
+    let ability = &resolved.ability;
+    let spell = ability
+        .spell
+        .as_ref()
+        .expect("plan_spell_cast is only called for spell abilities");
+    let base_level = i32::from(spell.level);
+
+    // D-11: minute/hour casting times cannot complete inside a combat round.
+    let unit_name = match spell.casting_time.unit {
+        crate::content::schema::CastingUnit::Minute => Some("minute"),
+        crate::content::schema::CastingUnit::Hour => Some("hour"),
+        _ => None,
+    };
+    if let Some(unit_name) = unit_name {
+        let amount = spell
+            .casting_time
+            .amount
+            .map(|amount| format!("{amount} "))
+            .unwrap_or_default();
+        bail!(
+            "`{}` has a casting time of {amount}{unit_name}s and cannot be completed within a \
+             combat round; resolve it outside combat (DM narration or talkdnd ritual)",
+            ability.display_name()
+        );
+    }
+
+    // Classify the resolved cost resource: a spell-slot-N resource that
+    // differs from the base ring is a pact-slot override written by spells
+    // sync (T3); arcanum-N is Mystic Arcanum.
+    let cost_slot = ability
+        .cost
+        .as_ref()
+        .and_then(|cost| cost_slot_level(&cost.resource));
+    let cost_arcanum = ability
+        .cost
+        .as_ref()
+        .and_then(|cost| cost_arcanum_level(&cost.resource));
+    let pact_level = cost_slot.filter(|level| *level != base_level);
+    let mut plan = SpellCastPlan::default();
+
+    if let Some(requested) = cast.slot_level {
+        if let Some(ring) = cost_arcanum {
+            bail!(
+                "`{}` is a Mystic Arcanum spell and consumes arcanum-{ring}; \
+                 --slot is not accepted",
+                ability.display_name()
+            );
+        }
+        if let Some(pact) = pact_level {
+            bail!(
+                "`{}` is cast with pact magic slots and can only be cast at slot level \
+                 {pact}; --slot is not accepted",
+                ability.display_name()
+            );
+        }
+        if base_level == 0 {
+            bail!(
+                "`{}` is a cantrip and cannot be cast with a spell slot",
+                ability.display_name()
+            );
+        }
+        if requested < base_level {
+            bail!(
+                "--slot {requested} is below the base level {base_level} of `{}`",
+                ability.display_name()
+            );
+        }
+        if requested > 9 {
+            bail!("--slot {requested} exceeds the highest spell slot level (9)",);
+        }
+        // An explicit slot request overrides the cost resource name (AC-1).
+        let amount = ability.cost.as_ref().map(|cost| cost.amount).unwrap_or(1);
+        plan.cost = Some(AbilityCost {
+            resource: format!("spell-slot-{requested}"),
+            amount,
+        });
+        plan.slot_level = Some(requested);
+    } else {
+        // Pact casters cast at their pact ring; arcanum at its own ring;
+        // everyone else at the base ring.
+        plan.slot_level = pact_level.or(cost_arcanum).or(ability.slot_level);
+        plan.cost = ability.cost.clone();
+    }
+
+    // Main-dice replacement (D-6). Arcanum never adds dice; cantrips grow
+    // with character level; everything else looks up the upcast table.
+    if base_level == 0 {
+        if let Some(scaling) = &spell.cantrip_scaling {
+            let level = state.combatants[actor].creature.level;
+            if let Some(dice) = level.and_then(|level| {
+                scaling
+                    .dice_by_character_level
+                    .iter()
+                    .rev()
+                    .find(|(key, _)| i32::from(**key) <= level)
+                    .map(|(_, dice)| dice.clone())
+            }) {
+                plan.main_dice = Some(dice);
+            }
+        }
+    } else if cost_arcanum.is_none() {
+        if let Some(slot) = plan.slot_level {
+            let entry = u8::try_from(slot).ok().and_then(|level| {
+                spell
+                    .upcast
+                    .as_ref()
+                    .and_then(|spec| spec.dice_by_level.get(&level))
+            });
+            match entry {
+                Some(dice) => plan.main_dice = Some(dice.clone()),
+                None if slot > base_level => match &spell.upcast {
+                    Some(_) => bail!(
+                        "`{}` has no upcast entry for slot level {slot}; \
+                         refusing to guess (add it to spell.upcast.dice_by_level)",
+                        ability.display_name()
+                    ),
+                    // Allowed, but the cast only produces base effects.
+                    None => log.log(format_args!(
+                        "UPCAST NOT MODELED: `{}` has no upcast table; casting at slot \
+                         level {slot} produces base effects",
+                        ability.display_name()
+                    )),
+                },
+                None => {}
+            }
+        }
+    }
+
+    // Component declarations (D-3/D-4): only costly or consumed materials
+    // demand a non-empty declaration; ignore-components is the DM override.
+    let declared = cast
+        .material
+        .as_deref()
+        .map(|text| !text.trim().is_empty())
+        .unwrap_or(false);
+    if declared {
+        plan.notes.push(format!(
+            "MATERIAL DECLARED: {}",
+            cast.material.as_deref().unwrap_or_default().trim()
+        ));
+    }
+    if let Some(material) = &spell.components.material {
+        if material.cost_gp.is_some() || material.consumed {
+            if cast.ignore_components {
+                plan.notes.push(format!(
+                    "COMPONENTS IGNORED: `{}` cast without a declared material component \
+                     (DM override)",
+                    ability.display_name()
+                ));
+            } else if !declared {
+                let mut why = String::new();
+                if let Some(cost) = material.cost_gp {
+                    why.push_str(&format!("costs {cost} gp"));
+                }
+                if material.consumed {
+                    if why.is_empty() {
+                        why.push_str("is consumed");
+                    } else {
+                        why.push_str(" and is consumed");
+                    }
+                }
+                bail!(
+                    "`{}` needs a material component that {} (`{}`); declare it with a \
+                     non-empty --material, or a DM may pass --ignore-components",
+                    ability.display_name(),
+                    why,
+                    material.text
+                );
+            }
+            if material.consumed {
+                plan.notes
+                    .push(format!("MATERIAL CONSUMED: {}", material.text));
+            }
+        }
+    }
+
+    // Validate the replacement dice now so a bad expression cannot fail
+    // after the slot was already spent. The dice must also land on a main
+    // damage/heal effect; otherwise the replacement in use_resolved_ability
+    // would fail after the action and slot were already spent, so fail
+    // closed here before any state mutation.
+    if let Some(dice) = &plan.main_dice {
+        evaluate_for_actor(
+            state,
+            actor,
+            &ExprValue::Text(dice.clone()),
+            &resolved.params,
+            None,
+            plan.slot_level,
+        )
+        .with_context(|| {
+            format!(
+                "`{}` upcast dice `{dice}` do not evaluate",
+                ability.display_name()
+            )
+        })?;
+        if replace_main_dice(&ability.effects, dice).is_none() {
+            bail!(
+                "`{}` has no main damage or heal effect to scale with `{dice}`",
+                ability.display_name()
+            );
+        }
+    }
+    Ok(plan)
+}
+
+/// Replaces the main damage/heal dice of the first matching effect
+/// (attack damage, first save-on-fail damage, or heal). Returns None when
+/// the effect list has no main damage/heal to scale; the caller fails closed.
+fn replace_main_dice(effects: &[Effect], dice: &str) -> Option<Vec<Effect>> {
+    for (index, effect) in effects.iter().enumerate() {
+        match effect {
+            Effect::Attack(attack) => {
+                if attack.damage.is_empty() {
+                    return None;
+                }
+                let mut patched = effects.to_vec();
+                let mut attack = attack.clone();
+                attack.damage[0].dice = ExprValue::Text(dice.to_string());
+                patched[index] = Effect::Attack(attack);
+                return Some(patched);
+            }
+            Effect::Save(save) => {
+                let position = save
+                    .on_fail
+                    .iter()
+                    .position(|effect| matches!(effect, Effect::Damage(_)))?;
+                let mut patched = effects.to_vec();
+                let mut save = save.clone();
+                if let Effect::Damage(damage) = &mut save.on_fail[position] {
+                    damage.dice = ExprValue::Text(dice.to_string());
+                }
+                patched[index] = Effect::Save(save);
+                return Some(patched);
+            }
+            Effect::Heal(heal) => {
+                let mut patched = effects.to_vec();
+                let mut heal = heal.clone();
+                heal.dice = ExprValue::Text(dice.to_string());
+                patched[index] = Effect::Heal(heal);
+                return Some(patched);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn use_resolved_ability(
     state: &mut EncounterState,
     actor: usize,
@@ -7350,7 +7663,7 @@ fn use_resolved_ability(
     zone_center: Option<&AreaCenter>,
     options: &AttackOptions,
     option: Option<usize>,
-    slot_level: Option<i32>,
+    cast: &CastParams,
     settlement: AbilitySettlement,
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
@@ -7460,7 +7773,20 @@ fn use_resolved_ability(
             }
         }
     }
-    if let Some(cost) = &ability.cost {
+    // Spell settlement (v1.6 T4): validate slot/material/casting-time rules
+    // for abilities that carry spell metadata and compute the effective cost
+    // before any state mutation. Abilities without spell metadata and prepaid
+    // casts (Ready) behave exactly as before.
+    let plan = if ability.spell.is_some() && !settlement.cost_paid {
+        Some(plan_spell_cast(state, actor, resolved, cast, log)?)
+    } else {
+        None
+    };
+    let effective_cost = plan
+        .as_ref()
+        .and_then(|plan| plan.cost.clone())
+        .or_else(|| ability.cost.clone());
+    if let Some(cost) = &effective_cost {
         if !settlement.cost_paid && !can_afford(state, actor, cost) {
             bail!(
                 "`{}` cannot afford {} {}",
@@ -7473,7 +7799,7 @@ fn use_resolved_ability(
     if !settlement.action_spent {
         spend_action(state, actor, ability.activation, log)?;
     }
-    if let Some(cost) = &ability.cost {
+    if let Some(cost) = &effective_cost {
         if !settlement.cost_paid {
             let _ = spend_cost(state, actor, cost, log)?;
         }
@@ -7484,7 +7810,11 @@ fn use_resolved_ability(
     if let Some(manual) = &ability.manual {
         log.log(format_args!("MANUAL: {manual}"));
     }
-    let slot_level = slot_level.or(ability.slot_level);
+    let slot_level = plan
+        .as_ref()
+        .and_then(|plan| plan.slot_level)
+        .or(cast.slot_level)
+        .or(ability.slot_level);
     let mut effect_source = source.clone();
     if let Some(slot_level) = slot_level {
         effect_source.slot_level = Some(slot_level);
@@ -7510,13 +7840,29 @@ fn use_resolved_ability(
         state.combatants[actor].name,
         ability.display_name()
     ));
+    for note in plan.iter().flat_map(|plan| plan.notes.iter()) {
+        log.log(format_args!("{note}"));
+    }
+    // Upcast/cantrip scaling replaces the main damage/heal dice only; the
+    // effect list itself never changes shape (v1.6 invariant).
+    let effects: std::borrow::Cow<[Effect]> =
+        match plan.as_ref().and_then(|plan| plan.main_dice.as_deref()) {
+            Some(dice) => match replace_main_dice(&ability.effects, dice) {
+                Some(patched) => std::borrow::Cow::Owned(patched),
+                None => bail!(
+                    "`{}` has no main damage or heal effect to scale with `{dice}`",
+                    ability.display_name()
+                ),
+            },
+            None => std::borrow::Cow::Borrowed(&ability.effects),
+        };
     match target_spec.target_type {
         TargetType::SelfTarget => {
             let context = EffectContext {
                 target: Some(actor),
                 ..context_base
             };
-            apply_effects(state, &context, &ability.effects, rng, log)?;
+            apply_effects(state, &context, &effects, rng, log)?;
         }
         TargetType::Creature => {
             for target in &effective_targets {
@@ -7524,7 +7870,7 @@ fn use_resolved_ability(
                     target: Some(*target),
                     ..context_base.clone()
                 };
-                apply_effects(state, &context, &ability.effects, rng, log)?;
+                apply_effects(state, &context, &effects, rng, log)?;
             }
         }
         TargetType::Zone => {
@@ -7533,7 +7879,7 @@ fn use_resolved_ability(
                     target: Some(*target),
                     ..context_base.clone()
                 };
-                apply_effects(state, &context, &ability.effects, rng, log)?;
+                apply_effects(state, &context, &effects, rng, log)?;
             }
         }
     }
@@ -7687,7 +8033,11 @@ pub fn use_ability(
         zone_center.as_ref(),
         &attack_options,
         options.option,
-        options.slot_level,
+        &CastParams {
+            slot_level: options.slot_level,
+            material: options.material.clone(),
+            ignore_components: options.ignore_components,
+        },
         AbilitySettlement {
             action_spent: false,
             ..AbilitySettlement::default()
@@ -8239,7 +8589,7 @@ fn execute_ready_response(
                 zone_center.as_ref(),
                 &AttackOptions::default(),
                 None,
-                None,
+                &CastParams::default(),
                 AbilitySettlement::prepaid(),
                 rng,
                 log,

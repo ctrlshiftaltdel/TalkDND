@@ -1492,3 +1492,419 @@ fn add_to_a_grid_scene_places_on_a_free_cell() {
     assert_eq!(added["zone"], "statue");
     assert_eq!(added["pos"], serde_json::json!([1, 4]));
 }
+
+// ---------------------------------------------------------------------------
+// v1.6 T4: spell-cast settlement through the real binary (TASK-0126).
+// ---------------------------------------------------------------------------
+
+const SPELL_LIBRARY: &str = r#"---
+abilities:
+  - id: test-bolt
+    name: Test Bolt
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - attack:
+          to_hit: 5
+          kind: ranged
+          damage: [{dice: 1d6, type: fire}]
+    spell:
+      level: 1
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      upcast:
+        text: higher
+        dice_by_level: {2: 2d6, 3: 3d6, 5: 5d6}
+  - id: gem-cast
+    name: Gem Cast
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    target: {type: self}
+    effects:
+      - note: gem
+    spell:
+      level: 1
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        material: {text: a diamond worth 50 gp, cost_gp: 50}
+  - id: slow-ritual
+    name: Slow Ritual
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    target: {type: self}
+    effects:
+      - note: long
+    spell:
+      level: 1
+      casting_time: {amount: 1, unit: minute}
+      components: {verbal: true}
+  - id: no-meta-bolt
+    name: No Meta Bolt
+    activation: action
+    cost: {resource: spell-slot-2, amount: 1}
+    slot_level: 2
+    range: 60
+    target: {type: creature, side: enemy, count: 1}
+    effects:
+      - attack:
+          to_hit: 5
+          kind: ranged
+          damage: [{dice: 1d8, type: force}]
+
+creatures:
+  - id: caster-x
+    name: Caster X
+    kind: pc
+    side: party
+    ac: 12
+    hp: 30
+    speed: {walk: 30}
+    init_bonus: 5
+    prof: 2
+    abilities: {str: 8, dex: 12, con: 14, int: 16, wis: 10, cha: 10}
+    resources:
+      spell-slot-1: {max: 4, recharge: long}
+      spell-slot-2: {max: 3, recharge: long}
+    actions:
+      - {ref: test-bolt}
+      - {ref: gem-cast}
+      - {ref: slow-ritual}
+      - {ref: no-meta-bolt}
+  - id: brute-b
+    name: Brute B
+    kind: monster
+    side: enemy
+    ac: 10
+    hp: 100
+    speed: {walk: 30}
+    init_bonus: 0
+    prof: 2
+    abilities: {str: 16, dex: 10, con: 14, int: 8, wis: 10, cha: 8}
+
+scenes:
+  - id: arena
+    name: Spell Arena
+    mode: zones
+    zones:
+      - {id: alpha}
+      - {id: beta}
+    edges:
+      - {a: alpha, b: beta, distance: 10}
+
+encounters:
+  - id: spell-fight
+    name: Spell Fight
+    scene: arena
+    party_zone: alpha
+    members:
+      - {creature: brute-b, zone: beta}
+"#;
+
+struct TempCampaign {
+    root: PathBuf,
+}
+
+impl TempCampaign {
+    fn new(label: &str) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is before the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "combat-sim-cli-t4-{label}-{}-{nanos}-{count}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("library")).expect("campaign dir should create");
+        fs::write(
+            root.join("manifest.yaml"),
+            "name: Spell CLI Fixtures\nlibrary: [library]\nstate_dir: state\n",
+        )
+        .expect("manifest should write");
+        fs::write(root.join("library/spells.yaml"), SPELL_LIBRARY).expect("library should write");
+        Self { root }
+    }
+
+    fn manifest(&self) -> PathBuf {
+        self.root.join("manifest.yaml")
+    }
+}
+
+impl Drop for TempCampaign {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn spell_status(state: &Path, manifest: &Path) -> Value {
+    let output = run_with_campaign(state, manifest, &["status", "--json"]);
+    assert_success(&output, "status --json");
+    serde_json::from_slice(&output.stdout).expect("status JSON should parse")
+}
+
+fn run_with_campaign(state: &Path, manifest: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("--state")
+        .arg(state)
+        .arg("--campaign")
+        .arg(manifest)
+        .args(args)
+        .output()
+        .expect("failed to run combat-sim")
+}
+
+fn wait_for_turn(state: &Path, manifest: &Path, name: &str) {
+    for _ in 0..10 {
+        let active = spell_status(state, manifest)["active"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        if active.starts_with(name) {
+            return;
+        }
+        assert_success(
+            &run_with_campaign(state, manifest, &["next", "--seed", "1"]),
+            "next",
+        );
+    }
+    panic!("{name} never became active");
+}
+
+fn resource_of(status: &Value, name: &str, id: &str) -> i64 {
+    let combatants = status["combatants"].as_array().expect("combatants array");
+    let combatant = combatants
+        .iter()
+        .find(|c| c["name"].as_str() == Some(name))
+        .unwrap_or_else(|| panic!("missing combatant {name}"));
+    combatant["resources"][id]["current"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("missing resource {id} for {name}"))
+}
+#[test]
+fn cast_slot_pays_and_upcasts_through_the_cli() {
+    let temp = TempState::new("t4-slot");
+    let campaign = TempCampaign::new("slot");
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &["new", "--encounter", "spell-fight", "--party", "caster-x"],
+    );
+    assert_success(&output, "new");
+    assert_success(
+        &run_with_campaign(temp.path(), &campaign.manifest(), &["init", "--seed", "42"]),
+        "init",
+    );
+    wait_for_turn(temp.path(), &campaign.manifest(), "Caster");
+
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &[
+            "cast",
+            "Caster",
+            "test-bolt",
+            "Brute",
+            "--slot",
+            "2",
+            "--seed",
+            "1",
+        ],
+    );
+    assert_success(&output, "cast --slot 2");
+    let text = stdout(&output);
+    assert!(text.contains("spends 1 spell-slot-2"), "{text}");
+    assert!(text.contains("2d6("), "{text}");
+
+    let status = spell_status(temp.path(), &campaign.manifest());
+    assert_eq!(
+        resource_of(&status, "Caster X", "spell-slot-2"),
+        2,
+        "slot 2 charged"
+    );
+    assert_eq!(
+        resource_of(&status, "Caster X", "spell-slot-1"),
+        4,
+        "base slot untouched"
+    );
+}
+
+#[test]
+fn cast_material_rejection_leaves_the_state_unsaved() {
+    let temp = TempState::new("t4-material");
+    let campaign = TempCampaign::new("material");
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &["new", "--encounter", "spell-fight", "--party", "caster-x"],
+    );
+    assert_success(&output, "new");
+    assert_success(
+        &run_with_campaign(temp.path(), &campaign.manifest(), &["init", "--seed", "42"]),
+        "init",
+    );
+    wait_for_turn(temp.path(), &campaign.manifest(), "Caster");
+
+    // Missing declaration: the cast fails and nothing is persisted.
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &["cast", "Caster", "gem-cast", "--seed", "1"],
+    );
+    assert!(
+        !output.status.success(),
+        "costly material must fail without a declaration"
+    );
+    assert!(
+        stderr(&output).contains("needs a material component that costs 50 gp"),
+        "{}",
+        stderr(&output)
+    );
+    let status = spell_status(temp.path(), &campaign.manifest());
+    assert_eq!(
+        resource_of(&status, "Caster X", "spell-slot-1"),
+        4,
+        "failed casts are not saved"
+    );
+
+    // With the declaration the cast succeeds and the log records it.
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &[
+            "cast",
+            "Caster",
+            "gem-cast",
+            "--material",
+            "a diamond worth 50 gp",
+            "--seed",
+            "1",
+        ],
+    );
+    assert_success(&output, "cast with material");
+    assert!(
+        stdout(&output).contains("MATERIAL DECLARED: a diamond worth 50 gp"),
+        "{}",
+        stdout(&output)
+    );
+
+    // The action was spent: move past this turn, then wait for the next one.
+    assert_success(
+        &run_with_campaign(temp.path(), &campaign.manifest(), &["next", "--seed", "1"]),
+        "next",
+    );
+    wait_for_turn(temp.path(), &campaign.manifest(), "Caster");
+
+    // The DM override succeeds but logs COMPONENTS IGNORED.
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &[
+            "cast",
+            "Caster",
+            "gem-cast",
+            "--ignore-components",
+            "--seed",
+            "1",
+        ],
+    );
+    assert_success(&output, "cast with ignore-components");
+    assert!(
+        stdout(&output).contains("COMPONENTS IGNORED"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn cast_rejects_minute_casting_time() {
+    let temp = TempState::new("t4-minute");
+    let campaign = TempCampaign::new("minute");
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &["new", "--encounter", "spell-fight", "--party", "caster-x"],
+    );
+    assert_success(&output, "new");
+    assert_success(
+        &run_with_campaign(temp.path(), &campaign.manifest(), &["init", "--seed", "42"]),
+        "init",
+    );
+    wait_for_turn(temp.path(), &campaign.manifest(), "Caster");
+
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &["cast", "Caster", "slow-ritual", "--seed", "1"],
+    );
+    assert!(
+        !output.status.success(),
+        "minute casts fail closed in combat"
+    );
+    assert!(
+        stderr(&output).contains("cannot be completed within a combat round"),
+        "{}",
+        stderr(&output)
+    );
+    let status = spell_status(temp.path(), &campaign.manifest());
+    assert_eq!(
+        resource_of(&status, "Caster X", "spell-slot-1"),
+        4,
+        "nothing spent"
+    );
+}
+
+#[test]
+fn cast_legacy_ability_keeps_the_old_slot_meaning() {
+    let temp = TempState::new("t4-legacy");
+    let campaign = TempCampaign::new("legacy");
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &["new", "--encounter", "spell-fight", "--party", "caster-x"],
+    );
+    assert_success(&output, "new");
+    assert_success(
+        &run_with_campaign(temp.path(), &campaign.manifest(), &["init", "--seed", "42"]),
+        "init",
+    );
+    wait_for_turn(temp.path(), &campaign.manifest(), "Caster");
+
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &[
+            "cast",
+            "Caster",
+            "no-meta-bolt",
+            "Brute",
+            "--slot",
+            "5",
+            "--seed",
+            "1",
+        ],
+    );
+    assert_success(&output, "legacy cast with --slot");
+    let text = stdout(&output);
+    assert!(text.contains("spends 1 spell-slot-2"), "{text}");
+    assert!(!text.contains("spell-slot-5"), "{text}");
+
+    let status = spell_status(temp.path(), &campaign.manifest());
+    assert_eq!(
+        resource_of(&status, "Caster X", "spell-slot-2"),
+        2,
+        "base cost charged"
+    );
+}

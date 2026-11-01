@@ -269,6 +269,13 @@ pub enum Command {
         option: Option<usize>,
         #[arg(long)]
         slot: Option<i32>,
+        /// Declare a material component verbatim (required for costly or
+        /// consumed materials; logged, never matched against inventory).
+        #[arg(long, value_name = "TEXT")]
+        material: Option<String>,
+        /// DM override: skip component declarations (logged as COMPONENTS IGNORED).
+        #[arg(long)]
+        ignore_components: bool,
         #[arg(long)]
         adv: bool,
         #[arg(long)]
@@ -292,6 +299,13 @@ pub enum Command {
         option: Option<usize>,
         #[arg(long)]
         slot: Option<i32>,
+        /// Declare a material component verbatim (required for costly or
+        /// consumed materials; logged, never matched against inventory).
+        #[arg(long, value_name = "TEXT")]
+        material: Option<String>,
+        /// DM override: skip component declarations (logged as COMPONENTS IGNORED).
+        #[arg(long)]
+        ignore_components: bool,
         #[arg(long)]
         adv: bool,
         #[arg(long)]
@@ -1089,6 +1103,8 @@ fn run_cli() -> Result<()> {
             targets,
             option,
             slot,
+            material,
+            ignore_components,
             adv,
             dis,
             no_reactions,
@@ -1103,6 +1119,8 @@ fn run_cli() -> Result<()> {
                     targets,
                     option,
                     slot_level: slot,
+                    material,
+                    ignore_components,
                     advantage: adv,
                     disadvantage: dis,
                     no_reactions,
@@ -1118,6 +1136,8 @@ fn run_cli() -> Result<()> {
             targets,
             option,
             slot,
+            material,
+            ignore_components,
             adv,
             dis,
             no_reactions,
@@ -1132,6 +1152,8 @@ fn run_cli() -> Result<()> {
                     targets: targets.clone(),
                     option,
                     slot_level: slot,
+                    material,
+                    ignore_components,
                     advantage: adv,
                     disadvantage: dis,
                     no_reactions,
