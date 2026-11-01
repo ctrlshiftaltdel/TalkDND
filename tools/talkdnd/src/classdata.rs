@@ -493,6 +493,20 @@ pub fn always_prepared_grants(
         .collect()
 }
 
+/// The ids of a subclass's terrain-grouped `always_prepared` grants unlocked
+/// at `level`, across every terrain: switching terrain (`spells terrain`)
+/// removes exactly these ids from `always_prepared` — the previous terrain's
+/// seeded grants — while grants without a terrain stay.
+pub fn terrain_granted_ids(cd: &ClassDef, subclass: Option<&str>, level: i32) -> Vec<String> {
+    subclass
+        .and_then(|s| cd.subclasses.get(s))
+        .into_iter()
+        .flat_map(|s| s.spells.iter())
+        .filter(|g| g.grant == "always_prepared" && g.from_level <= level && g.terrain.is_some())
+        .filter_map(|g| g.id.clone())
+        .collect()
+}
+
 /// The distinct terrains of a subclass's spell grants (2014 Land: arctic…,
 /// 2024 Land: arid…), sorted; empty when the class or the selected subclass
 /// has no terrain-grouped grants.

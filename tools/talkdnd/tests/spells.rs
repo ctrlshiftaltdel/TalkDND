@@ -3377,3 +3377,178 @@ fn terrain_failures_and_views_write_nothing() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn terrain_switch_retires_previous_grants_and_keeps_manual_prepared() {
+    let root = t3_root("terrain-switch");
+    let save = t3_save(&root, "s");
+
+    // 命令驱动的 arctic → forest 切换：旧地形授予退出 always_prepared，
+    // 新地形授予播种。
+    write_caster(
+        &save,
+        "thorn",
+        "druid",
+        Some("land"),
+        "2014",
+        5,
+        &[("wis", 16)],
+        empty_lists("prepared", "wis"),
+    );
+    run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "arctic".into(),
+            }),
+        },
+    )
+    .unwrap();
+    let out = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "forest".into(),
+            }),
+        },
+    )
+    .unwrap();
+    let joined = out.join("；");
+    assert!(joined.contains("地形设为 forest"), "{joined}");
+    assert!(joined.contains("移除旧地形授予"), "{joined}");
+    let lists = lists_of(&save, "thorn");
+    assert_eq!(lists.terrain.as_deref(), Some("forest"));
+    for id in ["hold-person", "spike-growth", "sleet-storm", "slow"] {
+        assert!(
+            !lists.always_prepared.contains(&id.to_string()),
+            "{id} must leave always_prepared on switch"
+        );
+    }
+    for id in ["barkskin", "spider-climb", "call-lightning", "plant-growth"] {
+        assert!(lists.always_prepared.contains(&id.to_string()), "{id}");
+    }
+
+    // 视图与 JSON 显示 forest。
+    let view = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: false,
+            cmd: None,
+        },
+    )
+    .unwrap();
+    assert!(
+        view.iter().any(|l| l.contains("地形：forest")),
+        "{}",
+        view.join("\n")
+    );
+    let json = run_op(
+        &save,
+        "thorn",
+        Op::Spells {
+            json: true,
+            cmd: None,
+        },
+    )
+    .unwrap()
+    .join("");
+    assert!(json.contains("\"terrain\":\"forest\""), "{json}");
+
+    // 玩家手动放在 prepared 的同 id 保留：这个状态只能来自迁移/手工存档
+    // （先 prepare 被 §3.9 地形门拒绝，后 prepare 被 always_prepared 拒绝），
+    // 用构造态覆盖；切换只动 always_prepared，prepared 不受影响。
+    let mut migrated = empty_lists("prepared", "wis");
+    migrated.terrain = Some("arctic".into());
+    migrated.always_prepared = vec![
+        "hold-person".into(),
+        "spike-growth".into(),
+        "sleet-storm".into(),
+        "slow".into(),
+    ];
+    migrated.prepared = vec!["slow".into()];
+    write_caster(
+        &save,
+        "rowan",
+        "druid",
+        Some("land"),
+        "2014",
+        5,
+        &[("wis", 16)],
+        migrated,
+    );
+    // 重复设置同一地形仍 no-op：不改列表、不重播种。
+    let out = run_op(
+        &save,
+        "rowan",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "arctic".into(),
+            }),
+        },
+    )
+    .unwrap();
+    assert!(out.join("；").contains("无变化"), "{}", out.join("；"));
+    let out = run_op(
+        &save,
+        "rowan",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "forest".into(),
+            }),
+        },
+    )
+    .unwrap();
+    let joined = out.join("；");
+    assert!(
+        joined.contains("移除旧地形授予：hold-person、spike-growth、sleet-storm、slow"),
+        "{joined}"
+    );
+    let lists = lists_of(&save, "rowan");
+    for id in ["hold-person", "spike-growth", "sleet-storm", "slow"] {
+        assert!(
+            !lists.always_prepared.contains(&id.to_string()),
+            "{id} must leave always_prepared"
+        );
+    }
+    for id in ["barkskin", "spider-climb", "call-lightning", "plant-growth"] {
+        assert!(lists.always_prepared.contains(&id.to_string()), "{id}");
+    }
+    assert!(
+        lists.prepared.contains(&"slow".to_string()),
+        "the same id the player prepared by hand keeps its list"
+    );
+
+    // 切回 arctic 双向验证：forest 授予退出，arctic 重新播种；slow 不回
+    // always_prepared（在 prepared 里），手动准备保留。
+    run_op(
+        &save,
+        "rowan",
+        Op::Spells {
+            json: false,
+            cmd: Some(charsheet::SpellsCmd::Terrain {
+                terrain: "arctic".into(),
+            }),
+        },
+    )
+    .unwrap();
+    let lists = lists_of(&save, "rowan");
+    for id in ["barkskin", "spider-climb", "call-lightning", "plant-growth"] {
+        assert!(
+            !lists.always_prepared.contains(&id.to_string()),
+            "{id} must leave always_prepared on switch back"
+        );
+    }
+    for id in ["hold-person", "spike-growth", "sleet-storm"] {
+        assert!(lists.always_prepared.contains(&id.to_string()), "{id}");
+    }
+    assert!(!lists.always_prepared.contains(&"slow".to_string()));
+    assert!(lists.prepared.contains(&"slow".to_string()));
+    let _ = fs::remove_dir_all(&root);
+}

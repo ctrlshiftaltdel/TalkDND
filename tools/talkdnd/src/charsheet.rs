@@ -2406,15 +2406,36 @@ fn spells_terrain(cf: &mut CharFile, book: &Book, terrain: &str) -> Result<Strin
         ));
     }
     lists.terrain = Some(wanted.clone());
+    // Switching terrain retires the previous terrain's seeded grants: drop
+    // every terrain-grouped grant id of the selected subclass from
+    // always_prepared (that list is grant-managed only). The same id the
+    // player prepared/learned/scribed by hand keeps its other list.
+    let terrain_granted = classdata::terrain_granted_ids(sc.cd, sc.subclass.as_deref(), sc.level);
+    let removed: Vec<String> = lists
+        .always_prepared
+        .iter()
+        .filter(|id| terrain_granted.contains(*id))
+        .cloned()
+        .collect();
+    lists
+        .always_prepared
+        .retain(|id| !terrain_granted.contains(id));
     let seeded = pending_always_prepared(&sc, Some(&wanted), lists);
-    let note = if seeded.is_empty() {
+    let mut notes: Vec<String> = Vec::new();
+    if !removed.is_empty() {
+        notes.push(format!("移除旧地形授予：{}", removed.join("、")));
+    }
+    if !seeded.is_empty() {
+        lists.always_prepared.extend(seeded.iter().cloned());
+        notes.push(format!(
+            "播种 always_prepared：{}（不占准备数量，施放前记得 `spells sync`）",
+            seeded.join("、")
+        ));
+    }
+    let note = if notes.is_empty() {
         String::new()
     } else {
-        lists.always_prepared.extend(seeded.iter().cloned());
-        format!(
-            "；播种 always_prepared：{}（不占准备数量，施放前记得 `spells sync`）",
-            seeded.join("、")
-        )
+        format!("；{}", notes.join("；"))
     };
     Ok(format!(
         "地形设为 {wanted}（可选：{}）{note}",
