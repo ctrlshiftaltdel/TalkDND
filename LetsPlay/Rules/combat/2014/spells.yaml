@@ -1,5 +1,11 @@
 # 2014 (SRD 5.1) versions of the spells used so far in TalkDND. Spellcasting numbers come from the caster's
 # `spellcasting` block ({spell_attack}, {spell_dc}, {spell_mod}).
+# TASK-0127 (v1.6 T5): every spell carries a structured `spell` block. Numbers are
+# transcribed from SRD 5.1 text (tracked via the 5.1 pack manuals) and the class
+# lists mirror the bundled talkdnd class data (5e-database 2014 spells[].classes).
+# Upcast that is not a main-damage/heal dice table (extra darts/targets/HP pool) is
+# deliberately NOT modelled as dice_by_level: an upcast block without the slot's key
+# fails closed in cast --slot, so those stay manual (D-6).
 abilities:
   - id: fire-bolt
     name: Fire Bolt
@@ -10,7 +16,19 @@ abilities:
     effects:
       - attack: {to_hit: "{spell_attack}", kind: ranged, damage: [{dice: "1d10", type: fire}]}
     ai: {role: damage}
-    source: "SRD 5.1 Fire Bolt (cantrip upgrade at levels 5/11/17 not modelled)"
+    source: "SRD 5.1 Fire Bolt"
+    spell:
+      level: 0
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: "120 feet"
+      duration_text: Instantaneous
+      cantrip_scaling:
+        text: "This spell's damage increases by 1d10 when you reach 5th level (2d10), 11th level (3d10), and 17th level (4d10)."
+        dice_by_character_level: {5: "2d10", 11: "3d10", 17: "4d10"}
   - id: shocking-grasp
     name: Shocking Grasp
     tags: [spell, cantrip]
@@ -26,6 +44,18 @@ abilities:
     ai: {role: damage}
     source: "SRD 5.1: target can't take reactions until the start of its next turn"
     todo: ["Duration approximated as end of target's next turn (rule: start of its next turn)"]
+    spell:
+      level: 0
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: Touch
+      duration_text: Instantaneous
+      cantrip_scaling:
+        text: "The spell's damage increases by 1d8 when you reach 5th level (2d8), 11th level (3d8), and 17th level (4d8)."
+        dice_by_character_level: {5: "2d8", 11: "3d8", 17: "4d8"}
   - id: sacred-flame
     name: Sacred Flame
     tags: [spell, cantrip]
@@ -36,6 +66,18 @@ abilities:
       - save: {ability: dex, dc: "{spell_dc}", ignore_cover: true, on_fail: [{damage: {dice: "1d8", type: radiant}}]}
     ai: {role: damage}
     source: "SRD 5.1: no benefit from Half or Three-Quarters Cover"
+    spell:
+      level: 0
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [cleric]
+      range_text: "60 feet"
+      duration_text: Instantaneous
+      cantrip_scaling:
+        text: "The spell's damage increases by 1d8 when you reach 5th level (2d8), 11th level (3d8), and 17th level (4d8)."
+        dice_by_character_level: {5: "2d8", 11: "3d8", 17: "4d8"}
   - id: magic-missile
     name: Magic Missile
     tags: [spell, magic-missile]
@@ -48,6 +90,16 @@ abilities:
       - damage: {dice: "1d4+1", type: force, repeat: 3}
     ai: {role: damage}
     source: "SRD 5.1: three darts, 1d4+1 force each, automatically hit (all darts on one target here)"
+    todo: ["Upcast adds one dart per slot level above 1st; dart count is not a dice table, so higher slots keep base effects (UPCAST NOT MODELED)"]
+    spell:
+      level: 1
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: "120 feet"
+      duration_text: Instantaneous
   - id: shield
     name: Shield
     tags: [spell]
@@ -63,6 +115,15 @@ abilities:
         effects: [{apply_condition: {condition: shielded, to: self, duration: {until: start_of_source_next_turn}}}]
     ai: {role: defense}
     source: "SRD 5.1: +5 AC until start of your next turn incl. triggering attack; no damage from Magic Missile"
+    spell:
+      level: 1
+      school: abjuration
+      casting_time: {amount: 1, unit: reaction}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: Self
+      duration_text: "1 round"
   - id: cure-wounds
     name: Cure Wounds
     tags: [spell, heal]
@@ -75,6 +136,26 @@ abilities:
       - heal: {dice: "1d8+{spell_mod}"}
     ai: {role: heal}
     source: "SRD 5.1: touch, 1d8 + spellcasting modifier"
+    spell:
+      level: 1
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [bard, cleric, druid, paladin, ranger]
+      range_text: Touch
+      duration_text: Instantaneous
+      upcast:
+        text: "At higher levels: When you cast this spell using a spell slot of 2nd level or higher, the healing increases by 1d8 for each slot level above 1st."
+        dice_by_level:
+          2: "2d8+{spell_mod}"
+          3: "3d8+{spell_mod}"
+          4: "4d8+{spell_mod}"
+          5: "5d8+{spell_mod}"
+          6: "6d8+{spell_mod}"
+          7: "7d8+{spell_mod}"
+          8: "8d8+{spell_mod}"
+          9: "9d8+{spell_mod}"
   - id: bless
     name: Bless
     tags: [spell]
@@ -88,6 +169,19 @@ abilities:
       - apply_condition: {condition: blessed, to: target, duration: {minutes: 1}}
     ai: {role: buff}
     source: "SRD 5.1: up to three creatures add 1d4 to attack rolls and saves; concentration 1 minute"
+    todo: ["Upcast targets one additional creature per slot level above 1st; not a dice table, higher slots keep three targets"]
+    spell:
+      level: 1
+      school: enchantment
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "A sprinkling of holy water."}
+      ritual: false
+      classes: [cleric, paladin]
+      range_text: "30 feet"
+      duration_text: "Up to 1 minute"
   - id: sanctuary
     name: Sanctuary
     tags: [spell]
@@ -100,7 +194,19 @@ abilities:
       - apply_condition: {condition: sanctuary-warded, to: target, duration: {minutes: 1}}
     ai: {role: defense}
     manual: "Attackers must pass a WIS save vs caster DC or pick a new target; AI enemies avoid warded targets via avoid_targets_with."
-    source: "SRD 5.1 Sanctuary (OCR partial)"
+    source: "SRD 5.1 Sanctuary"
+    spell:
+      level: 1
+      school: abjuration
+      casting_time: {amount: 1, unit: bonus_action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "A small silver mirror."}
+      ritual: false
+      classes: [cleric]
+      range_text: "30 feet"
+      duration_text: "1 minute"
   - id: sleep
     name: Sleep
     tags: [spell]
@@ -113,13 +219,38 @@ abilities:
       - note: "Sleep (2014): roll 5d8 (+2d8 per slot level above 1st). Creatures within 20 ft of the point, lowest current HP first, fall Unconscious if their HP <= remaining pool (subtract each). Undead and charm-immune unaffected. No save, no concentration, 1 minute; wakes on damage or an action to shake. Apply with `roll 5d8` + `condition add <name> unconscious --minutes 1`."
     ai: {role: none}
     source: "SRD 5.1 Sleep: HP pool 5d8, no save, no concentration"
+    todo: ["Upcast adds 2d8 to the HP pool per slot level above 1st; the pool is manual, so no dice table (higher slots keep the 5d8 note)"]
+    spell:
+      level: 1
+      school: enchantment
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "A pinch of fine sand, rose petals, or a cricket."}
+      ritual: false
+      classes: [bard, sorcerer, wizard]
+      range_text: "90 feet"
+      duration_text: "1 minute"
   - id: detect-magic
     name: Detect Magic
     tags: [spell, ritual]
     activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    concentration: true
     target: {type: self}
     effects: [{note: "Detect Magic: sense magic within 30 ft for up to 10 minutes (concentration)."}]
     ai: {role: none}
+    spell:
+      level: 1
+      school: divination
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: true
+      classes: [bard, cleric, druid, paladin, ranger, sorcerer, wizard]
+      range_text: Self
+      duration_text: "Up to 10 minutes"
   - id: mage-hand
     name: Mage Hand
     tags: [spell, cantrip]
@@ -127,6 +258,15 @@ abilities:
     target: {type: self}
     effects: [{note: "Mage Hand: spectral hand within 30 ft manipulates objects (no attacks)."}]
     ai: {role: none}
+    spell:
+      level: 0
+      school: conjuration
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [bard, sorcerer, warlock, wizard]
+      range_text: "30 feet"
+      duration_text: "1 minute"
   - id: minor-illusion
     name: Minor Illusion
     tags: [spell, cantrip]
@@ -134,6 +274,18 @@ abilities:
     target: {type: self}
     effects: [{note: "Minor Illusion: sound or image; Investigation vs spell DC to discern."}]
     ai: {role: none}
+    spell:
+      level: 0
+      school: illusion
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: false
+        somatic: true
+        material: {text: "A bit of fleece."}
+      ritual: false
+      classes: [bard, sorcerer, warlock, wizard]
+      range_text: "30 feet"
+      duration_text: "1 minute"
   - id: guidance
     name: Guidance
     tags: [spell, cantrip]
@@ -145,6 +297,15 @@ abilities:
       - note: "Guidance (SRD 5.1): touch willing creature; once before the spell ends, target adds 1d4 to one ability check (before or after the roll). Concentration up to 1 minute. Apply with `roll 1d4` on the check."
     ai: {role: buff}
     source: "SRD 5.1 Guidance (divination cantrip)"
+    spell:
+      level: 0
+      school: divination
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [cleric, druid]
+      range_text: Touch
+      duration_text: "Up to 1 minute"
   - id: mending
     name: Mending
     tags: [spell, cantrip]
@@ -155,7 +316,19 @@ abilities:
       - note: "Mending (SRD 5.1): casting time 1 minute; repair a single break or tear no larger than 1 foot in an object you touch. Can physically repair a magic item or construct but does not restore magic."
     ai: {role: none}
     source: "SRD 5.1 Mending (transmutation cantrip)"
-    todo: ["Casting time is 1 minute (not a combat action); activation listed as action for cataloguing only"]
+    todo: ["Casting time is 1 minute (not a combat action); activation listed as action for cataloguing only; cast refuses it inside combat (D-11)"]
+    spell:
+      level: 0
+      school: transmutation
+      casting_time: {amount: 1, unit: minute}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "Two lodestones."}
+      ritual: false
+      classes: [bard, cleric, druid, sorcerer, wizard]
+      range_text: Touch
+      duration_text: Instantaneous
   - id: healing-word
     name: Healing Word
     tags: [spell, heal]
@@ -167,7 +340,27 @@ abilities:
     effects:
       - heal: {dice: "1d4+{spell_mod}"}
     ai: {role: heal}
-    source: "SRD 5.1 Healing Word: bonus action, 1d4 + spellcasting modifier; no effect on undead or constructs. +1d4 per slot above 1st is manual."
+    source: "SRD 5.1 Healing Word: bonus action, 1d4 + spellcasting modifier; no effect on undead or constructs."
+    spell:
+      level: 1
+      school: evocation
+      casting_time: {amount: 1, unit: bonus_action}
+      components: {verbal: true, somatic: false}
+      ritual: false
+      classes: [bard, cleric, druid]
+      range_text: "60 feet"
+      duration_text: Instantaneous
+      upcast:
+        text: "At higher levels: When you cast this spell using a spell slot of 2nd level or higher, the healing increases by 1d4 for each slot level above 1st."
+        dice_by_level:
+          2: "2d4+{spell_mod}"
+          3: "3d4+{spell_mod}"
+          4: "4d4+{spell_mod}"
+          5: "5d4+{spell_mod}"
+          6: "6d4+{spell_mod}"
+          7: "7d4+{spell_mod}"
+          8: "8d4+{spell_mod}"
+          9: "9d4+{spell_mod}"
   - id: command
     name: Command
     tags: [spell]
@@ -183,8 +376,17 @@ abilities:
           on_fail:
             - note: "Command (SRD 5.1): on its next turn the target follows a one-word command (Approach, Drop, Flee, Grovel, Halt, or another the GM allows). No effect on undead, if it doesn't understand you, or if the command is directly harmful. Apply the matching condition/move manually."
     ai: {role: control}
-    source: "SRD 5.1 Command: WIS save, 1 round. At higher levels: +1 creature per slot above 1st (within 30 ft of each other)."
-    todo: ["Specific command behaviors are manual"]
+    source: "SRD 5.1 Command: WIS save, 1 round."
+    todo: ["Specific command behaviors are manual", "Upcast affects one additional creature per slot level above 1st (within 30 ft of each other); not a dice table"]
+    spell:
+      level: 1
+      school: enchantment
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: false}
+      ritual: false
+      classes: [cleric, paladin]
+      range_text: "60 feet"
+      duration_text: "1 round"
   - id: mage-armor
     name: Mage Armor
     tags: [spell]
@@ -197,3 +399,15 @@ abilities:
       - note: "Mage Armor (SRD 5.1): willing creature not wearing armor; base AC becomes 13 + Dexterity modifier for 8 hours. Ends if the target dons armor or you dismiss it as an action. Update the creature's AC on the sheet (engine has no set-base-AC effect)."
     ai: {role: buff}
     source: "SRD 5.1 Mage Armor"
+    spell:
+      level: 1
+      school: abjuration
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "A piece of cured leather."}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: Touch
+      duration_text: "8 hours"

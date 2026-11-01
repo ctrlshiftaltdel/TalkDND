@@ -2,6 +2,7 @@
 
 > 状态：T1 已实现——`Ability` 的可选 `spell` 元数据块、SRD 导入填充与 `content check` 规则。
 > T4（TASK-0126）已实现施法结算，见本文 §7：`cast`/`use` 的 `--slot` 扣槽与升环骰表、戏法成长、契约槽/Mystic Arcanum、材料声明与分钟/小时拒绝。
+> T5（TASK-0127）已补数据与文档：手写 `spells.yaml` 的 17（2014）/18（2024）个法术带完整 `spell` 元数据与结构化效果，玩家/DM 文档见 `LetsPlay/docs/spellcasting.md`；tracked SRD pack 仍未重新生成（见 §3）。
 > 设计权威是 `docs/SPELLCASTING.md` §2 与 §5（本文是其操作说明，不另立规则）。
 
 ## 1. 模型：`Ability` + 可选 `spell` 块
@@ -73,7 +74,7 @@ spell:
 
 缺失字段保持默认/省略，导入不 panic。`import_spells` 的输出形状不变（仍是 pack 的 `abilities`；旧字段与 `manual` 不变），条目 id、排序、去重与覆盖顺序都不变。带 `spell` 的 pack 重新生成后 `content_hash` 会变化——这是预期的，不要为保持 hash 而省略字段。
 
-**tracked pack 未重新生成**：仓库里的 `LetsPlay/Rules/combat/<edition>/srd/srd-*.pack.json` 在 T1 不重新生成（T5 数据任务处理）；本任务的元数据行为由合成 fixture 测试覆盖。手写 `spells.yaml` 覆盖层按原样加载（无 `spell` 块，`None`）；要给手写条目补元数据也留到数据任务。
+**tracked pack 仍未重新生成**：仓库里的 `LetsPlay/Rules/combat/<edition>/srd/srd-*.pack.json` 至今没有 `spell` 块（T5 未重新生成 tracked pack；`content check` 对它们的 `spell` tag 给 legacy warning，不阻止运行）。手写 `spells.yaml` 覆盖层自 T5（TASK-0127）起为全部 17（2014）/18（2024）个法术补齐 `spell` 元数据：数值对照 SRD 文本与 5e-database JSON，职业表反向取自 `tools/talkdnd/data/classes-<edition>.yaml`（D-2 唯一来源）。升环若不是主伤害/治疗骰表（多发魔矢、多目标、2014 睡眠 HP 池）或主效果未结构化（moonbeam、spirit guardians 的持续区域），刻意**不写** `upcast` 块——只有文本没有骰表的 `upcast` 块会让高环 `cast` 失败关闭；这些升环留在 manual（`UPCAST NOT MODELED`）。
 
 ## 4. `content check` 规则
 
@@ -105,6 +106,7 @@ tag 是旧兼容层，不承担语义，所以不一致只给 warning；字段�
 - `tools/combat-sim/tests/srd.rs`：导入映射（完整法术、分钟/小时、戏法成长、未知学派、缺失字段、旧字段不变、反序列化）。
 - `tools/combat-sim/tests/srd_pack.rs`：pack 导入后 `abilities` 形状、元数据字段与加载往返。
 - `tools/combat-sim/tests/content.rs`：serde 分层（旧 YAML 往返、部分字段默认值、完整往返）与 `content check` 错误/警告矩阵。
+- `tools/combat-sim/tests/spell_data.rs`（T5）：两版手写 17/18 法术的元数据全字段、升环/戏法骰表、覆盖矩阵结构化样本（attack/save half/auto damage/heal/condition/forced move）与 2014/2024 数据差异；配套调整 `real_content.rs` 的 2024 面积覆盖测试——手写层自 T5 起有意与 pack 分叉，测试只对冻结的 `AreaSpec` 形状做精确断言（pack 条目仍须可解析且 id 一致）。
 - `tools/combat-sim/tests/combat_spells.rs`（T4）：合成内容的施法结算矩阵（扣槽、升环骰、契约槽、arcanum、戏法成长、材料、分钟/小时、旧行为回归、Ready 预付）。
 - `tools/combat-sim/tests/cli.rs`（T4 追加）：真实二进制端到端（`cast --slot`/`--material`/`--ignore-components`、分钟拒绝、旧 `--slot` 语义）。
 

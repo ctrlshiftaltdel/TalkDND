@@ -2,6 +2,12 @@
 # the AoE shapes that the 2024 upstream JSON does not structure. Spellcasting
 # numbers come from the caster's `spellcasting` block ({spell_attack}, {spell_dc},
 # {spell_mod}).
+# TASK-0127 (v1.6 T5): every spell carries a structured `spell` block. Numbers are
+# transcribed from SRD 5.2.1 / PHB 2024 text (tracked via the 5.2.1 pack manuals
+# and the 5e-database 2024 JSON); class lists mirror the bundled talkdnd
+# class data (5e-database 2024 spells[].classes).
+# Upcast that is not a main-damage/heal dice table (extra darts/targets) and the
+# persistent areas (moonbeam, spirit guardians) stay manual (D-6).
 abilities:
   - id: fire-bolt
     name: Fire Bolt
@@ -12,7 +18,19 @@ abilities:
     effects:
       - attack: {to_hit: "{spell_attack}", kind: ranged, damage: [{dice: "1d10", type: fire}]}
     ai: {role: damage}
-    source: "PHB 2024 Fire Bolt (cantrip upgrade at levels 5/11/17 not modelled)"
+    source: "PHB 2024 Fire Bolt"
+    spell:
+      level: 0
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: "120 feet"
+      duration_text: Instantaneous
+      cantrip_scaling:
+        text: "Cantrip Upgrade: The damage increases by 1d10 when you reach levels 5 (2d10), 11 (3d10), and 17 (4d10)."
+        dice_by_character_level: {5: "2d10", 11: "3d10", 17: "4d10"}
   - id: shocking-grasp
     name: Shocking Grasp
     tags: [spell, cantrip]
@@ -28,6 +46,18 @@ abilities:
     ai: {role: damage}
     source: "PHB 2024: target can't make Opportunity Attacks until the start of its next turn"
     todo: ["Duration approximated as end of target's next turn (rule: start of its next turn)"]
+    spell:
+      level: 0
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: Touch
+      duration_text: Instantaneous
+      cantrip_scaling:
+        text: "Cantrip Upgrade: The damage increases by 1d8 when you reach levels 5 (2d8), 11 (3d8), and 17 (4d8)."
+        dice_by_character_level: {5: "2d8", 11: "3d8", 17: "4d8"}
   - id: sacred-flame
     name: Sacred Flame
     tags: [spell, cantrip]
@@ -38,6 +68,18 @@ abilities:
       - save: {ability: dex, dc: "{spell_dc}", ignore_cover: true, on_fail: [{damage: {dice: "1d8", type: radiant}}]}
     ai: {role: damage}
     source: "PHB 2024: no benefit from Half or Three-Quarters Cover"
+    spell:
+      level: 0
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [cleric]
+      range_text: "60 feet"
+      duration_text: Instantaneous
+      cantrip_scaling:
+        text: "Cantrip Upgrade: The damage increases by 1d8 when you reach levels 5 (2d8), 11 (3d8), and 17 (4d8)."
+        dice_by_character_level: {5: "2d8", 11: "3d8", 17: "4d8"}
   - id: magic-missile
     name: Magic Missile
     tags: [spell, magic-missile]
@@ -50,6 +92,16 @@ abilities:
       - damage: {dice: "1d4+1", type: force, repeat: 3}
     ai: {role: damage}
     source: "PHB 2024: three darts, 1d4+1 force each, automatically hit (all darts on one target here)"
+    todo: ["Upcast creates one more dart per slot level above 1; dart count is not a dice table, so higher slots keep base effects (UPCAST NOT MODELED)"]
+    spell:
+      level: 1
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: "120 feet"
+      duration_text: Instantaneous
   - id: shield
     name: Shield
     tags: [spell]
@@ -65,6 +117,15 @@ abilities:
         effects: [{apply_condition: {condition: shielded, to: self, duration: {until: start_of_source_next_turn}}}]
     ai: {role: defense}
     source: "PHB 2024: +5 AC until start of your next turn incl. triggering attack; no damage from Magic Missile"
+    spell:
+      level: 1
+      school: abjuration
+      casting_time: {amount: 1, unit: reaction}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: Self
+      duration_text: "1 round"
   - id: cure-wounds
     name: Cure Wounds
     tags: [spell, heal]
@@ -76,7 +137,27 @@ abilities:
     effects:
       - heal: {dice: "2d8+{spell_mod}"}
     ai: {role: heal}
-    source: "PHB 2024: 2d8 + spellcasting modifier"
+    source: "PHB 2024: 2d8 + spellcasting modifier (abjuration)"
+    spell:
+      level: 1
+      school: abjuration
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [bard, cleric, druid, paladin, ranger]
+      range_text: Touch
+      duration_text: Instantaneous
+      upcast:
+        text: "Using a Higher-Level Spell Slot: The healing increases by 2d8 for each spell slot level above 1."
+        dice_by_level:
+          2: "4d8+{spell_mod}"
+          3: "6d8+{spell_mod}"
+          4: "8d8+{spell_mod}"
+          5: "10d8+{spell_mod}"
+          6: "12d8+{spell_mod}"
+          7: "14d8+{spell_mod}"
+          8: "16d8+{spell_mod}"
+          9: "18d8+{spell_mod}"
   - id: bless
     name: Bless
     tags: [spell]
@@ -90,6 +171,19 @@ abilities:
       - apply_condition: {condition: blessed, to: target, duration: {minutes: 1}}
     ai: {role: buff}
     source: "PHB 2024: up to three creatures add 1d4 to attack rolls and saves; concentration 1 minute"
+    todo: ["Upcast targets one additional creature per slot level above 1; not a dice table, higher slots keep three targets"]
+    spell:
+      level: 1
+      school: enchantment
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "a Holy Symbol worth 5+ GP", cost_gp: 5}
+      ritual: false
+      classes: [cleric, paladin]
+      range_text: "30 feet"
+      duration_text: "Up to 1 minute"
   - id: sanctuary
     name: Sanctuary
     tags: [spell]
@@ -102,7 +196,19 @@ abilities:
       - apply_condition: {condition: sanctuary-warded, to: target, duration: {minutes: 1}}
     ai: {role: defense}
     manual: "Attackers must pass a WIS save vs caster DC or pick a new target; AI enemies avoid warded targets via avoid_targets_with."
-    source: "PHB 2024 Sanctuary (OCR partial)"
+    source: "PHB 2024 Sanctuary"
+    spell:
+      level: 1
+      school: abjuration
+      casting_time: {amount: 1, unit: bonus_action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "a shard of glass from a mirror"}
+      ritual: false
+      classes: [cleric]
+      range_text: "30 feet"
+      duration_text: "1 minute"
   - id: sleep
     name: Sleep
     tags: [spell]
@@ -122,14 +228,38 @@ abilities:
             - note: "Sleep: at the end of its next turn the target repeats the WIS save; on a failure it is Unconscious for the duration (ends if it takes damage or someone uses an action to shake it)."
     ai: {role: control}
     source: "PHB 2024 Sleep: 5-ft-radius sphere, WIS save or Incapacitated until end of next turn, then repeat save or Unconscious"
-    todo: ["Second save -> unconscious is manual (needs chained save_ends→condition)"]
+    todo: ["Second save -> unconscious is manual (needs chained save_ends→condition)", "Creatures that don't sleep or have Exhaustion immunity auto-pass; not expressible, DM rules it"]
+    spell:
+      level: 1
+      school: enchantment
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "a pinch of sand or rose petals"}
+      ritual: false
+      classes: [bard, sorcerer, wizard]
+      range_text: "60 feet"
+      duration_text: "Up to 1 minute"
   - id: detect-magic
     name: Detect Magic
     tags: [spell, ritual]
     activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    concentration: true
     target: {type: self}
     effects: [{note: "Detect Magic: sense magic within 30 ft for up to 10 minutes (concentration)."}]
     ai: {role: none}
+    spell:
+      level: 1
+      school: divination
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: true
+      classes: [bard, cleric, druid, paladin, ranger, sorcerer, warlock, wizard]
+      range_text: Self
+      duration_text: "Up to 10 minutes"
   - id: mage-hand
     name: Mage Hand
     tags: [spell, cantrip]
@@ -137,6 +267,15 @@ abilities:
     target: {type: self}
     effects: [{note: "Mage Hand: spectral hand within 30 ft manipulates objects (no attacks)."}]
     ai: {role: none}
+    spell:
+      level: 0
+      school: conjuration
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [bard, sorcerer, warlock, wizard]
+      range_text: "30 feet"
+      duration_text: "1 minute"
   - id: minor-illusion
     name: Minor Illusion
     tags: [spell, cantrip]
@@ -144,8 +283,23 @@ abilities:
     target: {type: self}
     effects: [{note: "Minor Illusion: sound or image; Investigation vs spell DC to discern."}]
     ai: {role: none}
+    spell:
+      level: 0
+      school: illusion
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: false
+        somatic: true
+        material: {text: "a bit of fleece"}
+      ritual: false
+      classes: [bard, sorcerer, warlock, wizard]
+      range_text: "30 feet"
+      duration_text: "1 minute"
   # SRD 5.2.1 AoE shape overlays. The upstream 2024 JSON has no
   # area_of_effect; these shapes come from the SRD spell text.
+  # TASK-0127: the four one-shot saves are structured (save + half damage,
+  # thunderwave also pushes on a failure); moonbeam and spirit guardians stay
+  # note+manual because their areas persist and re-save (no effect type yet).
   - id: "burning-hands"
     activation: "action"
     ai:
@@ -158,7 +312,15 @@ abilities:
       resource: "spell-slot-1"
     effects:
       -
-        note: "Burning Hands (SRD 5.2.1, manual): see `manual`."
+        save:
+          ability: "dex"
+          dc: "{spell_dc}"
+          half: true
+          on_fail:
+            -
+              damage:
+                dice: "3d6"
+                type: "fire"
     manual: |-
       action; Self ; V, S; Instantaneous.
 
@@ -176,6 +338,26 @@ abilities:
       - "evocation"
     target:
       type: "self"
+    spell:
+      level: 1
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: Self
+      duration_text: Instantaneous
+      upcast:
+        text: "At higher levels: The damage increases by 1d6 for each spell slot level above 1."
+        dice_by_level:
+          2: "4d6"
+          3: "5d6"
+          4: "6d6"
+          5: "7d6"
+          6: "8d6"
+          7: "9d6"
+          8: "10d6"
+          9: "11d6"
   - id: "fireball"
     activation: "action"
     ai:
@@ -188,7 +370,15 @@ abilities:
       resource: "spell-slot-3"
     effects:
       -
-        note: "Fireball (SRD 5.2.1, manual): see `manual`."
+        save:
+          ability: "dex"
+          dc: "{spell_dc}"
+          half: true
+          on_fail:
+            -
+              damage:
+                dice: "8d6"
+                type: "fire"
     manual: |-
       action; 150 feet ; V, S, M; Instantaneous.
 
@@ -206,6 +396,27 @@ abilities:
       - "evocation"
     target:
       type: "self"
+    spell:
+      level: 3
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "a ball of bat guano and sulfur"}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: "150 feet"
+      duration_text: Instantaneous
+      upcast:
+        text: "At higher levels: The damage increases by 1d6 for each spell slot level above 3."
+        dice_by_level:
+          4: "9d6"
+          5: "10d6"
+          6: "11d6"
+          7: "12d6"
+          8: "13d6"
+          9: "14d6"
   - id: "lightning-bolt"
     activation: "action"
     ai:
@@ -219,7 +430,15 @@ abilities:
       resource: "spell-slot-3"
     effects:
       -
-        note: "Lightning Bolt (SRD 5.2.1, manual): see `manual`."
+        save:
+          ability: "dex"
+          dc: "{spell_dc}"
+          half: true
+          on_fail:
+            -
+              damage:
+                dice: "8d6"
+                type: "lightning"
     manual: |-
       action; Self ; V, S, M; Instantaneous.
 
@@ -236,6 +455,27 @@ abilities:
       - "evocation"
     target:
       type: "self"
+    spell:
+      level: 3
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "a bit of fur and a crystal rod"}
+      ritual: false
+      classes: [sorcerer, wizard]
+      range_text: Self
+      duration_text: Instantaneous
+      upcast:
+        text: "At higher levels: The damage increases by 1d6 for each spell slot level above 3."
+        dice_by_level:
+          4: "9d6"
+          5: "10d6"
+          6: "11d6"
+          7: "12d6"
+          8: "13d6"
+          9: "14d6"
   - id: "moonbeam"
     activation: "action"
     ai:
@@ -267,6 +507,19 @@ abilities:
       - "evocation"
     target:
       type: "self"
+    todo: ["Persistent area: initial and recurring CON saves are manual; upcast (+1d10 per slot above 2) has no structured main effect, so no dice table (higher slots keep base effects)"]
+    spell:
+      level: 2
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "a moonseed leaf"}
+      ritual: false
+      classes: [druid]
+      range_text: "120 feet"
+      duration_text: "Up to 1 minute"
   - id: "spirit-guardians"
     activation: "action"
     ai:
@@ -298,6 +551,19 @@ abilities:
       - "conjuration"
     target:
       type: "self"
+    todo: ["Persistent area: recurring WIS saves are manual; upcast (+1d8 per slot above 3) has no structured main effect, so no dice table (higher slots keep base effects)"]
+    spell:
+      level: 3
+      school: conjuration
+      casting_time: {amount: 1, unit: action}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "a prayer scroll"}
+      ritual: false
+      classes: [cleric]
+      range_text: Self
+      duration_text: "Up to 10 minutes"
   - id: "thunderwave"
     activation: "action"
     ai:
@@ -310,7 +576,19 @@ abilities:
       resource: "spell-slot-1"
     effects:
       -
-        note: "Thunderwave (SRD 5.2.1, manual): see `manual`."
+        save:
+          ability: "con"
+          dc: "{spell_dc}"
+          half: true
+          on_fail:
+            -
+              damage:
+                dice: "2d8"
+                type: "thunder"
+            -
+              forced_move:
+                distance: 10
+                direction: "away"
     manual: |-
       action; Self ; V, S; Instantaneous.
 
@@ -326,3 +604,23 @@ abilities:
       - "evocation"
     target:
       type: "self"
+    spell:
+      level: 1
+      school: evocation
+      casting_time: {amount: 1, unit: action}
+      components: {verbal: true, somatic: true}
+      ritual: false
+      classes: [bard, druid, sorcerer, wizard]
+      range_text: Self
+      duration_text: Instantaneous
+      upcast:
+        text: "Using a Higher-Level Spell Slot: The damage increases by 1d8 for each spell slot level above 1."
+        dice_by_level:
+          2: "3d8"
+          3: "4d8"
+          4: "5d8"
+          5: "6d8"
+          6: "7d8"
+          7: "8d8"
+          8: "9d8"
+          9: "10d8"
