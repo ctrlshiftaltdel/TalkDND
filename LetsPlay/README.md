@@ -6,9 +6,9 @@ TalkDND 让 AI 助手在聊天窗口里给你当地下城主（DM），按 **D&D
 - 每一幕结尾给几个选项，也可以随便输入你想做的事；
 - 所有骰子都是真随机（在命令行里用操作系统熵掷出），并把完整算式展示给你；
 - 每一步都写进存档日志，下次可以从存档点接着玩；
-- 战斗由 **combat-sim** 结算（命中、伤害、状态、专注、移动、借机攻击、擒抱/推撞、准备动作……）。
+- 战斗由 **combat-sim** 结算（命中、伤害、状态、专注、移动、借机攻击、擒抱/推撞、准备动作、施法……）。
 
-当前发布：**v1.5.0**（2026-10-28）。本版发布四组战斗规则：核心动作（擒抱、推撞、徒手打击、双武器战斗、额外攻击）、战斗条件（血怒、力竭、魅惑、恐惧）、准备动作（Ready）与感官/遮蔽。存档结构仍是 **schema 9**，本版没有新的迁移，战斗状态也仍是 schema 1；默认战斗 AI 仍是 legacy，四规则集与完整书 pack 可选资产与 v1.4.0 相同，详见 `CHANGELOG.md` 的 v1.5.0 小节。
+当前发布：**v1.6.0**（2026-11-01）。本版发布 v1.6 施法核心：法术列表与准备（`char <名字> spells`、`prepare` / `learn` / `scribe` / `ritual`）、战斗内施法结算（升环 `--slot`、戏法成长、契约槽与 Mystic Arcanum、材料声明、长施法边界）与两版 17/18 个常用法术的结构化数据。存档结构升到 **schema 10**：角色卡新增 `spells` 法术列表块，第一次启动会自动迁移并先整份备份；战斗状态仍是 schema 1。默认战斗 AI 仍是 legacy，四规则集与完整书 pack 可选资产不变。施法玩法见 `docs/spellcasting.md`，详见 `CHANGELOG.md` 的 v1.6.0 小节。
 
 要玩：留在本目录。本目录的 `AGENTS.md` 是 DM 手册。开发与改代码在仓库根，不在这里。
 
@@ -192,7 +192,9 @@ $CS roll 1d20+5 --adv --dc 15
 
 v1.5 的四组战斗规则按需查：`docs/combat-actions.md`（擒抱、推撞、徒手打击、双武器战斗、额外攻击与攻击动作预算）、`docs/combat-conditions.md`（血怒、力竭、魅惑、恐惧）、`docs/combat-ready.md`（准备动作与触发）、`docs/combat-senses.md`（黑暗视觉、盲视、震颤感知、真实视觉与光照/遮蔽）。四组都按存档 `ruleset` 使用 2014 或 2024 数据。
 
-战斗 AI 默认沿用原有 legacy heuristic。v1.2 的战术效用规划器与有界搜索只作为库 API 显式 opt-in，v1.3 / v1.4 / v1.5 未改默认；质量基准在合成团队战看到回退，所以玩家不需要设置。自动化开关、知识 API 与 v1.5 战斗规则也不改变战斗 AI。
+v1.6 施法按需查 `docs/spellcasting.md`：法术数据在哪、战斗内外怎么施法、`--slot` 升环与成分声明、哪些效果自动结算、哪些由 DM 手动，以及 2014/2024 差异。tracked 内容包里的其余法术没有结构化数据，新增结构化法术改手写层 `Rules/combat/<edition>/spells.yaml`。
+
+战斗 AI 默认沿用原有 legacy heuristic。v1.2 的战术效用规划器与有界搜索只作为库 API 显式 opt-in，v1.3 / v1.4 / v1.5 / v1.6 未改默认；质量基准在合成团队战看到回退，所以玩家不需要设置。自动化开关、知识 API、v1.5 战斗规则与 v1.6 施法也不改变战斗 AI。
 
 ## 更新到新版本
 
@@ -202,18 +204,18 @@ v1.5 的四组战斗规则按需查：`docs/combat-actions.md`（擒抱、推撞
 2. 从 [Releases](https://github.com/ctrlshiftaltdel/TalkDND/releases) 下载对应平台的包，可用同名 `.sha256` 校验。
 3. 把包解压到任意临时位置，再把解压出来的 `TalkDND/` 文件夹**里面的全部内容**复制到你的游戏文件夹（不管它叫什么、放在哪），遇到同名文件选择「全部覆盖」。如果你的游戏文件夹本来就叫 `TalkDND` 且放在同一位置，直接在它的上一级解压覆盖也行。
 4. 照常「继续游戏」（`talkdnd start`）。第一次运行新版时程序会自动：
-   - 检查存档结构版本（`Saves/<存档>/save-meta.yaml`），旧了就先把整个存档备份到 `Saves/_backups/`，再迁移到新结构，写进会话日志并更新完整性清单；schema 8 → 9 会补上章程默认的自动化设置，`settings.dice_display` 与叙事风格保持不变；
+   - 检查存档结构版本（`Saves/<存档>/save-meta.yaml`），旧了就先把整个存档备份到 `Saves/_backups/`，再迁移到新结构，写进会话日志并更新完整性清单；schema 8 → 9 会补上章程默认的自动化设置，`settings.dice_display` 与叙事风格保持不变；schema 9 → 10 会给每张角色卡补 `spells` 法术列表块（从建卡数据或角色卡正文精确对号，对不上的进 `legacy`；手改过的角色卡不会被重写）；
    - 书籍导入数据（`Rules/chargen/local/`）的导入器版本过旧时重新导入；
    - 缺少的默认规则裁定从 `Rules/defaults/` 复制到 `Rules/`，已有的不动（默认版有更新时摘要会提示合并）；
    - 把新版已删除、你没改过的旧程序文件移到 `.talkdnd/obsolete/`；
    - 把旧存档的 `ruleset: "2014"` / `"2024"` 分别迁移为 `5e-srd` / `5.5e-srd`（只改这一行，保留其他字段与注释）；
    - 原先使用完整书内容的存档需要把 `ruleset` 重选为 `5e-full` / `5.5e-full`，并解锁对应完整书 pack。
 
-自动化开关不需要预先设置：不配置时按章程默认，要改随时用 `bin/talkdnd settings automation ...`，说明见 `docs/automation.md`。v1.5 没有新的存档结构变化，schema 仍为 9，战斗状态仍是 schema 1；旧 `combat/*.state.json` 直接加载，不需要迁移。四组新战斗规则没有额外设置，玩法说明见 `docs/combat-actions.md`、`docs/combat-conditions.md`、`docs/combat-ready.md`、`docs/combat-senses.md`；知识 API 只读、不需要额外设置，书籍/冒险索引缺失时搜索返回空结果，可先运行 `bin/talkdnd adventure index build --book "<书名>"`。四规则集和完整书 pack 的用法与 v1.2.0 相同。
+自动化开关不需要预先设置：不配置时按章程默认，要改随时用 `bin/talkdnd settings automation ...`，说明见 `docs/automation.md`。v1.6 把存档结构升到 schema 10（自动迁移并整份备份，见上一步）；战斗状态仍是 schema 1，旧 `combat/*.state.json` 直接加载，不需要迁移。四组战斗规则没有额外设置，玩法说明见 `docs/combat-actions.md`、`docs/combat-conditions.md`、`docs/combat-ready.md`、`docs/combat-senses.md`；施法说明见 `docs/spellcasting.md`。知识 API 只读、不需要额外设置，书籍/冒险索引缺失时搜索返回空结果，可先运行 `bin/talkdnd adventure index build --book "<书名>"`。四规则集和完整书 pack 的用法与 v1.2.0 相同。
 
 完整书 pack 不在普通发布包内。需要时，从项目所有者另行提供的 `talkdnd-full-packs-<标签>.tar.gz` 解压到 `Rules/packs/`，把匹配 PDF 放进 `Rules/<edition>/` 后用 `bin/talkdnd library scan` 解锁；没有它也能用 5e SRD / 5.5e SRD 完整游玩。
 
-发布包里**没有**任何用户数据：存档（只有 `Saves/README.md`）、规则书和冒险书（只有 README）、本地导入、`fixes/`、资料图登记表、你自己的规则裁定都不会被覆盖，打包时会自动检查。确认迁移没问题后，`Saves/_backups/` 里的备份可以自行删除。每个版本改了什么见仓库里的 `CHANGELOG.md`；v1.5.0 的已知限制（双武器没有装备栏、准备法术预付不退、魔法黑暗与逐格光照未建模、AI 默认策略、完整书 pack）也在那里。
+发布包里**没有**任何用户数据：存档（只有 `Saves/README.md`）、规则书和冒险书（只有 README）、本地导入、`fixes/`、资料图登记表、你自己的规则裁定都不会被覆盖，打包时会自动检查。确认迁移没问题后，`Saves/_backups/` 里的备份可以自行删除。每个版本改了什么见仓库里的 `CHANGELOG.md`；v1.6.0 的已知限制（tracked SRD pack 未结构化、非主骰升环与持续区域手动、材料不查库存、同回合/长施法与魔祈仪式由 DM 手动、抄书跨文件非原子、AI 默认策略、完整书 pack）也在那里。
 
 ## 版权与许可
 
