@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use combat_sim::ai::Ai;
-use combat_sim::content::schema::{Ability, AreaSpec, Creature};
+use combat_sim::content::schema::{Ability, AbilityName, AreaSpec, Creature, Direction, Effect};
 use combat_sim::content::{self, ContentSources, ItemKind};
 use combat_sim::dice;
 use combat_sim::engine::NullSink;
@@ -280,24 +280,140 @@ fn srd_2024_area_overlays_match_the_pack() {
             .iter()
             .find(|entry| entry["id"].as_str() == Some(id))
             .unwrap_or_else(|| panic!("missing pack spell `{id}`"));
-        // The pack entry must still parse as an Ability under the same id.
-        let parsed: Ability = serde_json::from_value(entry.clone()).expect("pack spell parses");
-        assert_eq!(parsed.id, id, "pack spell id");
-        // Since TASK-0127 the handwritten entries in spells.yaml carry
-        // `spell` metadata (and, for the four one-shot saves, structured
-        // effects), so the registry view no longer equals the pack entry
-        // byte for byte. The frozen area overlay contract is unchanged and
-        // is asserted exactly on the registry view.
-        let actual = registry
+        // The overlay contract: the pack entry plus the frozen area. The
+        // registry view is compared field by field against that baseline so
+        // no other field (name, tags, activation, cost, slot_level, range,
+        // target, concentration, duration, triggers, modifiers, ai, manual,
+        // source, notes, description) can drift from the pack unnoticed.
+        let mut expected: Ability =
+            serde_json::from_value(entry.clone()).expect("pack spell parses");
+        assert_eq!(expected.id, id, "pack spell id");
+        expected.area = Some(area);
+        let mut actual: Ability = registry
             .abilities
             .get(id)
-            .unwrap_or_else(|| panic!("missing overlay spell `{id}`"));
-        assert_eq!(
-            actual.area.as_ref(),
-            Some(&area),
-            "overlay mismatch for `{id}`"
+            .unwrap_or_else(|| panic!("missing overlay spell `{id}`"))
+            .clone();
+
+        // TASK-0127 added `spell` metadata to every handwritten spell entry
+        // (asserted in detail by spell_data.rs). Its presence is asserted
+        // separately and it is normalized on both sides so the comparison
+        // below keeps guarding every other field.
+        assert!(
+            actual.spell.is_some(),
+            "`{id}` must keep its spell metadata"
+        );
+        actual.spell = None;
+        expected.spell = None;
+
+        // TASK-0127 also re-expressed the four one-shot saves as one
+        // structured save instead of the pack's manual note: a Dexterity or
+        // Constitution save with `half` whose failed save deals the SRD
+        // damage (thunderwave also pushes). Assert that exact shape, then
+        // normalize both sides. The two concentration spells keep the pack's
+        // manual note; their effects stay compared verbatim below.
+        match id {
+            "burning-hands" => assert_save_half(&actual, AbilityName::Dex, "3d6", "fire", None),
+            "fireball" => assert_save_half(&actual, AbilityName::Dex, "8d6", "fire", None),
+            "lightning-bolt" => {
+                assert_save_half(&actual, AbilityName::Dex, "8d6", "lightning", None)
+            }
+            "thunderwave" => {
+                assert_save_half(&actual, AbilityName::Con, "2d8", "thunder", Some(10))
+            }
+            // The concentration spells additionally recorded their
+            // persistent-area upcast limitation in `todo`; assert it, then
+            // normalize both sides.
+            "moonbeam" => {
+                assert_eq!(
+                    actual.todo,
+                    ["Persistent area: initial and recurring CON saves are manual; upcast (+1d10 per slot above 2) has no structured main effect, so no dice table (higher slots keep base effects)"],
+                    "moonbeam todo"
+                );
+                actual.todo.clear();
+                expected.todo.clear();
+            }
+            "spirit-guardians" => {
+                assert_eq!(
+                    actual.todo,
+                    ["Persistent area: recurring WIS saves are manual; upcast (+1d8 per slot above 3) has no structured main effect, so no dice table (higher slots keep base effects)"],
+                    "spirit-guardians todo"
+                );
+                actual.todo.clear();
+                expected.todo.clear();
+            }
+            _ => unreachable!("unexpected overlay spell `{id}`"),
+        }
+        if matches!(
+            id,
+            "burning-hands" | "fireball" | "lightning-bolt" | "thunderwave"
+        ) {
+            actual.effects.clear();
+            expected.effects.clear();
+        }
+
+        assert_eq!(actual, expected, "overlay mismatch for `{id}`");
+    }
+}
+
+/// Assert the structured one-shot save shape of a TASK-0127 AoE spell: a
+/// single save effect with the given ability and the shared `{spell_dc}`
+/// placeholder, half damage on a success, and an `on_fail` that opens with
+/// the given damage (plus one optional push away).
+fn assert_save_half(
+    ability: &Ability,
+    save_ability: AbilityName,
+    dice: &str,
+    damage_type: &str,
+    push_ft: Option<i32>,
+) {
+    let [Effect::Save(save)] = ability.effects.as_slice() else {
+        panic!("`{}` must be one structured save", ability.id);
+    };
+    assert_eq!(save.ability, save_ability, "`{}` save ability", ability.id);
+    assert_eq!(save.dc.as_text(), "{spell_dc}", "`{}` save dc", ability.id);
+    assert!(
+        save.half,
+        "`{}` must take half damage on a success",
+        ability.id
+    );
+    assert!(!save.ignore_cover, "`{}` ignore_cover", ability.id);
+    let mut on_fail = save.on_fail.iter();
+    let Effect::Damage(damage) = on_fail
+        .next()
+        .unwrap_or_else(|| panic!("`{}` on_fail must open with damage", ability.id))
+    else {
+        panic!("`{}` on_fail must open with damage", ability.id);
+    };
+    assert_eq!(damage.dice.as_text(), dice, "`{}` damage", ability.id);
+    assert_eq!(
+        damage.damage_type.as_str(),
+        damage_type,
+        "`{}` damage type",
+        ability.id
+    );
+    if let Some(distance) = push_ft {
+        assert!(
+            matches!(
+                on_fail.next(),
+                Some(Effect::ForcedMove(push))
+                    if push.distance == distance && push.direction == Direction::Away
+            ),
+            "`{}` must push {distance} ft away",
+            ability.id
         );
     }
+    assert_eq!(
+        on_fail.next(),
+        None,
+        "`{}` on_fail has unexpected extras",
+        ability.id
+    );
+    assert!(
+        save.on_success.is_empty(),
+        "`{}` half damage is modelled by `half`, not on_success",
+        ability.id
+    );
 }
 
 #[test]
