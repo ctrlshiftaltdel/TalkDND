@@ -1683,8 +1683,26 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                     c.adventure = Some(v);
                 }
                 "species" | "race" => c.species = Some(chargen::slug(&v)),
-                "class" => c.class = Some(chargen::slug(&v)),
-                "subclass" => c.subclass = Some(chargen::slug(&v)),
+                "class" => {
+                    c.class = Some(chargen::slug(&v));
+                    // v1.6 T3: the spell lists follow the class once it exists.
+                    if c.spells_done {
+                        let book =
+                            classdata::Book::load(c.rs(), save.parent().and_then(|p| p.parent()))
+                                .ok();
+                        c.spell_lists = chargen::spell_lists_from_text(&c, book.as_ref());
+                    }
+                }
+                "subclass" => {
+                    c.subclass = Some(chargen::slug(&v));
+                    // v1.6 T3: subclass grants widen the spell universe.
+                    if c.spells_done {
+                        let book =
+                            classdata::Book::load(c.rs(), save.parent().and_then(|p| p.parent()))
+                                .ok();
+                        c.spell_lists = chargen::spell_lists_from_text(&c, book.as_ref());
+                    }
+                }
                 "masteries" => c.masteries = list().iter().map(|s| chargen::slug(s)).collect(),
                 "background" => c.background = Some(chargen::slug(&v)),
                 "skills" => c.skills = list(),
@@ -1708,6 +1726,11 @@ fn chargen_cmd(save: &Path, cmd: ChargenCmd, rng: &mut dyn DiceRng, seeded: bool
                             .collect()
                     };
                     c.spells_done = true;
+                    // v1.6 T3: fill the structured lists from the free text
+                    // (precise D-9 mapping; unmatched names go to legacy).
+                    let book =
+                        classdata::Book::load(c.rs(), save.parent().and_then(|p| p.parent())).ok();
+                    c.spell_lists = chargen::spell_lists_from_text(&c, book.as_ref());
                 }
                 "name" => c.name = Some(v),
                 "personality" | "traits" => c.personality = Some(v),

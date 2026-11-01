@@ -1502,3 +1502,113 @@ fn attribute_skill_save_checks_are_unchanged() {
     assert!(out.contains("dex check") && out.contains("+2="), "{out}");
     let _ = fs::remove_dir_all(&r);
 }
+
+// ---------------------------------------------------------------------------
+// v1.6 T3 (TASK-0124): the spell commands at the CLI boundary — exit codes,
+// the read-only view and the stable JSON flag (docs/SPELLCASTING.md §4.3).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spells_command_surface_and_exit_codes() {
+    let r = root("spells-cli");
+    let out = ok(&r, &["new", "--date", "2030-05-01"]);
+    assert!(out.contains("Saves/2030-05-01-01"));
+    let steps: Vec<Vec<&str>> = vec![
+        vec!["chargen", "set", "ruleset", "2014"],
+        vec!["chargen", "set", "species", "human"],
+        vec!["chargen", "set", "class", "cleric"],
+        vec!["chargen", "set", "level", "1"],
+        vec!["chargen", "set", "background", "acolyte"],
+        vec!["chargen", "array"],
+        vec![
+            "chargen", "assign", "str=13", "dex=12", "con=15", "int=10", "wis=14", "cha=8",
+        ],
+        vec!["chargen", "set", "skills", "medicine,persuasion"],
+        vec!["chargen", "set", "subclass", "life"],
+        vec!["chargen", "set", "spells", "guidance,bless,cure-wounds"],
+        vec!["chargen", "set", "name", "Bruni"],
+    ];
+    for a in &steps {
+        ok(&r, a);
+    }
+    ok(&r, &["chargen", "sheet"]);
+    ok(&r, &["chargen", "confirm"]);
+
+    // AC-1: the view is read-only; --json sits on the subcommand itself.
+    let save = r.join("Saves/2030-05-01-01");
+    let sheet = fs::read_to_string(save.join("sheets/bruni.yaml")).unwrap();
+    let text = ok(&r, &["char", "bruni", "spells"]);
+    assert!(text.contains("mode=prepared"), "{text}");
+    assert!(text.contains("戏法"), "{text}");
+    let json = ok(&r, &["char", "bruni", "spells", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(json.trim()).expect("json output");
+    assert_eq!(v["mode"], "prepared");
+    assert!(v["cantrips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "guidance"));
+    // Read-only: the stored yaml is byte-identical after both views.
+    assert_eq!(
+        sheet,
+        fs::read_to_string(save.join("sheets/bruni.yaml")).unwrap()
+    );
+
+    // Unknown character and unknown spell fail with exit 1.
+    let (good, _) = run(&r, &["char", "nobody", "spells"]);
+    assert!(!good);
+    let (good, _) = run(&r, &["char", "bruni", "prepare", "fireball"]);
+    assert!(!good);
+
+    // prepare / unprepare round trip; duplicate prepare stays exit 0.
+    ok(&r, &["char", "bruni", "unprepare", "bless"]);
+    ok(&r, &["char", "bruni", "unprepare", "bless"]);
+    ok(&r, &["char", "bruni", "prepare", "bless"]);
+    ok(&r, &["char", "bruni", "prepare", "bless"]);
+
+    // sync --dry-run does not change the sheet; sync does.
+    ok(&r, &["char", "bruni", "unprepare", "bless"]);
+    let before = fs::read_to_string(save.join("sheets/bruni.yaml")).unwrap();
+    let dry = ok(&r, &["char", "bruni", "spells", "sync", "--dry-run"]);
+    assert!(dry.contains("[dry-run]"), "{dry}");
+    assert_eq!(
+        before,
+        fs::read_to_string(save.join("sheets/bruni.yaml")).unwrap()
+    );
+    ok(&r, &["char", "bruni", "prepare", "bless"]);
+    ok(&r, &["char", "bruni", "spells", "sync"]);
+    let after = fs::read_to_string(save.join("sheets/bruni.yaml")).unwrap();
+    assert!(after.contains("ref: bless"), "{after}");
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn non_caster_gets_a_clear_error() {
+    let r = root("spells-noncaster");
+    ok(&r, &["new", "--date", "2030-05-02"]);
+    let steps: Vec<Vec<&str>> = vec![
+        vec!["chargen", "set", "ruleset", "2014"],
+        vec!["chargen", "set", "species", "human"],
+        vec!["chargen", "set", "class", "fighter"],
+        vec!["chargen", "set", "level", "1"],
+        vec!["chargen", "set", "background", "soldier"],
+        vec!["chargen", "set", "fighting-style", "defense"],
+        vec!["chargen", "array"],
+        vec![
+            "chargen", "assign", "str=15", "dex=14", "con=13", "int=12", "wis=10", "cha=8",
+        ],
+        vec!["chargen", "set", "name", "Rex"],
+    ];
+    for a in &steps {
+        ok(&r, a);
+    }
+    ok(&r, &["chargen", "sheet"]);
+    ok(&r, &["chargen", "confirm"]);
+    let (good, out) = run(&r, &["char", "rex", "spells"]);
+    assert!(!good);
+    assert!(out.contains("不是施法职业"), "{out}");
+    let (good, out) = run(&r, &["char", "rex", "prepare", "bless"]);
+    assert!(!good);
+    assert!(out.contains("不是施法职业"), "{out}");
+    let _ = fs::remove_dir_all(&r);
+}

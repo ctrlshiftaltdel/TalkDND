@@ -414,11 +414,21 @@ pub fn spell_mode(cd: &ClassDef) -> Option<String> {
 }
 
 /// Every spell id the class may take with its level (0 = cantrip): the base
-/// table, all fixed grants, and — for choice grants — the source class
-/// tables (`any_class`: every class in the book; `multi_list`: only the
-/// listed ones). Migration adopt and the T3 commands use this as the "known
-/// universe" for precise matching.
-pub fn spell_universe(book: &Book, cd: &ClassDef) -> BTreeMap<String, u8> {
+/// table, the class-level feature grants (e.g. 2014 Magical Secrets), the
+/// grants of the character's **selected** subclass (`None` or an unknown id
+/// contributes no subclass grants), and — for choice grants — the source
+/// class tables (`any_class`: every class in the book; `multi_list`: only
+/// the listed ones). Only grants with `from_level <= level` enter the set;
+/// the base table is unfiltered (ring availability stays with the slot
+/// logic). Migration adopt and the T3 commands use this as the "known
+/// universe" for precise matching (docs/SPELLCASTING.md §3.9).
+pub fn spell_universe(
+    book: &Book,
+    cd: &ClassDef,
+    subclass: Option<&str>,
+    level: i32,
+    terrain: Option<&str>,
+) -> BTreeMap<String, u8> {
     fn add_choice(m: &mut BTreeMap<String, u8>, book: &Book, from: &[String]) {
         let classes: Box<dyn Iterator<Item = &ClassDef>> = if from.is_empty() {
             Box::new(book.classes.values())
@@ -432,11 +442,26 @@ pub fn spell_universe(book: &Book, cd: &ClassDef) -> BTreeMap<String, u8> {
         }
     }
     let mut m = cd.spells.clone();
-    for g in cd
-        .features_grants
-        .iter()
-        .chain(cd.subclasses.values().flat_map(|s| s.spells.iter()))
-    {
+    for g in cd.features_grants.iter().chain(
+        subclass
+            .and_then(|s| cd.subclasses.get(s))
+            .into_iter()
+            .flat_map(|s| s.spells.iter()),
+    ) {
+        // A grant arrives at its class level: before `from_level` the
+        // spell is not in the universe yet (§3.9; the base table and the
+        // slot rings are separate gates).
+        if g.from_level > level {
+            continue;
+        }
+        // Terrain-grouped grants (2014/2024 Land): only the chosen terrain's
+        // spells enter the universe; without a chosen terrain none do (the
+        // player is told to pick one first, §3.9).
+        if let Some(t) = &g.terrain {
+            if Some(t.as_str()) != terrain {
+                continue;
+            }
+        }
         match (&g.id, g.from.as_slice()) {
             (Some(id), _) => {
                 m.entry(id.clone()).or_insert(g.level.unwrap_or(0));
@@ -445,6 +470,54 @@ pub fn spell_universe(book: &Book, cd: &ClassDef) -> BTreeMap<String, u8> {
         }
     }
     m
+}
+
+/// Fixed always-prepared spell ids of the selected subclass unlocked at
+/// `level` (§3.9): grants with `grant = always_prepared`, `from_level <=
+/// level` and, when the grant carries a terrain, a terrain matching the
+/// chosen one (grants without a terrain always count). Data order; callers
+/// de-duplicate against the lists they seed.
+pub fn always_prepared_grants(
+    cd: &ClassDef,
+    subclass: Option<&str>,
+    level: i32,
+    terrain: Option<&str>,
+) -> Vec<String> {
+    subclass
+        .and_then(|s| cd.subclasses.get(s))
+        .into_iter()
+        .flat_map(|s| s.spells.iter())
+        .filter(|g| g.grant == "always_prepared" && g.from_level <= level)
+        .filter(|g| g.terrain.as_deref().is_none_or(|t| Some(t) == terrain))
+        .filter_map(|g| g.id.clone())
+        .collect()
+}
+
+/// The ids of a subclass's terrain-grouped `always_prepared` grants unlocked
+/// at `level`, across every terrain: switching terrain (`spells terrain`)
+/// removes exactly these ids from `always_prepared` — the previous terrain's
+/// seeded grants — while grants without a terrain stay.
+pub fn terrain_granted_ids(cd: &ClassDef, subclass: Option<&str>, level: i32) -> Vec<String> {
+    subclass
+        .and_then(|s| cd.subclasses.get(s))
+        .into_iter()
+        .flat_map(|s| s.spells.iter())
+        .filter(|g| g.grant == "always_prepared" && g.from_level <= level && g.terrain.is_some())
+        .filter_map(|g| g.id.clone())
+        .collect()
+}
+
+/// The distinct terrains of a subclass's spell grants (2014 Land: arctic…,
+/// 2024 Land: arid…), sorted; empty when the class or the selected subclass
+/// has no terrain-grouped grants.
+pub fn subclass_terrains(cd: &ClassDef, subclass: Option<&str>) -> Vec<String> {
+    let set: std::collections::BTreeSet<String> = subclass
+        .and_then(|s| cd.subclasses.get(s))
+        .into_iter()
+        .flat_map(|s| s.spells.iter())
+        .filter_map(|g| g.terrain.clone())
+        .collect();
+    set.into_iter().collect()
 }
 
 /// The exact command(s) a DM agent should run when local data is missing.
