@@ -1,8 +1,8 @@
-# 法术元数据（v1.6 T1 / TASK-0122）
+# 法术元数据（v1.6 T1 / TASK-0122，T4 / TASK-0126 补结算）
 
 > 状态：T1 已实现——`Ability` 的可选 `spell` 元数据块、SRD 导入填充与 `content check` 规则。
-> **这不是 v1.6 施法结算**：本文只描述元数据层。`cast`/`use` 的执行行为没有变化；升环结算、成分硬校验、契约槽位（T4）、法术列表与存档迁移（T2/T3）尚未实现。
-> 设计权威是 `docs/SPELLCASTING.md` §2（本文是其 T1 子集的操作说明，不另立规则）。
+> T4（TASK-0126）已实现施法结算，见本文 §7：`cast`/`use` 的 `--slot` 扣槽与升环骰表、戏法成长、契约槽/Mystic Arcanum、材料声明与分钟/小时拒绝。
+> 设计权威是 `docs/SPELLCASTING.md` §2 与 §5（本文是其操作说明，不另立规则）。
 
 ## 1. 模型：`Ability` + 可选 `spell` 块
 
@@ -98,10 +98,29 @@ tag 是旧兼容层，不承担语义，所以不一致只给 warning；字段�
 - **旧 pack / 旧 YAML**：无 `spell` 字段 → `None`，加载、校验、执行与 v1.5 完全一致。
 - **旧二进制读新 pack**：`deny_unknown_fields` 拒绝——失败关闭，发布说明需写明 pack 与二进制同版本。
 - **`content show` / `content list`**：`show` 直接输出 ability JSON，带 `spell` 的条目会包含该块；`spell: None` 时不出现。
-- **T4 之后**：升环/成分/契约结算只读这里的字段；T2/T3 的法术列表只依赖 `spell.level` 与内容 id。在 T4 落地前，本字段对战斗结果没有任何影响。
+- **T4 结算（TASK-0126）**：带 `spell` 块的能力在 `cast`/`use` 时按 §7 结算；无 `spell` 块的能力行为逐字节不变，tracked pack（尚无 `spell` 块）在 T5 重新生成前完全走旧路径。
 
 ## 6. 测试位置
 
 - `tools/combat-sim/tests/srd.rs`：导入映射（完整法术、分钟/小时、戏法成长、未知学派、缺失字段、旧字段不变、反序列化）。
 - `tools/combat-sim/tests/srd_pack.rs`：pack 导入后 `abilities` 形状、元数据字段与加载往返。
 - `tools/combat-sim/tests/content.rs`：serde 分层（旧 YAML 往返、部分字段默认值、完整往返）与 `content check` 错误/警告矩阵。
+- `tools/combat-sim/tests/combat_spells.rs`（T4）：合成内容的施法结算矩阵（扣槽、升环骰、契约槽、arcanum、戏法成长、材料、分钟/小时、旧行为回归、Ready 预付）。
+- `tools/combat-sim/tests/cli.rs`（T4 追加）：真实二进制端到端（`cast --slot`/`--material`/`--ignore-components`、分钟拒绝、旧 `--slot` 语义）。
+
+## 7. 施法结算（T4 / TASK-0126）
+
+`combat-sim cast <谁> <法术> [目标...] [--slot N] [--material TEXT] [--ignore-components]` 与 `use` 是唯一施法入口：两条命令都进入 `engine::use_ability` → `use_resolved_ability`，AI 与嵌套效果也走同一执行器。所有新检查只作用于带 `spell` 块的能力；无 `spell` 块的能力（含旧 `--slot` 语义：只设上下文、不换扣费资源）逐字节不变。校验全部发生在任何状态修改之前，失败不消耗动作或资源、不保存 state。
+
+| 规则 | 行为 |
+|------|------|
+| `--slot N` | 校验 `N ≥ spell.level` 且 `N ≤ 9`（戏法拒绝）；扣费资源覆盖为 `spell-slot-N`（覆盖 `Ability.cost`/`AbilityRef.cost`）；`{slot_level}` 上下文 = N |
+| `upcast.dice_by_level` | 表中有 N → 只替换主伤害/治疗骰：`Attack.damage[0]`、`Save.on_fail` 第一个 `Damage`、或 `Heal`；表缺 N 且 N > 基础环 → 失败关闭；无 `upcast` 块且 N > 基础环 → 允许但记 `UPCAST NOT MODELED` |
+| `cantrip_scaling` | 戏法无槽：按施法者 `creature.level` 取不超过它的最大键；无表或等级低于首键 → 基础骰 |
+| 契约施法者 | ref 成本被 `spells sync` 覆盖为 `spell-slot-L`（L ≠ 基础环）→ 按 L 扣 1 槽、`{slot_level}` = L、骰表按 L 选；`--slot` 拒绝 |
+| Mystic Arcanum | ref 成本为 `arcanum-N` → 消耗 `arcanum-N`、不扣法术位、`{slot_level}` = N、不加骰；`--slot` 拒绝 |
+| 材料（D-3/D-4） | `material.cost_gp` 或 `consumed` 时必须给非空 `--material`，否则失败；`--material` 只原样声明（不匹配文本、不查库存）并写 `MATERIAL DECLARED`；`consumed` 另写 `MATERIAL CONSUMED`；`--ignore-components` 是 DM 越权，成功但写 `COMPONENTS IGNORED` |
+| `casting_time`（D-11） | `minute`/`hour` 在战斗内失败关闭拒绝，错误指向战斗外手动/仪式流程；`action`/`bonus_action`/`reaction` 不变 |
+| 专注/Ready | `--slot`/升环不改变 `begin_concentration` 与打断检定；Ready 仍按 setup 预付（含 ref 成本覆盖），触发时不重复校验 |
+
+组件声明日志行（施放成功后出现）：`MATERIAL DECLARED: <文本>`、`MATERIAL CONSUMED: <文本>`、`COMPONENTS IGNORED: `<法术>` ...`、`UPCAST NOT MODELED: ...`。`use` 命令与 `cast` 接受同一组新参数（`--material`、`--ignore-components`），因为两者共用执行器。
