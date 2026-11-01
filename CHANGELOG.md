@@ -32,7 +32,7 @@
 - **存档 schema 9 → 10（自动迁移）**：首次 `talkdnd start` / `talkdnd migrate` 先把整份存档备份到 `Saves/_backups/<存档>-<时间>-schema9`，再给每张角色卡补 `spells` 块：优先从 `chargen.json`、其次从角色卡正文 `## 法术` 段**精确**对号（法术 id 或名字的 slug；对不上的进 `legacy`，不猜测）。迁移幂等，重复执行不二次改写；DM 手改过的角色卡（完整性清单标记 dirty）保持原样不被重写。回退：恢复对应备份目录。
 - **先升级程序再开旧存档**：旧版 talkdnd 会在 `save-meta` 拒绝读取 schema 10 的存档（失败关闭）；不要用旧版程序打开已迁移的存档。
 - **覆盖式更新**：下载 1.6.0 发布包，把包内 `TalkDND/LetsPlay/` 的内容覆盖到现有游戏文件夹，覆盖同名文件；存档目录原样保留。不要用旧包整个替换。
-- 行为基线是 main `74dc5c371caf905746441e9bc5ea92d13bdd37c8`（PR #251 合并后）。该提交上 combat-sim 554、talkdnd 383、talkdnd-dev 45、AgentOrch 套件 676（19 skipped）个测试通过，`validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 退出码 0。发布提交只改三个 crate 的版本号与锁文件、本更新日志、章程和 `LetsPlay/README.md`，不含源码、测试或 CI 行为变更。
+- 行为基线是 main `74dc5c371caf905746441e9bc5ea92d13bdd37c8`（PR #251 合并后）。该提交上 combat-sim 556、talkdnd 383、talkdnd-dev 45、AgentOrch 套件 676（19 skipped）个测试通过，`validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 退出码 0。发布提交只改三个 crate 的版本号与锁文件、本更新日志、章程和 `LetsPlay/README.md`，不含源码、测试或 CI 行为变更。
 - 本任务不创建或推送 tag；合并后由 Master 在 main 上打 `v1.6.0` 并触发 release workflow。
 
 ### 已知限制
