@@ -4,18 +4,47 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
-## v1.6.0 — 未发布
+## v1.6.0 — 2026-11-01
+
+### 新功能
+
+- **法术元数据层**（TASK-0122，PR #241）：`Ability` 新增可选 `spell` 元数据块（环级/学派/施法时间/成分/仪式/范围与持续文本/升环表/戏法成长表/职业列表），SRD 导入按上游字段填充，`content check` 对带 `spell` 块的数据启用对应检查；没有 `spell` 块的旧内容加载、校验、执行与 v1.5 完全一致。
+- **法术列表块与职业数据**（TASK-0123，PR #243）：角色卡 `sheets/<id>.yaml` 新增 `spells` 块（模式/施法属性与 `cantrips` / `prepared` / `known` / `book` / `always_prepared` / `arcanum` / `legacy` 列表），是法术列表的唯一数据源。两版 8 个 SRD 施法职业带基础法术表与子职授予（Life/Devotion/Land 常备、Fiend、Magical Secrets、2024 子职常备表），2014 职业级仪式资格与 2024 edition 级仪式规则（wizard Ritual Adept、抄书 2 小时 + 50 gp 每环）、邪术师 Mystic Arcanum（11/13/15/17 级 `arcanum-6..9` 资源）；建卡数量校验支持结构化法术列表（旧自由文本仍可用）。
+- **法术列表命令与角色卡引用**（TASK-0124，PR #245）：`talkdnd char <名字> spells [--json]` 只读视图；`prepare` / `unprepare` / `learn` / `scribe` / `ritual` 按来源、环级、数量与法术书校验，失败不写任何文件；`spells adopt` 把遗留文本精确对号（未匹配进 `legacy`），`spells sync [--dry-run]` 维护战斗块法术引用（契约施法者成本覆盖为 `spell-slot-L`、Mystic Arcanum 为 `arcanum-N`、未受管引用保留并记日志）；`chargen set spells` 自动填充结构化列表，`chargen sheet` 生成 `spells` 块与法术引用，升级时重算数量、契约槽与奥术资源。
+- **战斗内施法结算**（TASK-0126，PR #249）：`combat-sim cast` / `use` 接入唯一施法执行器——`--slot N` 升环扣 `spell-slot-N` 并把 `{slot_level}` 上下文设为 N（N ≥ 基础环且 ≤ 9）；`upcast.dice_by_level` 命中时替换主伤害/治疗骰，缺表且 N > 基础环失败关闭，无表允许并记 `UPCAST NOT MODELED`；戏法按角色等级 5/11/17 自动成长（`cantrip_scaling`）且拒绝 `--slot`；契约施法者按契约环扣费与选骰表、Mystic Arcanum 消耗 `arcanum-N` 不扣法术位，两者都拒绝 `--slot`；昂贵/消耗材料要求非空 `--material`（只声明写日志，`--ignore-components` 是 DM 显式越权并写 `COMPONENTS IGNORED`）；施法时间分钟/小时的法术在战斗内失败关闭拒绝。
+- **法术数据与 DM 文档**（TASK-0127，PR #251）：两版手写 `spells.yaml` 17（2014）/18（2024）个常用法术带完整结构化 `spell` 元数据（升环/戏法骰表、材料成分、职业表、范围与持续文本）；2024 四个瞬时 AoE（Burning Hands / Fireball / Lightning Bolt / Thunderwave）从手动升级为结构化豁免+半伤结算（Thunderwave 豁免失败另推 10 尺）；新增玩家/DM 文档 `LetsPlay/docs/spellcasting.md`（战斗内外施法、成分声明、仪式、手动结算清单、同回合与长施法指引、两版差异）。
+
+### 变更
+
+- **存档 schema 9 → 10**（PR #243）：`spells` 块成为法术列表唯一数据源，迁移见下方"更新说明 / 迁移"；角色卡 `CharFile.version` 保持 1。
+- **`--slot` 真正扣费**（PR #249）：带 `spell` 元数据的有环法术，`--slot N` 从"只改上下文"变为按 `spell-slot-N` 实际扣费（有意的行为修复）；无 `spell` 元数据的旧能力保持旧 `--slot` 语义不变。
+- **材料与长施法边界**（PR #249）：有价格门槛或会消耗的材料缺少非空 `--material` 时施法失败；施法时间为分钟/小时的法术战斗内拒绝，走战斗外流程。
+- **2024 数据修复**（PR #251）：Detect Magic 两版补 `cost` / `slot_level` / `concentration`——1 环法术此前缺槽成本，战斗内施放现在正确扣 1 环槽。
+
+### 修复
+
+- **扣费前校验**（PR #249）：升环骰表的替换目标（主伤害/治疗）在计划阶段、任何状态变更之前校验；带骰表但找不到可替换主效果的法术在计划阶段失败，动作、法术位与专注零变化。
+- **2024 AoE 结构化**（PR #251）：四个瞬时 AoE 法术从 note+manual 升级为结构化豁免+半伤，战斗内自动结算；2014 的同名法术保持各自 SRD 文本形状。
+- **旧内容兼容**（PR #241/#249）：无 `spell` 元数据的能力逐字节不变，旧 pack、旧 YAML 与旧战斗状态照常加载；旧自由文本法术列表路径保留可用。
 
 ### 更新说明 / 迁移
 
-- **存档 schema 9 → 10（TASK-0123，T2）**：`sheets/<id>.yaml` 新增 `spells` 法术列表块（模式/施法属性与 `cantrips` / `prepared` / `known` / `book` / `always_prepared` / `arcanum` / `legacy` 列表），是法术列表的唯一数据源。首次 `talkdnd start` / `talkdnd migrate` 会先把整份存档备份到 `Saves/_backups/<存档>-<时间>-schema9`，再给每张角色卡补块：优先从 `chargen.json`、其次从角色卡正文 `## 法术` 段**精确**对号（法术 id 或名字的 slug；对不上的进 `legacy`，不猜测）。迁移幂等，重复执行不二次改写；DM 手改过的角色卡（校验清单标记 dirty）保持原样不被重写。回退：恢复对应备份目录。升级后旧版 talkdnd 会在 `save-meta` 拒绝读取 schema 10 的存档（失败关闭）。
-- **职业数据与规则形状（TASK-0123，T2）**：两版 8 个 SRD 施法职业新增基础法术表（生成自上游 5e-database `spells[].classes`，只收 SRD 法术）、子职法术授予（按各自 SRD 文本区分 always_prepared / class_list / any_class / multi_list）、2014 职业级仪式资格与 2024 edition 级 `rules.spellcasting.ritual`（combat-sim 新增可选形状，旧 rules 数据照常加载，战斗行为不变）、2024 法师 Ritual Adept 与抄书数值、邪术师 Mystic Arcanum（11/13/15/17 级解锁 `arcanum-6..9` 资源）。建卡的数量校验新增结构化法术列表路径（旧自由文本仍可用）。
+- **存档 schema 9 → 10（自动迁移）**：首次 `talkdnd start` / `talkdnd migrate` 先把整份存档备份到 `Saves/_backups/<存档>-<时间>-schema9`，再给每张角色卡补 `spells` 块：优先从 `chargen.json`、其次从角色卡正文 `## 法术` 段**精确**对号（法术 id 或名字的 slug；对不上的进 `legacy`，不猜测）。迁移幂等，重复执行不二次改写；DM 手改过的角色卡（完整性清单标记 dirty）保持原样不被重写。回退：恢复对应备份目录。
+- **先升级程序再开旧存档**：旧版 talkdnd 会在 `save-meta` 拒绝读取 schema 10 的存档（失败关闭）；不要用旧版程序打开已迁移的存档。
+- **覆盖式更新**：下载 1.6.0 发布包，把包内 `TalkDND/LetsPlay/` 的内容覆盖到现有游戏文件夹，覆盖同名文件；存档目录原样保留。不要用旧包整个替换。
+- 行为基线是 main `74dc5c371caf905746441e9bc5ea92d13bdd37c8`（PR #251 合并后）。该提交上 combat-sim 554、talkdnd 383、talkdnd-dev 45、AgentOrch 套件 676（19 skipped）个测试通过，`validate_kit.py --project-ready`、`check-leaks`、`check-letsplay` 退出码 0。发布提交只改三个 crate 的版本号与锁文件、本更新日志、章程和 `LetsPlay/README.md`，不含源码、测试或 CI 行为变更。
+- 本任务不创建或推送 tag；合并后由 Master 在 main 上打 `v1.6.0` 并触发 release workflow。
 
 ### 已知限制
 
-- v1.6 施法**命令面尚未交付**（T3）：`spells` / `prepare` / `unprepare` / `learn` / `scribe` / `ritual` / `adopt` / `sync` 命令、`set spells` 对结构化列表的自动填充、角色卡法术 refs 都还没有；本版本只有数据层、存档块与迁移。
-- 施法结算（升环、成分、契约槽位按覆盖成本、仪式校验）是 T4/T5 的交付；`rules.spellcasting` 目前只是数据形状，引擎不读它。
-- 土地圈（2014 Land）按地形常备的法术在迁移中不自动填入（需要玩家选地形，后续由命令处理）。
+- **tracked SRD pack 未重新生成**：pack 内 300+ 法术仍只有原文文本，没有结构化元数据；要新增结构化法术，改手写层 `Rules/combat/<edition>/spells.yaml`（同 id 覆盖 pack）。
+- **非主骰升环与持续区域仍是手动**：多发魔矢、多目标、2014 睡眠 HP 池这类"升环不加骰"的效果不会自动发生（无骰表的升环记 `UPCAST NOT MODELED`，DM 按文本手动补）；Moonbeam / Spirit Guardians 等持续区域与召唤/变形/传送/反制等效果类别保持 note+manual。
+- **材料不查库存**：`--material` 只原样声明（写 `MATERIAL DECLARED` / `MATERIAL CONSUMED` 日志），不匹配文本、不查物品栏；V/S 成分只展示，引擎不判断手部与沉默状态。
+- **同回合限制、长施法与魔祈仪式由 DM 手动**：2014"附赠动作施法后不能再施法"与 2024"每回合一个法术位"引擎不强制；分钟/小时长施法战斗内拒绝，跨回合由 DM 手动推进并记日志；2014 魔祈（Patron）授予法术的仪式资格失败关闭，由 DM 裁定。
+- **契约槽等价边界**：契约槽等级 L 恰等于法术基础环时（如 5 环法术在 L=5 契约槽），该法术与普通法术在引擎侧数据等价，`--slot` 按普通法术放行且行为与不带 `--slot` 一致；其余契约法术 `--slot` 一律拒绝。
+- **抄书跨文件非原子**：`scribe` 先扣金币（progress.yaml）再写角色卡，两个文件无法跨文件原子；金币扣减后角色卡写入失败会留下"钱已扣、法术未入书"，校验失败会报错且输出留有花费记录，DM 可用 `gold add` 手工补偿。
+- **土地圈（2014 Land）按地形常备的法术**在迁移中不自动填入：需要玩家选地形后用列表命令处理。
+- **默认战斗 AI 与完整书 pack 不变**：战斗 AI 仍是 legacy，Utility/Search 仍是库级 opt-in；完整书 pack 仍是可选资产，托管 CI 不构建也不上传。
 
 ## v1.5.0 — 2026-10-28
 
