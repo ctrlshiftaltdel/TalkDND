@@ -106,7 +106,7 @@ tag 是旧兼容层，不承担语义，所以不一致只给 warning；字段�
 - `tools/combat-sim/tests/srd.rs`：导入映射（完整法术、分钟/小时、戏法成长、未知学派、缺失字段、旧字段不变、反序列化）。
 - `tools/combat-sim/tests/srd_pack.rs`：pack 导入后 `abilities` 形状、元数据字段与加载往返。
 - `tools/combat-sim/tests/content.rs`：serde 分层（旧 YAML 往返、部分字段默认值、完整往返）与 `content check` 错误/警告矩阵。
-- `tools/combat-sim/tests/spell_data.rs`（T5）：两版手写 17/18 法术的元数据全字段、升环/戏法骰表、覆盖矩阵结构化样本（attack/save half/auto damage/heal/condition/forced move）与 2014/2024 数据差异；配套调整 `real_content.rs` 的 2024 面积覆盖测试——手写层自 T5 起有意与 pack 分叉，测试只对冻结的 `AreaSpec` 形状做精确断言（pack 条目仍须可解析且 id 一致）。
+- `tools/combat-sim/tests/spell_data.rs`（T5）：两版手写 17/18 法术的元数据全字段、升环/戏法骰表、覆盖矩阵结构化样本（attack/save half/auto damage/heal/condition/forced move）与 2014/2024 数据差异；配套调整 `real_content.rs` 的 2024 面积覆盖测试——手写层自 T5 起有意与 pack 分叉，测试保留 pack 条目叠加冻结 `AreaSpec` 后的整 `Ability` 相等断言，只对 `spell` 元数据（断言存在，全字段由 `spell_data.rs` 覆盖）、四个一次性 AoE 的结构化 Save（豁免属性/`{spell_dc}`/成功减半/`on_fail` 首项 SRD 伤害骰与类型/Thunderwave 另推离 10 尺/无多余效果）与 Moonbeam/Spirit Guardians 的持续区域 `todo`（逐字断言）先单独精确断言再两侧归一化，其余字段仍逐项比较（pack 条目仍须可解析且 id 一致）。
 - `tools/combat-sim/tests/combat_spells.rs`（T4）：合成内容的施法结算矩阵（扣槽、升环骰、契约槽、arcanum、戏法成长、材料、分钟/小时、旧行为回归、Ready 预付）。
 - `tools/combat-sim/tests/cli.rs`（T4 追加）：真实二进制端到端（`cast --slot`/`--material`/`--ignore-components`、分钟拒绝、旧 `--slot` 语义）。
 
