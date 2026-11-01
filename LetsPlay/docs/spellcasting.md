@@ -1,6 +1,6 @@
 # 施法（v1.6 T5）
 
-本页给 DM 与玩家使用：法术数据在哪、战斗内外怎么施法、哪些效果由程序自动结算、哪些必须 DM 手动，以及 2014/2024 两版差异。命令都在游戏文件夹里运行，`T=bin/talkdnd`、`CS=bin/combat-sim`（Windows：`bin\talkdnd.exe`、`bin\combat-sim.exe`）。引擎口径见 `tools/combat-sim/docs/COMBAT-SPELLS.md`；本页不重复规则原文，裁定依据是桌上的 SRD。
+本页给 DM 与玩家使用：法术数据在哪、战斗内外怎么施法、哪些效果由程序自动结算、哪些必须 DM 手动，以及 2014/2024 两版差异。命令都在游戏文件夹里运行，`T=bin/talkdnd`、`CS=bin/combat-sim`（Windows：`bin\talkdnd.exe`、`bin\combat-sim.exe`）。引擎与数据格式的开发文档在游戏文件夹之外（仓库内的 combat-sim 开发文档），玩家不需要读；本页不重复规则原文，裁定依据是桌上的 SRD。
 
 ## 法术数据在哪
 
