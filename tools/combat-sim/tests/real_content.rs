@@ -280,14 +280,23 @@ fn srd_2024_area_overlays_match_the_pack() {
             .iter()
             .find(|entry| entry["id"].as_str() == Some(id))
             .unwrap_or_else(|| panic!("missing pack spell `{id}`"));
-        let mut expected: Ability =
-            serde_json::from_value(entry.clone()).expect("pack spell parses");
-        expected.area = Some(area);
+        // The pack entry must still parse as an Ability under the same id.
+        let parsed: Ability = serde_json::from_value(entry.clone()).expect("pack spell parses");
+        assert_eq!(parsed.id, id, "pack spell id");
+        // Since TASK-0127 the handwritten entries in spells.yaml carry
+        // `spell` metadata (and, for the four one-shot saves, structured
+        // effects), so the registry view no longer equals the pack entry
+        // byte for byte. The frozen area overlay contract is unchanged and
+        // is asserted exactly on the registry view.
         let actual = registry
             .abilities
             .get(id)
             .unwrap_or_else(|| panic!("missing overlay spell `{id}`"));
-        assert_eq!(actual, &expected, "overlay mismatch for `{id}`");
+        assert_eq!(
+            actual.area.as_ref(),
+            Some(&area),
+            "overlay mismatch for `{id}`"
+        );
     }
 }
 
