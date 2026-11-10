@@ -40,6 +40,8 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 - Resolve Bloodied, Exhaustion, Charmed and Frightened through the same condition, modifier, predicate and spatial-query layers: Bloodied is derived from current HP, Exhaustion levels and their 2014/2024 effects come from `rules.exhaustion`, Charmed records its source and restricts damaging targets, and Frightened uses the existing line-of-sight kernel for disadvantage and willing-movement limits.
 - Resolve the Ready action through the same action, reaction, condition and spatial-query layers: one stored response and trigger, automatic or explicit triggering, the reaction spent once, the response resolved by the normal attack/ability/movement paths, setup-time payment and concentration for ability responses, expiry at the holder's next turn start, and additive state that keeps old combat states loadable.
 - Resolve sight through one visibility query: light and obscurement combine into clear / lightly obscured / heavily obscured / blocked, darkvision, blindsight, tremorsense and truesight use ranges parsed from the existing free-form `senses` text, ordinary hiding and invisibility are honored, and an unseen target or unseen attacker supplies the correct attack disadvantage or advantage with a logged reason.
+- Design single-class advancement around player-selected ability improvements or feats integrated with level-up; initially validate what is determinable, record the choice and computable ability changes, and leave unsupported effects to the DM. This is a goal, not a claim of delivery.
+- For that future advancement work, use save schema 11 with automatic 9/10 migration and a full pre-migration backup; preserve manual edits and unknown history. First-stage recovery uses full backup and persistent operation identifiers/stage records, stops on failure and requires explicit recovery. Update only reliably derived values; allow preview but not upgrade commit during an active encounter. These are approved design boundaries, not implemented behavior.
 
 ## Non-goals
 
@@ -49,6 +51,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 - Do not hard-code a campaign, an adventure, or a monster that is outside the SRD into the engine or into tracked combat data.
 - Do not run a second task system. The `local` AgentOrch edition files stay in the tree only because kit validation requires them. They are not a source of truth.
 - Do not add a network service, an account system, or a hosted game.
+- Do not automatically choose an advancement option for a player or claim unimplemented feat effects are automated.
 
 ## Scope and layout
 
@@ -190,7 +193,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 
 ## Open decisions
 
-None. A new product decision is written into the Decision Log, and into the sections it changes, before a task that depends on it is approved. The Master does not invent an answer in chat and leave this file stale.
+Single-class advancement: schema 11, automatic 9/10 migration, full pre-migration backup, preservation of manual edits and unknown history, first-stage backup/operation-stage records with explicit recovery, reliable-only numeric updates, and no upgrade commit during an active encounter are decided, not implemented. Storage shape, old-binary entry-point compatibility, detailed recovery, encounter detection, edition-specific eligibility and other rules semantics, and content integration remain open; options and risks are in [the written design](superpowers/specs/2026-11-10-character-advancement-design.md). The owner authorized PR #257 to merge only after its final head passes all G1–G6 and applicable CI; a new head requires fresh verification and review. Other material questions still follow the project decision gate. A new product decision is written into the Decision Log and affected sections before a dependent task is approved.
 
 ## Initial milestone
 
@@ -199,6 +202,14 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-11-10 — Advancement migration, recovery and encounter boundaries (TASK-0130, design only)
+
+The owner chose main save schema 11 with automatic migration from schema 9/10, a full backup before migration, preservation of manual edits and historical unknowns, and no guessing which historical opportunities were used. Older binaries do not check schema at every entry point: they are not guaranteed to reject writes; after migration, stop writing with older versions and audit entry points later. For the first stage, use a full backup and persistent operation identifiers/stage records; on failure stop and recover explicitly, without promising automatic recovery. Synthetic fault injection must verify no silent overwrite and no duplicate application. Automatically update only values whose source and derivation are reliable; preserve uncertain values and prompt the DM. During an active encounter an upgrade may be previewed but not committed; its detection algorithm is not decided. The existing migration backup has limitations and does not prove this future design is safely implemented. Detailed recovery, compatibility and remaining rules questions stay open. The owner authorized PR #257 to merge only after its final head passes G1–G6 and applicable CI; new heads require fresh verification and review. This decision does not implement the schema, migration or recovery.
+
+### 2026-11-10 — Single-class advancement direction (TASK-0130, design only)
+
+The owner prioritizes single-class ability improvement / feat choice integrated into level-up, with the player making the choice. The initial direction records choices, checks determinable conditions and applies clearly computable ability changes; unsupported effects remain manual for the DM. Known illegal choices are rejected and cannot be overridden; unknown prerequisites may be explicitly confirmed by the DM with the reason recorded and marked not program-verified. An unrecognized feat may be explicitly registered by name and source as unverified, with manual effects, but cannot bypass known illegal conditions or content authorization. Later full feat automation is planned in mechanism-based batches, with task status only in GitHub Issues. Existing 2014/2024 and SRD/FULL boundaries, unlock rules, privacy and player choice remain intact. Old-save compatibility and recovery are required. The owner approved the written design and authorized subsequent work without another routine design or plan review request; the later decision above settles specific schema, migration and recovery boundaries, but material unresolved details still require the appropriate decision. Merge authorization is conditional on G1–G6 and applicable CI as recorded above. No implementation or release is claimed here.
 
 ### 2026-11-01 — v1.6.0 release (TASK-0128)
 
