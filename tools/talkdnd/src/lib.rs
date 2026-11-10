@@ -3,6 +3,7 @@
 //! checkpoints and log entries. All dice go through combat-sim's engine.
 
 pub mod adventure;
+pub mod advancement_validation;
 pub mod audit;
 pub mod bookindex;
 pub mod chargen;
