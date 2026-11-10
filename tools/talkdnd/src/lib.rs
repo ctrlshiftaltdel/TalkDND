@@ -2,6 +2,7 @@
 //! resume digest, new save skeleton, character creation, random companions,
 //! checkpoints and log entries. All dice go through combat-sim's engine.
 
+pub mod advancement_validation;
 pub mod adventure;
 pub mod audit;
 pub mod bookindex;
