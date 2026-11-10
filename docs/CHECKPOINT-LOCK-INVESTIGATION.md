@@ -27,7 +27,7 @@
 
 ## 隔离假设实验
 
-以下是本机临时合成文件和 Rust 标准库文件锁的机制实验，不是产品复现；命令和代码见下方。两个实验分别构建、执行一次，编译器和程序均退出 0。第二次编译产生两个 FFI 类型警告；以下列出实际签名，结果只作为本环境观察。
+以下是本机临时合成文件和 Rust 标准库文件锁的机制实验，不是产品复现；命令和最终代码见下方。退回后在同一环境对最终代码重新构建、执行一次，编译器和程序均退出 0。第二次编译产生两个 FFI 类型警告；以下列出实际签名，结果只作为本环境观察。旧版本实验结果不作为最终代码的验证证据。
 
 1. **重复句柄**：同一进程 `try_clone` 持锁句柄、丢弃原句柄，另开句柄尝试取得锁：仍 `WouldBlock`；丢弃 clone 后成功。输出 `duplicate_retains_lock=true`、`duplicate_closed_reacquire=true`。说明保留副本可产生相同表象，不证明测试存在泄漏。
 2. **独立子进程**：子进程独立打开并持锁，经管道确认后父进程尝试：`WouldBlock`；子进程退出 0 后成功。输出 `independent_child_blocks=true`、`child_exit_reacquire=true`。说明独立竞争可产生同类现象；没有首次失败时的锁持有者证据。
@@ -37,7 +37,16 @@
 
 ### 机制实验重现材料
 
-本次命令依次为 `rustc /tmp/opencode/checkpoint-lock-synthetic.rs -o /tmp/opencode/checkpoint-lock-synthetic`、`/tmp/opencode/checkpoint-lock-synthetic run /tmp/opencode/checkpoint-lock-synthetic-file`、`rustc /tmp/opencode/checkpoint-lock-fork.rs -o /tmp/opencode/checkpoint-lock-fork`、`/tmp/opencode/checkpoint-lock-fork`；四个退出码均为 0。下列代码分别保存为上述源文件；仅 Linux fork 实验依赖 libc ABI。
+在工作树外新建的隔离合成 scratch 工作目录中，把下面两段代码分别保存为 `checkpoint-lock-synthetic.rs` 和 `checkpoint-lock-fork.rs`，在该目录依次执行下列命令（相对路径仅指向该 scratch 目录）。各命令均实际执行一次：
+
+| 命令 | 退出码 |
+|---|---:|
+| `rustc checkpoint-lock-synthetic.rs -o checkpoint-lock-synthetic` | 0 |
+| `./checkpoint-lock-synthetic run checkpoint-lock-synthetic-file` | 0 |
+| `rustc checkpoint-lock-fork.rs -o checkpoint-lock-fork` | 0（两个 FFI 类型警告） |
+| `./checkpoint-lock-fork` | 0 |
+
+第一程序输出 `duplicate_retains_lock=true`、`duplicate_closed_reacquire=true`、`independent_child_blocks=true`、`child_exit=exit status: 0` 和 `child_exit_reacquire=true`；第二程序输出 `fork_child_retains_fd=true parent_closed=true` 和 `child_wait_status=0 reacquire_after_child_exit=true`。仅 Linux fork 实验依赖 libc ABI。
 
 ```rust
 use std::{env,fs::OpenOptions,process::{Command,Stdio},io::{BufRead,BufReader,Write}};
@@ -49,7 +58,7 @@ fn main(){let a:Vec<String>=env::args().collect(); let p=&a[2]; if a[1]=="child"
 ```
 
 ```rust
-use std::{fs::OpenOptions,os::fd::AsRawFd};
+use std::fs::OpenOptions;
 unsafe extern "C" { fn fork()->i32; fn pipe(fds:*mut i32)->i32; fn read(fd:i32,buf:*mut u8,n:usize)->isize; fn write(fd:i32,buf:*const u8,n:usize)->isize; fn close(fd:i32)->i32; fn waitpid(pid:i32,status:*mut i32,opt:i32)->i32; fn _exit(code:i32)->!; }
-fn main(){let p="/tmp/opencode/checkpoint-lock-fork-file"; let open=||OpenOptions::new().create(true).truncate(false).write(true).open(p).unwrap(); let f=open(); f.lock().unwrap(); let mut fd=[0;2]; unsafe{assert_eq!(pipe(fd.as_mut_ptr()),0); let pid=fork(); assert!(pid>=0); if pid==0 {close(fd[1]); let mut b=0; read(fd[0],&mut b,1); _exit(0)} close(fd[0]); drop(f); let q=open(); println!("fork_child_retains_fd={} parent_closed=true",matches!(q.try_lock(),Err(std::fs::TryLockError::WouldBlock))); let b=1u8; assert_eq!(write(fd[1],&b,1),1); close(fd[1]); let mut status=0; assert_eq!(waitpid(pid,&mut status,0),pid); println!("child_wait_status={status} reacquire_after_child_exit={}",q.try_lock().is_ok()); println!("holder_raw_fd_before_fork={}",q.as_raw_fd()); }}
+fn main(){let p="checkpoint-lock-fork-file"; let open=||OpenOptions::new().create(true).truncate(false).write(true).open(p).unwrap(); let f=open(); f.lock().unwrap(); let mut fd=[0;2]; unsafe{assert_eq!(pipe(fd.as_mut_ptr()),0); let pid=fork(); assert!(pid>=0); if pid==0 {close(fd[1]); let mut b=0; read(fd[0],&mut b,1); _exit(0)} close(fd[0]); drop(f); let q=open(); println!("fork_child_retains_fd={} parent_closed=true",matches!(q.try_lock(),Err(std::fs::TryLockError::WouldBlock))); let b=1u8; assert_eq!(write(fd[1],&b,1),1); close(fd[1]); let mut status=0; assert_eq!(waitpid(pid,&mut status,0),pid); println!("child_wait_status={status} reacquire_after_child_exit={}",q.try_lock().is_ok()); }}
 ```
