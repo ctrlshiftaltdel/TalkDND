@@ -9,9 +9,12 @@
 | 路径 | 可定位事实 | 限制 |
 |---|---|---|
 | `tools/talkdnd/src/chargen.rs::slug`, `sheet_with`, `valid_id`；`lib.rs::chargen_cmd` | `sheet_with` 从名称生成 slug，写入 Markdown combat 块的 `id`；slug 去撇号、把其他分隔转连字符并小写，保留 Unicode 字母数字。`valid_id` 只接受首位小写 ASCII/数字、后续小写 ASCII/数字/连字符、最多 80 字节。建卡写 `Characters/<id>.md`，加 campaign party，再调用 `from_chargen`。 | slug 可碰撞；Unicode slug 可能未通过 ASCII 校验。格式合法不代表唯一、不可变、出处可信或人与角色身份相同；创建并非多文件事务。 |
+| `charsheet.rs::from_chargen`, `member_for` | `from_chargen` 以刚写入的 Markdown 创建 fresh 数据；若同 ID 的 YAML 已存在则以旧 `CharFile` 为基础，更新新建卡快照，并保留或合并既有 feats、inventory 等游玩字段。随后 `party` 调用 `member_for`，按 `cf.id` 复用已有成员并调整生命和资源；没有成员时才新增。`rerunning_chargen_sheet_keeps_play_data` 是保留字段的既有测试入口。 | **静态路径推演，未实测**：删除 Markdown 而保留旧 YAML、party/进度后，以同 slug 重建，可能复用旧角色游玩数据、party 成员及按 ID 引用的进度。当前枚举只剩一个匹配也不能证明身份历史连续；未断言真实存档发生过此事。同 ID 是否允许复用及显式重绑语义须 Owner 决定。 |
+| `lib.rs::npc_cmd` 的 `NpcCmd::Sheet`；`charsheet.rs::controller_for` | 同伴另走独立路径：生成 ID 后对 `check::sheets` 的**首个大小写敏感精确 ID**匹配检查 controller，匹配为 player 时拒绝覆盖；否则写 `Characters/<id>.md` 并 `add_to_party`。此路径不调用 `from_chargen`。 | 这不是全局唯一性校验：首项之后的重复项未检查；`sheets` 会跳过枚举/读取/解析失败项，保护范围仅限发现结果。不得据此推断同伴走了结构化重建或可靠身份验证。 |
 | `check.rs::sheets`, `find` | 先 Characters 后 NPCs，每目录路径排序；无法读取目录、目录项、文件或解析 combat 块时跳过；缺失非字符串 id/name 变空串。`find` 对 ID **或**名称大小写不敏感的精确匹配使用第一个 `.find`；仅无精确匹配时才要求名称前缀唯一。 | 重复 ID、同名、一个 ID 等于另一名称时第一个精确项胜出；它不是唯一性检查。返回列表不保证枚举完整；不存在匹配不能证明不存在角色。大小写折叠与文件系统大小写规则不是同一东西。 |
 | `charsheet.rs::path`, `load`, `parse_char_file`, `store`, `commit`, `markdown_path` | `load` 先发现/选择 Markdown，以其 ID 找 `sheets/<id>.yaml`；没有文件则从 Markdown `migrate` 到内存；有文件则解析，并在特定标记存在时吸收所选 Markdown 的 combat 块和尾部。`parse_char_file` 检查版本和 controller，所示路径未核对内部 ID 与发现 ID/路径一致；`store` 校验内部 ID 格式后按内部 ID 写。`commit` 依次存 YAML、party、按 `cf.file` 写 Markdown；`markdown_path` 检查相对路径组成。 | 一个合法 ID 可以指向另一个结构化文件，读入值和写出位置可能不同；`file` 路径合法不等于同一角色或 symlink 安全性已证明。写入次序非跨文件原子。不可据此声称任意真实存档有错绑。 |
 | `charsheet.rs::migrate`, `migrate.rs::detect`, `migrate_sheets` | 旧 Markdown 的 combat ID/name、相对路径和主体进入结构化角色；无 meta 时 `detect` 根据 `check::sheets` 和相应 YAML 是否存在推断旧 schema。`migrate_sheets` 发现同 ID 的 YAML 就跳过。 | 枚举跳过的条目不会参与判断；同 ID 文件存在也不能证明对应角色。自动创建 sidecar 或把空历史当没有选择均不可推断。 |
+| `migrate.rs::plan_companions`, `move_companions` | 旧 schema 向 6 迁移时，计划依据 sheet 的 `file`、combat side、campaign party 或 party state 等判定同伴，将 `NPCs/` 的相应文件移至 `Characters/`；目标冲突时分配空闲名称并警告。关联 sheet 存在时以文本编辑更新 `file: NPCs/...` 为新路径，其他 sheet 补 controller；`v5_companions_move_to_characters_and_story_npcs_stay` 是现有测试入口。 | 这是既有路径迁移，不是统一的身份重命名或绑定协议；计划阶段会跳过部分读取/枚举失败项，不能据此证明发现完整、身份唯一或全局引用已协调。移动和 sheet 更新分步执行，不能假设跨文件原子。 |
 | `lib.rs::add_to_party`, `start.rs::party_ids`, `combat-sim/src/party.rs::PartyState`, `progress.rs::recipients`, `xp_add`, `level_up`, `purse_key` | campaign party 是 ID 列表，建卡添加时按字符串精确去重；party state 的 `members` 按 creature ID 作键。进度、XP/钱袋用 ID；显式目标经 `find`，`all/party` 从 campaign 列表取 ID；`level_up` 经发现角色及其 ID 读进度并决定结构化/Markdown 写路径。`party_ids` 无法读取或找不到时返回空。 | 引用是可用键，不是持久人物身份；重复或改 ID 可能共用或悬空进度、party。不能根据单个匹配自动重绑或移动历史。 |
 | `charsheet.rs::rerunning_chargen_sheet_keeps_play_data`, `commit_rejects_sheet_paths_outside_the_save`；`tests/spells.rs::migration_skips_dirty_sheets_in_both_shapes`, `migration_without_integrity_manifest_keeps_every_sheet_byte_identical` | 现有合成测试分别检查重建保留指定游玩字段、拒绝 `../` 路径，以及法术迁移 dirty sheet 保护。 | 这些测试不证明全目录唯一性、身份绑定、外部写者、克隆或 sidecar 恢复。当前已有覆盖的完整性 UNKNOWN。 |
 
@@ -58,6 +61,8 @@
 | Markdown ID、内部 ID、文件路径、party/进度和 sidecar 不一致；sidecar 缺失、孤儿、复制、损坏、未来版本 | 分别识别差异或 UNKNOWN；不得自动认领、重建历史或重写人工数据。 |
 | 9、10 迁移，含仅 Markdown、无 sheet、dirty 注释及未知键、缺完整性基线 | 只有完整备份验证后才开始写；未知历史仍未知；不能无损处理时停止，原字节可恢复。 |
 | 受控改名、同档复制、整档克隆、跨档侧车复制及旧快照重放 | 按最终批准的身份作用域和分叉协议检查；相同内部字节无法区分时标 UNKNOWN 并停止，不虚构检测能力。 |
+| 删除角色 Markdown，保留旧 YAML、party、进度及 sidecar，再用同 slug 重建 | 将新建/旧身份连续性判为未知，不仅凭当前唯一 ID 自动认领历史；核对未授权关联不会改变旧数据。身份复用规则等待 Owner 决定。 |
+| 未来经授权的显式重绑：备份、阶段记录、逐文件发布及恢复前后分别注入中断 | 依最终批准的重绑语义和 D 协议检查不明状态停止、保留备份/记录与后续手改，恢复前保护当前内容并显式选择；不得自动猜测、覆盖或重复应用。此流程尚未确定或实现。 |
 | 预览前后及校验后外部新增/改写/删除；旧版写者 | 可观测差异停止、不覆盖；针对 TOCTOU 窗口记录无法保证而不声称消除竞态。 |
 | 候选构建、验证、每次发布/日志/阶段写入前后故障、满盘、同步失败、恢复再次中断 | 未发布前目标不变；部分发布时保留备份和记录，保护当前树，人工显式选择；不重复应用/删除后续日志。 |
 | 两协作进程、锁替换、活持有者超时、平台重启 | 验证最终锁协议而不删除活锁；无法证明安全时拒绝；Linux、Windows、macOS 单独取证，#264 独立跟踪。 |
@@ -65,7 +70,7 @@
 
 ## 5. 后续顺序与决策门
 
-1. Master 和独立 Reviewer 对照本文件静态路径与测试，Owner 决定身份作用域、初始关联、重命名与克隆/分叉/恢复语义、可信威胁边界与冲突解决；重大安全或迁移选择不由执行者默认决定。相应活章程和书面设计按治理流程更新。无法达到 B 的可靠身份条件则停止，不擅自改选 A 或弱化约束。
+1. Master 和独立 Reviewer 对照本文件静态路径与测试，Owner 决定身份作用域、初始关联、删除后 ID 复用与显式重绑、重命名与克隆/分叉/恢复语义、可信威胁边界与冲突解决；重大安全或迁移选择不由执行者默认决定。相应活章程和书面设计按治理流程更新。无法达到 B 的可靠身份条件则停止，不擅自改选 A 或弱化约束。
 2. **建议首个独立垂直任务**：在批准语义之后，仅用隔离合成 fixture 实现只读完整发现与身份关系诊断，提供结构化成功/歧义/UNKNOWN、重复及不完整枚举测试；不写 sidecar、角色、存档 schema、party 或进度，不执行迁移或升级。可独立证明“该测试输入下拒绝不明”，不能证明全平台或真实数据安全。若平台枚举/链接边界不能满足则阻塞并报告。
 3. 依赖前项 VERIFIED、具体身份授权与跨平台文件系统调查，再单独设计/验证协作锁域及 #264 风险、完整备份与元数据、操作阶段和 D 故障恢复；安全审查与故障注入不得以只读诊断替代。然后才可立项版本化 sidecar 的入籍与 9/10→11 自动迁移，实现必须保留未知历史和手改。
 4. 在可靠迁移/恢复及遭遇发现门完成后，按已批准规则、四规则集与授权隔离切分预览、显式选择、提交和端到端任务；仅可靠派生数值，其他由 DM 手动。每任务有独立合成负向和集成证据。首阶段全部验收后暂停，不进入全量专长自动化。
