@@ -1,13 +1,11 @@
 mod common;
 
 use std::fs;
-#[cfg(not(windows))]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use common::{program, text};
+use common::{find_program_near, missing_program_message, program, text, TempRepo};
 use talkdnd_dev::fetch::{dry_run_text, fetch_plan_for, host_target, PUBLISHED_TARGETS, TOOLS};
 
 fn tick() -> u128 {
@@ -79,6 +77,104 @@ fn all_plans(target: &str) -> String {
         .iter()
         .map(|t| dry_run_text(&fetch_plan_for(t, target, cfg!(unix)).unwrap()))
         .collect()
+}
+
+/// Regression for Cargo 1.100: integration test executables now live under
+/// `target/<profile>/build/<crate>/<hash>/out/`, so guessing `deps/` no longer
+/// works. `program()` must return the binary Cargo built, not a look-alike.
+#[test]
+fn program_is_the_cargo_built_binary() {
+    let path = program();
+    let test_exe = std::env::current_exe().expect("current_exe");
+    assert!(
+        path.is_file(),
+        "program() = {} is not a file (test executable: {})",
+        path.display(),
+        test_exe.display()
+    );
+    let name = if cfg!(windows) {
+        "talkdnd-dev.exe"
+    } else {
+        "talkdnd-dev"
+    };
+    assert_eq!(path.file_name().and_then(|part| part.to_str()), Some(name));
+    // Cargo names the variable after the binary target verbatim: the hyphen
+    // stays a hyphen. A mangled name silently falls through to layout guessing,
+    // so `env!` (not `option_env!`) keeps that contract a compile-time error.
+    let cargo = env!("CARGO_BIN_EXE_talkdnd-dev");
+    assert_eq!(path, PathBuf::from(cargo));
+}
+
+fn bin_name() -> &'static str {
+    if cfg!(windows) {
+        "talkdnd-dev.exe"
+    } else {
+        "talkdnd-dev"
+    }
+}
+
+/// Write a file the fallback accepts as the program: a regular file that, on
+/// unix, is executable.
+fn write_program(path: &Path) {
+    fs::write(path, b"").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
+}
+
+/// Cargo 1.100 moved integration test executables from `target/<profile>/deps/`
+/// to `target/<profile>/build/<crate>/<hash>/out/`. The fallback must find the
+/// binary from either depth instead of assuming `deps/`.
+#[test]
+fn fallback_finds_the_binary_from_old_and_new_test_layouts() {
+    for layout in ["deps", "build/talkdnd-dev/b7ae5011952c00b5/out"] {
+        let repo = TempRepo::dir_only();
+        let debug = repo.path.join("target/debug");
+        let dir = debug.join(layout);
+        fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("fetch-b7ae5011952c00b5");
+        fs::write(&exe, b"").unwrap();
+        let bin = debug.join(bin_name());
+        write_program(&bin);
+        assert_eq!(find_program_near(&exe), Some(bin), "layout {layout}");
+    }
+}
+
+#[test]
+fn fallback_never_runs_a_look_alike_directory_or_file() {
+    let repo = TempRepo::dir_only();
+    let debug = repo.path.join("target/debug");
+    let deps = debug.join("deps");
+    fs::create_dir_all(&deps).unwrap();
+    let exe = deps.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+
+    // A directory carrying the binary's name must not be picked.
+    fs::create_dir_all(debug.join(bin_name())).unwrap();
+    assert_eq!(find_program_near(&exe), None);
+
+    // Neither must a non-executable file (Windows has no execute bit).
+    fs::remove_dir_all(debug.join(bin_name())).unwrap();
+    fs::write(debug.join(bin_name()), b"").unwrap();
+    let expected = if cfg!(windows) {
+        Some(debug.join(bin_name()))
+    } else {
+        None
+    };
+    assert_eq!(find_program_near(&exe), expected);
+}
+
+#[test]
+fn missing_program_message_names_the_lookup() {
+    let exe = PathBuf::from("target/debug/deps/fetch-b7ae5011952c00b5");
+    let message = missing_program_message(&exe);
+    assert!(message.contains(&exe.display().to_string()), "{message}");
+    assert!(message.contains("CARGO_BIN_EXE_talkdnd-dev"), "{message}");
+    assert!(message.contains(bin_name()), "{message}");
 }
 
 #[test]

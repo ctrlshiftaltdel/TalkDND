@@ -92,21 +92,88 @@ pub fn program() -> PathBuf {
     bin()
 }
 
+/// Cargo names this variable after the binary target verbatim, so the hyphen
+/// in `talkdnd-dev` stays a hyphen: `CARGO_BIN_EXE_TALKDND_DEV` never exists.
+const CARGO_BIN_EXE: &str = "CARGO_BIN_EXE_talkdnd-dev";
+
+/// How far above the test executable the fallback looks. Cargo 1.100 puts the
+/// executable in `target/<profile>/build/<crate>/<hash>/out/`, older Cargos in
+/// `target/<profile>/deps/`; the binary itself stays at `target/<profile>/`.
+/// Anything further up is not ours.
+const MAX_ANCESTORS: usize = 8;
+
 fn bin() -> PathBuf {
     // Integration tests get the absolute path, including `.exe` on Windows.
-    // Fall back to the sibling of `deps/` when the env var is absent.
-    if let Some(path) = option_env!("CARGO_BIN_EXE_TALKDND_DEV") {
-        return PathBuf::from(path);
+    if let Some(path) = option_env!("CARGO_BIN_EXE_talkdnd-dev") {
+        let path = PathBuf::from(path);
+        assert!(
+            path.is_file(),
+            "{CARGO_BIN_EXE} = {} is not a file",
+            path.display()
+        );
+        return path;
     }
-    let mut path = std::env::current_exe().unwrap();
-    path.pop();
-    path.pop();
+    let exe = std::env::current_exe().unwrap_or_else(|err| panic!("current_exe: {err}"));
+    find_program_near(&exe).unwrap_or_else(|| panic!("{}", missing_program_message(&exe)))
+}
+
+/// Locate the `talkdnd-dev` binary for a test executable at `exe`. The depth
+/// of Cargo's test layout is not assumed: every ancestor up to the `target`
+/// directory is checked, so both the `deps/` and the `build/<crate>/<hash>/out/`
+/// layouts resolve. A candidate must be an executable file, so a directory or
+/// a stray file with the same name is never run as the program under test.
+pub fn find_program_near(exe: &Path) -> Option<PathBuf> {
+    let name = program_file_name();
+    for dir in exe.ancestors().skip(1).take(MAX_ANCESTORS) {
+        let candidate = dir.join(&name);
+        if is_program(&candidate) {
+            return Some(candidate);
+        }
+        // Do not leave the build tree: a `talkdnd-dev` above `target` belongs
+        // to someone else, not to the crate under test.
+        if dir.file_name() == Some(std::ffi::OsStr::new("target")) {
+            break;
+        }
+    }
+    None
+}
+
+/// The failure text used when neither Cargo's variable nor the layout scan
+/// finds the binary. Tests assert on it so "not found" stays a loud error.
+pub fn missing_program_message(exe: &Path) -> String {
+    format!(
+        "cannot locate the talkdnd-dev binary for the test executable {}: \
+         Cargo did not provide {CARGO_BIN_EXE} and no executable named {} was \
+         found up to {MAX_ANCESTORS} levels above it (searched the Cargo 1.100 \
+         build/<crate>/<hash>/out layout and the older deps layout)",
+        exe.display(),
+        program_file_name().to_string_lossy()
+    )
+}
+
+fn program_file_name() -> std::ffi::OsString {
     let mut name = std::ffi::OsString::from("talkdnd-dev");
     if cfg!(windows) {
         name.push(".exe");
     }
-    path.push(name);
-    path
+    name
+}
+
+fn is_program(path: &Path) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 == 0 {
+            return false;
+        }
+    }
+    true
 }
 
 fn symlink_to(target: &str, path: &Path) {
