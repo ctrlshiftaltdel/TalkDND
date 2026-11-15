@@ -1,13 +1,11 @@
 mod common;
 
 use std::fs;
-#[cfg(not(windows))]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use common::{program, text};
+use common::{find_program_near, program, program_for, text, TempRepo};
 use talkdnd_dev::fetch::{dry_run_text, fetch_plan_for, host_target, PUBLISHED_TARGETS, TOOLS};
 
 fn tick() -> u128 {
@@ -79,6 +77,207 @@ fn all_plans(target: &str) -> String {
         .iter()
         .map(|t| dry_run_text(&fetch_plan_for(t, target, cfg!(unix)).unwrap()))
         .collect()
+}
+
+/// Regression for Cargo 1.100: integration test executables now live under
+/// `target/<profile>/build/<crate>/<hash>/out/`, so guessing `deps/` no longer
+/// works. `program()` must return the binary Cargo built, not a look-alike.
+#[test]
+fn program_is_the_cargo_built_binary() {
+    let path = program();
+    let test_exe = std::env::current_exe().expect("current_exe");
+    assert!(
+        path.is_file(),
+        "program() = {} is not a file (test executable: {})",
+        path.display(),
+        test_exe.display()
+    );
+    let name = if cfg!(windows) {
+        "talkdnd-dev.exe"
+    } else {
+        "talkdnd-dev"
+    };
+    assert_eq!(path.file_name().and_then(|part| part.to_str()), Some(name));
+    // Cargo names the variable after the binary target verbatim: the hyphen
+    // stays a hyphen. A mangled name silently falls through to layout guessing,
+    // so `env!` (not `option_env!`) keeps that contract a compile-time error.
+    let cargo = env!("CARGO_BIN_EXE_talkdnd-dev");
+    assert_eq!(path, PathBuf::from(cargo));
+}
+
+fn bin_name() -> &'static str {
+    if cfg!(windows) {
+        "talkdnd-dev.exe"
+    } else {
+        "talkdnd-dev"
+    }
+}
+
+/// Write a file the fallback accepts as the program: a regular file that, on
+/// unix, is executable.
+fn write_program(path: &Path) {
+    fs::write(path, b"").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
+}
+
+/// Cargo 1.100 moved integration test executables from `target/<profile>/deps/`
+/// to `target/<profile>/build/<crate>/<hash>/out/`. The fallback must find the
+/// binary from either depth instead of assuming `deps/`.
+#[test]
+fn fallback_finds_the_binary_from_old_and_new_test_layouts() {
+    for layout in ["deps", "build/talkdnd-dev/b7ae5011952c00b5/out"] {
+        let repo = TempRepo::dir_only();
+        let debug = repo.path.join("target/debug");
+        let dir = debug.join(layout);
+        fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("fetch-b7ae5011952c00b5");
+        fs::write(&exe, b"").unwrap();
+        let bin = debug.join(bin_name());
+        write_program(&bin);
+        assert_eq!(find_program_near(&exe), Some(bin), "layout {layout}");
+    }
+}
+
+#[test]
+fn fallback_never_runs_a_look_alike_directory_or_file() {
+    let repo = TempRepo::dir_only();
+    let debug = repo.path.join("target/debug");
+    let deps = debug.join("deps");
+    fs::create_dir_all(&deps).unwrap();
+    let exe = deps.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+
+    // A directory carrying the binary's name must not be picked.
+    fs::create_dir_all(debug.join(bin_name())).unwrap();
+    assert_eq!(find_program_near(&exe), None);
+
+    // Neither must a non-executable file (Windows has no execute bit).
+    fs::remove_dir_all(debug.join(bin_name())).unwrap();
+    fs::write(debug.join(bin_name()), b"").unwrap();
+    let expected = if cfg!(windows) {
+        Some(debug.join(bin_name()))
+    } else {
+        None
+    };
+    assert_eq!(find_program_near(&exe), expected);
+}
+
+/// A look-alike under `build/<crate>/<hash>/out/` sits nearer to the test
+/// executable than the profile root does. Only `profile/<bin>` may be run.
+#[test]
+fn fallback_prefers_the_profile_binary_over_a_nearer_look_alike() {
+    let repo = TempRepo::dir_only();
+    let profile = repo.path.join("target/debug");
+    let out = profile.join("build/talkdnd-dev/b7ae5011952c00b5/out");
+    fs::create_dir_all(&out).unwrap();
+    let exe = out.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+    // A blind ancestor scan would stop at this one first.
+    write_program(&out.join(bin_name()));
+    let real = profile.join(bin_name());
+    write_program(&real);
+    assert_eq!(find_program_near(&exe), Some(real));
+}
+
+/// A custom target directory keeps the `deps/` layout. The profile root is the
+/// directory holding `deps`, and nothing above it is a candidate.
+#[test]
+fn fallback_uses_the_profile_root_of_a_custom_target_dir() {
+    let repo = TempRepo::dir_only();
+    let profile = repo.path.join("custom/cache/debug");
+    let deps = profile.join("deps");
+    fs::create_dir_all(&deps).unwrap();
+    let exe = deps.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+
+    // A look-alike above the profile root must not be chosen, and its presence
+    // must not hide that `profile/<bin>` is missing.
+    write_program(&profile.parent().unwrap().join(bin_name()));
+    assert_eq!(find_program_near(&exe), None);
+
+    let real = profile.join(bin_name());
+    write_program(&real);
+    assert_eq!(find_program_near(&exe), Some(real));
+}
+
+/// Layouts this fallback does not know return `None`, even when a file with the
+/// binary's name sits right next to the test executable.
+#[test]
+fn fallback_rejects_unknown_test_layouts() {
+    let repo = TempRepo::dir_only();
+    let profile = repo.path.join("target/debug");
+
+    let unknown = profile.join("somewhere/else");
+    fs::create_dir_all(&unknown).unwrap();
+    let exe = unknown.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+    write_program(&unknown.join(bin_name()));
+    write_program(&profile.join(bin_name()));
+    assert_eq!(find_program_near(&exe), None);
+
+    // `build/<hash>/out/` without the crate level is not the Cargo 1.100 shape.
+    let shallow = profile.join("build/b7ae5011952c00b5/out");
+    fs::create_dir_all(&shallow).unwrap();
+    let shallow_exe = shallow.join("fetch-b7ae5011952c00b5");
+    fs::write(&shallow_exe, b"").unwrap();
+    assert_eq!(find_program_near(&shallow_exe), None);
+
+    // Another crate's build directory must not be mistaken for ours.
+    let other = profile.join("build/talkdnd-other/b7ae5011952c00b5/out");
+    fs::create_dir_all(&other).unwrap();
+    let other_exe = other.join("fetch-b7ae5011952c00b5");
+    fs::write(&other_exe, b"").unwrap();
+    write_program(&other.join(bin_name()));
+    assert_eq!(find_program_near(&other_exe), None);
+}
+
+#[test]
+fn missing_program_message_names_the_lookup() {
+    // A recognised layout with the binary absent: the real failure branch runs
+    // and names the exact path it wanted.
+    let repo = TempRepo::dir_only();
+    let profile = repo.path.join("target/debug");
+    let deps = profile.join("deps");
+    fs::create_dir_all(&deps).unwrap();
+    let exe = deps.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+    let message = panic_message(|| program_for(&exe));
+    assert!(message.contains(&exe.display().to_string()), "{message}");
+    assert!(message.contains("CARGO_BIN_EXE_talkdnd-dev"), "{message}");
+    assert!(
+        message.contains(&profile.join(bin_name()).display().to_string()),
+        "{message}"
+    );
+
+    // An unknown layout fails too, and says which layouts are understood.
+    let unknown = profile.join("somewhere/else");
+    fs::create_dir_all(&unknown).unwrap();
+    let odd = unknown.join("fetch-b7ae5011952c00b5");
+    fs::write(&odd, b"").unwrap();
+    let message = panic_message(|| program_for(&odd));
+    assert!(message.contains(&odd.display().to_string()), "{message}");
+    assert!(message.contains("CARGO_BIN_EXE_talkdnd-dev"), "{message}");
+    assert!(message.contains("deps/"), "{message}");
+    assert!(message.contains("build/talkdnd-dev"), "{message}");
+}
+
+/// Run `f`, which must panic, and return the panic message.
+fn panic_message<F: FnOnce() -> PathBuf>(f: F) -> String {
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .expect_err("expected the lookup to fail loudly");
+    if let Some(text) = payload.downcast_ref::<String>() {
+        return text.clone();
+    }
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        return (*text).to_string();
+    }
+    panic!("panic payload was not a string");
 }
 
 #[test]
