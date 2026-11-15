@@ -1196,10 +1196,16 @@ fn a_symlinked_sheets_directory_is_incomplete() {
     );
     symlink(&target, f.save.join("sheets")).unwrap();
 
+    let save_before = snapshot_no_follow(&f.save);
     let target_before = snapshot_no_follow(&target);
     let link_before = link_state(&f.save.join("sheets"));
     let r = f.diagnose();
     assert_eq!(link_before, link_state(&f.save.join("sheets")));
+    assert_eq!(
+        save_before,
+        snapshot_no_follow(&f.save),
+        "the save was touched"
+    );
     assert_eq!(
         target_before,
         snapshot_no_follow(&target),
@@ -1232,11 +1238,17 @@ fn a_dangling_directory_symlink_is_incomplete() {
 
     let link_before = link_state(&f.save.join("Characters"));
     assert_eq!(link_before, (true, Some(target.clone())));
+    let save_before = snapshot_no_follow(&f.save);
     let r = f.diagnose();
     assert_eq!(
         link_before,
         link_state(&f.save.join("Characters")),
         "the diagnostic must not replace the link"
+    );
+    assert_eq!(
+        save_before,
+        snapshot_no_follow(&f.save),
+        "the save was touched"
     );
     assert!(
         !target.exists(),
@@ -1264,10 +1276,16 @@ fn a_symlinked_combat_directory_is_incomplete() {
     f.outside("combat/campaign.yaml", "name: \"x\"\nparty: [ghost]\n");
     symlink(&target, f.save.join("combat")).unwrap();
 
+    let save_before = snapshot_no_follow(&f.save);
     let target_before = snapshot_no_follow(&target);
     let link_before = link_state(&f.save.join("combat"));
     let r = f.diagnose();
     assert_eq!(link_before, link_state(&f.save.join("combat")));
+    assert_eq!(
+        save_before,
+        snapshot_no_follow(&f.save),
+        "the save was touched"
+    );
     assert_eq!(
         target_before,
         snapshot_no_follow(&target),
@@ -1457,4 +1475,78 @@ fn a_sheet_that_names_the_real_backslash_file_binds() {
     assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
     assert_eq!(r.characters[0].sheet(), Some("sheets/ab.yaml"));
     assert_eq!(r.characters[0].markdown(), r"Characters/a\b.md");
+}
+
+#[test]
+fn a_multiline_scalar_party_line_does_not_pass() {
+    // The line the tools match is inside a double-quoted scalar, not a mapping
+    // key: the manifest's top-level `party` comes from `party : []`, and both
+    // readers end up with an empty list.
+    let f = Fixture::new("party-multiline-empty");
+    f.write(
+        "combat/campaign.yaml",
+        "note: \"hello\nparty: []\nworld\"\nparty : []\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[test]
+fn a_multiline_scalar_party_line_with_ids_does_not_pass() {
+    let f = Fixture::new("party-multiline-ids");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    f.write(
+        "combat/campaign.yaml",
+        "note: \"hello\nparty: [bruni]\nworld\"\nparty : [bruni]\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+    assert!(!has(&r, IssueKind::PartyUnknownId), "{:?}", r.issues);
+}
+
+#[test]
+fn a_multiline_scalar_party_with_a_real_party_line_is_incomplete() {
+    // Two column-0 `party:` lines: one inside the scalar, one the real key.
+    let f = Fixture::new("party-multiline-twice");
+    f.write(
+        "combat/campaign.yaml",
+        "note: \"hello\nparty: []\nworld\"\nparty: []\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[test]
+fn an_inline_party_list_is_ok() {
+    let f = Fixture::new("party-inline-two");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    f.card("Characters/tess.md", "tess", "Tess");
+    f.sheet("tess", "tess", "Tess", "Characters/tess.md");
+    f.write(
+        "combat/campaign.yaml",
+        "name: \"fixture\"\nparty: [bruni, tess]\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
 }

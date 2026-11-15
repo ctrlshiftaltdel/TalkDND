@@ -33,9 +33,11 @@
 //! * unknown top-level sheet fields are counted (their names and values are
 //!   never echoed);
 //! * the party list, as the tools themselves read it, repeats no id and names
-//!   no unknown id. `party` must be the manifest's top-level key, written as an
-//!   inline list at column 0: a block list, an indented `party:` line (the
-//!   tools skip leading whitespace and would read a nested one) or any form
+//!   no unknown id. `party` must be the manifest's top-level key, written as the
+//!   **only** inline list at column 0, and that line must really be a mapping
+//!   key: a block list, an indented `party:` line (the tools skip leading
+//!   whitespace and would read a nested one), a `party:` line inside a
+//!   multi-line quoted scalar, a second top-level `party:` line, or any form
 //!   where the tools' line reader disagrees with the YAML is reported, not
 //!   guessed.
 //!
@@ -1036,7 +1038,18 @@ impl Diag {
         // block list or a key their line reader cannot see is reported even when
         // both sides end up empty. `start::party_ids` returns an empty list when
         // the file cannot be read, so read errors are reported here, above.
-        match consumer_party_line(&text) {
+        // The line the tools read must be the manifest's own top-level `party`
+        // entry, written as an inline list — and only once.
+        let hits = party_hits(&text);
+        if !hits.is_empty() && !party_key_present {
+            self.push(
+                IssueKind::UnparsableCampaignManifest,
+                MANIFEST,
+                "the tools read a `party:` line the manifest does not define at top level",
+            );
+            return;
+        }
+        match hits.first() {
             None if party_key_present => {
                 self.push(
                     IssueKind::UnparsableCampaignManifest,
@@ -1046,25 +1059,44 @@ impl Diag {
                 return;
             }
             None => {}
-            // Leading whitespace means the line the tools would read belongs to
-            // another key, not to the manifest's top-level `party`.
-            Some((_, false)) => {
-                self.push(
-                    IssueKind::UnparsableCampaignManifest,
-                    MANIFEST,
-                    "the tools' `party:` line is nested, not top-level",
-                );
-                return;
+            Some(first) => {
+                // Leading whitespace means the first line the tools would read
+                // belongs to another key, not to the top-level `party`.
+                if !first.top_level {
+                    self.push(
+                        IssueKind::UnparsableCampaignManifest,
+                        MANIFEST,
+                        "the tools' `party:` line is nested, not top-level",
+                    );
+                    return;
+                }
+                if hits.iter().filter(|hit| hit.top_level).count() != 1 {
+                    self.push(
+                        IssueKind::UnparsableCampaignManifest,
+                        MANIFEST,
+                        "the manifest has more than one top-level `party:` line",
+                    );
+                    return;
+                }
+                if !first.inline {
+                    self.push(
+                        IssueKind::UnparsableCampaignManifest,
+                        MANIFEST,
+                        "the `party` line is not an inline list the tools read",
+                    );
+                    return;
+                }
+                // A column-0 line can still be text inside a multi-line scalar;
+                // then it is not a key and must not stand in for one.
+                if !prefix_is_complete_document(&text, first.start) {
+                    self.push(
+                        IssueKind::UnparsableCampaignManifest,
+                        MANIFEST,
+                        "the `party:` line is inside a multi-line scalar, not a top-level key",
+                    );
+                    return;
+                }
             }
-            Some((false, true)) => {
-                self.push(
-                    IssueKind::UnparsableCampaignManifest,
-                    MANIFEST,
-                    "the `party` line is not an inline list the tools read",
-                );
-                return;
-            }
-            Some((true, true)) => {}
         }
         if crate::start::party_ids(save) != ids {
             self.push(
@@ -1142,25 +1174,48 @@ fn is_os_metadata(name: &str) -> bool {
     name.starts_with('.')
 }
 
-/// The `party:` line exactly as [`crate::start::party_ids`] finds it, returning
-/// `(inline list, at column 0)`.
+/// One line [`crate::start::party_ids`] would match.
+#[derive(Debug)]
+struct PartyHit {
+    /// Byte offset of the start of the line.
+    start: usize,
+    /// The value is an inline `[...]` list once the comment is stripped.
+    inline: bool,
+    /// The line starts at column 0 (no leading whitespace).
+    top_level: bool,
+}
+
+/// Every line the tools' reader would match, in document order.
 ///
 /// `start::party_ids` returns only the ids, so the syntactic form — which
 /// decides whether the tools can read the list at all — is mirrored here; the
 /// ids themselves are always taken from the real reader. The tools skip leading
-/// whitespace, so a `party:` line nested under another key would be read as the
-/// party; the manifest's own top-level key is what this diagnostic compares, so
-/// an indented line is reported instead of accepted.
-fn consumer_party_line(text: &str) -> Option<(bool, bool)> {
-    for line in text.lines() {
-        if let Some(rest) = line.trim_start().strip_prefix("party:") {
+/// whitespace, so a `party:` line nested under another key, or one inside a
+/// multi-line scalar, would be read as the party unless it is rejected.
+fn party_hits(text: &str) -> Vec<PartyHit> {
+    let mut hits = Vec::new();
+    let mut start = 0usize;
+    for line in text.split_inclusive('\n') {
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        let body = body.strip_suffix('\r').unwrap_or(body);
+        if let Some(rest) = body.trim_start().strip_prefix("party:") {
             let value = rest.split('#').next().unwrap_or("").trim();
-            let inline = value.starts_with('[') && value.ends_with(']');
-            let top_level = line.len() == line.trim_start().len();
-            return Some((inline, top_level));
+            hits.push(PartyHit {
+                start,
+                inline: value.starts_with('[') && value.ends_with(']'),
+                top_level: body.len() == body.trim_start().len(),
+            });
         }
+        start += line.len();
     }
-    None
+    hits
+}
+
+/// Whether `text[..end]` already parses as a YAML document. If it does not, the
+/// line at `end` continues a multi-line scalar or flow collection, so it is not
+/// a mapping key of its own and cannot define the manifest's top-level `party`.
+fn prefix_is_complete_document(text: &str, end: usize) -> bool {
+    serde_norway::from_str::<Value>(&text[..end]).is_ok()
 }
 
 /// The ```combat yaml``` block: `Ok(None)` when there is no fence, `Err(())`
@@ -1250,6 +1305,41 @@ mod tests {
 
         let unnamed = Path::new(OsStr::from_bytes(b"Characters/x\xff.md"));
         assert_eq!(display_path(unnamed), None, "no lossy stand-in");
+    }
+
+    #[test]
+    fn party_hits_mark_top_level_and_inline() {
+        let text =
+            "name: x\nparty: []\nother:\n  party: [a, b]  # note\nnote: \"q\nparty: []\nz\"\n";
+        let hits = super::party_hits(text);
+        assert_eq!(hits.len(), 3, "{hits:?}");
+        assert!(hits[0].top_level && hits[0].inline);
+        assert!(!hits[1].top_level && hits[1].inline);
+        assert!(hits[2].top_level && hits[2].inline);
+        assert_eq!(&text[hits[0].start..hits[0].start + 6], "party:");
+        assert_eq!(&text[hits[1].start..hits[1].start + 8], "  party:");
+    }
+
+    /// A `party:` line inside a multi-line scalar has no complete document
+    /// before it, so it cannot be the manifest's top-level key.
+    #[test]
+    fn a_party_line_inside_a_multiline_scalar_has_no_document_prefix() {
+        let inside = "note: \"hello\nparty: []\nworld\"\nparty : []\n";
+        let hits = super::party_hits(inside);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(!super::prefix_is_complete_document(inside, hits[0].start));
+
+        let normal = "name: x\nparty: []\n";
+        let hits = super::party_hits(normal);
+        assert_eq!(hits.len(), 1);
+        assert!(super::prefix_is_complete_document(normal, hits[0].start));
+
+        let first_line = "party: []\n";
+        let hits = super::party_hits(first_line);
+        assert!(super::prefix_is_complete_document(
+            first_line,
+            hits[0].start
+        ));
     }
 
     /// Only plain relative components can be displayed: an absolute path, a
