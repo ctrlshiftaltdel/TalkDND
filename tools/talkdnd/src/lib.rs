@@ -17,6 +17,7 @@ pub mod entity;
 pub mod graph;
 pub mod handout;
 pub mod identify;
+pub mod identity_diag;
 pub mod knowledge;
 pub mod known;
 pub mod library;
