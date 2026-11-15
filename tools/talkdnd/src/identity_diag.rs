@@ -11,22 +11,31 @@
 //! module did not read.
 //!
 //! Discovery covers `Characters/*.md`, `NPCs/*.md`, `sheets/*.yaml` and the
-//! `party` list of `combat/campaign.yaml`. It does not reuse [`crate::check::sheets`],
-//! which drops unreadable files and unparsable combat blocks: here a read,
-//! encoding or parse failure becomes `Status::Incomplete` instead of an empty
-//! result.
+//! `party` list of `combat/campaign.yaml`. It does not reuse
+//! [`crate::check::sheets`], which drops unreadable files and unparsable
+//! combat blocks: here a read, encoding or parse failure becomes
+//! `Status::Incomplete` instead of an empty result.
 //!
 //! What is checked:
 //!
 //! * every card has a non-empty `id` and `name` in its `combat yaml` block;
+//! * card ids, sheet ids and sheet file names are valid character ids
+//!   ([`crate::chargen::valid_id`]: lowercase ASCII letters, digits and
+//!   hyphens, starting with a letter or digit, at most 80 bytes);
 //! * ids are unique case-insensitively, names are unique case-insensitively,
 //!   and no id equals another card's name (across `Characters/` and `NPCs/`);
 //! * `sheets/<id>.yaml` exists for a card, its `id` equals the card id, and
 //!   its `file` names that card's Markdown and stays inside the save;
 //! * every sheet belongs to a card (otherwise it is an orphan);
 //! * sheet `version` is supported (1) and the identity fields are present and
-//!   well typed; unknown top-level fields are reported by name only;
-//! * the party list does not repeat an id and does not name an unknown id.
+//!   well typed; an absent or `null` `controller` is the old format and is
+//!   accepted, any other value must be `player` or `dm`;
+//! * unknown top-level sheet fields are counted (their names and values are
+//!   never echoed);
+//! * the party list, as the tools themselves read it, repeats no id and names
+//!   no unknown id. `party` must be an inline list the tools can read: a block
+//!   list or any form where the tools' line reader disagrees with the YAML is
+//!   reported, not guessed.
 //!
 //! A card with no structured sheet is `Status::Unknown`: no token has been
 //! enrolled for it yet and its history is unknown. That is a state to report,
@@ -38,14 +47,26 @@
 //! Party entries are compared to card ids exactly; a case-only difference is
 //! therefore both an unknown id and a duplicate.
 //!
+//! **Nothing read from the save is echoed.** An [`Issue::detail`] holds only a
+//! fixed category (plus a count, and the affected relative paths for a
+//! duplicate group, which the caller needs to act); ids, names, `file` values,
+//! unknown keys and versions from the save appear only where they are this
+//! module's own vocabulary. A `Report` is safe to show and to log.
+//!
+//! Every entry is classified, never silently dropped. The only exemptions are
+//! entries with no identity meaning: dotfiles whose name is not a card/sheet
+//! candidate (OS metadata such as `.DS_Store`) and `Characters/_party.md`
+//! **when it carries no character block** (the companion overview documented
+//! in `LetsPlay/docs/layout.md`). A `_`-prefixed `.md`/`.yaml` file is a
+//! carrier candidate like any other; any other entry is reported.
+//!
 //! Not covered (contract §3.1/§6, still `UNKNOWN` there): sidecar tokens,
 //! symlink and hard-link targets, case-insensitive file systems, permissions
 //! semantics beyond this process's own access, external or older writers,
 //! copies/rollbacks, and the loader's remaining requirements (for example
-//! `ruleset`). Directory entries other than regular `.md`/`.yaml` files are
-//! reported, never assumed empty. Names starting with `.` (OS metadata) and
-//! `_` (`Characters/_party.md` is the companion overview, see
-//! `LetsPlay/docs/layout.md`) are not identity carriers, in either folder.
+//! `ruleset`). Directory entries, the campaign manifest and every card/sheet
+//! path are only read when they are regular files: a symbolic link or special
+//! file is reported, never followed or opened.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -62,9 +83,17 @@ const SHEETS_DIR: &str = "sheets";
 const MANIFEST: &str = "combat/campaign.yaml";
 /// The only structured-sheet version this diagnostic can interpret.
 const SUPPORTED_SHEET_VERSION: u64 = 1;
+/// The documented non-card overview file inside `Characters/`.
+const PARTY_OVERVIEW: &str = "_party.md";
+
+/// Fixed `InvalidId` categories (no value from the save is echoed).
+const ID_RULE: &str = "lowercase letters, digits and hyphens; at most 80 bytes";
+const CARD_ID_INVALID: &str = "a card id is not a valid character id";
+const SHEET_ID_INVALID: &str = "the sheet id is not a valid character id";
+const SHEET_STEM_INVALID: &str = "the sheet file name is not a valid character id";
 
 /// Top-level keys of `sheets/<id>.yaml`, mirroring [`crate::charsheet::CharFile`].
-/// Anything else is reported as an unknown field: an unrecognised key may carry
+/// Anything else is counted as an unknown field: an unrecognised key may carry
 /// identity facts this version cannot interpret.
 const KNOWN_SHEET_FIELDS: [&str; 26] = [
     "version",
@@ -121,7 +150,7 @@ pub enum IssueKind {
     UnreadableDirectory,
     /// A directory entry cannot be read.
     UnreadableEntry,
-    /// A file cannot be read at all.
+    /// A file cannot be read (including a manifest that is not a regular file).
     UnreadableFile,
     /// A file is not valid UTF-8.
     InvalidUtf8,
@@ -141,10 +170,11 @@ pub enum IssueKind {
     SheetInvalidField,
     /// A structured sheet declares a version this diagnostic cannot interpret.
     UnsupportedSheetVersion,
-    /// `combat/campaign.yaml` cannot be parsed, or `party` is not an id list.
+    /// `combat/campaign.yaml` cannot be parsed, or the tools and the YAML
+    /// disagree about its `party` list.
     UnparsableCampaignManifest,
     // ---- Ambiguous: the objects disagree ----
-    /// A card id is not a single safe file name (so it cannot name a sheet).
+    /// A card id, sheet id or sheet file name is not a valid character id.
     InvalidId,
     /// Two cards share an id, ignoring case.
     DuplicateId,
@@ -198,8 +228,9 @@ impl IssueKind {
 }
 
 /// One finding. `path` is the affected path relative to the save, with `/`
-/// separators; `detail` names ids and paths only — never sheet text, values or
-/// secrets.
+/// separators; `detail` is a fixed category (with a count, or the affected
+/// relative paths of a duplicate group) and never echoes a value read from the
+/// save.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Issue {
     pub kind: IssueKind,
@@ -252,10 +283,17 @@ struct Diag {
     issues: Vec<Issue>,
 }
 
+/// One directory entry, already sorted by name by [`Diag::list_dir`].
+struct Entry {
+    rel: String,
+    name: String,
+    abs: std::path::PathBuf,
+    file_type: fs::FileType,
+}
+
 /// A parsed structured sheet, before it is bound to a card.
 struct SheetFile {
     rel: String,
-    stem: String,
     id: String,
     file: String,
 }
@@ -273,10 +311,11 @@ impl Diag {
         });
     }
 
-    /// Regular files of `dir` (sorted by name), with `UnexpectedEntry` for
-    /// anything else. A missing directory is normal; an unreadable one is not.
-    /// `.` and `_` prefixed names are OS metadata / non-card files (see module docs).
-    fn list_dir(&mut self, save: &Path, dir: &str) -> Vec<(String, std::path::PathBuf)> {
+    /// Every entry of `dir`, sorted by name, with `UnreadableEntry` for an
+    /// entry that cannot be read. A missing directory is normal; an unreadable
+    /// one is not. Nothing is filtered here: classification is the caller's job
+    /// so that every entry is accounted for.
+    fn list_dir(&mut self, save: &Path, dir: &str) -> Vec<Entry> {
         let abs = save.join(dir);
         let entries = match fs::read_dir(&abs) {
             Ok(rd) => rd,
@@ -314,46 +353,34 @@ impl Diag {
             found.push((entry.file_name(), entry.path(), file_type));
         }
         found.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut files = Vec::new();
-        for (name, path, file_type) in found {
-            let name_lossy = name.to_string_lossy();
-            if name_lossy.starts_with('.') || name_lossy.starts_with('_') {
-                // OS metadata / documented non-card files such as `_party.md`.
-                continue;
-            }
-            let rel = rel_of(save, &path);
-            if file_type.is_dir() {
-                self.push(
-                    IssueKind::UnexpectedEntry,
-                    rel,
-                    "is a directory; no identity meaning is defined for it",
-                );
-            } else if !file_type.is_file() {
-                self.push(
-                    IssueKind::UnexpectedEntry,
-                    rel,
-                    "is not a regular file (links are not followed)",
-                );
-            } else {
-                files.push((rel, path));
-            }
-        }
-        files
+        found
+            .into_iter()
+            .map(|(name, abs, file_type)| Entry {
+                rel: rel_of(save, &abs),
+                name: name.to_string_lossy().to_string(),
+                abs,
+                file_type,
+            })
+            .collect()
     }
 
-    fn read_text(&mut self, rel: &str, abs: &Path) -> Option<String> {
-        match fs::read(abs) {
+    fn read_text(&mut self, entry: &Entry) -> Option<String> {
+        match fs::read(&entry.abs) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(text) => Some(text),
                 Err(_) => {
-                    self.push(IssueKind::InvalidUtf8, rel, "file is not valid UTF-8");
+                    self.push(
+                        IssueKind::InvalidUtf8,
+                        &entry.rel,
+                        "file is not valid UTF-8",
+                    );
                     None
                 }
             },
             Err(e) => {
                 self.push(
                     IssueKind::UnreadableFile,
-                    rel,
+                    &entry.rel,
                     format!("file cannot be read ({:?})", e.kind()),
                 );
                 None
@@ -364,28 +391,39 @@ impl Diag {
     fn discover_cards(&mut self, save: &Path) -> Vec<Character> {
         let mut out = Vec::new();
         for dir in CARD_DIRS {
-            for (rel, abs) in self.list_dir(save, dir) {
-                let is_markdown = Path::new(&rel)
-                    .extension()
-                    .map(|e| e.eq_ignore_ascii_case("md"))
-                    .unwrap_or(false);
-                if !is_markdown {
+            for entry in self.list_dir(save, dir) {
+                if !entry.file_type.is_file() {
                     self.push(
                         IssueKind::UnexpectedEntry,
-                        rel,
+                        &entry.rel,
+                        "is not a regular file (links and directories are not followed)",
+                    );
+                    continue;
+                }
+                if !has_extension(&entry.name, "md") {
+                    if is_os_metadata(&entry.name) {
+                        continue;
+                    }
+                    self.push(
+                        IssueKind::UnexpectedEntry,
+                        &entry.rel,
                         "is not a character card (expected .md)",
                     );
                     continue;
                 }
-                let Some(text) = self.read_text(&rel, &abs) else {
+                // `Characters/_party.md` is the companion overview: a known
+                // non-card only while it carries no character block.
+                let overview = dir == "Characters" && entry.name == PARTY_OVERVIEW;
+                let Some(text) = self.read_text(&entry) else {
                     continue;
                 };
                 let block = match combat_block(&text) {
                     Ok(Some(block)) => block,
+                    Ok(None) if overview => continue,
                     Ok(None) => {
                         self.push(
                             IssueKind::MissingCombatBlock,
-                            rel,
+                            &entry.rel,
                             "no ```combat yaml``` block",
                         );
                         continue;
@@ -393,7 +431,7 @@ impl Diag {
                     Err(()) => {
                         self.push(
                             IssueKind::UnparsableCombatBlock,
-                            rel,
+                            &entry.rel,
                             "the ```combat yaml``` block cannot be parsed",
                         );
                         continue;
@@ -405,14 +443,14 @@ impl Diag {
                     if id.is_none() {
                         self.push(
                             IssueKind::MarkdownMissingField,
-                            rel.clone(),
+                            &entry.rel,
                             "the combat block has no usable `id`",
                         );
                     }
                     if name.is_none() {
                         self.push(
                             IssueKind::MarkdownMissingField,
-                            rel.clone(),
+                            &entry.rel,
                             "the combat block has no usable `name`",
                         );
                     }
@@ -421,7 +459,7 @@ impl Diag {
                 out.push(Character {
                     id: id.unwrap_or_default(),
                     name: name.unwrap_or_default(),
-                    markdown: rel,
+                    markdown: entry.rel,
                     sheet: None,
                 });
             }
@@ -431,56 +469,60 @@ impl Diag {
 
     fn discover_sheets(&mut self, save: &Path) -> Vec<SheetFile> {
         let mut out = Vec::new();
-        for (rel, abs) in self.list_dir(save, SHEETS_DIR) {
-            let is_yaml = Path::new(&rel)
-                .extension()
-                .map(|e| e.eq_ignore_ascii_case("yaml"))
-                .unwrap_or(false);
-            if !is_yaml {
+        for entry in self.list_dir(save, SHEETS_DIR) {
+            if !entry.file_type.is_file() {
                 self.push(
                     IssueKind::UnexpectedEntry,
-                    rel,
+                    &entry.rel,
+                    "is not a regular file (links and directories are not followed)",
+                );
+                continue;
+            }
+            if !has_extension(&entry.name, "yaml") {
+                if is_os_metadata(&entry.name) {
+                    continue;
+                }
+                self.push(
+                    IssueKind::UnexpectedEntry,
+                    &entry.rel,
                     "is not a structured sheet (expected .yaml)",
                 );
                 continue;
             }
-            let Some(text) = self.read_text(&rel, &abs) else {
+            let rel = entry.rel.clone();
+            let Some(text) = self.read_text(&entry) else {
                 continue;
             };
             let value: Value = match serde_norway::from_str(&text) {
                 Ok(v) => v,
                 Err(_) => {
-                    self.push(IssueKind::UnparsableSheet, rel, "not parseable YAML");
+                    self.push(IssueKind::UnparsableSheet, &rel, "not parseable YAML");
                     continue;
                 }
             };
             let Value::Mapping(map) = value else {
-                self.push(IssueKind::UnparsableSheet, rel, "not a YAML mapping");
+                self.push(IssueKind::UnparsableSheet, &rel, "not a YAML mapping");
                 continue;
             };
             let mut fields: BTreeMap<&str, &Value> = BTreeMap::new();
+            let mut unknown = 0usize;
             for (key, value) in &map {
                 match key.as_str() {
                     Some(key) => {
                         fields.insert(key, value);
                     }
-                    None => self.push(
-                        IssueKind::UnknownSheetField,
-                        rel.clone(),
-                        "unrecognised non-string top-level key",
-                    ),
+                    None => unknown += 1,
                 }
             }
-            let unknown: Vec<&str> = fields
+            unknown += fields
                 .keys()
-                .copied()
                 .filter(|k| !KNOWN_SHEET_FIELDS.contains(k))
-                .collect();
-            if !unknown.is_empty() {
+                .count();
+            if unknown > 0 {
                 self.push(
                     IssueKind::UnknownSheetField,
-                    rel.clone(),
-                    format!("unrecognised field(s): {}", unknown.join(", ")),
+                    &rel,
+                    format!("{unknown} unrecognised top-level field(s)"),
                 );
             }
             let Some(version) = self.sheet_field(&fields, &rel, "version") else {
@@ -489,7 +531,7 @@ impl Diag {
             let Some(version) = version.as_u64() else {
                 self.push(
                     IssueKind::SheetInvalidField,
-                    rel.clone(),
+                    &rel,
                     "`version` is not an integer",
                 );
                 continue;
@@ -497,8 +539,8 @@ impl Diag {
             if version > SUPPORTED_SHEET_VERSION {
                 self.push(
                     IssueKind::UnsupportedSheetVersion,
-                    rel.clone(),
-                    format!("version {version} (this diagnostic supports 1)"),
+                    &rel,
+                    "unsupported sheet version (this diagnostic supports 1)",
                 );
                 continue;
             }
@@ -523,29 +565,44 @@ impl Diag {
             else {
                 continue;
             };
-            if let Some(controller) = self.sheet_field(&fields, &rel, "controller") {
-                match controller.as_str() {
-                    Some(crate::charsheet::PLAYER) | Some(crate::charsheet::DM) => {}
+            // An absent `controller` (and YAML `null`) is the old format; only
+            // a value that is present and unreadable is a conflict.
+            if let Some(controller) = fields.get("controller").copied() {
+                match controller {
+                    Value::Null => {}
+                    Value::String(c)
+                        if c == crate::charsheet::PLAYER || c == crate::charsheet::DM => {}
                     _ => {
                         self.push(
                             IssueKind::SheetInvalidField,
-                            rel.clone(),
+                            &rel,
                             "`controller` must be `player` or `dm`",
                         );
                         continue;
                     }
                 }
             }
+            // An unusable id or file name is reported, but the sheet is still
+            // classified (bound, mismatched or orphan) instead of dropped.
+            if !crate::chargen::valid_id(&id) {
+                self.push(
+                    IssueKind::InvalidId,
+                    &rel,
+                    format!("{SHEET_ID_INVALID} ({ID_RULE})"),
+                );
+            }
             let stem = Path::new(&rel)
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            out.push(SheetFile {
-                rel,
-                stem,
-                id,
-                file,
-            });
+            if !crate::chargen::valid_id(&stem) {
+                self.push(
+                    IssueKind::InvalidId,
+                    &rel,
+                    format!("{SHEET_STEM_INVALID} ({ID_RULE})"),
+                );
+            }
+            out.push(SheetFile { rel, id, file });
         }
         out
     }
@@ -573,11 +630,11 @@ impl Diag {
     fn bind_sheets(&mut self, characters: &mut [Character], sheets: &[SheetFile]) {
         let mut bound: BTreeSet<&str> = BTreeSet::new();
         for character in characters.iter_mut() {
-            if !safe_name(&character.id) {
+            if !crate::chargen::valid_id(&character.id) {
                 self.push(
                     IssueKind::InvalidId,
                     &character.markdown,
-                    format!("id `{}` is not a single safe file name", character.id),
+                    format!("{CARD_ID_INVALID} ({ID_RULE})"),
                 );
                 continue;
             }
@@ -599,26 +656,20 @@ impl Diag {
                 self.push(
                     IssueKind::SheetIdMismatch,
                     &sheet.rel,
-                    format!(
-                        "sheet id `{}` but the file is `{}` and the card id is `{}`",
-                        sheet.id, sheet.rel, character.id
-                    ),
+                    "the sheet id does not match the card id",
                 );
             }
             if !safe_relative(&sheet.file) {
                 self.push(
                     IssueKind::SheetFileEscape,
                     &sheet.rel,
-                    format!("`file` `{}` is not a safe path inside the save", sheet.file),
+                    "the sheet `file` is not a safe path inside the save",
                 );
             } else if sheet.file != character.markdown {
                 self.push(
                     IssueKind::SheetFileMismatch,
                     &sheet.rel,
-                    format!(
-                        "`file` is `{}` but the card for id `{}` is `{}`",
-                        sheet.file, character.id, character.markdown
-                    ),
+                    "the sheet `file` does not name this card",
                 );
             }
         }
@@ -630,26 +681,20 @@ impl Diag {
                 self.push(
                     IssueKind::SheetFileEscape,
                     &sheet.rel,
-                    format!("`file` `{}` is not a safe path inside the save", sheet.file),
+                    "the sheet `file` is not a safe path inside the save",
                 );
                 continue;
             }
             match characters.iter().find(|c| c.markdown == sheet.file) {
-                Some(card) => self.push(
+                Some(_) => self.push(
                     IssueKind::SheetFileMismatch,
                     &sheet.rel,
-                    format!(
-                        "`file` is `{}`, whose id is `{}`, but the sheet file names id `{}`",
-                        card.markdown, card.id, sheet.stem
-                    ),
+                    "the sheet `file` names another card's file",
                 ),
                 None => self.push(
                     IssueKind::OrphanSheet,
                     &sheet.rel,
-                    format!(
-                        "no card carries id `{}` (and `file` `{}` is absent)",
-                        sheet.stem, sheet.file
-                    ),
+                    "no card matches this sheet",
                 ),
             }
         }
@@ -668,25 +713,33 @@ impl Diag {
                 .or_default()
                 .push(character);
         }
-        for (key, group) in &by_id {
+        for group in by_id.values() {
             if group.len() > 1 {
                 let mut paths: Vec<&str> = group.iter().map(|c| c.markdown.as_str()).collect();
                 paths.sort();
                 self.push(
                     IssueKind::DuplicateId,
                     paths[0],
-                    format!("id `{key}` is carried by: {}", paths.join(", ")),
+                    format!(
+                        "id is shared by {} cards: {}",
+                        paths.len(),
+                        paths.join(", ")
+                    ),
                 );
             }
         }
-        for (key, group) in &by_name {
+        for group in by_name.values() {
             if group.len() > 1 {
                 let mut paths: Vec<&str> = group.iter().map(|c| c.markdown.as_str()).collect();
                 paths.sort();
                 self.push(
                     IssueKind::DuplicateName,
                     paths[0],
-                    format!("name `{key}` is carried by: {}", paths.join(", ")),
+                    format!(
+                        "name is shared by {} cards: {}",
+                        paths.len(),
+                        paths.join(", ")
+                    ),
                 );
             }
         }
@@ -695,20 +748,11 @@ impl Diag {
             let Some(group) = by_name.get(&id_key) else {
                 continue;
             };
-            let others: Vec<&str> = group
-                .iter()
-                .filter(|c| c.markdown != character.markdown)
-                .map(|c| c.markdown.as_str())
-                .collect();
-            if !others.is_empty() {
+            if group.iter().any(|c| c.markdown != character.markdown) {
                 self.push(
                     IssueKind::IdNameCollision,
                     &character.markdown,
-                    format!(
-                        "id `{}` is also the name of: {}",
-                        character.id,
-                        others.join(", ")
-                    ),
+                    "a card id equals another card's name",
                 );
             }
         }
@@ -716,9 +760,30 @@ impl Diag {
 
     fn check_party(&mut self, save: &Path, characters: &[Character]) {
         let abs = save.join(MANIFEST);
+        // Refuse anything that is not a regular file: a directory, a symbolic
+        // link or a FIFO must never be opened (a FIFO could block forever).
+        let meta = match fs::symlink_metadata(&abs) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                self.push(
+                    IssueKind::UnreadableFile,
+                    MANIFEST,
+                    format!("manifest metadata cannot be read ({:?})", e.kind()),
+                );
+                return;
+            }
+        };
+        if !meta.file_type().is_file() {
+            self.push(
+                IssueKind::UnreadableFile,
+                MANIFEST,
+                "the manifest is not a regular file",
+            );
+            return;
+        }
         let bytes = match fs::read(&abs) {
             Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
             Err(e) => {
                 self.push(
                     IssueKind::UnreadableFile,
@@ -734,7 +799,7 @@ impl Diag {
                 self.push(
                     IssueKind::InvalidUtf8,
                     MANIFEST,
-                    "manifest is not valid UTF-8",
+                    "the manifest is not valid UTF-8",
                 );
                 return;
             }
@@ -745,53 +810,85 @@ impl Diag {
                 self.push(
                     IssueKind::UnparsableCampaignManifest,
                     MANIFEST,
-                    "manifest is not parseable YAML",
+                    "the manifest is not parseable YAML",
                 );
                 return;
             }
         };
-        let Some(party) = value.get("party") else {
-            return;
-        };
-        let Some(entries) = party.as_sequence() else {
+        let Value::Mapping(map) = value else {
             self.push(
                 IssueKind::UnparsableCampaignManifest,
                 MANIFEST,
-                "`party` is not a list",
+                "the manifest is not a YAML mapping",
             );
             return;
         };
-        let mut ids: Vec<String> = Vec::new();
-        for entry in entries {
-            match entry.as_str() {
-                Some(id) => ids.push(id.to_string()),
-                None => {
-                    self.push(
-                        IssueKind::UnparsableCampaignManifest,
-                        MANIFEST,
-                        "`party` has a non-string entry",
-                    );
-                    return;
+        let mut party = None;
+        for (key, value) in &map {
+            if key.as_str() == Some("party") {
+                party = Some(value);
+            }
+        }
+        let ids: Vec<String> = match party {
+            None => Vec::new(),
+            Some(Value::Sequence(entries)) => {
+                let mut ids = Vec::new();
+                for entry in entries {
+                    match entry.as_str() {
+                        Some(id) => ids.push(id.to_string()),
+                        None => {
+                            self.push(
+                                IssueKind::UnparsableCampaignManifest,
+                                MANIFEST,
+                                "`party` has a non-string entry",
+                            );
+                            return;
+                        }
+                    }
                 }
+                ids
             }
-        }
-        let mut seen: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for id in &ids {
-            seen.entry(id.to_lowercase()).or_default().push(id.clone());
-            if !characters.iter().any(|c| &c.id == id) {
+            Some(_) => {
                 self.push(
-                    IssueKind::PartyUnknownId,
+                    IssueKind::UnparsableCampaignManifest,
                     MANIFEST,
-                    format!("party names unknown id `{id}`"),
+                    "`party` is not a list",
                 );
+                return;
+            }
+        };
+        // The manifest must read the same way to the tools that consume it.
+        // `start::party_ids` returns an empty list when the file cannot be
+        // read, so read errors are reported here, by this module, above.
+        if crate::start::party_ids(save) != ids {
+            self.push(
+                IssueKind::UnparsableCampaignManifest,
+                MANIFEST,
+                "the tools read a different party list from the manifest",
+            );
+            return;
+        }
+        let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+        let mut unknown = 0usize;
+        for id in &ids {
+            *seen.entry(id.to_lowercase()).or_default() += 1;
+            if !characters.iter().any(|c| &c.id == id) {
+                unknown += 1;
             }
         }
-        for (key, group) in &seen {
-            if group.len() > 1 {
+        if unknown > 0 {
+            self.push(
+                IssueKind::PartyUnknownId,
+                MANIFEST,
+                format!("party names {unknown} id(s) no card carries"),
+            );
+        }
+        for count in seen.values() {
+            if *count > 1 {
                 self.push(
                     IssueKind::PartyDuplicateId,
                     MANIFEST,
-                    format!("party repeats id `{key}` ({} entries)", group.len()),
+                    format!("party repeats an id ({count} entries)"),
                 );
             }
         }
@@ -804,6 +901,19 @@ fn rel_of(save: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+fn has_extension(name: &str, want: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case(want))
+        .unwrap_or(false)
+}
+
+/// OS metadata (`.DS_Store`, `.gitkeep`, …) that is not a card or sheet name.
+/// Only consulted for entries that are not `.md`/`.yaml` candidates.
+fn is_os_metadata(name: &str) -> bool {
+    name.starts_with('.')
 }
 
 /// The ```combat yaml``` block: `Ok(None)` when there is no fence, `Err(())`
@@ -851,15 +961,6 @@ fn required_str(value: &Value, rel: &str, key: &str, diag: &mut Diag) -> Option<
             None
         }
     }
-}
-
-/// One path component, no `.`/`..`/root, no surrounding whitespace.
-fn safe_name(name: &str) -> bool {
-    if name.is_empty() || name.trim() != name {
-        return false;
-    }
-    let mut components = Path::new(name).components();
-    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 /// A relative path that stays inside the save (`markdown_path` in charsheet.rs

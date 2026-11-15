@@ -13,13 +13,29 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// A directory this test created, never a predictable path that already
+    /// existed: `create_dir` is atomic, so an occupied name is skipped instead
+    /// of removed. Only the directory created here is cleaned up.
     fn new(name: &str) -> Fixture {
-        let root =
-            std::env::temp_dir().join(format!("talkdnd-identity-{}-{}", name, std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        let save = root.join("Saves/2030-01-01-01");
-        fs::create_dir_all(&save).unwrap();
-        Fixture { root, save }
+        let base = std::env::temp_dir();
+        for attempt in 0..64u32 {
+            let root = base.join(format!(
+                "talkdnd-identity-{}-{}-{}",
+                name,
+                std::process::id(),
+                attempt
+            ));
+            match fs::create_dir(&root) {
+                Ok(()) => {
+                    let save = root.join("Saves/2030-01-01-01");
+                    fs::create_dir_all(&save).unwrap();
+                    return Fixture { root, save };
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("cannot create fixture directory {}: {e}", root.display()),
+            }
+        }
+        panic!("no free fixture directory name for {name}");
     }
 
     fn dir(&self, rel: &str) {
@@ -73,8 +89,8 @@ impl Fixture {
         report
     }
 
-    /// Diagnose without the automatic snapshot check; for the permission
-    /// fixtures, whose tree cannot be snapshotted while locked down.
+    /// Diagnose without the automatic snapshot check; for the permission and
+    /// symlink fixtures, whose tree cannot be snapshotted while locked down.
     fn diagnose(&self) -> Report {
         identity_diag::diagnose(&self.save)
     }
@@ -82,7 +98,8 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        // Unreadable fixtures restore their modes before cleanup (see tests).
+        // Only ever the directory `new` created (unreadable fixtures restore
+        // their modes before cleanup; see the tests).
         let _ = fs::remove_dir_all(&self.root);
     }
 }
@@ -138,6 +155,20 @@ fn find(report: &Report, kind: IssueKind) -> &Issue {
         .iter()
         .find(|i| i.kind == kind)
         .unwrap_or_else(|| panic!("no {kind:?} in {:?}", report.issues))
+}
+
+fn has(report: &Report, kind: IssueKind) -> bool {
+    report.issues.iter().any(|i| i.kind == kind)
+}
+
+/// The whole report as a user or log could see it (Debug plus every detail).
+fn rendered(report: &Report) -> String {
+    let mut text = format!("{report:?}");
+    for issue in &report.issues {
+        text.push_str(&issue.detail);
+        text.push_str(&issue.path);
+    }
+    text
 }
 
 #[test]
@@ -207,6 +238,7 @@ fn duplicate_ids_across_characters_and_npcs_are_ambiguous() {
         issue.path, "Characters/tess.md",
         "first path in sorted order"
     );
+    // Affected relative paths are allowed (field values are not).
     assert!(issue.detail.contains("Characters/tess.md"), "{issue:?}");
     assert!(issue.detail.contains("NPCs/tess.md"), "{issue:?}");
 }
@@ -219,8 +251,10 @@ fn ids_that_differ_only_by_case_are_ambiguous() {
 
     let r = f.report();
     assert_eq!(r.status, Status::Ambiguous);
-    let issue = find(&r, IssueKind::DuplicateId);
-    assert!(issue.detail.contains("bruni"), "{issue:?}");
+    // The capitalised id is also not a valid character id; the case-insensitive
+    // duplicate check stays independent of that.
+    assert!(has(&r, IssueKind::DuplicateId), "{:?}", r.issues);
+    assert!(has(&r, IssueKind::InvalidId), "{:?}", r.issues);
 }
 
 #[test]
@@ -271,7 +305,10 @@ fn a_sheet_whose_internal_id_disagrees_with_its_file_name_is_ambiguous() {
     assert_eq!(r.status, Status::Ambiguous);
     let issue = find(&r, IssueKind::SheetIdMismatch);
     assert_eq!(issue.path, "sheets/bruni.yaml");
-    assert!(issue.detail.contains("tess"), "{issue:?}");
+    assert!(
+        !issue.detail.contains("tess"),
+        "field values must not be echoed: {issue:?}"
+    );
 }
 
 #[test]
@@ -285,7 +322,10 @@ fn a_sheet_bound_to_another_markdown_is_ambiguous() {
     assert_eq!(r.status, Status::Ambiguous);
     let issue = find(&r, IssueKind::SheetFileMismatch);
     assert_eq!(issue.path, "sheets/bruni.yaml");
-    assert!(issue.detail.contains("Characters/tess.md"), "{issue:?}");
+    assert!(
+        !issue.detail.contains("Characters/tess.md"),
+        "the `file` value must not be echoed: {issue:?}"
+    );
     // tess genuinely has no sheet of its own; that is reported, not hidden.
     assert!(
         r.issues
@@ -330,7 +370,6 @@ fn a_corrupt_sheet_is_incomplete_not_absent() {
 fn a_future_sheet_version_is_incomplete() {
     let f = Fixture::new("future-version");
     f.card("Characters/bruni.md", "bruni", "Bruni");
-    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
     f.write(
         "sheets/bruni.yaml",
         &sheet_yaml("bruni", "Bruni", "Characters/bruni.md", 2),
@@ -340,7 +379,6 @@ fn a_future_sheet_version_is_incomplete() {
     assert_eq!(r.status, Status::Incomplete);
     let issue = find(&r, IssueKind::UnsupportedSheetVersion);
     assert_eq!(issue.path, "sheets/bruni.yaml");
-    assert!(issue.detail.contains('2'), "{issue:?}");
 }
 
 #[test]
@@ -356,6 +394,7 @@ fn a_sheet_missing_an_identity_field_is_incomplete() {
     assert_eq!(r.status, Status::Incomplete);
     let issue = find(&r, IssueKind::SheetMissingField);
     assert_eq!(issue.path, "sheets/bruni.yaml");
+    // The field name is this diagnostic's own vocabulary, not save content.
     assert!(issue.detail.contains("id"), "{issue:?}");
 }
 
@@ -376,13 +415,49 @@ fn an_invalid_controller_is_incomplete() {
 }
 
 #[test]
-fn unknown_sheet_fields_are_unknown_and_values_are_not_echoed() {
+fn an_absent_or_null_controller_is_accepted() {
+    // Older sheets predate `controller`; YAML `null` must read the same way.
+    let absent = Fixture::new("controller-absent");
+    absent.card("Characters/bruni.md", "bruni", "Bruni");
+    absent.write(
+        "sheets/bruni.yaml",
+        "version: 1\nid: bruni\nname: Bruni\nfile: Characters/bruni.md\n",
+    );
+    let r = absent.report();
+    assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
+
+    let null = Fixture::new("controller-null");
+    null.card("Characters/bruni.md", "bruni", "Bruni");
+    null.write(
+        "sheets/bruni.yaml",
+        "version: 1\nid: bruni\nname: Bruni\ncontroller: null\nfile: Characters/bruni.md\n",
+    );
+    let r = null.report();
+    assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
+}
+
+#[test]
+fn a_non_string_controller_is_incomplete() {
+    let f = Fixture::new("controller-type");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.write(
+        "sheets/bruni.yaml",
+        "version: 1\nid: bruni\nname: Bruni\ncontroller: 5\nfile: Characters/bruni.md\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete);
+    assert!(has(&r, IssueKind::SheetInvalidField), "{:?}", r.issues);
+}
+
+#[test]
+fn unknown_sheet_fields_are_reported_by_count_without_names_or_values() {
     let f = Fixture::new("unknown-field");
     f.card("Characters/bruni.md", "bruni", "Bruni");
     f.write(
         "sheets/bruni.yaml",
         &format!(
-            "{}token: secret-abc123\n",
+            "{}s3cr3t_key_abc: s3cr3t_value_xyz\n",
             sheet_yaml("bruni", "Bruni", "Characters/bruni.md", 1)
         ),
     );
@@ -391,11 +466,10 @@ fn unknown_sheet_fields_are_unknown_and_values_are_not_echoed() {
     assert_eq!(r.status, Status::Unknown);
     let issue = find(&r, IssueKind::UnknownSheetField);
     assert_eq!(issue.path, "sheets/bruni.yaml");
-    assert!(issue.detail.contains("token"), "{issue:?}");
-    assert!(
-        !issue.detail.contains("secret-abc123"),
-        "values must not be echoed: {issue:?}"
-    );
+    assert!(issue.detail.contains('1'), "{issue:?}");
+    let text = rendered(&r);
+    assert!(!text.contains("s3cr3t_key_abc"), "key name leaked: {text}");
+    assert!(!text.contains("s3cr3t_value_xyz"), "value leaked: {text}");
     assert!(r.characters[0].sheet.is_some(), "the sheet is still bound");
 }
 
@@ -416,58 +490,82 @@ fn a_sheet_file_path_that_escapes_the_save_is_ambiguous() {
             (IssueKind::SheetFileEscape, "sheets/tess.yaml".into()),
         ]
     );
+    let text = rendered(&r);
+    assert!(!text.contains("outside.md"), "the value leaked: {text}");
+    assert!(!text.contains("/etc/passwd"), "the value leaked: {text}");
 }
 
 #[test]
-fn a_markdown_id_that_is_not_a_safe_file_name_is_ambiguous() {
-    let f = Fixture::new("bad-id");
-    f.card("Characters/bruni.md", "../evil", "Bruni");
+fn a_sheet_file_value_is_never_echoed() {
+    let f = Fixture::new("escape-secret");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "../s3cr3t-token-abc.md");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous);
+    assert!(has(&r, IssueKind::SheetFileEscape), "{:?}", r.issues);
+    let text = rendered(&r);
+    assert!(
+        !text.contains("s3cr3t-token-abc"),
+        "the value leaked: {text}"
+    );
+}
+
+#[test]
+fn a_card_id_is_validated_as_a_character_id() {
+    for bad in ["Bad_Id", "Bruni", "bad.id", "bad id", "../evil", "-leading"] {
+        let f = Fixture::new("bad-id");
+        f.card("Characters/x.md", bad, "X");
+        let r = f.report();
+        assert_ne!(r.status, Status::Ok, "id {bad:?} must not be Ok");
+        assert!(has(&r, IssueKind::InvalidId), "id {bad:?}: {:?}", r.issues);
+    }
+    // 81 bytes is one over the 80-byte limit.
+    let long = "a".repeat(81);
+    let f = Fixture::new("bad-id-long");
+    f.card("Characters/x.md", &long, "X");
+    let r = f.report();
+    assert_ne!(r.status, Status::Ok);
+    assert!(has(&r, IssueKind::InvalidId), "{:?}", r.issues);
+}
+
+#[test]
+fn an_invalid_id_is_never_echoed() {
+    let f = Fixture::new("bad-id-secret");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.write(
+        "sheets/bruni.yaml",
+        "version: 1\nid: ../s3cr3t-id\nname: Bruni\nfile: Characters/bruni.md\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous);
+    assert!(has(&r, IssueKind::InvalidId), "{:?}", r.issues);
+    let text = rendered(&r);
+    assert!(!text.contains("s3cr3t-id"), "the id leaked: {text}");
+}
+
+#[test]
+fn a_sheet_internal_id_must_be_a_valid_character_id() {
+    let f = Fixture::new("sheet-bad-id");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "Bad_Id", "Bruni", "Characters/bruni.md");
 
     let r = f.report();
     assert_eq!(r.status, Status::Ambiguous);
     let issue = find(&r, IssueKind::InvalidId);
-    assert_eq!(issue.path, "Characters/bruni.md");
-    assert!(issue.detail.contains("evil"), "{issue:?}");
+    assert_eq!(issue.path, "sheets/bruni.yaml");
 }
 
 #[test]
-fn party_entries_that_name_unknown_characters_are_ambiguous() {
-    let f = Fixture::new("party-unknown");
+fn a_sheet_file_name_must_be_a_valid_character_id() {
+    let f = Fixture::new("sheet-bad-stem");
     f.card("Characters/bruni.md", "bruni", "Bruni");
-    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
-    f.campaign(&["bruni", "ghost"]);
+    f.sheet("Bruni", "bruni", "Bruni", "Characters/bruni.md");
 
     let r = f.report();
     assert_eq!(r.status, Status::Ambiguous);
-    let issue = find(&r, IssueKind::PartyUnknownId);
-    assert_eq!(issue.path, "combat/campaign.yaml");
-    assert!(issue.detail.contains("ghost"), "{issue:?}");
-}
-
-#[test]
-fn duplicate_party_entries_are_ambiguous() {
-    let f = Fixture::new("party-dup");
-    f.card("Characters/bruni.md", "bruni", "Bruni");
-    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
-    f.campaign(&["bruni", "bruni"]);
-
-    let r = f.report();
-    assert_eq!(r.status, Status::Ambiguous);
-    let issue = find(&r, IssueKind::PartyDuplicateId);
-    assert_eq!(issue.path, "combat/campaign.yaml");
-    assert!(issue.detail.contains("bruni"), "{issue:?}");
-}
-
-#[test]
-fn a_corrupt_campaign_manifest_is_incomplete() {
-    let f = Fixture::new("campaign");
-    f.card("Characters/bruni.md", "bruni", "Bruni");
-    f.write("combat/campaign.yaml", "party: [unclosed\n");
-
-    let r = f.report();
-    assert_eq!(r.status, Status::Incomplete);
-    let issue = find(&r, IssueKind::UnparsableCampaignManifest);
-    assert_eq!(issue.path, "combat/campaign.yaml");
+    assert!(has(&r, IssueKind::InvalidId), "{:?}", r.issues);
 }
 
 #[test]
@@ -502,7 +600,7 @@ fn a_combat_block_without_an_id_is_incomplete() {
 }
 
 #[test]
-fn underscore_and_dot_files_are_not_character_cards() {
+fn the_party_overview_and_os_metadata_are_not_cards() {
     let f = Fixture::new("ignored-files");
     f.write("Characters/_party.md", "# Party overview\n\nNot a card.\n");
     f.write("Characters/.DS_Store", "not utf8 \u{fffd}");
@@ -511,6 +609,227 @@ fn underscore_and_dot_files_are_not_character_cards() {
     let r = f.report();
     assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
     assert_eq!(r.issues, Vec::new());
+}
+
+#[test]
+fn an_underscore_prefixed_duplicate_is_not_skipped() {
+    let f = Fixture::new("underscore-dup");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.card("Characters/_duplicate.md", "bruni", "Bruni Again");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous, "{:?}", r.issues);
+    let issue = find(&r, IssueKind::DuplicateId);
+    assert!(
+        issue.detail.contains("Characters/_duplicate.md"),
+        "{issue:?}"
+    );
+}
+
+#[test]
+fn an_underscore_prefixed_broken_card_is_not_skipped() {
+    let f = Fixture::new("underscore-broken");
+    f.write("Characters/_broken.md", "# Broken\n\nNo block.\n");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete);
+    assert_eq!(
+        pairs(&r),
+        vec![(
+            IssueKind::MissingCombatBlock,
+            "Characters/_broken.md".into()
+        )]
+    );
+}
+
+#[test]
+fn an_underscore_prefixed_orphan_sheet_is_not_skipped() {
+    let f = Fixture::new("underscore-orphan");
+    f.sheet("_ghost", "ghost", "Ghost", "Characters/ghost.md");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous);
+    // `_ghost` is not a valid character id and the sheet belongs to no card;
+    // both are reported, and the file is not treated as absent.
+    assert!(has(&r, IssueKind::InvalidId), "{:?}", r.issues);
+    assert!(
+        r.issues
+            .iter()
+            .any(|i| i.kind == IssueKind::OrphanSheet && i.path == "sheets/_ghost.yaml"),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[test]
+fn party_entries_that_name_unknown_characters_are_ambiguous() {
+    let f = Fixture::new("party-unknown");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    f.campaign(&["bruni", "ghost"]);
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous);
+    let issue = find(&r, IssueKind::PartyUnknownId);
+    assert_eq!(issue.path, "combat/campaign.yaml");
+    assert!(
+        !issue.detail.contains("ghost"),
+        "the id must not be echoed: {issue:?}"
+    );
+}
+
+#[test]
+fn duplicate_party_entries_are_ambiguous() {
+    let f = Fixture::new("party-dup");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    f.campaign(&["bruni", "bruni"]);
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous);
+    let issue = find(&r, IssueKind::PartyDuplicateId);
+    assert_eq!(issue.path, "combat/campaign.yaml");
+    assert!(
+        !issue.detail.contains("bruni"),
+        "the id must not be echoed: {issue:?}"
+    );
+}
+
+#[test]
+fn a_party_id_is_never_echoed() {
+    let f = Fixture::new("party-secret");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.campaign(&["s3cr3t-party-id"]);
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous);
+    let text = rendered(&r);
+    assert!(!text.contains("s3cr3t-party-id"), "the id leaked: {text}");
+}
+
+#[test]
+fn quoted_party_ids_and_comments_match_the_tools() {
+    let f = Fixture::new("party-quoted");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    f.card("Characters/tess.md", "tess", "Tess");
+    f.sheet("tess", "tess", "Tess", "Characters/tess.md");
+    f.write(
+        "combat/campaign.yaml",
+        "name: \"fixture\"\nparty: [\"bruni\", 'tess']  # keep both\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
+}
+
+#[test]
+fn a_block_list_party_is_incomplete() {
+    let f = Fixture::new("party-block");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    f.write(
+        "combat/campaign.yaml",
+        "name: \"fixture\"\nparty:\n  - bruni\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete);
+    let issue = find(&r, IssueKind::UnparsableCampaignManifest);
+    assert_eq!(issue.path, "combat/campaign.yaml");
+    assert!(
+        !issue.detail.contains("bruni"),
+        "the id must not be echoed: {issue:?}"
+    );
+}
+
+#[test]
+fn party_forms_the_tools_cannot_read_are_incomplete() {
+    // A top-level sequence instead of a mapping.
+    let sequence = Fixture::new("party-sequence");
+    sequence.write("combat/campaign.yaml", "- bruni\n- tess\n");
+    let r = sequence.report();
+    assert_eq!(r.status, Status::Incomplete);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+
+    // `party` as a scalar, not a list.
+    let scalar = Fixture::new("party-scalar");
+    scalar.write("combat/campaign.yaml", "name: \"fixture\"\nparty: bruni\n");
+    let r = scalar.report();
+    assert_eq!(r.status, Status::Incomplete);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+
+    // A space before the colon: YAML reads the list, the tools' line parser
+    // does not, so the two disagree.
+    let spaced = Fixture::new("party-spaced-key");
+    spaced.card("Characters/bruni.md", "bruni", "Bruni");
+    spaced.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    spaced.write(
+        "combat/campaign.yaml",
+        "name: \"fixture\"\nparty : [bruni]\n",
+    );
+    let r = spaced.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[test]
+fn a_corrupt_campaign_manifest_is_incomplete() {
+    let f = Fixture::new("campaign");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.write("combat/campaign.yaml", "party: [unclosed\n");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete);
+    let issue = find(&r, IssueKind::UnparsableCampaignManifest);
+    assert_eq!(issue.path, "combat/campaign.yaml");
+}
+
+#[test]
+fn a_manifest_that_is_a_directory_is_incomplete() {
+    let f = Fixture::new("manifest-dir");
+    f.dir("combat/campaign.yaml");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        r.issues.iter().all(|i| i.path == "combat/campaign.yaml"),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_manifest_is_incomplete() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new("manifest-symlink");
+    f.write("combat/real.yaml", "party: []\n");
+    symlink(
+        f.save.join("combat/real.yaml"),
+        f.save.join("combat/campaign.yaml"),
+    )
+    .unwrap();
+
+    let r = f.diagnose();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        r.issues.iter().any(|i| i.path == "combat/campaign.yaml"),
+        "{:?}",
+        r.issues
+    );
 }
 
 #[test]
@@ -660,4 +979,21 @@ fn issues_and_characters_are_deterministic() {
         paths,
         vec!["Characters/bruni.md", "Characters/tess.md", "NPCs/tess.md"]
     );
+}
+
+#[test]
+fn fixture_directories_are_unique_per_fixture() {
+    let a = Fixture::new("same-name");
+    let b = Fixture::new("same-name");
+    assert_ne!(
+        a.root, b.root,
+        "a fixture must not reuse another fixture's dir"
+    );
+    assert!(a.root.is_dir() && b.root.is_dir());
+    let a_root = a.root.clone();
+    let b_root = b.root.clone();
+    drop(a);
+    drop(b);
+    assert!(!a_root.exists(), "a fixture cleans up its own dir");
+    assert!(!b_root.exists(), "a fixture cleans up its own dir");
 }
