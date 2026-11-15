@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use common::{find_program_near, missing_program_message, program, text, TempRepo};
+use common::{find_program_near, program, program_for, text, TempRepo};
 use talkdnd_dev::fetch::{dry_run_text, fetch_plan_for, host_target, PUBLISHED_TARGETS, TOOLS};
 
 fn tick() -> u128 {
@@ -168,13 +168,116 @@ fn fallback_never_runs_a_look_alike_directory_or_file() {
     assert_eq!(find_program_near(&exe), expected);
 }
 
+/// A look-alike under `build/<crate>/<hash>/out/` sits nearer to the test
+/// executable than the profile root does. Only `profile/<bin>` may be run.
+#[test]
+fn fallback_prefers_the_profile_binary_over_a_nearer_look_alike() {
+    let repo = TempRepo::dir_only();
+    let profile = repo.path.join("target/debug");
+    let out = profile.join("build/talkdnd-dev/b7ae5011952c00b5/out");
+    fs::create_dir_all(&out).unwrap();
+    let exe = out.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+    // A blind ancestor scan would stop at this one first.
+    write_program(&out.join(bin_name()));
+    let real = profile.join(bin_name());
+    write_program(&real);
+    assert_eq!(find_program_near(&exe), Some(real));
+}
+
+/// A custom target directory keeps the `deps/` layout. The profile root is the
+/// directory holding `deps`, and nothing above it is a candidate.
+#[test]
+fn fallback_uses_the_profile_root_of_a_custom_target_dir() {
+    let repo = TempRepo::dir_only();
+    let profile = repo.path.join("custom/cache/debug");
+    let deps = profile.join("deps");
+    fs::create_dir_all(&deps).unwrap();
+    let exe = deps.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+
+    // A look-alike above the profile root must not be chosen, and its presence
+    // must not hide that `profile/<bin>` is missing.
+    write_program(&profile.parent().unwrap().join(bin_name()));
+    assert_eq!(find_program_near(&exe), None);
+
+    let real = profile.join(bin_name());
+    write_program(&real);
+    assert_eq!(find_program_near(&exe), Some(real));
+}
+
+/// Layouts this fallback does not know return `None`, even when a file with the
+/// binary's name sits right next to the test executable.
+#[test]
+fn fallback_rejects_unknown_test_layouts() {
+    let repo = TempRepo::dir_only();
+    let profile = repo.path.join("target/debug");
+
+    let unknown = profile.join("somewhere/else");
+    fs::create_dir_all(&unknown).unwrap();
+    let exe = unknown.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+    write_program(&unknown.join(bin_name()));
+    write_program(&profile.join(bin_name()));
+    assert_eq!(find_program_near(&exe), None);
+
+    // `build/<hash>/out/` without the crate level is not the Cargo 1.100 shape.
+    let shallow = profile.join("build/b7ae5011952c00b5/out");
+    fs::create_dir_all(&shallow).unwrap();
+    let shallow_exe = shallow.join("fetch-b7ae5011952c00b5");
+    fs::write(&shallow_exe, b"").unwrap();
+    assert_eq!(find_program_near(&shallow_exe), None);
+
+    // Another crate's build directory must not be mistaken for ours.
+    let other = profile.join("build/talkdnd-other/b7ae5011952c00b5/out");
+    fs::create_dir_all(&other).unwrap();
+    let other_exe = other.join("fetch-b7ae5011952c00b5");
+    fs::write(&other_exe, b"").unwrap();
+    write_program(&other.join(bin_name()));
+    assert_eq!(find_program_near(&other_exe), None);
+}
+
 #[test]
 fn missing_program_message_names_the_lookup() {
-    let exe = PathBuf::from("target/debug/deps/fetch-b7ae5011952c00b5");
-    let message = missing_program_message(&exe);
+    // A recognised layout with the binary absent: the real failure branch runs
+    // and names the exact path it wanted.
+    let repo = TempRepo::dir_only();
+    let profile = repo.path.join("target/debug");
+    let deps = profile.join("deps");
+    fs::create_dir_all(&deps).unwrap();
+    let exe = deps.join("fetch-b7ae5011952c00b5");
+    fs::write(&exe, b"").unwrap();
+    let message = panic_message(|| program_for(&exe));
     assert!(message.contains(&exe.display().to_string()), "{message}");
     assert!(message.contains("CARGO_BIN_EXE_talkdnd-dev"), "{message}");
-    assert!(message.contains(bin_name()), "{message}");
+    assert!(
+        message.contains(&profile.join(bin_name()).display().to_string()),
+        "{message}"
+    );
+
+    // An unknown layout fails too, and says which layouts are understood.
+    let unknown = profile.join("somewhere/else");
+    fs::create_dir_all(&unknown).unwrap();
+    let odd = unknown.join("fetch-b7ae5011952c00b5");
+    fs::write(&odd, b"").unwrap();
+    let message = panic_message(|| program_for(&odd));
+    assert!(message.contains(&odd.display().to_string()), "{message}");
+    assert!(message.contains("CARGO_BIN_EXE_talkdnd-dev"), "{message}");
+    assert!(message.contains("deps/"), "{message}");
+    assert!(message.contains("build/talkdnd-dev"), "{message}");
+}
+
+/// Run `f`, which must panic, and return the panic message.
+fn panic_message<F: FnOnce() -> PathBuf>(f: F) -> String {
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .expect_err("expected the lookup to fail loudly");
+    if let Some(text) = payload.downcast_ref::<String>() {
+        return text.clone();
+    }
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        return (*text).to_string();
+    }
+    panic!("panic payload was not a string");
 }
 
 #[test]
