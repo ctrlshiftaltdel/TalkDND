@@ -1348,7 +1348,11 @@ fn a_backslash_file_name_is_not_a_subdirectory_path() {
     assert_eq!(r.characters[0].markdown(), r"Characters/a\b.md");
 }
 
-#[cfg(unix)]
+// macOS (APFS) refuses to create a file name that is not valid UTF-8
+// (`fs::write` returns EILSEQ), so this fixture cannot exist there. The same
+// code path is covered on every Unix by
+// `identity_diag::tests::display_path_never_fabricates_a_name`.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn a_non_utf8_file_name_is_incomplete_without_a_fake_path() {
     use std::ffi::OsString;

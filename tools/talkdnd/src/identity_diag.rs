@@ -1219,3 +1219,49 @@ fn safe_relative(file: &str) -> bool {
     let path = Path::new(file);
     !path.is_absolute() && path.components().all(|c| matches!(c, Component::Normal(_)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::display_path;
+    use std::path::Path;
+
+    /// The display form must name exactly the real components: a backslash is
+    /// never a separator, and a name that is not valid UTF-8 yields `None`
+    /// instead of a lossy stand-in. Runs on every Unix, including the platforms
+    /// whose file system refuses to store such a name.
+    #[cfg(unix)]
+    #[test]
+    fn display_path_never_fabricates_a_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let backslash = Path::new(r"Characters/a\b.md");
+        let nested = Path::new("Characters/a/b.md");
+        assert_eq!(
+            display_path(backslash).as_deref(),
+            Some(r"Characters/a\b.md")
+        );
+        assert_eq!(display_path(nested).as_deref(), Some("Characters/a/b.md"));
+        assert_ne!(
+            display_path(backslash),
+            display_path(nested),
+            "one Unix file name can never display as two components"
+        );
+
+        let unnamed = Path::new(OsStr::from_bytes(b"Characters/x\xff.md"));
+        assert_eq!(display_path(unnamed), None, "no lossy stand-in");
+    }
+
+    /// Only plain relative components can be displayed: an absolute path, a
+    /// parent step or an empty path has no display form.
+    #[test]
+    fn display_path_requires_normal_components_only() {
+        assert_eq!(
+            display_path(Path::new("Characters/Bruni.md")).as_deref(),
+            Some("Characters/Bruni.md")
+        );
+        assert_eq!(display_path(Path::new("/etc/passwd")), None);
+        assert_eq!(display_path(Path::new("a/../b")), None);
+        assert_eq!(display_path(Path::new("")), None);
+    }
+}
