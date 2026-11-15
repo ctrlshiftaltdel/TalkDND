@@ -123,6 +123,39 @@ fn sheet_yaml(id: &str, name: &str, file: &str, version: u32) -> String {
     )
 }
 
+/// Tree snapshot that never follows a link: the link itself is recorded with
+/// its target string, so a dangling or external link is covered without being
+/// traversed (and without panicking).
+fn snapshot_no_follow(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        let mut entries: Vec<PathBuf> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        entries.sort();
+        for p in entries {
+            let rel = p.strip_prefix(base).unwrap().to_string_lossy().to_string();
+            let meta = fs::symlink_metadata(&p).unwrap();
+            let file_type = meta.file_type();
+            if file_type.is_symlink() {
+                let target = fs::read_link(&p).unwrap();
+                out.push((
+                    format!("{rel}@"),
+                    target.to_string_lossy().into_owned().into_bytes(),
+                ));
+            } else if file_type.is_dir() {
+                out.push((format!("{rel}/"), Vec::new()));
+                walk(base, &p, out);
+            } else {
+                out.push((rel, fs::read(&p).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
 /// Every path (dirs included) with its bytes, so a create/delete/modify shows up.
 fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
     fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
@@ -535,16 +568,28 @@ fn a_card_id_is_validated_as_a_character_id() {
         let f = Fixture::new("bad-id");
         f.card("Characters/x.md", bad, "X");
         let r = f.report();
-        assert_ne!(r.status, Status::Ok, "id {bad:?} must not be Ok");
-        assert!(has(&r, IssueKind::InvalidId), "id {bad:?}: {:?}", r.issues);
+        // An unusable card id is a conflict on that card, not a mere warning.
+        assert_eq!(r.status, Status::Ambiguous, "id {bad:?}: {:?}", r.issues);
+        let issue = find(&r, IssueKind::InvalidId);
+        assert_eq!(issue.path, "Characters/x.md", "id {bad:?}");
+        assert_eq!(
+            r.issues
+                .iter()
+                .filter(|i| i.kind == IssueKind::InvalidId)
+                .count(),
+            1,
+            "id {bad:?}: exactly one finding for the card: {:?}",
+            r.issues
+        );
     }
     // 81 bytes is one over the 80-byte limit.
     let long = "a".repeat(81);
     let f = Fixture::new("bad-id-long");
     f.card("Characters/x.md", &long, "X");
     let r = f.report();
-    assert_ne!(r.status, Status::Ok);
-    assert!(has(&r, IssueKind::InvalidId), "{:?}", r.issues);
+    assert_eq!(r.status, Status::Ambiguous, "{:?}", r.issues);
+    let issue = find(&r, IssueKind::InvalidId);
+    assert_eq!(issue.path, "Characters/x.md");
 }
 
 #[test]
@@ -837,7 +882,7 @@ fn a_symlinked_manifest_is_incomplete() {
     let target = f.write("combat/real.yaml", "party: []\n");
     symlink(&target, f.save.join("combat/campaign.yaml")).unwrap();
 
-    let before = snapshot(&f.save);
+    let before = snapshot_no_follow(&f.save);
     let link_before = link_state(&f.save.join("combat/campaign.yaml"));
     let r = f.diagnose();
     assert_eq!(
@@ -847,7 +892,7 @@ fn a_symlinked_manifest_is_incomplete() {
     );
     assert_eq!(
         before,
-        snapshot(&f.save),
+        snapshot_no_follow(&f.save),
         "the link or its target was touched"
     );
 
@@ -895,7 +940,7 @@ fn an_unreadable_file_is_incomplete() {
     use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new("unreadable-file");
     f.card("Characters/bruni.md", "bruni", "Bruni");
-    let before = snapshot(&f.save);
+    let before = snapshot_no_follow(&f.save);
     let path = f.save.join("Characters/bruni.md");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
     assert!(
@@ -907,7 +952,7 @@ fn an_unreadable_file_is_incomplete() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(
         before,
-        snapshot(&f.save),
+        snapshot_no_follow(&f.save),
         "the identity diagnostic must not touch the save"
     );
     assert_eq!(r.status, Status::Incomplete);
@@ -923,7 +968,7 @@ fn an_unreadable_directory_is_incomplete() {
     use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new("unreadable-dir");
     f.card("Characters/bruni.md", "bruni", "Bruni");
-    let before = snapshot(&f.save);
+    let before = snapshot_no_follow(&f.save);
     let dir = f.save.join("Characters");
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
     assert!(
@@ -935,7 +980,7 @@ fn an_unreadable_directory_is_incomplete() {
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(
         before,
-        snapshot(&f.save),
+        snapshot_no_follow(&f.save),
         "the identity diagnostic must not touch the save"
     );
     assert_eq!(r.status, Status::Incomplete);
@@ -1107,17 +1152,21 @@ fn a_symlinked_character_directory_is_incomplete() {
     );
     symlink(&target, f.save.join("Characters")).unwrap();
 
-    let save_before = snapshot(&f.save);
-    let target_before = snapshot(&target);
+    let save_before = snapshot_no_follow(&f.save);
+    let target_before = snapshot_no_follow(&target);
     let link_before = link_state(&f.save.join("Characters"));
     let r = f.diagnose();
     assert_eq!(link_before, link_state(&f.save.join("Characters")));
     assert_eq!(
         target_before,
-        snapshot(&target),
+        snapshot_no_follow(&target),
         "the link target was touched"
     );
-    assert_eq!(save_before, snapshot(&f.save), "the save was touched");
+    assert_eq!(
+        save_before,
+        snapshot_no_follow(&f.save),
+        "the save was touched"
+    );
 
     assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
     assert!(
@@ -1147,13 +1196,13 @@ fn a_symlinked_sheets_directory_is_incomplete() {
     );
     symlink(&target, f.save.join("sheets")).unwrap();
 
-    let target_before = snapshot(&target);
+    let target_before = snapshot_no_follow(&target);
     let link_before = link_state(&f.save.join("sheets"));
     let r = f.diagnose();
     assert_eq!(link_before, link_state(&f.save.join("sheets")));
     assert_eq!(
         target_before,
-        snapshot(&target),
+        snapshot_no_follow(&target),
         "the link target was touched"
     );
 
@@ -1215,13 +1264,13 @@ fn a_symlinked_combat_directory_is_incomplete() {
     f.outside("combat/campaign.yaml", "name: \"x\"\nparty: [ghost]\n");
     symlink(&target, f.save.join("combat")).unwrap();
 
-    let target_before = snapshot(&target);
+    let target_before = snapshot_no_follow(&target);
     let link_before = link_state(&f.save.join("combat"));
     let r = f.diagnose();
     assert_eq!(link_before, link_state(&f.save.join("combat")));
     assert_eq!(
         target_before,
-        snapshot(&target),
+        snapshot_no_follow(&target),
         "the link target was touched"
     );
 
@@ -1280,4 +1329,128 @@ fn an_empty_block_list_party_is_incomplete() {
         "{:?}",
         r.issues
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_backslash_file_name_is_not_a_subdirectory_path() {
+    // On Unix `Characters/a\b.md` is one file name; it must never be treated as
+    // the two-component path `Characters/a/b.md` that a sheet could name.
+    let f = Fixture::new("backslash");
+    f.card(r"Characters/a\b.md", "ab", "Ab");
+    f.sheet("ab", "ab", "Ab", "Characters/a/b.md");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous, "{:?}", r.issues);
+    let issue = find(&r, IssueKind::SheetFileMismatch);
+    assert_eq!(issue.path, "sheets/ab.yaml");
+    assert_eq!(r.characters.len(), 1);
+    assert_eq!(r.characters[0].markdown(), r"Characters/a\b.md");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_file_name_is_incomplete_without_a_fake_path() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    let f = Fixture::new("non-utf8-name");
+    f.dir("Characters");
+    let mut name = OsString::from_vec(vec![b'x', 0xff, 0xfe]);
+    name.push(".md");
+    fs::write(f.save.join("Characters").join(&name), card("x", "X")).unwrap();
+
+    let before = snapshot_no_follow(&f.save);
+    let r = f.diagnose();
+    assert_eq!(before, snapshot_no_follow(&f.save), "the save was touched");
+
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    let issue = find(&r, IssueKind::InvalidUtf8);
+    assert_eq!(issue.path, "Characters", "the report names the directory");
+    assert!(r.characters.is_empty(), "no identity from an unnamed file");
+    assert!(
+        !rendered(&r).contains('\u{fffd}'),
+        "a lossy stand-in leaked: {}",
+        rendered(&r)
+    );
+}
+
+#[test]
+fn a_nested_party_line_does_not_pass() {
+    // The top-level key is `party ` (a space before the colon) and the only
+    // `party:` line the tools find is indented under `other`.
+    let f = Fixture::new("party-nested-empty");
+    f.write("combat/campaign.yaml", "other:\n  party: []\nparty : []\n");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[test]
+fn a_nested_party_line_with_a_flow_value_does_not_pass() {
+    let f = Fixture::new("party-nested-flow");
+    f.write(
+        "combat/campaign.yaml",
+        "other:\n  party: []\nparty:\n  []\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[test]
+fn nested_and_top_level_party_lists_that_agree_do_not_pass() {
+    let f = Fixture::new("party-nested-same");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    f.write(
+        "combat/campaign.yaml",
+        "other:\n  party: [bruni]\nparty: [bruni]\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+    assert!(!has(&r, IssueKind::PartyUnknownId), "{:?}", r.issues);
+}
+
+#[test]
+fn a_top_level_party_line_after_other_keys_is_ok() {
+    let f = Fixture::new("party-top-level");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    f.write(
+        "combat/campaign.yaml",
+        "other:\n  name: x\nparty: [bruni]\n",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_sheet_that_names_the_real_backslash_file_binds() {
+    // Positive control for the case above: naming the literal file does bind.
+    let f = Fixture::new("backslash-binds");
+    f.card(r"Characters/a\b.md", "ab", "Ab");
+    f.sheet("ab", "ab", "Ab", r"Characters/a\b.md");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
+    assert_eq!(r.characters[0].sheet(), Some("sheets/ab.yaml"));
+    assert_eq!(r.characters[0].markdown(), r"Characters/a\b.md");
 }

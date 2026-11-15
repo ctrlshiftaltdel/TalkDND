@@ -33,9 +33,19 @@
 //! * unknown top-level sheet fields are counted (their names and values are
 //!   never echoed);
 //! * the party list, as the tools themselves read it, repeats no id and names
-//!   no unknown id. `party` must be an inline list the tools can read: a block
-//!   list or any form where the tools' line reader disagrees with the YAML is
-//!   reported, not guessed.
+//!   no unknown id. `party` must be the manifest's top-level key, written as an
+//!   inline list at column 0: a block list, an indented `party:` line (the
+//!   tools skip leading whitespace and would read a nested one) or any form
+//!   where the tools' line reader disagrees with the YAML is reported, not
+//!   guessed.
+//!
+//! Paths are compared as real [`Path`] components, never as normalised display
+//! strings: on Unix a `\` is part of a file name, so `Characters/a\\b.md` is
+//! not `Characters/a/b.md`. The report shows a path as its components joined
+//! with `/` (no separator is rewritten inside a component); a name that is not
+//! valid UTF-8 cannot be shown or compared truthfully and is reported as an
+//! `InvalidUtf8` finding for its directory instead of being replaced with a
+//! lossy stand-in.
 //!
 //! A card with no structured sheet is `Status::Unknown`: no token has been
 //! enrolled for it yet and its history is unknown. That is a state to report,
@@ -86,7 +96,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use serde_norway::Value;
 
@@ -262,8 +272,14 @@ pub struct Issue {
 pub struct Character {
     id: String,
     name: String,
-    markdown: String,
-    sheet: Option<String>,
+    /// Real card path, relative to the save; used for every comparison.
+    markdown: PathBuf,
+    /// Display form of `markdown`.
+    markdown_text: String,
+    /// Real bound sheet path, when one exists.
+    sheet: Option<PathBuf>,
+    /// Display form of `sheet`.
+    sheet_text: Option<String>,
 }
 
 impl Character {
@@ -281,12 +297,12 @@ impl Character {
 
     /// Card path relative to the save, e.g. `Characters/Bruni.md` (a locator).
     pub fn markdown(&self) -> &str {
-        &self.markdown
+        &self.markdown_text
     }
 
     /// Bound structured sheet path (`sheets/<id>.yaml`), when one exists.
     pub fn sheet(&self) -> Option<&str> {
-        self.sheet.as_deref()
+        self.sheet_text.as_deref()
     }
 }
 
@@ -332,7 +348,7 @@ pub fn diagnose(save_dir: &Path) -> Report {
     diag.bind_sheets(&mut characters, &sheets);
     diag.check_conflicts(&characters);
     diag.check_party(save_dir, &characters);
-    characters.sort_by(|a, b| (&a.id, &a.markdown).cmp(&(&b.id, &b.markdown)));
+    characters.sort_by(|a, b| (&a.id, &a.markdown_text).cmp(&(&b.id, &b.markdown_text)));
     diag.issues.sort();
     Report {
         status: diag.status,
@@ -348,17 +364,25 @@ struct Diag {
 }
 
 /// One directory entry, already sorted by name by [`Diag::list_dir`].
+///
+/// `rel` is the real relative path and is what identity is decided on; `text` is
+/// its display form for the report. The two are never interchangeable: on Unix a
+/// name may contain `\`, so `Characters/a\b.md` is not `Characters/a/b.md`.
 struct Entry {
-    rel: String,
+    rel: PathBuf,
+    text: String,
     name: String,
-    abs: std::path::PathBuf,
+    abs: PathBuf,
     file_type: fs::FileType,
 }
 
 /// A parsed structured sheet, before it is bound to a card.
 struct SheetFile {
-    rel: String,
+    rel: std::path::PathBuf,
+    text: String,
     id: String,
+    /// The `file` value as written in the YAML; compared as a path, never as a
+    /// normalised string.
     file: String,
 }
 
@@ -429,25 +453,49 @@ impl Diag {
                 }
             };
             let Ok(file_type) = entry.file_type() else {
-                self.push(
-                    IssueKind::UnreadableEntry,
-                    rel_of(save, &entry.path()),
-                    "entry type cannot be read",
-                );
+                self.push(IssueKind::UnreadableEntry, dir, "entry type cannot be read");
                 continue;
             };
             found.push((entry.file_name(), entry.path(), file_type));
         }
         found.sort_by(|a, b| a.0.cmp(&b.0));
-        found
-            .into_iter()
-            .map(|(name, abs, file_type)| Entry {
-                rel: rel_of(save, &abs),
-                name: name.to_string_lossy().to_string(),
+        let mut out = Vec::new();
+        for (_, abs, file_type) in found {
+            let Some(rel) = rel_to(save, &abs) else {
+                self.push(
+                    IssueKind::UnreadableEntry,
+                    dir,
+                    "entry path cannot be related to the save",
+                );
+                continue;
+            };
+            // A name that is not valid UTF-8 cannot be shown or compared
+            // truthfully, so it is reported instead of being lossily renamed.
+            let Some(text) = display_path(&rel) else {
+                self.push(
+                    IssueKind::InvalidUtf8,
+                    dir,
+                    "an entry name is not valid UTF-8",
+                );
+                continue;
+            };
+            let Some(name) = rel.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
+                self.push(
+                    IssueKind::InvalidUtf8,
+                    dir,
+                    "an entry name is not valid UTF-8",
+                );
+                continue;
+            };
+            out.push(Entry {
+                rel,
+                text,
+                name,
                 abs,
                 file_type,
-            })
-            .collect()
+            });
+        }
+        out
     }
 
     fn read_text(&mut self, entry: &Entry) -> Option<String> {
@@ -457,7 +505,7 @@ impl Diag {
                 Err(_) => {
                     self.push(
                         IssueKind::InvalidUtf8,
-                        &entry.rel,
+                        &entry.text,
                         "file is not valid UTF-8",
                     );
                     None
@@ -466,7 +514,7 @@ impl Diag {
             Err(e) => {
                 self.push(
                     IssueKind::UnreadableFile,
-                    &entry.rel,
+                    &entry.text,
                     format!("file cannot be read ({:?})", e.kind()),
                 );
                 None
@@ -481,7 +529,7 @@ impl Diag {
                 if !entry.file_type.is_file() {
                     self.push(
                         IssueKind::UnexpectedEntry,
-                        &entry.rel,
+                        &entry.text,
                         "is not a regular file (links and directories are not followed)",
                     );
                     continue;
@@ -492,7 +540,7 @@ impl Diag {
                     }
                     self.push(
                         IssueKind::UnexpectedEntry,
-                        &entry.rel,
+                        &entry.text,
                         "is not a character card (expected .md)",
                     );
                     continue;
@@ -509,7 +557,7 @@ impl Diag {
                     Ok(None) => {
                         self.push(
                             IssueKind::MissingCombatBlock,
-                            &entry.rel,
+                            &entry.text,
                             "no ```combat yaml``` block",
                         );
                         continue;
@@ -517,7 +565,7 @@ impl Diag {
                     Err(()) => {
                         self.push(
                             IssueKind::UnparsableCombatBlock,
-                            &entry.rel,
+                            &entry.text,
                             "the ```combat yaml``` block cannot be parsed",
                         );
                         continue;
@@ -529,24 +577,27 @@ impl Diag {
                     if id.is_none() {
                         self.push(
                             IssueKind::MarkdownMissingField,
-                            &entry.rel,
+                            &entry.text,
                             "the combat block has no usable `id`",
                         );
                     }
                     if name.is_none() {
                         self.push(
                             IssueKind::MarkdownMissingField,
-                            &entry.rel,
+                            &entry.text,
                             "the combat block has no usable `name`",
                         );
                     }
                     continue;
                 }
+                let (markdown, markdown_text) = (entry.rel, entry.text);
                 out.push(Character {
                     id: id.unwrap_or_default(),
                     name: name.unwrap_or_default(),
-                    markdown: entry.rel,
+                    markdown,
+                    markdown_text,
                     sheet: None,
+                    sheet_text: None,
                 });
             }
         }
@@ -559,7 +610,7 @@ impl Diag {
             if !entry.file_type.is_file() {
                 self.push(
                     IssueKind::UnexpectedEntry,
-                    &entry.rel,
+                    &entry.text,
                     "is not a regular file (links and directories are not followed)",
                 );
                 continue;
@@ -570,12 +621,12 @@ impl Diag {
                 }
                 self.push(
                     IssueKind::UnexpectedEntry,
-                    &entry.rel,
+                    &entry.text,
                     "is not a structured sheet (expected .yaml)",
                 );
                 continue;
             }
-            let rel = entry.rel.clone();
+            let rel = entry.text.clone();
             let Some(text) = self.read_text(&entry) else {
                 continue;
             };
@@ -677,10 +728,12 @@ impl Diag {
                     format!("{SHEET_ID_INVALID} ({ID_RULE})"),
                 );
             }
-            let stem = Path::new(&rel)
+            let stem = entry
+                .rel
                 .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
             if !crate::chargen::valid_id(&stem) {
                 self.push(
                     IssueKind::InvalidId,
@@ -688,7 +741,12 @@ impl Diag {
                     format!("{SHEET_STEM_INVALID} ({ID_RULE})"),
                 );
             }
-            out.push(SheetFile { rel, id, file });
+            out.push(SheetFile {
+                rel: entry.rel,
+                text: entry.text,
+                id,
+                file,
+            });
         }
         out
     }
@@ -714,72 +772,78 @@ impl Diag {
     }
 
     fn bind_sheets(&mut self, characters: &mut [Character], sheets: &[SheetFile]) {
-        let mut bound: BTreeSet<&str> = BTreeSet::new();
+        let mut bound: BTreeSet<&Path> = BTreeSet::new();
         for character in characters.iter_mut() {
             if !crate::chargen::valid_id(&character.id) {
                 self.push(
                     IssueKind::InvalidId,
-                    &character.markdown,
+                    &character.markdown_text,
                     format!("{CARD_ID_INVALID} ({ID_RULE})"),
                 );
                 continue;
             }
-            let want = format!("{SHEETS_DIR}/{}.yaml", character.id);
+            let want = Path::new(SHEETS_DIR).join(format!("{}.yaml", character.id));
             let sheet = match sheets.iter().find(|s| s.rel == want) {
                 Some(sheet) => sheet,
                 None => {
                     self.push(
                         IssueKind::MarkdownWithoutSheet,
-                        &character.markdown,
+                        &character.markdown_text,
                         "no structured sheet for this card (history not enrolled)",
                     );
                     continue;
                 }
             };
-            bound.insert(sheet.rel.as_str());
+            bound.insert(sheet.rel.as_path());
             character.sheet = Some(sheet.rel.clone());
+            character.sheet_text = Some(sheet.text.clone());
             if sheet.id != character.id {
                 self.push(
                     IssueKind::SheetIdMismatch,
-                    &sheet.rel,
+                    &sheet.text,
                     "the sheet id does not match the card id",
                 );
             }
             if !safe_relative(&sheet.file) {
                 self.push(
                     IssueKind::SheetFileEscape,
-                    &sheet.rel,
+                    &sheet.text,
                     "the sheet `file` is not a safe path inside the save",
                 );
-            } else if sheet.file != character.markdown {
+            } else if Path::new(&sheet.file) != character.markdown.as_path() {
+                // Compared as real path components: a `\` inside a Unix file
+                // name is not a separator, so it can never equal a subdirectory.
                 self.push(
                     IssueKind::SheetFileMismatch,
-                    &sheet.rel,
+                    &sheet.text,
                     "the sheet `file` does not name this card",
                 );
             }
         }
         for sheet in sheets {
-            if bound.contains(sheet.rel.as_str()) {
+            if bound.contains(sheet.rel.as_path()) {
                 continue;
             }
             if !safe_relative(&sheet.file) {
                 self.push(
                     IssueKind::SheetFileEscape,
-                    &sheet.rel,
+                    &sheet.text,
                     "the sheet `file` is not a safe path inside the save",
                 );
                 continue;
             }
-            match characters.iter().find(|c| c.markdown == sheet.file) {
+            match characters
+                .iter()
+                .find(|c| Path::new(&sheet.file) == c.markdown.as_path())
+            {
                 Some(_) => self.push(
                     IssueKind::SheetFileMismatch,
-                    &sheet.rel,
+                    &sheet.text,
                     "the sheet `file` names another card's file",
                 ),
                 None => self.push(
                     IssueKind::OrphanSheet,
-                    &sheet.rel,
+                    &sheet.text,
                     "no card matches this sheet",
                 ),
             }
@@ -801,7 +865,7 @@ impl Diag {
         }
         for group in by_id.values() {
             if group.len() > 1 {
-                let mut paths: Vec<&str> = group.iter().map(|c| c.markdown.as_str()).collect();
+                let mut paths: Vec<&str> = group.iter().map(|c| c.markdown_text.as_str()).collect();
                 paths.sort();
                 self.push(
                     IssueKind::DuplicateId,
@@ -816,7 +880,7 @@ impl Diag {
         }
         for group in by_name.values() {
             if group.len() > 1 {
-                let mut paths: Vec<&str> = group.iter().map(|c| c.markdown.as_str()).collect();
+                let mut paths: Vec<&str> = group.iter().map(|c| c.markdown_text.as_str()).collect();
                 paths.sort();
                 self.push(
                     IssueKind::DuplicateName,
@@ -837,7 +901,7 @@ impl Diag {
             if group.iter().any(|c| c.markdown != character.markdown) {
                 self.push(
                     IssueKind::IdNameCollision,
-                    &character.markdown,
+                    &character.markdown_text,
                     "a card id equals another card's name",
                 );
             }
@@ -972,7 +1036,7 @@ impl Diag {
         // block list or a key their line reader cannot see is reported even when
         // both sides end up empty. `start::party_ids` returns an empty list when
         // the file cannot be read, so read errors are reported here, above.
-        match consumer_party_form(&text) {
+        match consumer_party_line(&text) {
             None if party_key_present => {
                 self.push(
                     IssueKind::UnparsableCampaignManifest,
@@ -981,7 +1045,18 @@ impl Diag {
                 );
                 return;
             }
-            Some(false) => {
+            None => {}
+            // Leading whitespace means the line the tools would read belongs to
+            // another key, not to the manifest's top-level `party`.
+            Some((_, false)) => {
+                self.push(
+                    IssueKind::UnparsableCampaignManifest,
+                    MANIFEST,
+                    "the tools' `party:` line is nested, not top-level",
+                );
+                return;
+            }
+            Some((false, true)) => {
                 self.push(
                     IssueKind::UnparsableCampaignManifest,
                     MANIFEST,
@@ -989,7 +1064,7 @@ impl Diag {
                 );
                 return;
             }
-            _ => {}
+            Some((true, true)) => {}
         }
         if crate::start::party_ids(save) != ids {
             self.push(
@@ -1027,11 +1102,31 @@ impl Diag {
 }
 
 /// Path relative to the save with `/` separators.
-fn rel_of(save: &Path, path: &Path) -> String {
-    path.strip_prefix(save)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+/// The path relative to the save, as real components. `None` when it cannot be
+/// related to the save at all; nothing is guessed from a lossy string.
+fn rel_to(save: &Path, path: &Path) -> Option<PathBuf> {
+    path.strip_prefix(save).ok().map(Path::to_path_buf)
+}
+
+/// The report form of a relative path: its real components joined with `/`.
+///
+/// This is display only — identity is decided on the [`Path`] itself. A `\`
+/// inside a component stays part of that name (on Unix `Characters/a\\b.md` is
+/// one file), and a name that is not valid UTF-8 yields `None` instead of a
+/// lossy stand-in that could collide with a real path.
+fn display_path(rel: &Path) -> Option<String> {
+    let mut out = String::new();
+    for component in rel.components() {
+        let Component::Normal(part) = component else {
+            return None;
+        };
+        let part = part.to_str()?;
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(part);
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 fn has_extension(name: &str, want: &str) -> bool {
@@ -1048,15 +1143,21 @@ fn is_os_metadata(name: &str) -> bool {
 }
 
 /// The `party:` line exactly as [`crate::start::party_ids`] finds it, returning
-/// whether its value is an inline `[...]` list once the comment is stripped.
+/// `(inline list, at column 0)`.
+///
 /// `start::party_ids` returns only the ids, so the syntactic form — which
 /// decides whether the tools can read the list at all — is mirrored here; the
-/// ids themselves are always taken from the real reader.
-fn consumer_party_form(text: &str) -> Option<bool> {
+/// ids themselves are always taken from the real reader. The tools skip leading
+/// whitespace, so a `party:` line nested under another key would be read as the
+/// party; the manifest's own top-level key is what this diagnostic compares, so
+/// an indented line is reported instead of accepted.
+fn consumer_party_line(text: &str) -> Option<(bool, bool)> {
     for line in text.lines() {
         if let Some(rest) = line.trim_start().strip_prefix("party:") {
             let value = rest.split('#').next().unwrap_or("").trim();
-            return Some(value.starts_with('[') && value.ends_with(']'));
+            let inline = value.starts_with('[') && value.ends_with(']');
+            let top_level = line.len() == line.trim_start().len();
+            return Some((inline, top_level));
         }
     }
     None
