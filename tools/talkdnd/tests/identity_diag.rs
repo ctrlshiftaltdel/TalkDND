@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use talkdnd::identity_diag::{self, Character, Issue, IssueKind, Report, Status};
+use talkdnd::identity_diag::{self, Issue, IssueKind, Report, Status};
 
 struct Fixture {
     root: PathBuf,
@@ -42,16 +42,25 @@ impl Fixture {
         fs::create_dir_all(self.save.join(rel)).unwrap();
     }
 
-    fn write(&self, rel: &str, text: &str) {
+    fn write(&self, rel: &str, text: &str) -> PathBuf {
         let p = self.save.join(rel);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
-        fs::write(p, text).unwrap();
+        fs::write(&p, text).unwrap();
+        p
     }
 
     fn write_bytes(&self, rel: &str, bytes: &[u8]) {
         let p = self.save.join(rel);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, bytes).unwrap();
+    }
+
+    /// A file outside the save tree (for link targets); never inside `Saves/`.
+    fn outside(&self, rel: &str, text: &str) -> PathBuf {
+        let p = self.root.join("outside").join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, text).unwrap();
+        p
     }
 
     /// A character card: prose plus the `combat yaml` block the tools read.
@@ -171,6 +180,15 @@ fn rendered(report: &Report) -> String {
     text
 }
 
+/// Whether a path is a link and where it points; used to prove the diagnostic
+/// neither follows nor rewrites links.
+fn link_state(path: &Path) -> (bool, Option<PathBuf>) {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => (meta.file_type().is_symlink(), fs::read_link(path).ok()),
+        Err(_) => (false, None),
+    }
+}
+
 #[test]
 fn a_consistent_save_is_ok() {
     let f = Fixture::new("ok");
@@ -181,15 +199,12 @@ fn a_consistent_save_is_ok() {
     let r = f.report();
     assert_eq!(r.status, Status::Ok);
     assert_eq!(r.issues, Vec::new(), "{:?}", r.issues);
-    assert_eq!(
-        r.characters,
-        vec![Character {
-            id: "bruni".into(),
-            name: "Bruni".into(),
-            markdown: "Characters/bruni.md".into(),
-            sheet: Some("sheets/bruni.yaml".into()),
-        }]
-    );
+    assert_eq!(r.characters.len(), 1);
+    let c = &r.characters[0];
+    assert_eq!(c.id(), "bruni");
+    assert_eq!(c.name(), "Bruni");
+    assert_eq!(c.markdown(), "Characters/bruni.md");
+    assert_eq!(c.sheet(), Some("sheets/bruni.yaml"));
 }
 
 #[test]
@@ -222,7 +237,7 @@ fn a_markdown_without_a_structured_sheet_is_unknown() {
             "Characters/bruni.md".into()
         )]
     );
-    assert_eq!(r.characters[0].sheet, None, "history not enrolled");
+    assert_eq!(r.characters[0].sheet(), None, "history not enrolled");
 }
 
 #[test]
@@ -470,7 +485,10 @@ fn unknown_sheet_fields_are_reported_by_count_without_names_or_values() {
     let text = rendered(&r);
     assert!(!text.contains("s3cr3t_key_abc"), "key name leaked: {text}");
     assert!(!text.contains("s3cr3t_value_xyz"), "value leaked: {text}");
-    assert!(r.characters[0].sheet.is_some(), "the sheet is still bound");
+    assert!(
+        r.characters[0].sheet().is_some(),
+        "the sheet is still bound"
+    );
 }
 
 #[test]
@@ -816,14 +834,23 @@ fn a_manifest_that_is_a_directory_is_incomplete() {
 fn a_symlinked_manifest_is_incomplete() {
     use std::os::unix::fs::symlink;
     let f = Fixture::new("manifest-symlink");
-    f.write("combat/real.yaml", "party: []\n");
-    symlink(
-        f.save.join("combat/real.yaml"),
-        f.save.join("combat/campaign.yaml"),
-    )
-    .unwrap();
+    let target = f.write("combat/real.yaml", "party: []\n");
+    symlink(&target, f.save.join("combat/campaign.yaml")).unwrap();
 
+    let before = snapshot(&f.save);
+    let link_before = link_state(&f.save.join("combat/campaign.yaml"));
     let r = f.diagnose();
+    assert_eq!(
+        link_before,
+        link_state(&f.save.join("combat/campaign.yaml")),
+        "the diagnostic must not replace the link"
+    );
+    assert_eq!(
+        before,
+        snapshot(&f.save),
+        "the link or its target was touched"
+    );
+
     assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
     assert!(
         r.issues.iter().any(|i| i.path == "combat/campaign.yaml"),
@@ -968,13 +995,9 @@ fn issues_and_characters_are_deterministic() {
         first.issues
     );
 
-    let ids: Vec<&str> = first.characters.iter().map(|c| c.id.as_str()).collect();
+    let ids: Vec<&str> = first.characters.iter().map(|c| c.id()).collect();
     assert_eq!(ids, vec!["bruni", "tess", "tess"]);
-    let paths: Vec<&str> = first
-        .characters
-        .iter()
-        .map(|c| c.markdown.as_str())
-        .collect();
+    let paths: Vec<&str> = first.characters.iter().map(|c| c.markdown()).collect();
     assert_eq!(
         paths,
         vec!["Characters/bruni.md", "Characters/tess.md", "NPCs/tess.md"]
@@ -996,4 +1019,265 @@ fn fixture_directories_are_unique_per_fixture() {
     drop(b);
     assert!(!a_root.exists(), "a fixture cleans up its own dir");
     assert!(!b_root.exists(), "a fixture cleans up its own dir");
+}
+
+#[test]
+fn the_report_debug_does_not_contain_ids_or_names() {
+    // The values a card carries are untrusted: the `Debug` view of the whole
+    // report is what a log line or an error message shows, so it must redact
+    // them. The raw values stay reachable through the documented accessors.
+    let f = Fixture::new("debug-redaction");
+    f.card("Characters/bruni.md", "s3cr3t-id-abc", "s3cr3t-name-xyz");
+    f.sheet(
+        "s3cr3t-id-abc",
+        "s3cr3t-id-abc",
+        "s3cr3t-name-xyz",
+        "Characters/bruni.md",
+    );
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
+    let debug = format!("{r:?}");
+    assert!(!debug.contains("s3cr3t-id-abc"), "id leaked: {debug}");
+    assert!(!debug.contains("s3cr3t-name-xyz"), "name leaked: {debug}");
+    // Each character's `Debug` is redacted too, not just the report's.
+    let card = format!("{:?}", r.characters[0]);
+    assert!(!card.contains("s3cr3t-id-abc"), "id leaked: {card}");
+    assert!(!card.contains("s3cr3t-name-xyz"), "name leaked: {card}");
+    // The restricted accessors still return the raw value for the caller.
+    assert_eq!(r.characters[0].id(), "s3cr3t-id-abc");
+    assert_eq!(r.characters[0].name(), "s3cr3t-name-xyz");
+}
+
+#[test]
+fn a_dotfile_card_is_not_skipped() {
+    let f = Fixture::new("dotfile-card");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.card("Characters/.hidden.md", "bruni", "Bruni Again");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous, "{:?}", r.issues);
+    let issue = find(&r, IssueKind::DuplicateId);
+    assert!(issue.detail.contains("Characters/.hidden.md"), "{issue:?}");
+}
+
+#[test]
+fn a_dotfile_broken_card_is_not_skipped() {
+    let f = Fixture::new("dotfile-broken");
+    f.write("Characters/.broken.md", "# Broken\n\nNo block.\n");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete);
+    assert_eq!(
+        pairs(&r),
+        vec![(
+            IssueKind::MissingCombatBlock,
+            "Characters/.broken.md".into()
+        )]
+    );
+}
+
+#[test]
+fn a_dotfile_sheet_is_not_skipped() {
+    let f = Fixture::new("dotfile-sheet");
+    f.sheet(".ghost", "ghost", "Ghost", "Characters/ghost.md");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ambiguous, "{:?}", r.issues);
+    assert!(has(&r, IssueKind::InvalidId), "{:?}", r.issues);
+    assert!(
+        r.issues
+            .iter()
+            .any(|i| i.kind == IssueKind::OrphanSheet && i.path == "sheets/.ghost.yaml"),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_character_directory_is_incomplete() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new("symlink-cards");
+    let target = f.root.join("outside/Characters");
+    f.outside("Characters/ghost.md", &card("ghost", "Ghost"));
+    f.outside(
+        "Characters/sheets/ghost.yaml",
+        &sheet_yaml("ghost", "Ghost", "Characters/ghost.md", 1),
+    );
+    symlink(&target, f.save.join("Characters")).unwrap();
+
+    let save_before = snapshot(&f.save);
+    let target_before = snapshot(&target);
+    let link_before = link_state(&f.save.join("Characters"));
+    let r = f.diagnose();
+    assert_eq!(link_before, link_state(&f.save.join("Characters")));
+    assert_eq!(
+        target_before,
+        snapshot(&target),
+        "the link target was touched"
+    );
+    assert_eq!(save_before, snapshot(&f.save), "the save was touched");
+
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        r.issues
+            .iter()
+            .any(|i| i.kind == IssueKind::UnreadableDirectory && i.path == "Characters"),
+        "{:?}",
+        r.issues
+    );
+    assert!(r.characters.is_empty(), "the target must not be read");
+    assert!(
+        !rendered(&r).contains("ghost"),
+        "target content leaked: {}",
+        rendered(&r)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_sheets_directory_is_incomplete() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new("symlink-sheets");
+    let target = f.root.join("outside/sheets");
+    f.outside(
+        "sheets/ghost.yaml",
+        &sheet_yaml("ghost", "Ghost", "Characters/ghost.md", 1),
+    );
+    symlink(&target, f.save.join("sheets")).unwrap();
+
+    let target_before = snapshot(&target);
+    let link_before = link_state(&f.save.join("sheets"));
+    let r = f.diagnose();
+    assert_eq!(link_before, link_state(&f.save.join("sheets")));
+    assert_eq!(
+        target_before,
+        snapshot(&target),
+        "the link target was touched"
+    );
+
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        r.issues
+            .iter()
+            .any(|i| i.kind == IssueKind::UnreadableDirectory && i.path == "sheets"),
+        "{:?}",
+        r.issues
+    );
+    assert!(!has(&r, IssueKind::OrphanSheet), "{:?}", r.issues);
+    assert!(
+        !rendered(&r).contains("ghost"),
+        "target content leaked: {}",
+        rendered(&r)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_directory_symlink_is_incomplete() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new("symlink-dangling");
+    let target = f.root.join("missing-characters");
+    symlink(&target, f.save.join("Characters")).unwrap();
+
+    let link_before = link_state(&f.save.join("Characters"));
+    assert_eq!(link_before, (true, Some(target.clone())));
+    let r = f.diagnose();
+    assert_eq!(
+        link_before,
+        link_state(&f.save.join("Characters")),
+        "the diagnostic must not replace the link"
+    );
+    assert!(
+        !target.exists(),
+        "the diagnostic must not create the target"
+    );
+
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        r.issues
+            .iter()
+            .any(|i| i.kind == IssueKind::UnreadableDirectory && i.path == "Characters"),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_combat_directory_is_incomplete() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new("symlink-combat");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    let target = f.root.join("outside/combat");
+    f.outside("combat/campaign.yaml", "name: \"x\"\nparty: [ghost]\n");
+    symlink(&target, f.save.join("combat")).unwrap();
+
+    let target_before = snapshot(&target);
+    let link_before = link_state(&f.save.join("combat"));
+    let r = f.diagnose();
+    assert_eq!(link_before, link_state(&f.save.join("combat")));
+    assert_eq!(
+        target_before,
+        snapshot(&target),
+        "the link target was touched"
+    );
+
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        r.issues
+            .iter()
+            .any(|i| i.kind == IssueKind::UnreadableDirectory && i.path == "combat"),
+        "{:?}",
+        r.issues
+    );
+    assert!(!has(&r, IssueKind::PartyUnknownId), "{:?}", r.issues);
+    assert!(
+        !rendered(&r).contains("ghost"),
+        "target content leaked: {}",
+        rendered(&r)
+    );
+}
+
+#[test]
+fn an_empty_inline_party_list_is_ok() {
+    let f = Fixture::new("party-empty-inline");
+    f.card("Characters/bruni.md", "bruni", "Bruni");
+    f.sheet("bruni", "bruni", "Bruni", "Characters/bruni.md");
+    f.write("combat/campaign.yaml", "name: \"fixture\"\nparty: []\n");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Ok, "{:?}", r.issues);
+}
+
+#[test]
+fn a_spaced_party_key_is_incomplete_even_when_empty() {
+    // Both readers end up with no ids, but the tools' line reader cannot see a
+    // `party :` key at all: that form must not pass silently.
+    let f = Fixture::new("party-spaced-empty");
+    f.write("combat/campaign.yaml", "name: \"fixture\"\nparty : []\n");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
+}
+
+#[test]
+fn an_empty_block_list_party_is_incomplete() {
+    let f = Fixture::new("party-empty-block");
+    f.write("combat/campaign.yaml", "name: \"fixture\"\nparty:\n");
+
+    let r = f.report();
+    assert_eq!(r.status, Status::Incomplete, "{:?}", r.issues);
+    assert!(
+        has(&r, IssueKind::UnparsableCampaignManifest),
+        "{:?}",
+        r.issues
+    );
 }

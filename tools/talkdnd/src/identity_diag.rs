@@ -47,11 +47,19 @@
 //! Party entries are compared to card ids exactly; a case-only difference is
 //! therefore both an unknown id and a duplicate.
 //!
-//! **Nothing read from the save is echoed.** An [`Issue::detail`] holds only a
-//! fixed category (plus a count, and the affected relative paths for a
-//! duplicate group, which the caller needs to act); ids, names, `file` values,
-//! unknown keys and versions from the save appear only where they are this
-//! module's own vocabulary. A `Report` is safe to show and to log.
+//! **Saved values are not echoed.** An [`Issue::detail`] holds only a fixed
+//! category (plus a count, and the affected relative paths for a duplicate
+//! group, which the caller needs to act); ids, names, `file` values, unknown
+//! keys and versions from the save appear only where they are this module's own
+//! vocabulary. [`Character`] and [`Report`] implement `Debug` by hand: ids,
+//! names and the paths derived from them print as `<redacted>`, and a `Report`
+//! prints its counters only. The raw values are reachable through
+//! [`Character::id`] and [`Character::name`], which return untrusted save
+//! content and must not be logged or displayed verbatim. [`Character::markdown`]
+//! and [`Character::sheet`] return the locators, for callers that need to act.
+//! [`Issue`] does show relative paths, because a finding is useless without
+//! them: `Issue` output is for the DM's own save, and a save whose *file names*
+//! are themselves sensitive must be handled by the caller.
 //!
 //! Every entry is classified, never silently dropped. The only exemptions are
 //! entries with no identity meaning: dotfiles whose name is not a card/sheet
@@ -64,12 +72,19 @@
 //! symlink and hard-link targets, case-insensitive file systems, permissions
 //! semantics beyond this process's own access, external or older writers,
 //! copies/rollbacks, and the loader's remaining requirements (for example
-//! `ruleset`). Directory entries, the campaign manifest and every card/sheet
-//! path are only read when they are regular files: a symbolic link or special
-//! file is reported, never followed or opened.
+//! `ruleset`). `Characters`, `NPCs`, `sheets`, `combat` and the campaign
+//! manifest are only used after `symlink_metadata` confirms the expected type,
+//! so a symbolic link, a special file or a dangling link is reported and its
+//! target is never read.
+//!
+//! Those checks are point-in-time observations. A concurrent writer can replace
+//! a path between the check and the read; this diagnostic does not claim to
+//! close that window and no no-follow guarantee under concurrent replacement is
+//! proven here.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
+use std::fmt;
 use std::fs;
 use std::path::{Component, Path};
 
@@ -228,9 +243,9 @@ impl IssueKind {
 }
 
 /// One finding. `path` is the affected path relative to the save, with `/`
-/// separators; `detail` is a fixed category (with a count, or the affected
-/// relative paths of a duplicate group) and never echoes a value read from the
-/// save.
+/// separators — a locator the caller needs to act on, not a field value;
+/// `detail` is a fixed category (with a count, or the affected relative paths
+/// of a duplicate group) and never echoes a value read from the save.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Issue {
     pub kind: IssueKind,
@@ -239,25 +254,74 @@ pub struct Issue {
 }
 
 /// One character card as discovered, with the structured sheet bound to it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The fields are private because they hold untrusted save content: read them
+/// through the accessors, and never log a value returned by [`Character::id`]
+/// or [`Character::name`]. `Debug` prints those two as `<redacted>`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Character {
-    /// `id` from the card's combat block, verbatim.
-    pub id: String,
-    /// `name` from the card's combat block, verbatim.
-    pub name: String,
-    /// Card path relative to the save, e.g. `Characters/Bruni.md`.
-    pub markdown: String,
-    /// Bound structured sheet (`sheets/<id>.yaml`) when one exists.
-    pub sheet: Option<String>,
+    id: String,
+    name: String,
+    markdown: String,
+    sheet: Option<String>,
+}
+
+impl Character {
+    /// The raw `id` from the card's combat block. Untrusted save content:
+    /// never log it or show it verbatim; use `Debug` for a redacted view.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The raw `name` from the card's combat block. Untrusted save content:
+    /// never log it or show it verbatim; use `Debug` for a redacted view.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Card path relative to the save, e.g. `Characters/Bruni.md` (a locator).
+    pub fn markdown(&self) -> &str {
+        &self.markdown
+    }
+
+    /// Bound structured sheet path (`sheets/<id>.yaml`), when one exists.
+    pub fn sheet(&self) -> Option<&str> {
+        self.sheet.as_deref()
+    }
+}
+
+impl fmt::Debug for Character {
+    /// Fully redacted: ids and names are save content, and the card/sheet paths
+    /// are derived from them (`characters/<slug>.md`), so a path can carry the
+    /// same value. Locators stay available through the accessors.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Character")
+            .field("id", &"<redacted>")
+            .field("name", &"<redacted>")
+            .field("markdown", &"<redacted>")
+            .field("sheet", &self.sheet.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// Result of one read-only pass. `issues` is sorted and stable; `characters`
 /// is sorted by id and card path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Report {
     pub status: Status,
     pub issues: Vec<Issue>,
     pub characters: Vec<Character>,
+}
+
+impl fmt::Debug for Report {
+    /// Counters only: a report is often logged, and its contents are save data.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Report")
+            .field("status", &self.status)
+            .field("issues", &self.issues.len())
+            .field("characters", &self.characters.len())
+            .finish()
+    }
 }
 
 /// Discover and diagnose `save_dir` without writing anything.
@@ -317,9 +381,31 @@ impl Diag {
     /// so that every entry is accounted for.
     fn list_dir(&mut self, save: &Path, dir: &str) -> Vec<Entry> {
         let abs = save.join(dir);
+        // The directory itself is checked without following links: a symlinked,
+        // non-directory or dangling directory is reported, and its target is
+        // never listed.
+        let meta = match fs::symlink_metadata(&abs) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(e) => {
+                self.push(
+                    IssueKind::UnreadableDirectory,
+                    dir,
+                    format!("directory metadata cannot be read ({:?})", e.kind()),
+                );
+                return Vec::new();
+            }
+        };
+        if !meta.file_type().is_dir() {
+            self.push(
+                IssueKind::UnreadableDirectory,
+                dir,
+                "not a directory (links are not followed)",
+            );
+            return Vec::new();
+        }
         let entries = match fs::read_dir(&abs) {
             Ok(rd) => rd,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
             Err(e) => {
                 self.push(
                     IssueKind::UnreadableDirectory,
@@ -759,6 +845,29 @@ impl Diag {
     }
 
     fn check_party(&mut self, save: &Path, characters: &[Character]) {
+        // The manifest's own directory is checked without following links, so a
+        // symlinked or non-directory `combat/` is reported and nothing inside it
+        // is read.
+        match fs::symlink_metadata(save.join("combat")) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => {
+                self.push(
+                    IssueKind::UnreadableDirectory,
+                    "combat",
+                    "not a directory (links are not followed)",
+                );
+                return;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                self.push(
+                    IssueKind::UnreadableDirectory,
+                    "combat",
+                    format!("directory metadata cannot be read ({:?})", e.kind()),
+                );
+                return;
+            }
+        }
         let abs = save.join(MANIFEST);
         // Refuse anything that is not a regular file: a directory, a symbolic
         // link or a FIFO must never be opened (a FIFO could block forever).
@@ -829,6 +938,7 @@ impl Diag {
                 party = Some(value);
             }
         }
+        let party_key_present = party.is_some();
         let ids: Vec<String> = match party {
             None => Vec::new(),
             Some(Value::Sequence(entries)) => {
@@ -858,8 +968,29 @@ impl Diag {
             }
         };
         // The manifest must read the same way to the tools that consume it.
-        // `start::party_ids` returns an empty list when the file cannot be
-        // read, so read errors are reported here, by this module, above.
+        // They look for a top-level `party:` line and read an inline list, so a
+        // block list or a key their line reader cannot see is reported even when
+        // both sides end up empty. `start::party_ids` returns an empty list when
+        // the file cannot be read, so read errors are reported here, above.
+        match consumer_party_form(&text) {
+            None if party_key_present => {
+                self.push(
+                    IssueKind::UnparsableCampaignManifest,
+                    MANIFEST,
+                    "the tools do not read a `party:` line from the manifest",
+                );
+                return;
+            }
+            Some(false) => {
+                self.push(
+                    IssueKind::UnparsableCampaignManifest,
+                    MANIFEST,
+                    "the `party` line is not an inline list the tools read",
+                );
+                return;
+            }
+            _ => {}
+        }
         if crate::start::party_ids(save) != ids {
             self.push(
                 IssueKind::UnparsableCampaignManifest,
@@ -914,6 +1045,21 @@ fn has_extension(name: &str, want: &str) -> bool {
 /// Only consulted for entries that are not `.md`/`.yaml` candidates.
 fn is_os_metadata(name: &str) -> bool {
     name.starts_with('.')
+}
+
+/// The `party:` line exactly as [`crate::start::party_ids`] finds it, returning
+/// whether its value is an inline `[...]` list once the comment is stripped.
+/// `start::party_ids` returns only the ids, so the syntactic form — which
+/// decides whether the tools can read the list at all — is mirrored here; the
+/// ids themselves are always taken from the real reader.
+fn consumer_party_form(text: &str) -> Option<bool> {
+    for line in text.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("party:") {
+            let value = rest.split('#').next().unwrap_or("").trim();
+            return Some(value.starts_with('[') && value.ends_with(']'));
+        }
+    }
+    None
 }
 
 /// The ```combat yaml``` block: `Ok(None)` when there is no fence, `Err(())`
