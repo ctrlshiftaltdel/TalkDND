@@ -1519,6 +1519,9 @@ impl AdvancementLock {
     /// back and its directory synced before the state becomes `active`; a
     /// failure leaves the previous state untouched and never writes `active`.
     /// The snapshot is control metadata, not a replacement for the D backup.
+    /// The writable predicate runs first, so on a platform without directory
+    /// sync the answer is `unwritable_state` before any evidence path is
+    /// inspected.
     pub fn begin_operation(
         &mut self,
         operation_id: &str,
