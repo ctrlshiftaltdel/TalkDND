@@ -108,10 +108,8 @@ fn meaning_chaos_is_clamped_to_one_through_nine() {
     let _ = fs::remove_dir_all(&r);
 }
 
-#[test]
-fn oracle_is_read_only_on_a_scope0_save() {
-    let (r, save) = new_save("read-only");
-    let before = snapshot(&save);
+/// Every oracle form, twice: repeated seeded calls must change nothing either.
+fn oracle_calls(r: &Path) {
     let cases: &[&[&str]] = &[
         &["--seed", "42", "oracle", "yes-no"],
         &["--seed", "42", "oracle", "yes-no", "门后有人吗？"],
@@ -120,16 +118,52 @@ fn oracle_is_read_only_on_a_scope0_save() {
         &["--seed", "42", "oracle", "meaning"],
         &["--seed", "42", "oracle", "meaning", "--chaos", "9"],
     ];
-    // Run everything twice: repeated seeded calls change nothing either.
     for _ in 0..2 {
         for args in cases {
-            ok(&r, args);
+            ok(r, args);
         }
     }
+}
+
+#[test]
+fn oracle_is_read_only_on_a_scope0_save() {
+    let (r, save) = new_save("read-only");
+    // TASK-0141 regression, deterministic: pin the reconciliation baseline to
+    // an old date. The integrity audit rewrites that date to the current
+    // minute whenever it runs at all, so an oracle call that reached
+    // `audit::after_command` changes these bytes even within one minute —
+    // no waiting for a clock tick, no flaky cross-minute window.
+    let manifest = save.join("integrity.yaml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    let seeded: String = text
+        .split_inclusive('\n')
+        .map(|line| match line.starts_with("  date: ") {
+            true => "  date: 2000-01-01 00:00\n",
+            false => line,
+        })
+        .collect();
+    assert_ne!(
+        seeded, text,
+        "a fresh save carries a reconciliation baseline date to pin"
+    );
+    assert_eq!(
+        seeded.matches("  date: 2000-01-01 00:00").count(),
+        1,
+        "exactly one baseline date is replaced:\n{seeded}"
+    );
+    fs::write(&manifest, &seeded).unwrap();
+
+    let before = snapshot(&save);
+    oracle_calls(&r);
     let after = snapshot(&save);
     assert_eq!(
         before, after,
         "oracle must not change or create any save file"
+    );
+    assert_eq!(
+        fs::read_to_string(&manifest).unwrap(),
+        seeded,
+        "oracle must not rewrite the integrity baseline date"
     );
     // The named ledgers are untouched (map equality already proves it; these
     // assertions pin the intent for reviewers).
@@ -147,6 +181,33 @@ fn oracle_is_read_only_on_a_scope0_save() {
             "{name} changed"
         );
     }
+
+    // A save whose manifest disagrees with its files (a hand edit) and a save
+    // without any manifest must both stay untouched as well: a read-only
+    // command may neither record fingerprints nor create a fresh baseline.
+    let meta = save.join("save-meta.yaml");
+    let dirty = fs::read_to_string(&meta).unwrap() + "# hand edit\n";
+    fs::write(&meta, &dirty).unwrap();
+    let before = snapshot(&save);
+    oracle_calls(&r);
+    assert_eq!(
+        before,
+        snapshot(&save),
+        "oracle must not touch a save with a hand-edited file"
+    );
+
+    fs::remove_file(&manifest).unwrap();
+    let before = snapshot(&save);
+    oracle_calls(&r);
+    assert!(
+        !manifest.exists(),
+        "oracle created integrity.yaml on a save without a manifest"
+    );
+    assert_eq!(
+        before,
+        snapshot(&save),
+        "oracle must not touch a save without an integrity manifest"
+    );
     let _ = fs::remove_dir_all(&r);
 }
 
