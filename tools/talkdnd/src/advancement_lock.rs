@@ -69,11 +69,12 @@
 //!   replaced path is detected exactly. Directory `fsync` is attempted and its
 //!   error is reported.
 //! * Windows: the stable standard library exposes no file index, so the
-//!   identity is a best-effort `creation_time` + size pair, derived from a
-//!   handle on both sides of the comparison. A replacement or copy that also
-//!   preserves those values may go unnoticed, so a same-relative-path copy is
-//!   not claimed to be detectable there. Directory `fsync` is not available and
-//!   is skipped, so the durability of the rename is unverified. Both limits are
+//!   identity is a best-effort creation time, read from a handle on both sides
+//!   of the comparison. Size and write time cannot be part of it: writing the
+//!   immutable header changes them. A replacement or copy that also preserves
+//!   the creation time may go unnoticed, so a same-relative-path copy is not
+//!   claimed to be detectable there. Directory `fsync` is not available and is
+//!   skipped, so the durability of the rename is unverified. Both limits are
 //!   recorded in the design document and in the task's
 //!   `unverified_assumptions`.
 //! * Network shares, FUSE and sync folders are unsupported and unverified.
@@ -290,7 +291,7 @@ impl LockIdentity {
         let tag = parts.next()?;
         let expected = match tag {
             "unix" => 3,
-            "windows" => 3,
+            "windows" => 2,
             "generic" => 3,
             _ => return None,
         };
@@ -339,14 +340,11 @@ fn identity_of(meta: &fs::Metadata) -> Result<LockIdentity> {
 fn identity_of(meta: &fs::Metadata) -> Result<LockIdentity> {
     use std::os::windows::fs::MetadataExt;
     // The standard library still has no stable file index on Windows, so this
-    // is a best-effort identity: creation time plus size. A replacement or copy
-    // that preserves both may not be detected; the module and design documents
-    // say so.
-    Ok(LockIdentity(format!(
-        "windows:{}:{}",
-        meta.creation_time(),
-        meta.file_size()
-    )))
+    // is a best-effort identity: the creation time only. Size and write time
+    // change when the immutable header is written, so they cannot identify a
+    // file. A replacement or copy that also preserves the creation time may go
+    // unnoticed; the module and design documents say so.
+    Ok(LockIdentity(format!("windows:{}", meta.creation_time())))
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -777,12 +775,15 @@ pub fn init(save_dir: &Path, opts: &InitOptions<'_>) -> Result<InitOutcome> {
         .write(true)
         .create_new(true)
         .open(&lock_file)
-        .map_err(|e| {
-            ctx(
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => err(
                 ErrorKind::AlreadyInitialized,
-                format!("create {}", lock_file.display()),
-                e,
-            )
+                format!(
+                    "{} was created by another initializer; init never takes over",
+                    lock_file.display()
+                ),
+            ),
+            _ => ctx(ErrorKind::Io, format!("create {}", lock_file.display()), e),
         })?;
     acquire(&file, &opts.acquire)?;
 
@@ -923,6 +924,7 @@ pub fn open(save_dir: &Path, opts: &OpenOptions) -> Result<AdvancementLock> {
         identity,
         header,
         state: record,
+        poisoned: false,
     })
 }
 
@@ -1000,6 +1002,10 @@ pub struct AdvancementLock {
     identity: LockIdentity,
     header: LockHeader,
     state: StateRecord,
+    /// Set when a state rename succeeded but its directory sync failed: the
+    /// new content is visible while its durability is unknown, so this holder
+    /// must not continue.
+    poisoned: bool,
 }
 
 impl AdvancementLock {
@@ -1017,13 +1023,24 @@ impl AdvancementLock {
 
     /// The only "may start a normal write" answer.
     pub fn check_writable(&self) -> Result<()> {
+        if self.poisoned {
+            return Err(err(
+                ErrorKind::UnwritableState,
+                "a previous state publish was renamed but may not be durable; reopen the lock instead of continuing",
+            ));
+        }
         self.recheck_lock()?;
         match self.state.state {
             State::Ready => Ok(()),
-            State::Complete if self.state.pending.is_empty() => Ok(()),
+            State::Complete
+                if self.state.pending.is_empty()
+                    && self.state.published.iter().all(|entry| entry.done) =>
+            {
+                Ok(())
+            }
             State::Complete => Err(err(
                 ErrorKind::UnwritableState,
-                "complete with a pending intent is a contradiction; treat it as in_doubt",
+                "complete with a pending intent or an unfinished publish is a contradiction; treat it as in_doubt",
             )),
             State::Failed
                 if self.state.published.is_empty()
@@ -1214,6 +1231,12 @@ impl AdvancementLock {
     /// Stage, verify and publish a new state revision. Never truncates in place.
     fn store(&mut self, mut next: StateRecord) -> Result<()> {
         self.recheck_lock()?;
+        if self.poisoned {
+            return Err(err(
+                ErrorKind::UnwritableState,
+                "a previous state publish was renamed but may not be durable; reopen the lock instead of continuing",
+            ));
+        }
         next.revision = self
             .state
             .revision
@@ -1221,11 +1244,27 @@ impl AdvancementLock {
             .ok_or_else(|| err(ErrorKind::InvalidRequest, "the state revision overflowed"))?;
         next.updated_at = now();
         let (tmp, _) = stage_state(&self.save_dir, &mut next)?;
-        if let Err(e) = publish_state(&self.save_dir, &tmp) {
+        let target = state_path(&self.save_dir);
+        if let Err(e) = fs::rename(&tmp, &target) {
             let _ = fs::remove_file(&tmp);
-            return Err(e);
+            return Err(ctx(
+                ErrorKind::Io,
+                format!("rename {} -> {}", tmp.display(), target.display()),
+                e,
+            ));
         }
+        // Readers already see the new revision, so adopt it here too.
         self.state = next;
+        if let Err(e) = sync_dir(&self.save_dir) {
+            self.poisoned = true;
+            return Err(err(
+                ErrorKind::Io,
+                format!(
+                    "the new state was renamed but the directory sync failed ({}); its durability is unknown and this holder must not continue",
+                    e.detail()
+                ),
+            ));
+        }
         Ok(())
     }
 

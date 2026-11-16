@@ -463,6 +463,43 @@ fn a_forged_self_consistent_complete_with_pending_is_refused() {
 }
 
 #[test]
+fn a_forged_self_consistent_complete_with_an_unfinished_publish_is_refused() {
+    let dir = root("forged-unfinished");
+    init_ok(&dir);
+    let mut record = read_state(&dir);
+    record.state = adv::State::Complete;
+    record.stage = adv::Stage::Done;
+    record.published.push(adv::Published {
+        path: "sheets/a.yaml".into(),
+        before: "before".into(),
+        after: "after".into(),
+        done: false,
+    });
+    adv::reseal(&mut record).unwrap();
+    write_state(&dir, &record);
+
+    let lock = open_ok(&dir);
+    assert_eq!(
+        lock.check_writable().unwrap_err().kind(),
+        adv::ErrorKind::UnwritableState
+    );
+}
+
+#[test]
+fn init_reports_a_missing_save_directory_instead_of_taking_over() {
+    let dir = root("init-missing-dir").join("absent");
+    let mut opts = adv::InitOptions::new(SAVE_PATH);
+    opts.acquire = fast();
+    let err = adv::init(&dir, &opts).unwrap_err();
+    assert_ne!(
+        err.kind(),
+        adv::ErrorKind::AlreadyInitialized,
+        "a missing parent is an I/O problem, not an existing protocol file"
+    );
+    assert!(!dir.exists(), "a failed init creates no directory");
+}
+
+#[test]
 fn state_updates_replace_atomically_and_never_truncate_in_place() {
     let dir = root("revisions");
     init_ok(&dir);
