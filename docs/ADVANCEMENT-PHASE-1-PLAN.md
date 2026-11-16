@@ -33,7 +33,7 @@
 | 旧 checkpoint 锁归属/抢占与备份控制文件修正 | #286 | 修正 `Drop` 归属、取消 mtime 抢占、备份/回滚排除控制文件；**不修复 #264** |
 | 其余只读命令的完整性审计副作用修复 | #281、#279 | 提供“只读路径不写存档”的既有结论；是写者盘点的输入 |
 
-另有两个未闭合的跟踪项，不是本计划的前置交付：**#285**（剩余只读命令的完整性审计副作用，仍跟踪）是写者盘点的输入，其结论闭合前块 `ADV-P1-1` 的完整性 AC 无法判定通过；**#264**（checkpoint 锁测试首次 `WouldBlock` 根因）仍未解决，见 `ADV-P1-9`。
+另有两个未闭合的跟踪项，不是本计划的前置交付：**#285**（剩余只读命令的完整性审计副作用，仍跟踪）是写者盘点的输入，其中每个入口要么在 `ADV-P1-1` 内接入、要么声明只读，两者任一未闭合时该块的 AC-2 不能判定通过；**#264**（checkpoint 锁测试首次 `WouldBlock` 根因）仍未解决，见 `ADV-P1-9`。
 
 ### 已批准边界（本计划只承接，不缩窄、不新增）
 
@@ -60,7 +60,7 @@
 
 - 阶段目标：只读身份诊断、锁域/恢复设计、锁 v1 原语、旧锁行为修正与只读路径修复可查、可复核。
 - 交付：上表五个前置 Issue 的已验收产物。
-- 出口条件：相关 Issue 在 GitHub 上为已验收状态，且其证据矩阵绑定各自 head；本计划不重复判定。
+- 出口条件：相关 Issue 在 GitHub 上为 `VERIFIED`，且其证据矩阵绑定各自 head；本计划不重复判定。
 
 ### Phase 1 — 写者覆盖与 D 前置
 
@@ -100,9 +100,9 @@
 
 - **Goal:** 让每一个相关新版本写入入口在同一存档上要么已接入共享协作锁，要么在未接入时拒绝写入或明确声明只读。
 - **建议允许路径：** `tools/talkdnd/src/`（`lib.rs`、`progress.rs`、`checkpoint.rs`、`charsheet.rs`、`migrate.rs`、`audit.rs` 等实际写者）、`tools/combat-sim/src/`（`cli.rs`、`party.rs`、`state.rs`、`integrity.rs`；按源码只读约定先 `chmod u+w`、验证后 `chmod a-w`）、`tools/talkdnd/tests/`、`tools/combat-sim/tests/`、`docs/ADVANCEMENT-LOCK-DESIGN.md`（只记录接入状态与证据位置）
-- **Depends on:** #282、#286（均已验收）；#285 的结论是盘点输入，未闭合前 AC-2 不能判定通过
+- **Depends on:** #282、#286（均已验收）；#285 的剩余只读路径是盘点输入，其入口未接入或未声明只读前 AC-2 不能判定通过
 - **Acceptance criteria:**
-  - [ ] `AC-1`: 产出写入入口清单，逐项标注命令/函数定位、写入哪些存档内对象、是否取 SAV E 锁、未接入时的行为；清单随 PR 发布，不含真实存档、书籍或秘密。
+  - [ ] `AC-1`: 产出写入入口清单，逐项标注命令/函数定位、写入哪些存档内对象、是否取 SAVE 锁、未接入时的行为；清单随 PR 发布，不含真实存档、书籍或秘密。
   - [ ] `AC-2`: 每个未接入入口在同一存档上要么失败关闭拒绝写入，要么在 `--help` 与文档中明确声明只读；合成测试逐条证明，不存在“静默写入且不持锁”的入口。
   - [ ] `AC-3`: 已接入入口按总序 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock` 获取；反向获取在合成用例中被判为协议违规。
   - [ ] `AC-4`: 本块结束时成长提交入口仍**未启用**：`progress::level_up` 与任何 CLI 都不提供成长提交；用静态核对与测试证明没有该入口。
@@ -124,7 +124,7 @@
 
 ### Task: `ADV-P1-3` — 发布、日志/完整性与幂等
 
-- **Goal:** 让逐文件发布、日志与完整性更新、以及重试幂等在合成故障注入下符合已批准边界，并在 OD-9 未决时保持提交路径不接入。
+- **Goal:** 让一次成长提交的逐文件发布在合成故障注入下恰好应用一次（含日志与完整性更新），失败即停并留下可判定的阶段记录；OD-9 未决时提交路径保持不接入。
 - **建议允许路径：** `tools/talkdnd/src/advancement_commit.rs`（或等价模块）、`tools/talkdnd/src/lib.rs`、`tools/talkdnd/src/progress.rs`、`tools/talkdnd/src/save.rs`、`tools/combat-sim/src/integrity.rs`（按源码只读约定）、`tools/talkdnd/tests/`、`tools/combat-sim/tests/`、`docs/ADVANCEMENT-LOCK-DESIGN.md`
 - **Depends on:** `ADV-P1-2`；OD-9 的内层锁有界化未决（未决时提交路径不接入）
 - **Acceptance criteria:**
@@ -151,7 +151,7 @@
 
 ### Task: `ADV-P1-5` — sidecar 入籍与 9/10→11 自动迁移
 
-- **Goal:** 在合成 fixture 上完成 schema 11 的选择 sidecar 入籍与 9/10→11 自动迁移，并保留手改与未知历史。
+- **Goal:** 让 schema 9/10 存档在合成 fixture 上自动迁移到 schema 11，并为每个角色建立与承载体双边绑定、可验证的选择 sidecar，同时保留手改与未知历史。
 - **建议允许路径：** `tools/talkdnd/src/migrate.rs`、`tools/talkdnd/src/charsheet.rs`、`tools/talkdnd/src/progress.rs`、新增 sidecar 模块、`tools/talkdnd/src/lib.rs`、`tools/talkdnd/tests/`、`LetsPlay/docs/layout.md`（存档结构权威）、`docs/ADVANCEMENT-IDENTITY-CONTRACT.md`（记录实现状态与证据位置）、三个 crate 的 `Cargo.toml` 版本号、`CHANGELOG.md`、`docs/PROJECT-CHARTER.md`（按 LIVING CHARTER 同 PR 更新）
 - **Depends on:** `ADV-P1-1`、`ADV-P1-4`
 - **Acceptance criteria:**
