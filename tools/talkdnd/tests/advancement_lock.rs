@@ -172,13 +172,20 @@ fn write_state(root: &Path, record: &adv::StateRecord) {
     .unwrap();
 }
 
-fn evidence_dir(tag: &str) -> PathBuf {
+/// A trusted, existing evidence root plus the directory below it that the
+/// pre-state snapshot will create.
+fn evidence_root(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "talkdnd-advlock-evidence-{tag}-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+fn evidence_dir(tag: &str) -> PathBuf {
+    evidence_root(tag).join("ops")
 }
 
 // ---------------------------------------------------------------- init ----
@@ -329,11 +336,20 @@ fn a_non_utf8_save_component_is_refused_without_touching_its_target() {
     let link = dir
         .join("Saves")
         .join(OsString::from_vec(b"bad-\xff".to_vec()));
-    if symlink(&real, &link).is_err() {
+    if let Err(e) = symlink(&real, &link) {
         // Some filesystems (APFS) reject a name that is not valid UTF-8, which
         // makes the bypass impossible there; record that instead of pretending.
-        eprintln!("skipped: this filesystem rejects a non-UTF-8 symlink name");
-        return;
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::Unsupported
+        ) {
+            eprintln!(
+                "skipped: this filesystem rejects a non-UTF-8 symlink name ({:?})",
+                e.kind()
+            );
+            return;
+        }
+        panic!("unexpected error creating a non-UTF-8 symlink: {e}");
     }
 
     let err = adv::init(&dir, &link, &init_opts()).unwrap_err();
@@ -353,9 +369,18 @@ fn a_non_utf8_save_component_is_refused_without_touching_its_target() {
     let plain = dir
         .join("Saves")
         .join(OsString::from_vec(b"plain-\xfe".to_vec()));
-    if fs::create_dir(&plain).is_err() {
-        eprintln!("skipped: this filesystem rejects a non-UTF-8 directory name");
-        return;
+    if let Err(e) = fs::create_dir(&plain) {
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::Unsupported
+        ) {
+            eprintln!(
+                "skipped: this filesystem rejects a non-UTF-8 directory name ({:?})",
+                e.kind()
+            );
+            return;
+        }
+        panic!("unexpected error creating a non-UTF-8 directory: {e}");
     }
     let err = adv::init(&dir, &plain, &init_opts()).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
@@ -716,7 +741,8 @@ fn only_ready_complete_or_zero_write_failed_is_writable() {
     assert_eq!(lock.state().state, adv::State::Ready);
     lock.check_writable().unwrap();
 
-    lock.begin_operation("op-1", &evidence_dir("predicate"))
+    let evidence_root = evidence_root("predicate");
+    lock.begin_operation("op-1", &evidence_root, &evidence_dir("predicate"))
         .unwrap();
     assert_eq!(lock.state().state, adv::State::Active);
     assert_eq!(
@@ -738,15 +764,16 @@ fn failed_is_only_allowed_before_any_target_write() {
     let dir = root("failed");
     init_ok(&dir);
     let mut lock = open_ok(&dir);
+    let evidence_root = evidence_root("failed");
     let ops = evidence_dir("failed");
 
-    lock.begin_operation("op-1", &ops).unwrap();
+    lock.begin_operation("op-1", &evidence_root, &ops).unwrap();
     lock.finish_failed("backup was not verified").unwrap();
     assert_eq!(lock.state().state, adv::State::Failed);
     assert_eq!(lock.state().stage, adv::Stage::StoppedBeforeWrite);
     lock.check_writable().unwrap();
     // A stop before any target write may be reopened with a new operation.
-    lock.begin_operation("op-2", &ops).unwrap();
+    lock.begin_operation("op-2", &evidence_root, &ops).unwrap();
     assert_eq!(lock.state().operation_id, "op-2");
 
     // Once an intent or a publish exists, `failed` is a contradiction.
@@ -770,7 +797,8 @@ fn complete_needs_all_verification_and_no_pending_intent() {
     let dir = root("complete");
     init_ok(&dir);
     let mut lock = open_ok(&dir);
-    lock.begin_operation("op-1", &evidence_dir("complete"))
+    let evidence_root = evidence_root("complete");
+    lock.begin_operation("op-1", &evidence_root, &evidence_dir("complete"))
         .unwrap();
     lock.record_intent("sheets/a.yaml", "before", "after")
         .unwrap();
@@ -858,8 +886,9 @@ fn state_updates_replace_atomically_and_never_truncate_in_place() {
     let dir = root("revisions");
     init_ok(&dir);
     let mut lock = open_ok(&dir);
+    let evidence_root = evidence_root("revisions");
     let ops = evidence_dir("revisions");
-    lock.begin_operation("op-1", &ops).unwrap();
+    lock.begin_operation("op-1", &evidence_root, &ops).unwrap();
     lock.record_intent("sheets/a.yaml", "before", "after")
         .unwrap();
     lock.record_published("sheets/a.yaml").unwrap();
@@ -889,7 +918,8 @@ fn a_state_deleted_after_open_is_not_rebuilt() {
     let dir = root("disk-delete");
     init_ok(&dir);
     let mut lock = open_ok(&dir);
-    lock.begin_operation("op-1", &evidence_dir("disk-delete"))
+    let evidence_root = evidence_root("disk-delete");
+    lock.begin_operation("op-1", &evidence_root, &evidence_dir("disk-delete"))
         .unwrap();
     let state = adv::state_path(&slot(&dir));
     fs::remove_file(&state).unwrap();
@@ -915,7 +945,8 @@ fn a_state_zeroed_corrupted_or_replaced_after_open_stops_every_update() {
         let dir = root(tag);
         init_ok(&dir);
         let mut lock = open_ok(&dir);
-        lock.begin_operation("op-1", &evidence_dir(tag)).unwrap();
+        lock.begin_operation("op-1", &evidence_root(tag), &evidence_dir(tag))
+            .unwrap();
         let state = adv::state_path(&slot(&dir));
         mutate(&state);
         let before = fs::read(&state).unwrap();
@@ -973,7 +1004,11 @@ fn a_state_changed_between_open_and_begin_operation_is_refused() {
     let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
 
     let err = lock
-        .begin_operation("op-1", &evidence_dir("pre-begin-change"))
+        .begin_operation(
+            "op-1",
+            &evidence_root("pre-begin-change"),
+            &evidence_dir("pre-begin-change"),
+        )
         .unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::CorruptState);
     assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
@@ -990,9 +1025,10 @@ fn a_state_changed_between_open_and_begin_operation_is_refused() {
 fn begin_operation_snapshots_the_previous_state_before_becoming_active() {
     let dir = root("prestate");
     init_ok(&dir);
+    let evidence_root = evidence_root("prestate");
     let ops = evidence_dir("prestate");
     let mut lock = open_ok(&dir);
-    lock.begin_operation("op-1", &ops).unwrap();
+    lock.begin_operation("op-1", &evidence_root, &ops).unwrap();
 
     assert_eq!(lock.state().state, adv::State::Active);
     assert_eq!(lock.state().stage, adv::Stage::Admit);
@@ -1019,6 +1055,7 @@ fn begin_operation_snapshots_the_previous_state_before_becoming_active() {
 fn a_failed_prestate_snapshot_leaves_the_state_untouched() {
     let dir = root("prestate-fail");
     init_ok(&dir);
+    let evidence_root = evidence_root("prestate-fail");
     let ops = evidence_dir("prestate-fail");
     fs::create_dir_all(&ops).unwrap();
     // The exclusive create must fail: this is the injectable failure.
@@ -1026,7 +1063,9 @@ fn a_failed_prestate_snapshot_leaves_the_state_untouched() {
 
     let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
     let mut lock = open_ok(&dir);
-    let err = lock.begin_operation("op-1", &ops).unwrap_err();
+    let err = lock
+        .begin_operation("op-1", &evidence_root, &ops)
+        .unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
     assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
     assert_eq!(lock.state().state, adv::State::Ready);
@@ -1038,10 +1077,12 @@ fn a_failed_prestate_snapshot_leaves_the_state_untouched() {
 fn begin_operation_creates_and_syncs_nested_evidence_directories() {
     let dir = root("prestate-nested");
     init_ok(&dir);
-    let ops = dir.join("ops").join("a").join("b").join("c");
+    let evidence_root = dir.join("ops");
+    fs::create_dir(&evidence_root).unwrap();
+    let ops = evidence_root.join("a").join("b").join("c");
     assert!(!ops.exists());
     let mut lock = open_ok(&dir);
-    lock.begin_operation("op-1", &ops).unwrap();
+    lock.begin_operation("op-1", &evidence_root, &ops).unwrap();
 
     assert!(ops.is_dir());
     assert!(ops.join("op-1-prestate.json").is_file());
@@ -1053,14 +1094,16 @@ fn begin_operation_creates_and_syncs_nested_evidence_directories() {
 fn begin_operation_fails_when_a_directory_cannot_be_created() {
     let dir = root("prestate-dirfail");
     init_ok(&dir);
-    // A regular file in the path makes the mkdir of the level below impossible.
-    let blocker = dir.join("ops");
+    let evidence_root = dir.join("ops");
+    fs::create_dir(&evidence_root).unwrap();
+    // A regular file in the path makes the level below it impossible.
+    let blocker = evidence_root.join("a");
     fs::write(&blocker, b"not a directory").unwrap();
     let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
 
     let mut lock = open_ok(&dir);
     let err = lock
-        .begin_operation("op-1", &blocker.join("sub"))
+        .begin_operation("op-1", &evidence_root, &blocker.join("sub"))
         .unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
     assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
@@ -1069,53 +1112,214 @@ fn begin_operation_fails_when_a_directory_cannot_be_created() {
 
 #[cfg(unix)]
 #[test]
-fn a_failed_parent_sync_after_mkdir_is_rechecked_on_retry() {
+fn every_retry_rechecks_all_evidence_levels() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = root("retry-sync");
     init_ok(&dir);
-    let ops = dir.join("ops");
-    fs::create_dir(&ops).unwrap();
-    // Write and execute but not readable: `mkdir` inside works while opening
-    // the directory to fsync it fails, which is the exact injection we need.
-    let mut perms = fs::metadata(&ops).unwrap().permissions();
+    // `ops` is the trusted, syncable root; `ops/a` is the level that cannot be
+    // opened for fsync, so `mkdir` below it works while syncing its entry fails.
+    let evidence_root = dir.join("ops");
+    fs::create_dir(&evidence_root).unwrap();
+    let broken = evidence_root.join("a");
+    fs::create_dir(&broken).unwrap();
+    let mut perms = fs::metadata(&broken).unwrap().permissions();
     let mode = perms.mode();
     perms.set_mode(0o333);
-    fs::set_permissions(&ops, perms).unwrap();
+    fs::set_permissions(&broken, perms).unwrap();
 
-    if fs::File::open(&ops).is_ok() {
-        let mut perms = fs::metadata(&ops).unwrap().permissions();
+    if fs::File::open(&broken).is_ok() {
+        let mut perms = fs::metadata(&broken).unwrap().permissions();
         perms.set_mode(mode);
-        fs::set_permissions(&ops, perms).unwrap();
+        fs::set_permissions(&broken, perms).unwrap();
+        eprintln!("skipped: this user can open a 0o333 directory");
+        return;
+    }
+
+    let evidence = broken.join("b").join("c");
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+    let mut lock = open_ok(&dir);
+    // Every attempt walks all levels from the root again. The first failure
+    // leaves `b` behind and the second leaves `c`, but `a`'s own entry can
+    // still not be synced, so every retry must fail instead of skipping the
+    // level that failed first.
+    for (index, operation) in ["op-1", "op-2", "op-3"].iter().enumerate() {
+        let err = lock
+            .begin_operation(operation, &evidence_root, &evidence)
+            .unwrap_err();
+        assert_eq!(
+            err.kind(),
+            adv::ErrorKind::EvidenceFailed,
+            "attempt {}",
+            index + 1
+        );
+        assert_eq!(
+            fs::read(adv::state_path(&slot(&dir))).unwrap(),
+            before,
+            "attempt {} must not touch the state",
+            index + 1
+        );
+        assert_eq!(lock.state().state, adv::State::Ready);
+    }
+
+    // Restoring the level lets the same path succeed.
+    let mut perms = fs::metadata(&broken).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(&broken, perms).unwrap();
+    lock.begin_operation("op-4", &evidence_root, &evidence)
+        .unwrap();
+    assert_eq!(lock.state().state, adv::State::Active);
+}
+
+#[test]
+fn begin_operation_requires_an_existing_evidence_root() {
+    let dir = root("evidence-root-missing");
+    init_ok(&dir);
+    let evidence_root = dir.join("absent-root");
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+    let mut lock = open_ok(&dir);
+    let err = lock
+        .begin_operation("op-1", &evidence_root, &evidence_root.join("ops"))
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
+    assert!(!evidence_root.exists(), "the root must never be created");
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+    assert_eq!(lock.state().state, adv::State::Ready);
+}
+
+#[test]
+fn begin_operation_rejects_an_evidence_root_that_is_not_a_directory() {
+    let dir = root("evidence-root-file");
+    init_ok(&dir);
+    let evidence_root = dir.join("root-file");
+    fs::write(&evidence_root, b"not a directory").unwrap();
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+    let mut lock = open_ok(&dir);
+    let err = lock
+        .begin_operation("op-1", &evidence_root, &evidence_root.join("ops"))
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+    assert_eq!(lock.state().state, adv::State::Ready);
+}
+
+#[test]
+fn begin_operation_rejects_an_evidence_dir_outside_its_root() {
+    let dir = root("evidence-outside");
+    init_ok(&dir);
+    let evidence_root = dir.join("ops");
+    fs::create_dir(&evidence_root).unwrap();
+    let other = dir.join("other");
+    fs::create_dir(&other).unwrap();
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+    let mut lock = open_ok(&dir);
+    let err = lock
+        .begin_operation("op-1", &evidence_root, &other.join("ops"))
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(err.detail().contains("outside"), "{}", err.detail());
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+    assert_eq!(lock.state().state, adv::State::Ready);
+}
+
+#[cfg(unix)]
+#[test]
+fn begin_operation_fails_when_the_evidence_root_cannot_be_synced() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = root("evidence-root-nosync");
+    init_ok(&dir);
+    let evidence_root = dir.join("ops");
+    fs::create_dir(&evidence_root).unwrap();
+    let mut perms = fs::metadata(&evidence_root).unwrap().permissions();
+    let mode = perms.mode();
+    perms.set_mode(0o333);
+    fs::set_permissions(&evidence_root, perms).unwrap();
+    if fs::File::open(&evidence_root).is_ok() {
+        let mut perms = fs::metadata(&evidence_root).unwrap().permissions();
+        perms.set_mode(mode);
+        fs::set_permissions(&evidence_root, perms).unwrap();
         eprintln!("skipped: this user can open a 0o333 directory");
         return;
     }
 
     let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
     let mut lock = open_ok(&dir);
-    let evidence = ops.join("evidence");
-    assert_eq!(
-        lock.begin_operation("op-1", &evidence).unwrap_err().kind(),
-        adv::ErrorKind::EvidenceFailed
-    );
-    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+    let err = lock
+        .begin_operation("op-1", &evidence_root, &evidence_root.join("ops"))
+        .unwrap_err();
+    let mut perms = fs::metadata(&evidence_root).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(&evidence_root, perms).unwrap();
 
-    // `evidence` now exists from the failed attempt. A retry must not skip
-    // verifying and syncing its entry just because the directory exists.
-    assert!(evidence.is_dir());
-    assert_eq!(
-        lock.begin_operation("op-2", &evidence).unwrap_err().kind(),
-        adv::ErrorKind::EvidenceFailed
+    assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+    assert_eq!(lock.state().state, adv::State::Ready);
+}
+
+#[cfg(unix)]
+#[test]
+fn begin_operation_rejects_a_symlinked_evidence_level() {
+    use std::os::unix::fs::symlink;
+
+    let dir = root("evidence-symlink");
+    init_ok(&dir);
+    let evidence_root = dir.join("ops");
+    fs::create_dir(&evidence_root).unwrap();
+    let target = dir.join("target");
+    fs::create_dir(&target).unwrap();
+    let link = evidence_root.join("link");
+    symlink(&target, &link).unwrap();
+
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+    let mut lock = open_ok(&dir);
+    let err = lock
+        .begin_operation("op-1", &evidence_root, &link.join("ops"))
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
+    assert!(
+        !target.join("ops").exists(),
+        "nothing may be created through the link"
     );
     assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
     assert_eq!(lock.state().state, adv::State::Ready);
+}
 
-    // Once the parent can be synced, the same path succeeds.
-    let mut perms = fs::metadata(&ops).unwrap().permissions();
-    perms.set_mode(mode);
-    fs::set_permissions(&ops, perms).unwrap();
-    lock.begin_operation("op-3", &evidence).unwrap();
-    assert_eq!(lock.state().state, adv::State::Active);
+#[cfg(unix)]
+#[test]
+fn begin_operation_rejects_a_non_utf8_evidence_component() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = root("evidence-non-utf8");
+    init_ok(&dir);
+    let evidence_root = dir.join("ops");
+    fs::create_dir(&evidence_root).unwrap();
+    let bad = evidence_root.join(OsString::from_vec(b"bad-\xff".to_vec()));
+    if fs::create_dir(&bad).is_err() {
+        eprintln!("skipped: this filesystem rejects a non-UTF-8 directory name");
+        return;
+    }
+
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+    let mut lock = open_ok(&dir);
+    let err = lock
+        .begin_operation("op-1", &evidence_root, &bad.join("ops"))
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(err.detail().contains("not valid UTF-8"), "{}", err.detail());
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_backslash_in_a_save_component_is_refused() {
+    let dir = root("backslash");
+    let slot = dir.join("Saves").join("a\\b");
+    fs::create_dir_all(&slot).unwrap();
+    let err = adv::init(&dir, &slot, &init_opts()).unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(err.detail().contains("backslash"), "{}", err.detail());
 }
 
 #[cfg(not(unix))]
@@ -1147,9 +1351,13 @@ fn init_reports_published_but_not_durable_and_refuses_every_commit() {
         adv::ErrorKind::UnwritableState
     );
     assert_eq!(
-        lock.begin_operation("op-1", &evidence_dir("prestate-nosync"))
-            .unwrap_err()
-            .kind(),
+        lock.begin_operation(
+            "op-1",
+            &evidence_root("prestate-nosync"),
+            &evidence_dir("prestate-nosync"),
+        )
+        .unwrap_err()
+        .kind(),
         adv::ErrorKind::UnwritableState
     );
     assert_eq!(
@@ -1375,9 +1583,10 @@ fn a_read_only_directory_stops_a_state_write_and_keeps_the_old_state() {
 
     let dir = root("read-only-write");
     init_ok(&dir);
+    let evidence_root = evidence_root("read-only-write");
     let ops = evidence_dir("read-only-write");
     let mut lock = open_ok(&dir);
-    lock.begin_operation("op-1", &ops).unwrap();
+    lock.begin_operation("op-1", &evidence_root, &ops).unwrap();
     let save = slot(&dir);
     let before = fs::read(adv::state_path(&save)).unwrap();
 

@@ -102,6 +102,7 @@
 //! * Network shares, FUSE and sync folders are unsupported and unverified.
 //!   Nothing in this build detects them.
 
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -869,40 +870,173 @@ fn sync_dir(dir: &Path) -> Result<()> {
     ))
 }
 
-/// Create `dir` level by level and sync **every** directory entry involved,
-/// from the first existing ancestor down to `dir` itself.
+/// The validated levels of `dir` below `root`, without touching the disk.
 ///
-/// A level that already exists is not skipped: it may be a leftover from an
-/// attempt whose parent sync failed, so its entry is re-synced. If any entry
-/// cannot be confirmed, the whole step fails closed.
-fn ensure_dir(dir: &Path) -> Result<()> {
-    let mut missing = Vec::new();
-    let mut current = dir;
-    let ancestor = loop {
-        if current.exists() {
-            break current.to_path_buf();
+/// Refuses a non-normalized or relative path, `..`, `.`, a directory outside
+/// the root, a non-UTF-8 component, and an empty relative path.
+fn relative_levels(
+    root: &Path,
+    dir: &Path,
+    root_name: &str,
+    dir_name: &str,
+) -> Result<Vec<OsString>> {
+    check_absolute(root, root_name)?;
+    check_absolute(dir, dir_name)?;
+    let relative = dir.strip_prefix(root).map_err(|_| {
+        err(
+            ErrorKind::InvalidRequest,
+            format!(
+                "{dir_name} {} is outside {root_name} {}; it must be below it",
+                dir.display(),
+                root.display()
+            ),
+        )
+    })?;
+    let mut levels = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => {
+                if name.to_str().is_none() {
+                    return Err(err(
+                        ErrorKind::InvalidRequest,
+                        format!(
+                            "{dir_name} {} has a component that is not valid UTF-8; v1 cannot handle it losslessly",
+                            dir.display()
+                        ),
+                    ));
+                }
+                levels.push(name.to_os_string());
+            }
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
+                return Err(err(
+                    ErrorKind::InvalidRequest,
+                    format!(
+                        "{dir_name} {} is not a plain path below {root_name} {}",
+                        dir.display(),
+                        root.display()
+                    ),
+                ))
+            }
         }
-        missing.push(current.to_path_buf());
-        current = current.parent().ok_or_else(|| {
-            err(
-                ErrorKind::EvidenceFailed,
-                format!("{} has no existing ancestor to sync", dir.display()),
-            )
-        })?;
-    };
-    for level in missing.iter().rev() {
-        fs::create_dir(level).map_err(|e| {
-            ctx(
-                ErrorKind::EvidenceFailed,
-                format!("create {}", level.display()),
-                e,
-            )
-        })?;
-        sync_parent_of(level)?;
     }
-    // Re-sync the entry of the first existing level: on a retry it may be the
-    // directory a previous attempt created before its parent sync failed.
-    sync_parent_of(&ancestor)?;
+    if levels.is_empty() {
+        return Err(err(
+            ErrorKind::InvalidRequest,
+            format!(
+                "{dir_name} {} must be strictly below {root_name} {}",
+                dir.display(),
+                root.display()
+            ),
+        ));
+    }
+    Ok(levels)
+}
+
+/// Prepare `dir` below the trusted, already existing `root`, and make every
+/// directory entry involved durable.
+///
+/// Every attempt walks **all** levels from `root` down to `dir`: a missing level
+/// is created, and the parent entry of **every** level is synced whether that
+/// level was just created or already existed. That is what makes a retry repair
+/// an earlier failure instead of skipping the level that failed first. The root
+/// itself must exist, be a real directory and be syncable; it is never created.
+/// Any failure is [`ErrorKind::EvidenceFailed`] and nothing is written to the
+/// state.
+fn ensure_evidence_dir(root: &Path, dir: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(root).map_err(|e| {
+        ctx(
+            ErrorKind::EvidenceFailed,
+            format!(
+                "the evidence root {} must already exist; it is never created automatically",
+                root.display()
+            ),
+            e,
+        )
+    })?;
+    if meta.file_type().is_symlink() {
+        return Err(err(
+            ErrorKind::EvidenceFailed,
+            format!(
+                "the evidence root {} is a symlink; it must be a real directory",
+                root.display()
+            ),
+        ));
+    }
+    if !meta.is_dir() {
+        return Err(err(
+            ErrorKind::EvidenceFailed,
+            format!("the evidence root {} is not a directory", root.display()),
+        ));
+    }
+    let levels = relative_levels(root, dir, "the evidence root", "the evidence directory")?;
+    // The root must be syncable before anything is created below it.
+    sync_dir(root).map_err(|e| {
+        err(
+            ErrorKind::EvidenceFailed,
+            format!(
+                "the evidence root {} cannot be synced ({}); nothing was created",
+                root.display(),
+                e.detail()
+            ),
+        )
+    })?;
+
+    let mut current = root.to_path_buf();
+    for level in &levels {
+        current.push(level);
+        match fs::symlink_metadata(&current) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    return Err(err(
+                        ErrorKind::EvidenceFailed,
+                        format!(
+                            "{} is a symlink; the evidence path must be real directories",
+                            current.display()
+                        ),
+                    ));
+                }
+                if !meta.is_dir() {
+                    return Err(err(
+                        ErrorKind::EvidenceFailed,
+                        format!("{} is not a directory", current.display()),
+                    ));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&current).map_err(|e| {
+                    ctx(
+                        ErrorKind::EvidenceFailed,
+                        format!("create {}", current.display()),
+                        e,
+                    )
+                })?;
+            }
+            Err(e) => {
+                return Err(ctx(
+                    ErrorKind::EvidenceFailed,
+                    format!("inspect {}", current.display()),
+                    e,
+                ))
+            }
+        }
+        // Synced on every attempt, so an entry left behind by an earlier
+        // failure is repaired rather than assumed.
+        sync_parent_of(&current)?;
+    }
+    // The directory that will hold the pre-state file itself.
+    sync_dir(dir).map_err(|e| {
+        err(
+            ErrorKind::EvidenceFailed,
+            format!(
+                "the evidence directory {} could not be synced ({}); stopping without writing active",
+                dir.display(),
+                e.detail()
+            ),
+        )
+    })?;
     Ok(())
 }
 
@@ -1376,15 +1510,25 @@ impl AdvancementLock {
 
     /// Snapshot the previous state, then move to `active`/`admit`.
     ///
-    /// The snapshot is written, synced, read back and its directory synced
-    /// before the state becomes `active`; a failure leaves the previous state
-    /// untouched and never writes `active`. The snapshot is control metadata,
-    /// not a replacement for the D backup.
-    pub fn begin_operation(&mut self, operation_id: &str, evidence_dir: &Path) -> Result<()> {
+    /// `evidence_root` is the caller's trusted, already existing and synced
+    /// directory; it is never created. `evidence_dir` must be strictly below it
+    /// (normalized, no symlink, no `..`, no non-UTF-8 component). Every attempt
+    /// walks all levels from the root down and re-syncs every parent entry,
+    /// including levels that already exist, so a retry repairs an earlier
+    /// failure instead of skipping it. The snapshot is written, synced, read
+    /// back and its directory synced before the state becomes `active`; a
+    /// failure leaves the previous state untouched and never writes `active`.
+    /// The snapshot is control metadata, not a replacement for the D backup.
+    pub fn begin_operation(
+        &mut self,
+        operation_id: &str,
+        evidence_root: &Path,
+        evidence_dir: &Path,
+    ) -> Result<()> {
         self.check_writable()?;
         validate_operation_id(operation_id)?;
         self.recheck_lock()?;
-        self.write_prestate(operation_id, evidence_dir)?;
+        self.write_prestate(operation_id, evidence_root, evidence_dir)?;
 
         let mut next = self.state.clone();
         next.operation_id = operation_id.to_string();
@@ -1618,7 +1762,12 @@ impl AdvancementLock {
     ///
     /// The read-back and the later link are separate syscalls, so a
     /// non-cooperating writer between them is outside what this can promise.
-    fn write_prestate(&self, operation_id: &str, evidence_dir: &Path) -> Result<()> {
+    fn write_prestate(
+        &self,
+        operation_id: &str,
+        evidence_root: &Path,
+        evidence_dir: &Path,
+    ) -> Result<()> {
         // One read: the bytes that were just validated are the bytes recorded,
         // so there is no second-read window between validation and the snapshot.
         let raw = self.verify_disk_state()?;
@@ -1640,7 +1789,7 @@ impl AdvancementLock {
         let bytes = serde_json::to_vec_pretty(&document)
             .map_err(|e| ctx(ErrorKind::Io, "encode the pre-state snapshot", e))?;
 
-        ensure_dir(evidence_dir)?;
+        ensure_evidence_dir(evidence_root, evidence_dir)?;
         let path = evidence_dir.join(format!("{operation_id}-prestate.json"));
         let written = (|| -> Result<()> {
             let mut file = fs::OpenOptions::new()
