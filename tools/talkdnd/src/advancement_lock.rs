@@ -15,21 +15,38 @@
 //!   "the state is clean".
 //! * `.talkdnd.advancement.state` — the only authority for whether a normal
 //!   write may start. It is never truncated in place: every update writes a
-//!   unique same-directory temporary file, `sync_all`s it, renames it over the
-//!   target and syncs the parent directory. A missing, zero-byte or
-//!   checksum-invalid state is UNKNOWN and fails closed; it is never treated as
-//!   a fresh initialization.
+//!   unique same-directory temporary file, `sync_all`s it, re-reads it, links
+//!   it into place without overwriting and syncs the parent directory. A
+//!   missing, zero-byte or checksum-invalid state is UNKNOWN and fails closed;
+//!   it is never treated as a fresh initialization and never rebuilt.
+//!
+//! ## Save identity comes from the caller's root, not from a string
+//!
+//! [`init`] and [`open`] take the trusted repository `root` and the actual
+//! `save_dir`; the library derives the recorded `save_path` itself (normalized
+//! POSIX, relative to `root`) and refuses a save outside the root, a symlinked
+//! component, `..`, `.` or an ambiguous textual form. A caller cannot claim a
+//! path the save does not have.
 //!
 //! ## The writable predicate
 //!
 //! [`AdvancementLock::check_writable`] is the only "may start a normal write"
-//! answer. It accepts `ready`, `complete` with no pending intent, and `failed`
+//! answer, and it re-reads the on-disk state first. It accepts `ready`,
+//! `complete` with no pending intent and every publish finished, and `failed`
 //! that provably stopped before any target write. `active` and `in_doubt`
 //! always refuse. [`AdvancementLock::finish_complete`] refuses unless the
 //! caller states that the candidate comparison, the log append and the
 //! integrity update all completed and no intent is pending;
 //! [`AdvancementLock::finish_failed`] refuses once anything was published or
 //! intended. Partial or unclear work is only ever `in_doubt`.
+//!
+//! Every mutation re-reads the state file and validates it (existence, parse,
+//! checksum, schema, `save_id`, derived `save_path`, lock identity) and
+//! requires it to equal the revision this holder read. A deleted, zero-byte,
+//! corrupt or replaced state fails closed before the temporary file is staged:
+//! nothing is renamed, nothing is rebuilt. The read and the later link are two
+//! syscalls, so a non-cooperating writer in between is still outside what this
+//! protocol can promise.
 //!
 //! ## Bounded acquisition
 //!
@@ -38,16 +55,17 @@
 //! lock, never rewrites the header and never takes over. Only the platform's
 //! "already locked" answer counts as contention; any other error fails closed.
 //! [`init`] additionally proves that a second handle on the same file cannot
-//! take the lock, so a filesystem without working advisory locks is refused
-//! instead of silently accepted.
+//! take the lock, so a filesystem whose lock API does not enforce exclusion is
+//! refused. That self-check proves **this client's** lock API only: it does not
+//! identify a network share, FUSE mount or sync folder, and this library has no
+//! admission gate that could refuse one.
 //!
 //! ## Copying and moving a save
 //!
 //! v1 does **not** support advancement commits for a copied or moved save. The
-//! state records `save_path` (a normalized POSIX path relative to the
-//! repository root) and the identity of the lock file. A save whose path
-//! changed is refused with [`ErrorKind::SavePathMismatch`]; a save copied with
-//! the same relative path is normally refused with
+//! state records the derived `save_path` and the identity of the lock file. A
+//! save whose path changed is refused with [`ErrorKind::SavePathMismatch`]; a
+//! save copied with the same relative path is normally refused with
 //! [`ErrorKind::IdentityMismatch`]. A whole-disk image that preserves both the
 //! relative path and the file identity **may not be detectable**, and nothing
 //! here claims otherwise: a human must confirm. There is no `adopt`, no
@@ -73,15 +91,18 @@
 //!   of the comparison. Size and write time cannot be part of it: writing the
 //!   immutable header changes them. A replacement or copy that also preserves
 //!   the creation time may go unnoticed, so a same-relative-path copy is not
-//!   claimed to be detectable there. Directory `fsync` is not available and is
-//!   skipped, so the durability of the rename is unverified. Both limits are
-//!   recorded in the design document and in the task's
-//!   `unverified_assumptions`.
+//!   claimed to be detectable there.
+//! * Windows also has no directory `fsync`. [`init`] therefore reports
+//!   `state_dir_synced = false` instead of claiming the directory entry is
+//!   durable, and every commit is refused because the pre-state snapshot
+//!   requires directory sync. Local advancement commits are **not supported**
+//!   on Windows in v1; the initial files may exist, but no commit is allowed.
 //! * Network shares, FUSE and sync folders are unsupported and unverified.
+//!   Nothing in this build detects them.
 
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -127,7 +148,7 @@ pub enum ErrorKind {
     CorruptState,
     /// The state exists but the writable predicate refuses it.
     UnwritableState,
-    /// The pre-operation snapshot could not be created and verified.
+    /// The pre-operation snapshot could not be created, synced or verified.
     EvidenceFailed,
     /// The caller asked for something the protocol does not allow.
     InvalidRequest,
@@ -381,34 +402,40 @@ pub struct InitHooks<'a> {
 }
 
 pub struct InitOptions<'a> {
-    /// Normalized POSIX path of this save relative to the repository root.
-    pub save_path: String,
     pub acquire: AcquireOptions,
     pub hooks: InitHooks<'a>,
 }
 
 impl<'a> InitOptions<'a> {
-    pub fn new(save_path: impl Into<String>) -> Self {
+    pub fn new() -> Self {
         Self {
-            save_path: save_path.into(),
             acquire: AcquireOptions::default(),
             hooks: InitHooks::default(),
         }
     }
 }
 
+impl Default for InitOptions<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct OpenOptions {
-    /// The same representation that was passed to [`init`].
-    pub save_path: String,
     pub acquire: AcquireOptions,
 }
 
 impl OpenOptions {
-    pub fn new(save_path: impl Into<String>) -> Self {
+    pub fn new() -> Self {
         Self {
-            save_path: save_path.into(),
             acquire: AcquireOptions::default(),
         }
+    }
+}
+
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -416,6 +443,11 @@ impl OpenOptions {
 pub struct InitOutcome {
     pub header: LockHeader,
     pub state: StateRecord,
+    /// Whether the parent directory of the published state could be synced.
+    /// `false` means this platform has no directory `fsync`; the state file
+    /// exists but its directory entry is not proven durable, and every commit
+    /// is refused. It is never a claim of durability.
+    pub state_dir_synced: bool,
 }
 
 /// What the caller must have verified before `complete` may be written.
@@ -468,25 +500,126 @@ fn new_save_id(save_path: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn validate_save_path(save_path: &str) -> Result<()> {
-    let bad = save_path.is_empty()
-        || save_path.trim() != save_path
-        || save_path.starts_with('/')
-        || save_path.ends_with('/')
-        || save_path.contains('\\')
-        || save_path.contains("//")
-        || save_path
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..");
-    if bad {
+/// Reject a path that is not already in one normalized absolute form, and
+/// reject `..` outright instead of resolving it.
+fn check_absolute_text(path: &Path, what: &str) -> Result<()> {
+    if !path.is_absolute() {
+        return Err(err(
+            ErrorKind::InvalidRequest,
+            format!("{what} {} must be an absolute path", path.display()),
+        ));
+    }
+    let text = path.to_string_lossy().replace('\\', "/");
+    let mut normalized = String::new();
+    let mut parent = false;
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => {
+                normalized.push_str(&prefix.as_os_str().to_string_lossy().replace('\\', "/"))
+            }
+            Component::RootDir => normalized.push('/'),
+            Component::CurDir => {}
+            Component::ParentDir => parent = true,
+            Component::Normal(name) => {
+                if !normalized.ends_with('/') && !normalized.is_empty() {
+                    normalized.push('/');
+                }
+                normalized.push_str(&name.to_string_lossy());
+            }
+        }
+    }
+    if parent {
         return Err(err(
             ErrorKind::InvalidRequest,
             format!(
-                "save_path {save_path:?} must be a normalized POSIX path relative to the repository root"
+                "{what} {} contains `..`; v1 refuses an ambiguous path instead of resolving it",
+                path.display()
+            ),
+        ));
+    }
+    if normalized != text {
+        return Err(err(
+            ErrorKind::InvalidRequest,
+            format!(
+                "{what} {} is not a normalized absolute path (repeated, trailing or `.` separators are ambiguous)",
+                path.display()
             ),
         ));
     }
     Ok(())
+}
+
+/// Derive the recorded save path from the trusted root and the actual save
+/// directory. The caller never supplies the string.
+///
+/// Refuses a relative or non-normalized path, `..`, a save outside the root, a
+/// symlinked component below the root, and a non-directory component.
+fn derive_save_path(root: &Path, save_dir: &Path) -> Result<String> {
+    check_absolute_text(root, "root")?;
+    check_absolute_text(save_dir, "save_dir")?;
+    let relative = save_dir.strip_prefix(root).map_err(|_| {
+        err(
+            ErrorKind::InvalidRequest,
+            format!(
+                "save_dir {} is outside root {}; v1 only accepts a save below the repository root",
+                save_dir.display(),
+                root.display()
+            ),
+        )
+    })?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => parts.push(name.to_string_lossy().to_string()),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(err(
+                    ErrorKind::InvalidRequest,
+                    format!(
+                        "save_dir {} is not a plain path below root {}",
+                        save_dir.display(),
+                        root.display()
+                    ),
+                ))
+            }
+        }
+    }
+    if parts.is_empty() {
+        return Err(err(
+            ErrorKind::InvalidRequest,
+            format!(
+                "save_dir {} is the root itself; a save slot must be below it",
+                save_dir.display()
+            ),
+        ));
+    }
+    let mut current = root.to_path_buf();
+    for part in &parts {
+        current.push(part);
+        let meta = fs::symlink_metadata(&current).map_err(|e| {
+            ctx(
+                ErrorKind::InvalidRequest,
+                format!("inspect {}", current.display()),
+                e,
+            )
+        })?;
+        if meta.file_type().is_symlink() {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                format!(
+                    "{} is a symlink; v1 refuses to treat a linked path as a save identity",
+                    current.display()
+                ),
+            ));
+        }
+        if !meta.is_dir() {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                format!("{} is not a directory", current.display()),
+            ));
+        }
+    }
+    Ok(parts.join("/"))
 }
 
 fn validate_operation_id(operation_id: &str) -> Result<()> {
@@ -627,16 +760,45 @@ fn stage_state(save_dir: &Path, record: &mut StateRecord) -> Result<(PathBuf, Ve
     Ok((tmp, bytes))
 }
 
-fn publish_state(save_dir: &Path, tmp: &Path) -> Result<()> {
+/// Publish the staged state for the first time **without overwriting**.
+///
+/// A hard link fails when the target exists, so a state created by another
+/// process between the precheck and this call is never replaced. A filesystem
+/// without hard links fails closed. Returns whether the directory entry could
+/// be synced (`false` means this platform has no directory `fsync`).
+fn publish_state(save_dir: &Path, tmp: &Path) -> Result<bool> {
     let target = state_path(save_dir);
-    fs::rename(tmp, &target).map_err(|e| {
-        ctx(
-            ErrorKind::Io,
-            format!("rename {} -> {}", tmp.display(), target.display()),
-            e,
-        )
-    })?;
-    sync_dir(save_dir)
+    match fs::hard_link(tmp, &target) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(err(
+                ErrorKind::AlreadyInitialized,
+                format!(
+                    "{} appeared before this init published; refusing to overwrite it",
+                    target.display()
+                ),
+            ))
+        }
+        Err(e) => {
+            return Err(ctx(
+                ErrorKind::Io,
+                format!(
+                    "link {} -> {} (this platform or filesystem cannot publish the state without overwriting it)",
+                    tmp.display(),
+                    target.display()
+                ),
+                e,
+            ))
+        }
+    }
+    let _ = fs::remove_file(tmp);
+    match sync_dir(save_dir) {
+        Ok(()) => Ok(true),
+        // The platform cannot sync a directory at all: report it, never claim
+        // durability.
+        Err(e) if e.kind() == ErrorKind::EvidenceFailed => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(unix)]
@@ -649,9 +811,63 @@ fn sync_dir(dir: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> Result<()> {
-    // No portable directory fsync; the durability of the rename stays
-    // unverified on this platform and the design document records it.
+fn sync_dir(dir: &Path) -> Result<()> {
+    // There is no portable directory fsync. Returning success here would claim
+    // a durability this platform cannot provide, so it fails closed instead.
+    Err(err(
+        ErrorKind::EvidenceFailed,
+        format!(
+            "this platform cannot sync the directory {}; directory durability is unverified, so no commit is allowed",
+            dir.display()
+        ),
+    ))
+}
+
+/// Create `dir` level by level, syncing each new directory's parent right after
+/// the `mkdir`. Any missing sync fails the whole step.
+fn ensure_dir(dir: &Path) -> Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    let mut missing = Vec::new();
+    let mut current = dir;
+    loop {
+        if current.exists() {
+            break;
+        }
+        missing.push(current.to_path_buf());
+        current = current.parent().ok_or_else(|| {
+            err(
+                ErrorKind::EvidenceFailed,
+                format!("{} has no existing ancestor to sync", dir.display()),
+            )
+        })?;
+    }
+    for level in missing.iter().rev() {
+        fs::create_dir(level).map_err(|e| {
+            ctx(
+                ErrorKind::EvidenceFailed,
+                format!("create {}", level.display()),
+                e,
+            )
+        })?;
+        let parent = level.parent().ok_or_else(|| {
+            err(
+                ErrorKind::EvidenceFailed,
+                format!("{} has no parent to sync", level.display()),
+            )
+        })?;
+        sync_dir(parent).map_err(|e| {
+            err(
+                ErrorKind::EvidenceFailed,
+                format!(
+                    "the parent of {} could not be synced after mkdir ({}); stopping without writing active",
+                    level.display(),
+                    e.detail()
+                ),
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -748,9 +964,9 @@ fn self_check_second_handle(path: &Path, expected: &LockIdentity) -> Result<()> 
 /// `create_new`, locks that same handle, proves a second handle cannot lock it,
 /// checks the path still names the locked file, writes the one immutable
 /// header, stages and verifies `state=ready`, rechecks the path and only then
-/// renames the state into place.
-pub fn init(save_dir: &Path, opts: &InitOptions<'_>) -> Result<InitOutcome> {
-    validate_save_path(&opts.save_path)?;
+/// publishes the state with a hard link that cannot overwrite an existing one.
+pub fn init(root: &Path, save_dir: &Path, opts: &InitOptions<'_>) -> Result<InitOutcome> {
+    let save_path = derive_save_path(root, save_dir)?;
     let lock_file = lock_path(save_dir);
     let state_file = state_path(save_dir);
 
@@ -799,7 +1015,7 @@ pub fn init(save_dir: &Path, opts: &InitOptions<'_>) -> Result<InitOutcome> {
     let created_at = now();
     let header = LockHeader {
         schema: SCHEMA,
-        save_id: new_save_id(&opts.save_path),
+        save_id: new_save_id(&save_path),
         created_at: created_at.clone(),
     };
     let header_bytes = serde_json::to_vec_pretty(&header)
@@ -826,7 +1042,7 @@ pub fn init(save_dir: &Path, opts: &InitOptions<'_>) -> Result<InitOutcome> {
         state: State::Ready,
         stage: Stage::Init,
         lock_identity: identity.as_str().to_string(),
-        save_path: opts.save_path.clone(),
+        save_path: save_path.clone(),
         published: Vec::new(),
         pending: Vec::new(),
         backup_dir: None,
@@ -845,14 +1061,18 @@ pub fn init(save_dir: &Path, opts: &InitOptions<'_>) -> Result<InitOutcome> {
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
-    if let Err(e) = publish_state(save_dir, &tmp) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
+    let state_dir_synced = match publish_state(save_dir, &tmp) {
+        Ok(synced) => synced,
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
+    };
 
     Ok(InitOutcome {
         header,
         state: record,
+        state_dir_synced,
     })
 }
 
@@ -861,11 +1081,12 @@ pub fn init(save_dir: &Path, opts: &InitOptions<'_>) -> Result<InitOutcome> {
 /// Take the lock for a normal operation and validate the protocol.
 ///
 /// Opens the lock without `create`, takes the OS lock on that same handle,
-/// rechecks the path identity, opens the state without `create` and validates
-/// schema, checksum, `save_id`, `save_path`, lock identity and directory
-/// enumeration. Any failure is a fail-closed error; nothing is repaired.
-pub fn open(save_dir: &Path, opts: &OpenOptions) -> Result<AdvancementLock> {
-    validate_save_path(&opts.save_path)?;
+/// rechecks the path identity, opens the state without `create`, validates
+/// schema, checksum, `save_id`, the derived `save_path`, lock identity and the
+/// `ready` invariants, and walks the whole directory. Any failure is a
+/// fail-closed error; nothing is repaired.
+pub fn open(root: &Path, save_dir: &Path, opts: &OpenOptions) -> Result<AdvancementLock> {
+    let save_path = derive_save_path(root, save_dir)?;
     let lock_file = lock_path(save_dir);
     let file = fs::OpenOptions::new()
         .read(true)
@@ -908,18 +1129,12 @@ pub fn open(save_dir: &Path, opts: &OpenOptions) -> Result<AdvancementLock> {
         _ => ctx(ErrorKind::Io, format!("read {}", state_file.display()), e),
     })?;
     let record = parse_record(&bytes)?;
-    verify_record(&record, &header, &identity, opts)?;
-
-    fs::read_dir(save_dir).map_err(|e| {
-        ctx(
-            ErrorKind::CorruptState,
-            format!("enumerate {}", save_dir.display()),
-            e,
-        )
-    })?;
+    verify_record(&record, &header, &identity, &save_path)?;
+    enumerate(save_dir)?;
 
     Ok(AdvancementLock {
         save_dir: save_dir.to_path_buf(),
+        save_path,
         file,
         identity,
         header,
@@ -928,11 +1143,33 @@ pub fn open(save_dir: &Path, opts: &OpenOptions) -> Result<AdvancementLock> {
     })
 }
 
+/// Walk every entry of `dir` and propagate an error from any of them. Reading
+/// only the iterator would not prove the directory can be listed.
+fn enumerate(dir: &Path) -> Result<()> {
+    let entries = fs::read_dir(dir).map_err(|e| {
+        ctx(
+            ErrorKind::CorruptState,
+            format!("enumerate {}", dir.display()),
+            e,
+        )
+    })?;
+    for entry in entries {
+        entry.map_err(|e| {
+            ctx(
+                ErrorKind::CorruptState,
+                format!("read a directory entry of {}", dir.display()),
+                e,
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn verify_record(
     record: &StateRecord,
     header: &LockHeader,
     identity: &LockIdentity,
-    opts: &OpenOptions,
+    save_path: &str,
 ) -> Result<()> {
     if record.schema != SCHEMA {
         return Err(err(
@@ -958,18 +1195,28 @@ fn verify_record(
         ));
     }
     verify_checksum(record)?;
+    if record.state == State::Ready
+        && (record.stage != Stage::Init
+            || !record.pending.is_empty()
+            || !record.published.is_empty())
+    {
+        return Err(err(
+            ErrorKind::CorruptState,
+            "a ready state must have stage init and no pending or published entries; a self-consistent checksum does not make a contradiction valid",
+        ));
+    }
     if record.save_id != header.save_id {
         return Err(err(
             ErrorKind::IdentityMismatch,
             "the state save_id does not match the lock header",
         ));
     }
-    if record.save_path != opts.save_path {
+    if record.save_path != save_path {
         return Err(err(
             ErrorKind::SavePathMismatch,
             format!(
                 "the state records save_path {:?} but this save is {:?}. {}",
-                record.save_path, opts.save_path, COPY_LIMITATION
+                record.save_path, save_path, COPY_LIMITATION
             ),
         ));
     }
@@ -998,13 +1245,14 @@ fn verify_record(
 #[derive(Debug)]
 pub struct AdvancementLock {
     save_dir: PathBuf,
+    save_path: String,
     file: File,
     identity: LockIdentity,
     header: LockHeader,
     state: StateRecord,
-    /// Set when a state rename succeeded but its directory sync failed: the
-    /// new content is visible while its durability is unknown, so this holder
-    /// must not continue.
+    /// Set when a state link succeeded but its directory sync failed: the new
+    /// content is visible while its durability is unknown, so this holder must
+    /// not continue.
     poisoned: bool,
 }
 
@@ -1021,15 +1269,22 @@ impl AdvancementLock {
         &self.save_dir
     }
 
-    /// The only "may start a normal write" answer.
+    /// The path derived from the caller's root, never a caller-supplied string.
+    pub fn save_path(&self) -> &str {
+        &self.save_path
+    }
+
+    /// The only "may start a normal write" answer. Re-reads the on-disk state
+    /// first, so a state that changed after this holder opened it is refused.
     pub fn check_writable(&self) -> Result<()> {
         if self.poisoned {
             return Err(err(
                 ErrorKind::UnwritableState,
-                "a previous state publish was renamed but may not be durable; reopen the lock instead of continuing",
+                "a previous state publish was linked but may not be durable; reopen the lock instead of continuing",
             ));
         }
         self.recheck_lock()?;
+        self.verify_disk_state()?;
         match self.state.state {
             State::Ready => Ok(()),
             State::Complete
@@ -1214,6 +1469,35 @@ impl AdvancementLock {
         Ok(())
     }
 
+    /// Re-read the state file and require it to be the exact revision this
+    /// holder read. Missing, zero-byte, corrupt or replaced data fails closed;
+    /// nothing is rebuilt or overwritten.
+    fn verify_disk_state(&self) -> Result<()> {
+        let path = state_path(&self.save_dir);
+        let bytes = fs::read(&path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => err(
+                ErrorKind::CorruptState,
+                format!(
+                    "{} disappeared while the lock was held; failing closed instead of rebuilding it",
+                    path.display()
+                ),
+            ),
+            _ => ctx(ErrorKind::Io, format!("read {}", path.display()), e),
+        })?;
+        let record = parse_record(&bytes)?;
+        verify_record(&record, &self.header, &self.identity, &self.save_path)?;
+        if record != self.state {
+            return Err(err(
+                ErrorKind::CorruptState,
+                format!(
+                    "the state on disk is revision {} but this holder read revision {}; failing closed instead of overwriting it",
+                    record.revision, self.state.revision
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn require_active(&self, what: &str) -> Result<()> {
         self.recheck_lock()?;
         if self.state.state != State::Active {
@@ -1228,15 +1512,17 @@ impl AdvancementLock {
         Ok(())
     }
 
-    /// Stage, verify and publish a new state revision. Never truncates in place.
+    /// Stage, verify and publish a new state revision. Never truncates in place
+    /// and never rebuilds a state it could not re-read first.
     fn store(&mut self, mut next: StateRecord) -> Result<()> {
         self.recheck_lock()?;
         if self.poisoned {
             return Err(err(
                 ErrorKind::UnwritableState,
-                "a previous state publish was renamed but may not be durable; reopen the lock instead of continuing",
+                "a previous state publish was linked but may not be durable; reopen the lock instead of continuing",
             ));
         }
+        self.verify_disk_state()?;
         next.revision = self
             .state
             .revision
@@ -1257,8 +1543,9 @@ impl AdvancementLock {
         self.state = next;
         if let Err(e) = sync_dir(&self.save_dir) {
             self.poisoned = true;
+            let kind = e.kind();
             return Err(err(
-                ErrorKind::Io,
+                kind,
                 format!(
                     "the new state was renamed but the directory sync failed ({}); its durability is unknown and this holder must not continue",
                     e.detail()
@@ -1271,17 +1558,14 @@ impl AdvancementLock {
     /// `admit` pre-state evidence: the raw previous state plus the values a
     /// human needs after a failure. Written with `create_new`, synced, read
     /// back and its directory synced before `active` is written.
+    ///
+    /// The read-back and the later link are separate syscalls, so a
+    /// non-cooperating writer between them is outside what this can promise.
     fn write_prestate(&self, operation_id: &str, evidence_dir: &Path) -> Result<()> {
+        self.verify_disk_state()?;
         let state_file = state_path(&self.save_dir);
         let raw = fs::read(&state_file)
             .map_err(|e| ctx(ErrorKind::Io, format!("read {}", state_file.display()), e))?;
-        let on_disk = parse_record(&raw)?;
-        if on_disk != self.state {
-            return Err(err(
-                ErrorKind::CorruptState,
-                "the state changed outside this holder since it was opened",
-            ));
-        }
         let state_bytes = String::from_utf8(raw)
             .map_err(|e| ctx(ErrorKind::CorruptState, "the state is not valid UTF-8", e))?;
         let document = PrestateDocument {
@@ -1300,14 +1584,7 @@ impl AdvancementLock {
         let bytes = serde_json::to_vec_pretty(&document)
             .map_err(|e| ctx(ErrorKind::Io, "encode the pre-state snapshot", e))?;
 
-        let created_dir = !evidence_dir.exists();
-        fs::create_dir_all(evidence_dir).map_err(|e| {
-            ctx(
-                ErrorKind::EvidenceFailed,
-                format!("create {}", evidence_dir.display()),
-                e,
-            )
-        })?;
+        ensure_dir(evidence_dir)?;
         let path = evidence_dir.join(format!("{operation_id}-prestate.json"));
         let written = (|| -> Result<()> {
             let mut file = fs::OpenOptions::new()
@@ -1359,14 +1636,17 @@ impl AdvancementLock {
                 "the pre-state snapshot did not read back byte-identical",
             ));
         }
-        sync_dir(evidence_dir)
-            .map_err(|e| err(ErrorKind::EvidenceFailed, e.detail().to_string()))?;
-        if created_dir {
-            if let Some(parent) = evidence_dir.parent() {
-                sync_dir(parent)
-                    .map_err(|e| err(ErrorKind::EvidenceFailed, e.detail().to_string()))?;
-            }
-        }
+        // The file's directory entry must be durable before `active` is written.
+        sync_dir(evidence_dir).map_err(|e| {
+            err(
+                ErrorKind::EvidenceFailed,
+                format!(
+                    "the pre-state directory {} could not be synced ({}); keeping the previous state and not writing active",
+                    evidence_dir.display(),
+                    e.detail()
+                ),
+            )
+        })?;
         Ok(())
     }
 }

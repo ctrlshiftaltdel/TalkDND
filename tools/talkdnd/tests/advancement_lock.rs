@@ -1,21 +1,19 @@
 //! Synthetic tests for the cooperative advancement lock (v1).
 //!
 //! Every fixture is created here; no test reads a real save, a book or a
-//! secret. Multi-process and path-replacement injection are Unix-only because
-//! Windows file-sharing semantics for replacing an open file are unverified
-//! (see `docs/ADVANCEMENT-LOCK-DESIGN.md` §2.8 and the task's
-//! `unverified_assumptions`).
+//! secret. Path-replacement injection and the read-only permission tests are
+//! Unix-only because Windows file-sharing and mode semantics for them are
+//! unverified (see `docs/ADVANCEMENT-LOCK-DESIGN.md` §2.8 and the task's
+//! `unverified_assumptions`). Everything else, including the multi-process
+//! cases, runs on every platform.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use talkdnd::advancement_lock as adv;
-
-const SAVE_PATH: &str = "Saves/slot";
 
 fn fast() -> adv::AcquireOptions {
     adv::AcquireOptions {
@@ -24,6 +22,7 @@ fn fast() -> adv::AcquireOptions {
     }
 }
 
+/// The repository root of one synthetic fixture.
 fn root(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("talkdnd-advlock-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -31,20 +30,40 @@ fn root(tag: &str) -> PathBuf {
     dir
 }
 
-fn init_ok(dir: &Path) -> adv::InitOutcome {
-    let mut opts = adv::InitOptions::new(SAVE_PATH);
-    opts.acquire = fast();
-    adv::init(dir, &opts).unwrap()
+/// The save slot path below `root`, without creating it.
+fn slot(root: &Path) -> PathBuf {
+    root.join("Saves").join("slot")
 }
 
-fn open_opts() -> adv::OpenOptions {
-    let mut opts = adv::OpenOptions::new(SAVE_PATH);
+/// The save slot path below `root`, created.
+fn make_slot(root: &Path) -> PathBuf {
+    let dir = slot(root);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn init_opts() -> adv::InitOptions<'static> {
+    let mut opts = adv::InitOptions::new();
     opts.acquire = fast();
     opts
 }
 
-fn open_ok(dir: &Path) -> adv::AdvancementLock {
-    adv::open(dir, &open_opts()).unwrap()
+fn init_ok(root: &Path) -> adv::InitOutcome {
+    adv::init(root, &make_slot(root), &init_opts()).unwrap()
+}
+
+fn open_opts() -> adv::OpenOptions {
+    let mut opts = adv::OpenOptions::new();
+    opts.acquire = fast();
+    opts
+}
+
+fn open_ok(root: &Path) -> adv::AdvancementLock {
+    adv::open(root, &make_slot(root), &open_opts()).unwrap()
+}
+
+fn open_at(root: &Path, save: &Path) -> adv::Result<adv::AdvancementLock> {
+    adv::open(root, save, &open_opts())
 }
 
 /// Every file and directory under `dir`, keyed by a POSIX-style relative path.
@@ -86,13 +105,13 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-fn read_state(dir: &Path) -> adv::StateRecord {
-    serde_json::from_slice(&fs::read(adv::state_path(dir)).unwrap()).unwrap()
+fn read_state(root: &Path) -> adv::StateRecord {
+    serde_json::from_slice(&fs::read(adv::state_path(&slot(root))).unwrap()).unwrap()
 }
 
-fn write_state(dir: &Path, record: &adv::StateRecord) {
+fn write_state(root: &Path, record: &adv::StateRecord) {
     fs::write(
-        adv::state_path(dir),
+        adv::state_path(&slot(root)),
         serde_json::to_vec_pretty(record).unwrap(),
     )
     .unwrap();
@@ -115,7 +134,7 @@ fn init_creates_only_the_lock_and_state_and_a_second_init_is_refused() {
     let outcome = init_ok(&dir);
 
     assert_eq!(
-        snapshot(&dir).keys().cloned().collect::<Vec<_>>(),
+        snapshot(&slot(&dir)).keys().cloned().collect::<Vec<_>>(),
         vec![adv::LOCK_FILE.to_string(), adv::STATE_FILE.to_string()]
     );
     assert_eq!(outcome.header.schema, adv::SCHEMA);
@@ -124,77 +143,169 @@ fn init_creates_only_the_lock_and_state_and_a_second_init_is_refused() {
     assert_eq!(outcome.state.stage, adv::Stage::Init);
     assert_eq!(outcome.state.revision, 1);
     assert_eq!(outcome.state.save_id, outcome.header.save_id);
-    assert_eq!(outcome.state.save_path, SAVE_PATH);
+    assert_eq!(outcome.state.save_path, "Saves/slot");
     assert!(!outcome.state.save_id.is_empty());
+    // Directory sync is available on Unix and unsupported on Windows; init
+    // must report which one happened instead of claiming durability.
+    assert_eq!(outcome.state_dir_synced, cfg!(unix));
 
-    let before = snapshot(&dir);
-    let mut opts = adv::InitOptions::new(SAVE_PATH);
-    opts.acquire = fast();
-    let err = adv::init(&dir, &opts).unwrap_err();
+    let before = snapshot(&slot(&dir));
+    let err = adv::init(&dir, &slot(&dir), &init_opts()).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::AlreadyInitialized);
-    assert_eq!(snapshot(&dir), before, "init must never take over");
+    assert_eq!(snapshot(&slot(&dir)), before, "init must never take over");
 
     // What init wrote is exactly what a normal open reads back.
     let lock = open_ok(&dir);
     assert_eq!(lock.header(), &outcome.header);
     assert_eq!(lock.state(), &outcome.state);
+    assert_eq!(lock.save_path(), "Saves/slot");
 }
 
 #[test]
 fn init_refuses_every_partial_protocol_state() {
-    // lock without state
     let dir = root("init-lock-only");
-    fs::write(adv::lock_path(&dir), b"").unwrap();
-    let before = snapshot(&dir);
-    let mut opts = adv::InitOptions::new(SAVE_PATH);
-    opts.acquire = fast();
+    fs::write(adv::lock_path(&make_slot(&dir)), b"").unwrap();
+    let before = snapshot(&slot(&dir));
     assert_eq!(
-        adv::init(&dir, &opts).unwrap_err().kind(),
+        adv::init(&dir, &slot(&dir), &init_opts())
+            .unwrap_err()
+            .kind(),
         adv::ErrorKind::AlreadyInitialized
     );
-    assert_eq!(snapshot(&dir), before);
+    assert_eq!(snapshot(&slot(&dir)), before);
 
-    // state without lock
     let dir = root("init-state-only");
-    fs::write(adv::state_path(&dir), b"{}").unwrap();
-    let before = snapshot(&dir);
+    fs::write(adv::state_path(&make_slot(&dir)), b"{}").unwrap();
+    let before = snapshot(&slot(&dir));
     assert_eq!(
-        adv::init(&dir, &opts).unwrap_err().kind(),
+        adv::init(&dir, &slot(&dir), &init_opts())
+            .unwrap_err()
+            .kind(),
         adv::ErrorKind::AlreadyInitialized
     );
-    assert_eq!(snapshot(&dir), before);
+    assert_eq!(snapshot(&slot(&dir)), before);
 
-    // a zero-byte lock is never overwritten
     let dir = root("init-zero-lock");
-    fs::write(adv::lock_path(&dir), b"").unwrap();
-    let before = snapshot(&dir);
+    fs::write(adv::lock_path(&make_slot(&dir)), b"").unwrap();
+    let before = snapshot(&slot(&dir));
     assert_eq!(
-        adv::init(&dir, &opts).unwrap_err().kind(),
+        adv::init(&dir, &slot(&dir), &init_opts())
+            .unwrap_err()
+            .kind(),
         adv::ErrorKind::AlreadyInitialized
     );
-    assert_eq!(snapshot(&dir), before);
+    assert_eq!(snapshot(&slot(&dir)), before);
 }
 
 #[test]
-fn init_refuses_an_invalid_save_path() {
+fn init_refuses_a_path_it_cannot_trust() {
     let dir = root("init-bad-path");
-    for bad in [
-        "",
-        " Saves/slot",
-        "/abs",
-        "Saves/../x",
-        "Saves\\slot",
-        "Saves//x",
-    ] {
-        let mut opts = adv::InitOptions::new(bad);
-        opts.acquire = fast();
-        assert_eq!(
-            adv::init(&dir, &opts).unwrap_err().kind(),
-            adv::ErrorKind::InvalidRequest,
-            "{bad:?} must be rejected"
-        );
-    }
-    assert!(snapshot(&dir).is_empty(), "a rejected init creates nothing");
+    let save = make_slot(&dir);
+    let before = snapshot(&dir);
+
+    // Relative root.
+    assert_eq!(
+        adv::init(Path::new("relative"), &save, &init_opts())
+            .unwrap_err()
+            .kind(),
+        adv::ErrorKind::InvalidRequest
+    );
+    // The save is the root itself.
+    assert_eq!(
+        adv::init(&dir, &dir, &init_opts()).unwrap_err().kind(),
+        adv::ErrorKind::InvalidRequest
+    );
+    // A `..` component is refused instead of resolved.
+    assert_eq!(
+        adv::init(&dir, &dir.join("Saves/../Saves/slot"), &init_opts())
+            .unwrap_err()
+            .kind(),
+        adv::ErrorKind::InvalidRequest
+    );
+    // A trailing separator is an ambiguous second spelling.
+    let trailing = PathBuf::from(format!("{}/", save.display()));
+    assert_eq!(
+        adv::init(&dir, &trailing, &init_opts()).unwrap_err().kind(),
+        adv::ErrorKind::InvalidRequest
+    );
+    // A repeated separator is ambiguous too.
+    assert_eq!(
+        adv::init(&dir, &dir.join("Saves//slot"), &init_opts())
+            .unwrap_err()
+            .kind(),
+        adv::ErrorKind::InvalidRequest
+    );
+    // A save outside the root.
+    let outside = root("init-bad-path-outside");
+    let outside_save = make_slot(&outside);
+    assert_eq!(
+        adv::init(&dir, &outside_save, &init_opts())
+            .unwrap_err()
+            .kind(),
+        adv::ErrorKind::InvalidRequest
+    );
+
+    assert_eq!(snapshot(&dir), before, "a rejected init creates nothing");
+}
+
+#[cfg(unix)]
+#[test]
+fn init_refuses_a_symlinked_save_slot() {
+    use std::os::unix::fs::symlink;
+
+    let dir = root("init-symlink");
+    let real = make_slot(&dir);
+    let link = dir.join("Saves").join("link");
+    symlink(&real, &link).unwrap();
+
+    let err = adv::init(&dir, &link, &init_opts()).unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(err.detail().contains("symlink"), "{}", err.detail());
+}
+
+#[test]
+fn init_reports_a_missing_save_directory_instead_of_taking_over() {
+    let dir = root("init-missing-dir");
+    let missing = dir.join("Saves").join("absent");
+    let err = adv::init(&dir, &missing, &init_opts()).unwrap_err();
+    assert_ne!(
+        err.kind(),
+        adv::ErrorKind::AlreadyInitialized,
+        "a missing save directory is not an existing protocol file"
+    );
+    assert!(!missing.exists(), "a failed init creates no directory");
+}
+
+#[test]
+fn init_never_overwrites_a_state_created_before_publish() {
+    let dir = root("init-no-overwrite");
+    make_slot(&dir);
+    let sentinel = b"state created by someone else".to_vec();
+    let hook = {
+        let target = adv::state_path(&slot(&dir));
+        let sentinel = sentinel.clone();
+        move |_lock: &Path| fs::write(&target, &sentinel).unwrap()
+    };
+    let mut opts = adv::InitOptions::new();
+    opts.acquire = fast();
+    opts.hooks = adv::InitHooks {
+        after_create: None,
+        before_publish: Some(&hook),
+    };
+
+    let err = adv::init(&dir, &slot(&dir), &opts).unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::AlreadyInitialized);
+    assert_eq!(
+        fs::read(adv::state_path(&slot(&dir))).unwrap(),
+        sentinel,
+        "the existing state must survive byte-identically"
+    );
+    // The lock exists (with its header), so a normal open must fail closed
+    // instead of treating the sentinel as a first initialization.
+    assert_eq!(
+        open_at(&dir, &slot(&dir)).unwrap_err().kind(),
+        adv::ErrorKind::CorruptState
+    );
 }
 
 // ---------------------------------------------------------------- open ----
@@ -202,10 +313,15 @@ fn init_refuses_an_invalid_save_path() {
 #[test]
 fn open_requires_both_files_and_never_creates_them() {
     let dir = root("open-empty");
-    let before = snapshot(&dir);
-    let err = adv::open(&dir, &open_opts()).unwrap_err();
+    make_slot(&dir);
+    let before = snapshot(&slot(&dir));
+    let err = open_at(&dir, &slot(&dir)).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::NotInitialized);
-    assert_eq!(snapshot(&dir), before, "a normal open never creates a file");
+    assert_eq!(
+        snapshot(&slot(&dir)),
+        before,
+        "a normal open never creates a file"
+    );
 }
 
 #[test]
@@ -213,11 +329,11 @@ fn open_fails_closed_on_zero_byte_missing_corrupt_and_forged_state() {
     fn case(tag: &str, mutate: impl Fn(&Path)) -> adv::ErrorKind {
         let dir = root(tag);
         init_ok(&dir);
-        mutate(&dir);
-        let before = snapshot(&dir);
-        let err = adv::open(&dir, &open_opts()).unwrap_err();
+        mutate(&slot(&dir));
+        let before = snapshot(&slot(&dir));
+        let err = open_at(&dir, &slot(&dir)).unwrap_err();
         assert_eq!(
-            snapshot(&dir),
+            snapshot(&slot(&dir)),
             before,
             "{tag}: a failed open must not repair, rewrite or create anything"
         );
@@ -258,29 +374,44 @@ fn open_fails_closed_on_zero_byte_missing_corrupt_and_forged_state() {
     // A changed body without a new checksum is corruption.
     assert_eq!(
         case("state-checksum", |d| {
-            let mut record = read_state(d);
+            let mut record: adv::StateRecord =
+                serde_json::from_slice(&fs::read(adv::state_path(d)).unwrap()).unwrap();
             record.revision = 9;
-            write_state(d, &record);
+            fs::write(
+                adv::state_path(d),
+                serde_json::to_vec_pretty(&record).unwrap(),
+            )
+            .unwrap();
         }),
         adv::ErrorKind::CorruptState
     );
     // A self-consistent record with a different save_id is an identity mismatch.
     assert_eq!(
         case("state-save-id", |d| {
-            let mut record = read_state(d);
+            let mut record: adv::StateRecord =
+                serde_json::from_slice(&fs::read(adv::state_path(d)).unwrap()).unwrap();
             record.save_id = "other".into();
             adv::reseal(&mut record).unwrap();
-            write_state(d, &record);
+            fs::write(
+                adv::state_path(d),
+                serde_json::to_vec_pretty(&record).unwrap(),
+            )
+            .unwrap();
         }),
         adv::ErrorKind::IdentityMismatch
     );
     // A self-consistent record naming another lock file is an identity mismatch.
     assert_eq!(
         case("state-lock-identity", |d| {
-            let mut record = read_state(d);
+            let mut record: adv::StateRecord =
+                serde_json::from_slice(&fs::read(adv::state_path(d)).unwrap()).unwrap();
             record.lock_identity = "unix:0:0".into();
             adv::reseal(&mut record).unwrap();
-            write_state(d, &record);
+            fs::write(
+                adv::state_path(d),
+                serde_json::to_vec_pretty(&record).unwrap(),
+            )
+            .unwrap();
         }),
         adv::ErrorKind::IdentityMismatch
     );
@@ -307,18 +438,129 @@ fn open_fails_closed_on_zero_byte_missing_corrupt_and_forged_state() {
 }
 
 #[test]
+fn open_rejects_a_ready_state_that_contradicts_itself() {
+    fn forged(tag: &str, mutate: impl Fn(&mut adv::StateRecord)) -> adv::ErrorKind {
+        let dir = root(tag);
+        init_ok(&dir);
+        let mut record = read_state(&dir);
+        mutate(&mut record);
+        adv::reseal(&mut record).unwrap();
+        write_state(&dir, &record);
+        let before = snapshot(&slot(&dir));
+        let err = open_at(&dir, &slot(&dir)).unwrap_err();
+        assert_eq!(snapshot(&slot(&dir)), before);
+        err.kind()
+    }
+
+    // `ready` with a pending intent, even with a self-consistent checksum.
+    assert_eq!(
+        forged("ready-pending", |record| {
+            record.pending.push(adv::Pending {
+                path: "sheets/a.yaml".into(),
+                before: "a".into(),
+                after: "b".into(),
+            });
+        }),
+        adv::ErrorKind::CorruptState
+    );
+    // `ready` with a published entry.
+    assert_eq!(
+        forged("ready-published", |record| {
+            record.published.push(adv::Published {
+                path: "sheets/a.yaml".into(),
+                before: "a".into(),
+                after: "b".into(),
+                done: true,
+            });
+        }),
+        adv::ErrorKind::CorruptState
+    );
+    // `ready` at a stage other than init.
+    assert_eq!(
+        forged("ready-stage", |record| {
+            record.stage = adv::Stage::Publish;
+        }),
+        adv::ErrorKind::CorruptState
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn open_fails_closed_when_the_directory_cannot_be_enumerated() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = root("enumerate");
+    init_ok(&dir);
+    let save = slot(&dir);
+    let before = snapshot(&dir.join("Saves"));
+    let mut perms = fs::metadata(&save).unwrap().permissions();
+    let mode = perms.mode();
+    // Execute-only: opening a known file by name still works, listing does not.
+    perms.set_mode(0o111);
+    fs::set_permissions(&save, perms).unwrap();
+
+    if fs::read_dir(&save).is_ok() {
+        let mut perms = fs::metadata(&save).unwrap().permissions();
+        perms.set_mode(mode);
+        fs::set_permissions(&save, perms).unwrap();
+        eprintln!("skipped: this user can list a 0o111 directory");
+        return;
+    }
+
+    let result = open_at(&dir, &save);
+    let mut perms = fs::metadata(&save).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(&save, perms).unwrap();
+
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::CorruptState);
+    assert!(
+        err.detail().contains("enumerate"),
+        "the error must name the enumeration step: {}",
+        err.detail()
+    );
+    assert_eq!(snapshot(&dir.join("Saves")), before);
+}
+
+#[test]
+fn open_rejects_a_save_outside_the_root_or_a_moved_path() {
+    let dir = root("outside");
+    init_ok(&dir);
+    let other = root("outside-other");
+    make_slot(&other);
+
+    let err = open_at(&dir, &slot(&other)).unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(err.detail().contains("outside"), "{}", err.detail());
+
+    // A same-volume rename keeps the files but changes the derived path.
+    let old = slot(&dir);
+    let moved = dir.join("Saves").join("renamed");
+    fs::rename(&old, &moved).unwrap();
+    let before = snapshot(&dir.join("Saves"));
+    let err = open_at(&dir, &moved).unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::SavePathMismatch);
+    assert!(
+        err.detail().contains("does not support"),
+        "{}",
+        err.detail()
+    );
+    assert_eq!(snapshot(&dir.join("Saves")), before);
+}
+
+#[test]
 fn a_replaced_lock_file_is_an_identity_mismatch_before_open() {
     let dir = root("identity-before-open");
     init_ok(&dir);
-    let bytes = fs::read(adv::lock_path(&dir)).unwrap();
+    let bytes = fs::read(adv::lock_path(&slot(&dir))).unwrap();
     // Write a sibling copy and rename it over the lock: the source file exists
     // while the target does, so the two cannot share an inode. Deleting first
     // and rewriting would let the filesystem reuse the inode.
-    let replacement = dir.join("replacement");
+    let replacement = slot(&dir).join("replacement");
     fs::write(&replacement, &bytes).unwrap();
-    fs::rename(&replacement, adv::lock_path(&dir)).unwrap();
+    fs::rename(&replacement, adv::lock_path(&slot(&dir))).unwrap();
 
-    let err = adv::open(&dir, &open_opts()).unwrap_err();
+    let err = open_at(&dir, &slot(&dir)).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::IdentityMismatch);
     assert!(
         err.detail().contains("not the lock that wrote this state"),
@@ -331,14 +573,18 @@ fn a_replaced_lock_file_is_an_identity_mismatch_before_open() {
 fn a_read_only_success_path_writes_nothing() {
     let dir = root("read-only");
     init_ok(&dir);
-    let before = snapshot(&dir);
+    let before = snapshot(&slot(&dir));
 
     let lock = open_ok(&dir);
     assert_eq!(lock.state().state, adv::State::Ready);
     lock.check_writable().unwrap();
     drop(lock);
 
-    assert_eq!(snapshot(&dir), before, "opening and reading must not write");
+    assert_eq!(
+        snapshot(&slot(&dir)),
+        before,
+        "opening and reading must not write"
+    );
 }
 
 // ------------------------------------------------------------ predicate ----
@@ -486,20 +732,6 @@ fn a_forged_self_consistent_complete_with_an_unfinished_publish_is_refused() {
 }
 
 #[test]
-fn init_reports_a_missing_save_directory_instead_of_taking_over() {
-    let dir = root("init-missing-dir").join("absent");
-    let mut opts = adv::InitOptions::new(SAVE_PATH);
-    opts.acquire = fast();
-    let err = adv::init(&dir, &opts).unwrap_err();
-    assert_ne!(
-        err.kind(),
-        adv::ErrorKind::AlreadyInitialized,
-        "a missing parent is an I/O problem, not an existing protocol file"
-    );
-    assert!(!dir.exists(), "a failed init creates no directory");
-}
-
-#[test]
 fn state_updates_replace_atomically_and_never_truncate_in_place() {
     let dir = root("revisions");
     init_ok(&dir);
@@ -518,13 +750,87 @@ fn state_updates_replace_atomically_and_never_truncate_in_place() {
     drop(lock);
 
     assert_eq!(
-        snapshot(&dir).keys().cloned().collect::<Vec<_>>(),
+        snapshot(&slot(&dir)).keys().cloned().collect::<Vec<_>>(),
         vec![adv::LOCK_FILE.to_string(), adv::STATE_FILE.to_string()],
         "no temp file may survive a successful write"
     );
     let record = read_state(&dir);
     assert_eq!(record.revision, 5);
     assert_eq!(record.state, adv::State::Complete);
+}
+
+// --------------------------------------------------- on-disk state recheck ----
+
+#[test]
+fn a_state_deleted_after_open_is_not_rebuilt() {
+    let dir = root("disk-delete");
+    init_ok(&dir);
+    let mut lock = open_ok(&dir);
+    lock.begin_operation("op-1", &evidence_dir("disk-delete"))
+        .unwrap();
+    let state = adv::state_path(&slot(&dir));
+    fs::remove_file(&state).unwrap();
+
+    let err = lock
+        .record_intent("sheets/a.yaml", "before", "after")
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::CorruptState);
+    assert!(!state.exists(), "a missing state must never be rebuilt");
+    assert_eq!(lock.state().state, adv::State::Active);
+
+    assert_eq!(
+        lock.finish_failed("stop").unwrap_err().kind(),
+        adv::ErrorKind::CorruptState
+    );
+    assert!(!state.exists());
+}
+
+#[test]
+fn a_state_zeroed_corrupted_or_replaced_after_open_stops_every_update() {
+    fn case(tag: &str, mutate: impl Fn(&Path)) {
+        let dir = root(tag);
+        init_ok(&dir);
+        let mut lock = open_ok(&dir);
+        lock.begin_operation("op-1", &evidence_dir(tag)).unwrap();
+        let state = adv::state_path(&slot(&dir));
+        mutate(&state);
+        let before = fs::read(&state).unwrap();
+
+        let err = lock
+            .record_intent("sheets/a.yaml", "before", "after")
+            .unwrap_err();
+        assert_eq!(err.kind(), adv::ErrorKind::CorruptState, "{tag}");
+        assert_eq!(
+            fs::read(&state).unwrap(),
+            before,
+            "{tag}: must not overwrite"
+        );
+        assert_eq!(lock.state().state, adv::State::Active);
+    }
+
+    case("disk-zero", |state| fs::write(state, b"").unwrap());
+    case("disk-garbage", |state| {
+        fs::write(state, b"{not json").unwrap()
+    });
+    case("disk-replaced", |state| {
+        // A self-consistent but different revision must not be accepted.
+        let mut record: adv::StateRecord =
+            serde_json::from_slice(&fs::read(state).unwrap()).unwrap();
+        record.revision = 99;
+        adv::reseal(&mut record).unwrap();
+        fs::write(state, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+    });
+}
+
+#[test]
+fn check_writable_rechecks_the_disk_state() {
+    let dir = root("predicate-disk");
+    init_ok(&dir);
+    let lock = open_ok(&dir);
+    lock.check_writable().unwrap();
+    fs::remove_file(adv::state_path(&slot(&dir))).unwrap();
+    let err = lock.check_writable().unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::CorruptState);
 }
 
 // -------------------------------------------------------- pre-state (D) ----
@@ -546,7 +852,7 @@ fn begin_operation_snapshots_the_previous_state_before_becoming_active() {
     assert_eq!(doc["prior_state"], "ready");
     assert_eq!(doc["prior_stage"], "init");
     assert_eq!(doc["state_revision"], 1);
-    assert_eq!(doc["save_path"], SAVE_PATH);
+    assert_eq!(doc["save_path"], "Saves/slot");
     assert!(doc["state_bytes"].as_str().unwrap().contains("\"ready\""));
 }
 
@@ -559,27 +865,84 @@ fn a_failed_prestate_snapshot_leaves_the_state_untouched() {
     // The exclusive create must fail: this is the injectable failure.
     fs::write(ops.join("op-1-prestate.json"), b"stale evidence").unwrap();
 
-    let before = fs::read(adv::state_path(&dir)).unwrap();
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
     let mut lock = open_ok(&dir);
     let err = lock.begin_operation("op-1", &ops).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
-    assert_eq!(fs::read(adv::state_path(&dir)).unwrap(), before);
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
     assert_eq!(lock.state().state, adv::State::Ready);
     lock.check_writable().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn begin_operation_creates_and_syncs_nested_evidence_directories() {
+    let dir = root("prestate-nested");
+    init_ok(&dir);
+    let ops = dir.join("ops").join("a").join("b").join("c");
+    assert!(!ops.exists());
+    let mut lock = open_ok(&dir);
+    lock.begin_operation("op-1", &ops).unwrap();
+
+    assert!(ops.is_dir());
+    assert!(ops.join("op-1-prestate.json").is_file());
+    assert_eq!(lock.state().state, adv::State::Active);
+}
+
+#[test]
+fn begin_operation_fails_when_a_directory_cannot_be_created() {
+    let dir = root("prestate-dirfail");
+    init_ok(&dir);
+    // A regular file in the path makes the mkdir of the level below impossible.
+    let blocker = dir.join("ops");
+    fs::write(&blocker, b"not a directory").unwrap();
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+
+    let mut lock = open_ok(&dir);
+    let err = lock
+        .begin_operation("op-1", &blocker.join("sub"))
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+    assert_eq!(lock.state().state, adv::State::Ready);
+}
+
+#[cfg(not(unix))]
+#[test]
+fn begin_operation_is_refused_when_the_platform_cannot_sync_a_directory() {
+    let dir = root("prestate-nosync");
+    let outcome = init_ok(&dir);
+    assert!(
+        !outcome.state_dir_synced,
+        "this platform has no directory fsync and init must say so"
+    );
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+
+    let mut lock = open_ok(&dir);
+    lock.check_writable().unwrap();
+    let err = lock
+        .begin_operation("op-1", &evidence_dir("prestate-nosync"))
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
+    assert_eq!(
+        fs::read(adv::state_path(&slot(&dir))).unwrap(),
+        before,
+        "the previous state must survive byte-identically"
+    );
+    assert_eq!(lock.state().state, adv::State::Ready);
 }
 
 // ------------------------------------------------------------- copying ----
 
 #[test]
-fn a_copied_or_moved_save_with_another_path_is_refused() {
+fn a_copied_save_with_another_path_is_refused() {
     let from = root("copy-source");
     init_ok(&from);
     let to = root("copy-target");
-    copy_dir(&from, &to);
+    let target = to.join("Saves").join("other");
+    copy_dir(&slot(&from), &target);
 
-    let mut opts = adv::OpenOptions::new("Saves/moved");
-    opts.acquire = fast();
-    let err = adv::open(&to, &opts).unwrap_err();
+    let err = open_at(&to, &target).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::SavePathMismatch);
     assert!(
         err.detail().contains("does not support"),
@@ -591,10 +954,9 @@ fn a_copied_or_moved_save_with_another_path_is_refused() {
         "{}",
         err.detail()
     );
-    // Nothing was written into the copy.
     assert_eq!(
-        snapshot(&to),
-        snapshot(&from),
+        snapshot(&target),
+        snapshot(&slot(&from)),
         "a refused copy must stay byte-identical"
     );
 }
@@ -605,13 +967,13 @@ fn a_copied_save_with_the_same_relative_path_is_refused_by_lock_identity() {
     let from = root("copy-same-source");
     init_ok(&from);
     let to = root("copy-same-target");
-    copy_dir(&from, &to);
+    copy_dir(&slot(&from), &slot(&to));
 
     // The copy keeps `save_path`, so only the file identity can notice it.
-    // Unix has an exact `dev`+`ino`; the Windows best-effort triple may be
+    // Unix has an exact `dev`+`ino`; the Windows best-effort identity may be
     // preserved by a copy, which is why this case is Unix-only and the module
     // documents "may not be detectable".
-    let err = adv::open(&to, &open_opts()).unwrap_err();
+    let err = open_at(&to, &slot(&to)).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::IdentityMismatch);
 }
 
@@ -624,31 +986,34 @@ fn a_second_handle_in_this_process_cannot_take_the_lock() {
     let dir = root("self-check");
     init_ok(&dir);
     let lock = open_ok(&dir);
-    let err = adv::open(&dir, &open_opts()).unwrap_err();
+    let err = open_at(&dir, &slot(&dir)).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::LockTimeout);
     drop(lock);
     open_ok(&dir);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_second_process_times_out_and_never_takes_over() {
     let dir = root("timeout");
     init_ok(&dir);
     let lock = open_ok(&dir);
-    let before = snapshot(&dir);
+    let before = snapshot(&slot(&dir));
 
     let result = run_child("open", &dir);
     assert_eq!(result, "ERR:lock_timeout");
-    assert_eq!(snapshot(&dir), before, "the waiter must not write anything");
+    assert_eq!(
+        snapshot(&slot(&dir)),
+        before,
+        "the waiter must not write anything"
+    );
     assert_eq!(lock.state().state, adv::State::Ready);
     drop(lock);
 }
 
-#[cfg(unix)]
 #[test]
 fn two_processes_race_init_and_exactly_one_wins() {
     let dir = root("init-race");
+    make_slot(&dir);
     let children: Vec<Child> = (0..4).map(|_| spawn_child("init", &dir)).collect();
     let results: Vec<String> = children.into_iter().map(wait_child).collect();
 
@@ -658,7 +1023,7 @@ fn two_processes_race_init_and_exactly_one_wins() {
         assert_eq!(loser, "ERR:already_initialized", "{results:?}");
     }
     assert_eq!(
-        snapshot(&dir).keys().cloned().collect::<Vec<_>>(),
+        snapshot(&slot(&dir)).keys().cloned().collect::<Vec<_>>(),
         vec![adv::LOCK_FILE.to_string(), adv::STATE_FILE.to_string()]
     );
     let lock = open_ok(&dir);
@@ -671,16 +1036,16 @@ fn replacing_the_lock_while_held_is_detected_before_the_next_write() {
     let dir = root("replace-held");
     init_ok(&dir);
     let mut lock = open_ok(&dir);
-    let before = fs::read(adv::state_path(&dir)).unwrap();
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
 
-    let replacement = dir.join("replacement");
+    let replacement = slot(&dir).join("replacement");
     fs::write(&replacement, b"not the locked inode").unwrap();
-    fs::rename(&replacement, adv::lock_path(&dir)).unwrap();
+    fs::rename(&replacement, adv::lock_path(&slot(&dir))).unwrap();
 
     let err = lock.finish_in_doubt("stop").unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::PathReplaced);
     assert_eq!(
-        fs::read(adv::state_path(&dir)).unwrap(),
+        fs::read(adv::state_path(&slot(&dir))).unwrap(),
         before,
         "a replaced lock aborts before any state write"
     );
@@ -690,27 +1055,28 @@ fn replacing_the_lock_while_held_is_detected_before_the_next_write() {
 #[test]
 fn init_stops_when_the_path_is_replaced_before_the_first_identity_check() {
     let dir = root("t2f1");
-    let replacement = dir.join("replacement");
+    make_slot(&dir);
+    let replacement = slot(&dir).join("replacement");
     fs::write(&replacement, b"not the locked inode").unwrap();
     let replace = {
         let replacement = replacement.clone();
         move |path: &Path| fs::rename(&replacement, path).unwrap()
     };
-    let mut opts = adv::InitOptions::new(SAVE_PATH);
+    let mut opts = adv::InitOptions::new();
     opts.acquire = fast();
     opts.hooks = adv::InitHooks {
         after_create: Some(&replace),
         before_publish: None,
     };
 
-    let err = adv::init(&dir, &opts).unwrap_err();
+    let err = adv::init(&dir, &slot(&dir), &opts).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::PathReplaced);
     assert!(
-        !adv::state_path(&dir).exists(),
+        !adv::state_path(&slot(&dir)).exists(),
         "no state may be published after a replacement"
     );
     assert_eq!(
-        fs::read(adv::lock_path(&dir)).unwrap(),
+        fs::read(adv::lock_path(&slot(&dir))).unwrap(),
         b"not the locked inode",
         "the replacement must not receive a header"
     );
@@ -720,34 +1086,35 @@ fn init_stops_when_the_path_is_replaced_before_the_first_identity_check() {
 #[test]
 fn init_stops_when_the_path_is_replaced_after_the_header_before_publish() {
     let dir = root("t2f2");
-    let replacement = dir.join("replacement");
+    make_slot(&dir);
+    let replacement = slot(&dir).join("replacement");
     fs::write(&replacement, b"not the locked inode").unwrap();
     let replace = {
         let replacement = replacement.clone();
         move |path: &Path| fs::rename(&replacement, path).unwrap()
     };
-    let mut opts = adv::InitOptions::new(SAVE_PATH);
+    let mut opts = adv::InitOptions::new();
     opts.acquire = fast();
     opts.hooks = adv::InitHooks {
         after_create: None,
         before_publish: Some(&replace),
     };
 
-    let err = adv::init(&dir, &opts).unwrap_err();
+    let err = adv::init(&dir, &slot(&dir), &opts).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::PathReplaced);
     assert!(
-        !adv::state_path(&dir).exists(),
+        !adv::state_path(&slot(&dir)).exists(),
         "no state may be published after a replacement"
     );
     // The header was written to the original (now unlinked) inode; the
     // replacement file proves the tool cannot claim it skipped the header.
     assert_eq!(
-        fs::read(adv::lock_path(&dir)).unwrap(),
+        fs::read(adv::lock_path(&slot(&dir))).unwrap(),
         b"not the locked inode"
     );
     // A later normal open fails closed: lock exists, state does not.
     assert_eq!(
-        adv::open(&dir, &open_opts()).unwrap_err().kind(),
+        open_at(&dir, &slot(&dir)).unwrap_err().kind(),
         adv::ErrorKind::CorruptState
     );
 }
@@ -762,35 +1129,35 @@ fn a_read_only_directory_stops_a_state_write_and_keeps_the_old_state() {
     let ops = evidence_dir("read-only-write");
     let mut lock = open_ok(&dir);
     lock.begin_operation("op-1", &ops).unwrap();
-    let before = fs::read(adv::state_path(&dir)).unwrap();
+    let save = slot(&dir);
+    let before = fs::read(adv::state_path(&save)).unwrap();
 
-    let mut perms = fs::metadata(&dir).unwrap().permissions();
+    let mut perms = fs::metadata(&save).unwrap().permissions();
     let mode = perms.mode();
     perms.set_mode(0o555);
-    fs::set_permissions(&dir, perms).unwrap();
+    fs::set_permissions(&save, perms).unwrap();
 
     // A privileged user ignores the mode; never pretend the injection worked.
-    if fs::write(dir.join("probe"), b"x").is_ok() {
-        let _ = fs::remove_file(dir.join("probe"));
-        let mut perms = fs::metadata(&dir).unwrap().permissions();
+    if fs::write(save.join("probe"), b"x").is_ok() {
+        let _ = fs::remove_file(save.join("probe"));
+        let mut perms = fs::metadata(&save).unwrap().permissions();
         perms.set_mode(mode);
-        fs::set_permissions(&dir, perms).unwrap();
+        fs::set_permissions(&save, perms).unwrap();
         eprintln!("skipped: this user can write into a 0o555 directory");
         return;
     }
 
     let result = lock.finish_in_doubt("stop");
-    let mut perms = fs::metadata(&dir).unwrap().permissions();
+    let mut perms = fs::metadata(&save).unwrap().permissions();
     perms.set_mode(mode);
-    fs::set_permissions(&dir, perms).unwrap();
+    fs::set_permissions(&save, perms).unwrap();
 
     assert_eq!(result.unwrap_err().kind(), adv::ErrorKind::Io);
-    assert_eq!(fs::read(adv::state_path(&dir)).unwrap(), before);
+    assert_eq!(fs::read(adv::state_path(&save)).unwrap(), before);
 }
 
 // ------------------------------------------------- child process helper ----
 
-#[cfg(unix)]
 fn spawn_child(role: &str, dir: &Path) -> Child {
     Command::new(std::env::current_exe().unwrap())
         .args([
@@ -809,12 +1176,10 @@ fn spawn_child(role: &str, dir: &Path) -> Child {
         .unwrap()
 }
 
-#[cfg(unix)]
 fn run_child(role: &str, dir: &Path) -> String {
     wait_child(spawn_child(role, dir))
 }
 
-#[cfg(unix)]
 fn wait_child(child: Child) -> String {
     let out = child.wait_with_output().unwrap();
     assert!(
@@ -841,19 +1206,16 @@ fn child_helper() {
         return;
     };
     let dir = PathBuf::from(std::env::var("ADV_LOCK_CHILD_DIR").unwrap());
+    let save = dir.join("Saves").join("slot");
     let result = match role.as_str() {
-        "open" => match adv::open(&dir, &open_opts()) {
+        "open" => match adv::open(&dir, &save, &open_opts()) {
             Ok(_) => "OK".to_string(),
             Err(e) => format!("ERR:{}", e.kind().as_str()),
         },
-        "init" => {
-            let mut opts = adv::InitOptions::new(SAVE_PATH);
-            opts.acquire = fast();
-            match adv::init(&dir, &opts) {
-                Ok(_) => "OK".to_string(),
-                Err(e) => format!("ERR:{}", e.kind().as_str()),
-            }
-        }
+        "init" => match adv::init(&dir, &save, &init_opts()) {
+            Ok(_) => "OK".to_string(),
+            Err(e) => format!("ERR:{}", e.kind().as_str()),
+        },
         other => panic!("unknown child role {other}"),
     };
     println!("RESULT:{result}");
