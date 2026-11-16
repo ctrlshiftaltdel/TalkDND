@@ -56,23 +56,27 @@ fn init_opts() -> adv::InitOptions<'static> {
 /// `state_published_not_durable` instead of `Ok`, so the helper accepts exactly
 /// that and reads the outcome back through a normal open.
 #[cfg(unix)]
-fn init_ok(root: &Path) -> adv::InitOutcome {
-    adv::init(root, &make_slot(root), &init_opts()).unwrap()
+fn init_at(root: &Path, slot: &Path) -> adv::InitOutcome {
+    adv::init(root, slot, &init_opts()).unwrap()
 }
 
 #[cfg(not(unix))]
-fn init_ok(root: &Path) -> adv::InitOutcome {
-    let err = adv::init(root, &make_slot(root), &init_opts()).unwrap_err();
+fn init_at(root: &Path, slot: &Path) -> adv::InitOutcome {
+    let err = adv::init(root, slot, &init_opts()).unwrap_err();
     assert_eq!(
         err.kind(),
         adv::ErrorKind::StatePublishedNotDurable,
         "{err}"
     );
-    let lock = open_ok(root);
+    let lock = adv::open(root, slot, &open_opts()).unwrap();
     adv::InitOutcome {
         header: lock.header().clone(),
         state: lock.state().clone(),
     }
+}
+
+fn init_ok(root: &Path) -> adv::InitOutcome {
+    init_at(root, &make_slot(root))
 }
 
 fn open_opts() -> adv::OpenOptions {
@@ -325,7 +329,12 @@ fn a_non_utf8_save_component_is_refused_without_touching_its_target() {
     let link = dir
         .join("Saves")
         .join(OsString::from_vec(b"bad-\xff".to_vec()));
-    symlink(&real, &link).unwrap();
+    if symlink(&real, &link).is_err() {
+        // Some filesystems (APFS) reject a name that is not valid UTF-8, which
+        // makes the bypass impossible there; record that instead of pretending.
+        eprintln!("skipped: this filesystem rejects a non-UTF-8 symlink name");
+        return;
+    }
 
     let err = adv::init(&dir, &link, &init_opts()).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
@@ -344,7 +353,10 @@ fn a_non_utf8_save_component_is_refused_without_touching_its_target() {
     let plain = dir
         .join("Saves")
         .join(OsString::from_vec(b"plain-\xfe".to_vec()));
-    fs::create_dir(&plain).unwrap();
+    if fs::create_dir(&plain).is_err() {
+        eprintln!("skipped: this filesystem rejects a non-UTF-8 directory name");
+        return;
+    }
     let err = adv::init(&dir, &plain, &init_opts()).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
     assert!(!adv::lock_path(&plain).exists());
@@ -356,7 +368,7 @@ fn a_directory_named_with_the_replacement_character_round_trips_losslessly() {
     let slot = dir.join("Saves").join("slot\u{FFFD}");
     fs::create_dir_all(&slot).unwrap();
 
-    let outcome = adv::init(&dir, &slot, &init_opts()).unwrap();
+    let outcome = init_at(&dir, &slot);
     assert_eq!(outcome.state.save_path, "Saves/slot\u{FFFD}");
     let lock = adv::open(&dir, &slot, &open_opts()).unwrap();
     assert_eq!(lock.save_path(), "Saves/slot\u{FFFD}");
@@ -1241,10 +1253,23 @@ fn two_processes_race_init_and_exactly_one_wins() {
     let children: Vec<Child> = (0..4).map(|_| spawn_child("init", &dir)).collect();
     let results: Vec<String> = children.into_iter().map(wait_child).collect();
 
-    let winners = results.iter().filter(|r| *r == "OK").count();
-    assert_eq!(winners, 1, "exactly one init may win: {results:?}");
+    // One initializer wins; the others lose at the lock's `create_new`. On a
+    // platform without directory fsync the winner publishes and then reports
+    // that durability is unknown instead of returning `Ok`.
+    let winners: Vec<&String> = results
+        .iter()
+        .filter(|result| *result != "ERR:already_initialized")
+        .collect();
+    assert_eq!(winners.len(), 1, "exactly one init may win: {results:?}");
+    #[cfg(unix)]
+    assert_eq!(winners[0], "OK", "{results:?}");
+    #[cfg(not(unix))]
+    assert_eq!(winners[0], "ERR:state_published_not_durable", "{results:?}");
     for loser in results.iter().filter(|r| *r != "OK") {
-        assert_eq!(loser, "ERR:already_initialized", "{results:?}");
+        assert!(
+            loser == "ERR:already_initialized" || loser == "ERR:state_published_not_durable",
+            "{results:?}"
+        );
     }
     assert_eq!(
         snapshot(&slot(&dir)).keys().cloned().collect::<Vec<_>>(),
