@@ -710,6 +710,10 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         | Cmd::Data { .. }
         | Cmd::Knowledge { .. }
         | Cmd::Library { .. } => None,
+        // `oracle` never reads or writes the save (P08). Tracking it would run
+        // the integrity audit after a read-only command and rewrite the
+        // reconciliation baseline date on a clean save.
+        Cmd::Oracle { .. } => None,
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
     };
     let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
