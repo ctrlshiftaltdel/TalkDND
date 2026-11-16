@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -310,8 +311,12 @@ fn a_replaced_lock_file_is_an_identity_mismatch_before_open() {
     let dir = root("identity-before-open");
     init_ok(&dir);
     let bytes = fs::read(adv::lock_path(&dir)).unwrap();
-    fs::remove_file(adv::lock_path(&dir)).unwrap();
-    fs::write(adv::lock_path(&dir), &bytes).unwrap();
+    // Write a sibling copy and rename it over the lock: the source file exists
+    // while the target does, so the two cannot share an inode. Deleting first
+    // and rewriting would let the filesystem reuse the inode.
+    let replacement = dir.join("replacement");
+    fs::write(&replacement, &bytes).unwrap();
+    fs::rename(&replacement, adv::lock_path(&dir)).unwrap();
 
     let err = adv::open(&dir, &open_opts()).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::IdentityMismatch);
@@ -557,6 +562,7 @@ fn a_copied_or_moved_save_with_another_path_is_refused() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_copied_save_with_the_same_relative_path_is_refused_by_lock_identity() {
     let from = root("copy-same-source");
@@ -565,6 +571,9 @@ fn a_copied_save_with_the_same_relative_path_is_refused_by_lock_identity() {
     copy_dir(&from, &to);
 
     // The copy keeps `save_path`, so only the file identity can notice it.
+    // Unix has an exact `dev`+`ino`; the Windows best-effort triple may be
+    // preserved by a copy, which is why this case is Unix-only and the module
+    // documents "may not be detectable".
     let err = adv::open(&to, &open_opts()).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::IdentityMismatch);
 }
@@ -744,6 +753,7 @@ fn a_read_only_directory_stops_a_state_write_and_keeps_the_old_state() {
 
 // ------------------------------------------------- child process helper ----
 
+#[cfg(unix)]
 fn spawn_child(role: &str, dir: &Path) -> Child {
     Command::new(std::env::current_exe().unwrap())
         .args([
@@ -762,10 +772,12 @@ fn spawn_child(role: &str, dir: &Path) -> Child {
         .unwrap()
 }
 
+#[cfg(unix)]
 fn run_child(role: &str, dir: &Path) -> String {
     wait_child(spawn_child(role, dir))
 }
 
+#[cfg(unix)]
 fn wait_child(child: Child) -> String {
     let out = child.wait_with_output().unwrap();
     assert!(

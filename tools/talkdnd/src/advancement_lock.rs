@@ -69,11 +69,13 @@
 //!   replaced path is detected exactly. Directory `fsync` is attempted and its
 //!   error is reported.
 //! * Windows: the stable standard library exposes no file index, so the
-//!   identity is a best-effort `creation_time` + `last_write_time` + size
-//!   triple. A replacement that also preserves those values may go unnoticed.
-//!   Directory `fsync` is not available and is skipped, so the durability of
-//!   the rename is unverified. Both limits are recorded in the design document
-//!   and in the task's `unverified_assumptions`.
+//!   identity is a best-effort `creation_time` + size pair, derived from a
+//!   handle on both sides of the comparison. A replacement or copy that also
+//!   preserves those values may go unnoticed, so a same-relative-path copy is
+//!   not claimed to be detectable there. Directory `fsync` is not available and
+//!   is skipped, so the durability of the rename is unverified. Both limits are
+//!   recorded in the design document and in the task's
+//!   `unverified_assumptions`.
 //! * Network shares, FUSE and sync folders are unsupported and unverified.
 
 use std::fs::{self, File};
@@ -288,7 +290,7 @@ impl LockIdentity {
         let tag = parts.next()?;
         let expected = match tag {
             "unix" => 3,
-            "windows" => 4,
+            "windows" => 3,
             "generic" => 3,
             _ => return None,
         };
@@ -313,14 +315,17 @@ impl LockIdentity {
     }
 
     fn of_path(path: &Path) -> Result<LockIdentity> {
-        let meta = fs::metadata(path).map_err(|e| {
+        // Derive the identity from a handle so both sides of every comparison
+        // use the same platform query. A path-only query can report a different
+        // value than the handle on Windows.
+        let file = File::open(path).map_err(|e| {
             ctx(
                 ErrorKind::PathReplaced,
-                format!("stat {}", path.display()),
+                format!("open {}", path.display()),
                 e,
             )
         })?;
-        identity_of(&meta)
+        LockIdentity::of_file(&file)
     }
 }
 
@@ -334,12 +339,12 @@ fn identity_of(meta: &fs::Metadata) -> Result<LockIdentity> {
 fn identity_of(meta: &fs::Metadata) -> Result<LockIdentity> {
     use std::os::windows::fs::MetadataExt;
     // The standard library still has no stable file index on Windows, so this
-    // is a best-effort identity. A replacement that also preserves these values
-    // may not be detected; the module and design documents say so.
+    // is a best-effort identity: creation time plus size. A replacement or copy
+    // that preserves both may not be detected; the module and design documents
+    // say so.
     Ok(LockIdentity(format!(
-        "windows:{}:{}:{}",
+        "windows:{}:{}",
         meta.creation_time(),
-        meta.last_write_time(),
         meta.file_size()
     )))
 }
@@ -697,8 +702,10 @@ fn recheck_path(path: &Path, expected: &LockIdentity) -> Result<()> {
         return Err(err(
             ErrorKind::PathReplaced,
             format!(
-                "{} no longer names the locked file; aborting before any write",
-                path.display()
+                "{} no longer names the locked file (expected {}, found {}); aborting before any write",
+                path.display(),
+                expected.as_str(),
+                current.as_str()
             ),
         ));
     }
