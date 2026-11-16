@@ -715,6 +715,17 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         // the integrity audit after a read-only command and rewrite the
         // reconciliation baseline date on a clean save.
         Cmd::Oracle { .. } => None,
+        // `known` and `snapshot diff` only read the save (TASK-0142): the same
+        // audit-after-read would rewrite the baseline date for no reason.
+        Cmd::Known | Cmd::Snapshot { .. } => None,
+        // `adventure index` (build/show/search) and `adventure search` only
+        // read the save. `adventure section` writes the session log when it
+        // reads a section ahead of progress or a DM-only one with `--reason`,
+        // so it stays tracked and audited.
+        Cmd::Adventure { cmd } => match cmd {
+            AdventureCmd::Index { .. } | AdventureCmd::Search { .. } => None,
+            AdventureCmd::Section { .. } => save::resolve_slot(&root, cli.save.as_deref()).ok(),
+        },
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
     };
     let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
