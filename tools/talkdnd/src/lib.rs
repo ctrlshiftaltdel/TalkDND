@@ -718,12 +718,18 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         // `known` and `snapshot diff` only read the save (TASK-0142): the same
         // audit-after-read would rewrite the baseline date for no reason.
         Cmd::Known | Cmd::Snapshot { .. } => None,
-        // `adventure index` (build/show/search) and `adventure search` only
-        // read the save. `adventure section` writes the session log when it
-        // reads a section ahead of progress or a DM-only one with `--reason`,
-        // so it stays tracked and audited.
+        // `adventure index show|search` and `adventure search` only read the
+        // save. `adventure index build` is not read-only: `--book` may name a
+        // folder inside the save and `build_one` writes `structured.json`
+        // there, so it stays tracked. `adventure section` writes the session
+        // log when it reads a section ahead of progress or a DM-only one with
+        // `--reason`, so it stays tracked and audited too.
         Cmd::Adventure { cmd } => match cmd {
-            AdventureCmd::Index { .. } | AdventureCmd::Search { .. } => None,
+            AdventureCmd::Index { cmd } => match cmd {
+                bookindex::Cmd::Show { .. } | bookindex::Cmd::Search { .. } => None,
+                bookindex::Cmd::Build { .. } => save::resolve_slot(&root, cli.save.as_deref()).ok(),
+            },
+            AdventureCmd::Search { .. } => None,
             AdventureCmd::Section { .. } => save::resolve_slot(&root, cli.save.as_deref()).ok(),
         },
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
