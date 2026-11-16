@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1084,6 +1085,299 @@ fn adventure_section_refuses_ahead_and_logs_with_reason() {
     assert!(
         good && out.contains("first body") && !out.contains("second body"),
         "{out}"
+    );
+    let _ = fs::remove_dir_all(&r);
+}
+
+/// Every entry under `dir`: relative path → `Some(bytes)` for a file and
+/// `None` for a directory. Empty directories are part of the map too, so a
+/// command that creates one is caught as well as one that creates a file.
+fn tree(dir: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+    fn walk(dir: &Path, base: &Path, out: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
+        for e in fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            let rel = p.strip_prefix(base).unwrap().to_path_buf();
+            if p.is_dir() {
+                out.insert(rel, None);
+                walk(&p, base, out);
+            } else {
+                out.insert(rel, Some(fs::read(&p).unwrap()));
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// Compare two save trees by entry: names only in the failure message, so a
+/// byte difference stays readable.
+fn assert_same_tree(
+    before: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+    after: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+    what: &str,
+) {
+    let mut changed: Vec<String> = Vec::new();
+    for (path, entry) in before {
+        match after.get(path) {
+            Some(other) if other == entry => {}
+            Some(_) => changed.push(format!("{} (changed)", path.display())),
+            None => changed.push(format!("{} (removed)", path.display())),
+        }
+    }
+    for path in after.keys() {
+        if !before.contains_key(path) {
+            changed.push(format!("{} (new)", path.display()));
+        }
+    }
+    assert!(changed.is_empty(), "{what}: {changed:?}");
+}
+
+/// Pin the reconciliation baseline `date:` to a fixed old minute and return
+/// the exact manifest text. The integrity audit rewrites that date to the
+/// current minute whenever it runs at all, so any command that reaches
+/// `audit::after_command` changes these bytes deterministically — no waiting
+/// for a clock tick, no cross-minute flake.
+fn pin_baseline(manifest: &Path) -> String {
+    let text = fs::read_to_string(manifest).unwrap();
+    let seeded: String = text
+        .split_inclusive('\n')
+        .map(|line| match line.starts_with("  date: ") {
+            true => "  date: 2000-01-01 00:00\n",
+            false => line,
+        })
+        .collect();
+    assert_ne!(
+        seeded, text,
+        "a clean save carries a reconciliation baseline date to pin"
+    );
+    assert_eq!(
+        seeded.matches("  date: 2000-01-01 00:00").count(),
+        1,
+        "exactly one baseline date is replaced:\n{seeded}"
+    );
+    fs::write(manifest, &seeded).unwrap();
+    seeded
+}
+
+// TASK-0142 regression, deterministic: `known`, `snapshot diff`,
+// `adventure search`, `adventure index show` and `adventure index search`
+// only read the save, so none of them may reach the integrity audit.
+// `adventure index build` is NOT read-only — `--book` may name a folder
+// inside the save and `build_one` writes `structured.json` there — so it
+// stays tracked, and `adventure section` stays tracked because reading ahead
+// of progress with `--reason` appends to the session log.
+#[test]
+fn read_only_commands_never_touch_the_integrity_baseline() {
+    let r = root("read-only-audit");
+    ok(
+        &r,
+        &[
+            "new",
+            "--date",
+            "2030-08-02",
+            "--scope",
+            "0",
+            "--adventure",
+            "Test Book",
+        ],
+    );
+    let save = r.join("Saves/2030-08-02-01");
+    // A two-chapter track so `adventure section` can refuse a later chapter.
+    fs::write(
+        save.join("progress.yaml"),
+        "version: 1\ntrack:\n  - {name: First Job, level: 1}\n  - {name: Second Job, level: 3}\n",
+    )
+    .unwrap();
+    let book = r.join("Adventures/test-book/.md/Test Book");
+    fs::create_dir_all(&book).unwrap();
+    fs::write(
+        book.join("Test Book.pages.md"),
+        "# Test Book\n\n<a id=\"p1\"></a>\n<!-- PDF p.1 -->\nintro\n\n\
+         <a id=\"p2\"></a>\n<!-- PDF p.2 -->\n## Chapter 1: First Job\n\nfirst body\n\n\
+         <a id=\"p3\"></a>\n<!-- PDF p.3 -->\n## Chapter 2: Second Job\n\nsecond body\n\n\
+         <a id=\"p4\"></a>\n<!-- PDF p.4 -->\n..mown to the hero’s ﬁnal exam-\nple.\n",
+    )
+    .unwrap();
+    fs::write(
+        book.join("index.json"),
+        "{\"headings\":[{\"level\":1,\"text\":\"Test Book\",\"page\":1},\
+         {\"level\":2,\"text\":\"Chapter 1: First Job\",\"page\":2},\
+         {\"level\":2,\"text\":\"Chapter 2: Second Job\",\"page\":3}],\
+         \"chapters\":[{\"title\":\"Chapter 1: First Job\",\"page\":2}]}",
+    )
+    .unwrap();
+    let book_arg = book.to_string_lossy().to_string();
+    // The structural index lives in the book folder, outside the save; build
+    // it once so `index show` has real input, then take two checkpoints so
+    // `snapshot diff` compares two real checkpoints.
+    ok(&r, &["adventure", "index", "build", "--book", &book_arg]);
+    ok(&r, &["checkpoint", "snapshot", "--reason", "one"]);
+    ok(&r, &["checkpoint", "snapshot", "--reason", "two"]);
+    let listed: serde_json::Value =
+        serde_json::from_str(&ok(&r, &["checkpoint", "list", "--json"])).unwrap();
+    let ids: Vec<String> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids.len(), 2, "two checkpoints to diff: {ids:?}");
+    // Accept the hand-written progress.yaml so the save is clean. A dirty save
+    // never refreshes its baseline, and the regression would not be
+    // deterministic.
+    ok(&r, &["integrity", "accept", "--reason", "test setup"]);
+    let manifest = save.join("integrity.yaml");
+
+    // `adventure index build` is not read-only and stays tracked: `--book` may
+    // name a folder inside the save, and `build_one` writes `structured.json`
+    // there. This book folder lives outside the save, so the observable proof
+    // of the tracked branch is the audit side effect: the pinned baseline date
+    // is rewritten, while the save's own files stay put.
+    fs::remove_file(book.join("structured.json")).unwrap();
+    pin_baseline(&manifest);
+    let before = tree(&save);
+    let out = ok(&r, &["adventure", "index", "build", "--book", &book_arg]);
+    assert!(
+        book.join("structured.json").is_file(),
+        "index build writes the book's structured.json: {out}"
+    );
+    // The book folder is outside the save, so the only save entry that may
+    // change is the manifest the tracked audit rewrites.
+    let after = tree(&save);
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "index build must not add or remove save entries"
+    );
+    for (path, entry) in &before {
+        if path == Path::new("integrity.yaml") {
+            continue;
+        }
+        assert_eq!(
+            after.get(path),
+            Some(entry),
+            "index build changed {}",
+            path.display()
+        );
+    }
+    assert!(
+        !fs::read_to_string(&manifest)
+            .unwrap()
+            .contains("2000-01-01 00:00"),
+        "index build stays tracked: the audit rewrote the baseline date"
+    );
+
+    // Everything below is genuinely read-only: pin the date again and require
+    // the whole save tree — file bytes, directories and the absence of new
+    // entries — to survive every command, twice.
+    let seeded = pin_baseline(&manifest);
+    let before = tree(&save);
+    for _ in 0..2 {
+        assert!(ok(&r, &["known"]).contains("当前章节"));
+        let diff = ok(&r, &["snapshot", "diff", &ids[0], &ids[1]]);
+        assert!(diff.contains("snapshot diff"), "{diff}");
+        let search = ok(&r, &["adventure", "search", "known"]);
+        assert!(
+            search.contains("p.4:"),
+            "search reads the paged book: {search}"
+        );
+        let index = ok(&r, &["adventure", "index", "show", &book_arg]);
+        assert!(index.contains("Chapter 1: First Job"), "{index}");
+        let labels = ok(
+            &r,
+            &["adventure", "index", "search", &book_arg, "First Job"],
+        );
+        assert!(
+            labels.contains("[章]") && labels.contains("First Job"),
+            "index search reads the structured index: {labels}"
+        );
+    }
+    assert_same_tree(
+        &before,
+        &tree(&save),
+        "read-only commands must not change or create any save entry",
+    );
+    assert_eq!(
+        fs::read_to_string(&manifest).unwrap(),
+        seeded,
+        "read-only commands must not rewrite the integrity baseline date"
+    );
+
+    // `adventure section` stays tracked: an ahead-of-progress read with
+    // --reason appends to the session log, and the audit still runs after it.
+    let log = save.join("Sessions/2030-08-02-session-00-setup.md");
+    let log_before = fs::read_to_string(&log).unwrap();
+    let out = ok(
+        &r,
+        &[
+            "adventure",
+            "section",
+            "Second Job",
+            "--reason",
+            "player skipped ahead",
+        ],
+    );
+    assert!(
+        out.contains("second body") && out.contains("超前阅读"),
+        "{out}"
+    );
+    let log_after = fs::read_to_string(&log).unwrap();
+    assert_ne!(
+        log_before, log_after,
+        "section must append the ahead-of-progress read to the session log"
+    );
+    assert!(log_after.contains("player skipped ahead"), "{log_after}");
+    assert!(
+        !fs::read_to_string(&manifest)
+            .unwrap()
+            .contains("2000-01-01 00:00"),
+        "section is still a tracked command: the audit rewrote the baseline date"
+    );
+
+    // Negative case: a save whose manifest disagrees with its files (a hand
+    // edit) must stay untouched — a read-only command may not "repair" the
+    // baseline, record fingerprints or rewrite the edited file.
+    let meta = save.join("save-meta.yaml");
+    let dirty = fs::read_to_string(&meta).unwrap() + "# hand edit\n";
+    fs::write(&meta, &dirty).unwrap();
+    let manifest_before = fs::read_to_string(&manifest).unwrap();
+    let before = tree(&save);
+    assert!(ok(&r, &["known"]).contains("当前章节"));
+    let diff = ok(&r, &["snapshot", "diff", &ids[0], &ids[1]]);
+    assert!(diff.contains("snapshot diff"), "{diff}");
+    assert_same_tree(
+        &before,
+        &tree(&save),
+        "read-only commands must not touch a save with a hand-edited file",
+    );
+    assert_eq!(
+        fs::read_to_string(&meta).unwrap(),
+        dirty,
+        "the hand edit stays"
+    );
+    assert_eq!(
+        fs::read_to_string(&manifest).unwrap(),
+        manifest_before,
+        "a read-only command must not rewrite a dirty save's baseline"
+    );
+
+    // Negative case: a save without any manifest must not gain one. Only
+    // `known` and `snapshot diff` are covered here; the other read-only forms
+    // share the same tracked-branch decision.
+    fs::remove_file(&manifest).unwrap();
+    let before = tree(&save);
+    assert!(ok(&r, &["known"]).contains("当前章节"));
+    let diff = ok(&r, &["snapshot", "diff", &ids[0], &ids[1]]);
+    assert!(diff.contains("snapshot diff"), "{diff}");
+    assert!(
+        !manifest.exists(),
+        "read-only commands created integrity.yaml on a save without a manifest"
+    );
+    assert_same_tree(
+        &before,
+        &tree(&save),
+        "read-only commands must not touch a save without an integrity manifest",
     );
     let _ = fs::remove_dir_all(&r);
 }
