@@ -182,7 +182,7 @@
 - 崩溃/被杀：OS 释放锁。lock 与锁头保留；state 因原子替换要么是旧值要么是新值。下一次按 §2.4 判定：`active` → 拒绝普通写入，人工按备份恢复；state 缺失/损坏 → 失败关闭。
 - 锁文件被删除/替换：持有者在阶段边界复核“路径 → 句柄 → 文件标识”，不一致立即中止、不再写目标。之后：lock 缺失 → 一切正常操作失败关闭，`init` 也拒绝（state 存在）；出现新 lock（非协作创建）→ `lock_identity` 不符 → `IDENTITY_MISMATCH` 失败关闭。路径/句柄复核不能发现旧 inode 的其它持有者。
 - state 被删除/零字节/校验失败：失败关闭；**绝不**当作首次初始化，也绝不自动重建。恢复只能按 D 备份人工处理。
-- 平台：Linux/macOS `flock`（advisory，按打开文件描述）；Windows `LockFileEx`（字节区锁，共享/删除语义待实测）。网络盘/同步目录/FUSE **UNKNOWN**。`init` 用“第二句柄须与 H 同一文件、且 `try_lock` 必须被拒”做能力自检（不创建探针文件）；失败关闭。
+- 平台：Linux/macOS `flock`（advisory，按打开文件描述）；Windows `LockFileEx`（字节区锁）。**Windows 实测（TASK-0143 CI）**：持有排他锁时，其它句柄连**读取被锁字节区**都会被拒（`ERROR_LOCK_VIOLATION`），因此持锁期间只能用元数据查询做身份复核，不能另开句柄读取锁文件内容；本库按此实现。网络盘/同步目录/FUSE **UNKNOWN**。`init` 用“第二句柄须与 H 同一文件、且 `try_lock` 必须被拒”做能力自检（不创建探针文件）；失败关闭。该自检只证明同一客户端的锁 API。
 - 共存：总序 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`；反向获取算协议违规。checkpoint/完整性锁语义不变。必须先修的旧行为：checkpoint `Drop` 无条件删除锁文件、mtime 抢占、备份/回滚复制锁文件、`migrate::backup_save` 静默跳过特殊文件——修掉前新锁只约束遵守新协议的写者。
 - 不受约束：旧版本二进制、外部编辑器、脚本、同步客户端、杀毒软件、备份工具、其它机器客户端、PDF 转换进程、手工复制。当前 `combat-sim` 尚未接入（写遭遇/party 不取 SAVE）；接入前把遭遇写入当并发风险，活动遭遇只预览。
 - 残余 TOCTOU 无法消除：每文件 rename 前复核仍有窗口；只能缩小、记录复核值、失败时说明“可能已覆盖某次外部写入”。#264 未解决期间同样适用；本设计不解释、不修复首次 `WouldBlock`。

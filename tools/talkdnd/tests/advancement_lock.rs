@@ -108,6 +108,34 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
+/// Names and sizes only. Safe while this process holds the lock: a Windows
+/// byte-range lock blocks *reading* the locked file from another handle but not
+/// a metadata query, so a byte snapshot cannot be taken while the lock is held.
+fn footprint(dir: &Path) -> BTreeMap<String, u64> {
+    fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, u64>) {
+        let mut entries: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.is_dir() {
+                out.insert(format!("{rel}/"), 0);
+                walk(root, &path, out);
+            } else {
+                out.insert(rel, meta.len());
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
 fn read_state(root: &Path) -> adv::StateRecord {
     serde_json::from_slice(&fs::read(adv::state_path(&slot(root))).unwrap()).unwrap()
 }
@@ -1009,14 +1037,22 @@ fn a_second_process_times_out_and_never_takes_over() {
     let dir = root("timeout");
     init_ok(&dir);
     let lock = open_ok(&dir);
-    let before = snapshot(&slot(&dir));
+    // A byte snapshot cannot be read while this process holds the lock on
+    // Windows, so compare names/sizes and the (unlocked) state bytes.
+    let before = footprint(&slot(&dir));
+    let state_before = fs::read(adv::state_path(&slot(&dir))).unwrap();
 
     let result = run_child("open", &dir);
     assert_eq!(result, "ERR:lock_timeout");
     assert_eq!(
-        snapshot(&slot(&dir)),
+        footprint(&slot(&dir)),
         before,
         "the waiter must not write anything"
+    );
+    assert_eq!(
+        fs::read(adv::state_path(&slot(&dir))).unwrap(),
+        state_before,
+        "the waiter must not touch the state"
     );
     assert_eq!(lock.state().state, adv::State::Ready);
     drop(lock);
