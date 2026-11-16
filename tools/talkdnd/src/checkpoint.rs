@@ -28,7 +28,7 @@
 //! inside it — always checkpoint lock first, integrity lock second, never
 //! the reverse.
 
-use crate::{audit, migrate, save};
+use crate::{advancement_lock, audit, migrate, save};
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use combat_sim::fsutil::atomic_write;
@@ -47,8 +47,6 @@ const VERSION: u32 = 1;
 /// Checkpoints kept after every snapshot; older ones are deleted and reported.
 const KEEP: usize = 10;
 const LOCK: &str = ".talkdnd.lock";
-/// A lock older than this counts as abandoned (mirrors the pdf2md worker lock).
-const LOCK_STALE_SECS: u64 = 600;
 const BACKUP_DIR: &str = "_backups";
 /// Top-level files covered by a checkpoint (each one when it exists).
 const COVERED_FILES: [&str; 7] = [
@@ -62,6 +60,20 @@ const COVERED_FILES: [&str; 7] = [
 ];
 /// Directories covered by a checkpoint, recursively.
 const COVERED_DIRS: [&str; 4] = ["Characters", "NPCs", "sheets", "combat"];
+
+/// Runtime control files: locks and protocol state. They are never part of a
+/// user-data backup (a copy would clone a lock identity), and a mirror
+/// rollback must never delete them.
+const CONTROL_FILES: [&str; 4] = [
+    LOCK,
+    integrity::LOCK,
+    advancement_lock::LOCK_FILE,
+    advancement_lock::STATE_FILE,
+];
+
+fn is_control_file(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|n| CONTROL_FILES.contains(&n))
+}
 
 #[derive(Subcommand, Clone)]
 pub enum Cmd {
@@ -1049,18 +1061,18 @@ fn allocate_restore_backup(parent: &Path, slot: &str, stamp: &str, id: &str) -> 
     }
 }
 
-/// Recursive copy (backups and rollback); skips the checkpoint lock and the
-/// cache. Refuses any other entry it cannot reproduce (symlink, socket, …)
-/// instead of silently producing an incomplete backup that a mirror rollback
-/// would later treat as the whole pre-restore tree. Callers that need a
-/// faithful backup must pass a destination this process just created empty:
-/// entries already under `dest` are left in place.
+/// Recursive copy (backups and rollback); skips the runtime control files
+/// (see [`CONTROL_FILES`]) and the cache. Refuses any other entry it cannot
+/// reproduce (symlink, socket, …) instead of silently producing an incomplete
+/// backup that a mirror rollback would later treat as the whole pre-restore
+/// tree. Callers that need a faithful backup must pass a destination this
+/// process just created empty: entries already under `dest` are left in place.
 fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("create {}", dest.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
         let name = entry.file_name();
-        if name == LOCK {
+        if is_control_file(&name) {
             continue;
         }
         let from = entry.path();
@@ -1086,10 +1098,9 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
 
 /// The removing half of a mirror rollback: delete every entry under `dest`
 /// that has no counterpart under `src`, so the tree matches `src` exactly
-/// after `copy_tree(src, dest)`. The checkpoint lock `.talkdnd.lock`, the
-/// integrity manifest lock `.talkdnd.integrity.lock` and `.cache`
-/// directories are runtime data deliberately outside the backup scope
-/// (contract §4.1) and are never touched. Returns human-readable leftovers
+/// after `copy_tree(src, dest)`. The runtime control files (see
+/// [`CONTROL_FILES`]) and `.cache` directories are deliberately outside the
+/// backup scope and are never touched. Returns human-readable leftovers
 /// (`path（error）`) for entries that could not be removed — the caller
 /// must report them instead of claiming a verified rollback.
 fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
@@ -1111,7 +1122,7 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let name = entry.file_name();
-            if name == LOCK || name == integrity::LOCK || name == ".cache" {
+            if is_control_file(&name) || name == ".cache" {
                 continue;
             }
             let path = entry.path();
@@ -1143,54 +1154,175 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
 
 // --------------------------------------------------------------------- lock
 
-/// Per-slot mutex for snapshot/restore; the file is removed on drop.
+/// Stable identity of the lock file, re-readable from the path after the fact.
+/// Unix: device + inode. Windows: volume serial + file index + creation time.
+/// Size and write time are deliberately not part of it: writing the PID into
+/// the fresh file changes them, and they are not unique.
+#[cfg(unix)]
+type FileIdentity = (u64, u64);
+#[cfg(windows)]
+type FileIdentity = (u64, u64, u64);
+#[cfg(not(any(unix, windows)))]
+type FileIdentity = (u64, u64);
+
+#[cfg(unix)]
+fn identity(meta: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    Some((meta.dev(), meta.ino()))
+}
+
+#[cfg(windows)]
+fn identity(meta: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::windows::fs::MetadataExt;
+    Some((
+        u64::from(meta.volume_serial_number()?),
+        meta.file_index()?,
+        meta.creation_time(),
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn identity(_meta: &fs::Metadata) -> Option<FileIdentity> {
+    None
+}
+
+/// Per-slot mutex for snapshot/restore. The file is created with
+/// `create_new` and only removed on drop when the path still names the file
+/// this handle created; an existing lock is never deleted or taken over.
+#[derive(Debug)]
 struct Lock {
     path: PathBuf,
+    /// Held for the whole hold, so the identity belongs to the file this
+    /// process created rather than to a path that may have been re-bound.
+    file: Option<fs::File>,
+    identity: FileIdentity,
 }
 
 impl Lock {
     fn acquire(save: &Path) -> Result<Lock> {
         let path = save.join(LOCK);
-        let mut stolen = false;
-        loop {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut f) => {
-                    let _ = writeln!(f, "{}", std::process::id());
-                    return Ok(Lock { path });
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if stolen || !stale(&path) {
-                        bail!(
-                            "另一个 checkpoint 操作正在进行（锁 {}）；稍后重试",
-                            path.display()
-                        );
-                    }
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                let _ = writeln!(f, "{}", std::process::id());
+                let Some(identity) = f.metadata().ok().as_ref().and_then(identity) else {
+                    drop(f);
                     let _ = fs::remove_file(&path);
-                    stolen = true;
-                }
-                Err(err) => {
-                    return Err(anyhow::Error::new(err))
-                        .with_context(|| format!("open lock {}", path.display()));
-                }
+                    bail!(
+                        "无法读取锁文件 {} 的身份标识；已放弃获取锁（不会按路径盲删他人锁）",
+                        path.display()
+                    );
+                };
+                Ok(Lock {
+                    path,
+                    file: Some(f),
+                    identity,
+                })
             }
+            // Never take over, however old the file is: a live snapshot or
+            // restore may legitimately run for longer than any age heuristic,
+            // and a crashed one needs a human to confirm no writer is alive.
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => bail!(
+                "另一个 checkpoint 操作正在进行（锁 {} 已存在）；本工具不会删除、接管或改动已有锁文件。请先确认没有仍在运行的 checkpoint/恢复写者，再由人工检查并在确认安全后移除该锁文件",
+                path.display()
+            ),
+            Err(err) => Err(anyhow::Error::new(err))
+                .with_context(|| format!("open lock {}", path.display())),
         }
     }
 }
 
 impl Drop for Lock {
     fn drop(&mut self) {
+        // Only remove the file this handle created. If the path was deleted
+        // and re-created (or replaced) while held, it belongs to someone else
+        // and deleting it would let a third writer in.
+        let same = fs::metadata(&self.path)
+            .ok()
+            .as_ref()
+            .and_then(identity)
+            .is_some_and(|current| current == self.identity);
+        if !same {
+            return;
+        }
+        // Close the handle first: Windows refuses to unlink an open file, and
+        // the identity was just re-checked against the path.
+        drop(self.file.take());
         let _ = fs::remove_file(&self.path);
     }
 }
 
-fn stale(path: &Path) -> bool {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.elapsed().ok())
-        .is_some_and(|age| age.as_secs() >= LOCK_STALE_SECS)
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("talkdnd-cp-lock-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_held_lock_blocks_a_second_acquire_until_it_is_released() {
+        let save = scratch("held");
+        let held = Lock::acquire(&save).unwrap();
+        let err = Lock::acquire(&save).unwrap_err();
+        assert!(err.to_string().contains("锁"), "{err}");
+        drop(held);
+        assert!(!save.join(LOCK).exists());
+        let again = Lock::acquire(&save).unwrap();
+        drop(again);
+        assert!(!save.join(LOCK).exists());
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    #[test]
+    fn a_lock_with_an_old_mtime_is_not_taken_over() {
+        let save = scratch("old-mtime");
+        let path = save.join(LOCK);
+        fs::write(&path, "12345\n").unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        // Well past the old 600-second takeover window.
+        file.set_modified(SystemTime::now() - Duration::from_secs(3_600))
+            .unwrap();
+        drop(file);
+        let before = fs::read(&path).unwrap();
+        let err = Lock::acquire(&save).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("锁"), "{msg}");
+        assert!(
+            msg.contains("人工"),
+            "the refusal must send the operator to manual handling: {msg}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before, "the lock file changed");
+        // Releasing by hand is the only way back in.
+        fs::remove_file(&path).unwrap();
+        let again = Lock::acquire(&save).unwrap();
+        drop(again);
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    /// A lock file deleted and re-created while held belongs to the new
+    /// writer; the old holder's `Drop` must leave it alone. Windows refuses
+    /// to unlink a file that still has an open handle, so the replacement
+    /// cannot be constructed there.
+    #[cfg(unix)]
+    #[test]
+    fn drop_keeps_a_lock_file_that_was_replaced_after_acquire() {
+        let save = scratch("replaced");
+        let path = save.join(LOCK);
+        let held = Lock::acquire(&save).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, "someone else\n").unwrap();
+        drop(held);
+        assert!(path.exists(), "the old holder deleted the new lock file");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "someone else\n");
+        let _ = fs::remove_dir_all(&save);
+    }
 }

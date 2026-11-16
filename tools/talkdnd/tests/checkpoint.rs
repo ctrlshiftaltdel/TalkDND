@@ -692,6 +692,50 @@ fn a_held_lock_fails_the_second_call_and_a_retry_after_release_works() {
 }
 
 #[test]
+fn a_lock_with_an_old_mtime_is_refused_and_left_untouched() {
+    let (root, save) = fixture("stale-mtime");
+    let id = snapshot(&save, None);
+    // A crash leaves the lock behind. Its age must not make it stealable:
+    // a live writer may legitimately hold it for a long snapshot/restore.
+    let lock = save.join(".talkdnd.lock");
+    fs::write(&lock, "12345\n").unwrap();
+    let file = fs::OpenOptions::new().write(true).open(&lock).unwrap();
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3_600))
+        .unwrap();
+    drop(file);
+    let before = fs::read(&lock).unwrap();
+
+    let err = checkpoint::run(
+        &root_of(&save),
+        &save,
+        Cmd::Snapshot {
+            reason: None,
+            json: false,
+        },
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("锁"), "{msg}");
+    assert!(
+        msg.contains("人工"),
+        "the refusal must send the operator to manual handling: {msg}"
+    );
+    assert!(lock.exists(), "the lock file was removed");
+    assert_eq!(fs::read(&lock).unwrap(), before, "the lock file changed");
+
+    let before_save = fingerprint(&save);
+    let err = restore(&save, &id, true).unwrap_err();
+    assert!(err.to_string().contains("锁"), "{err}");
+    assert_eq!(fingerprint(&save), before_save);
+
+    // Handled by hand: released, both work again.
+    fs::remove_file(&lock).unwrap();
+    snapshot(&save, None);
+    restore(&save, &id, true).unwrap();
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn concurrent_snapshots_exactly_one_wins() {
     let (root, save) = fixture("concurrent");
     // Enough files that the winner's snapshot outlasts the loser's lock attempt.
@@ -1091,6 +1135,16 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
     assert!(!lock.exists());
     fs::write(save.join("progress.yaml"), "xp: {tess: 999}\n").unwrap();
 
+    // Advancement control files are runtime data as well: the whole-save
+    // backup excludes them, so the mirror rollback must leave them alone too.
+    let advancement = [
+        (".talkdnd.advancement.lock", "advancement lock\n"),
+        (".talkdnd.advancement.state", "advancement state\n"),
+    ];
+    for (name, bytes) in advancement {
+        fs::write(save.join(name), bytes).unwrap();
+    }
+
     let held: std::sync::Mutex<Option<fs::File>> = std::sync::Mutex::new(None);
     let hook_save = save.clone();
     let concurrent_writer = || {
@@ -1116,6 +1170,15 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("回滚到恢复前状态"), "{err}");
+
+    // The mirror rollback must not delete control files the backup excludes.
+    for (name, bytes) in advancement {
+        assert_eq!(
+            fs::read_to_string(save.join(name)).unwrap(),
+            bytes,
+            "the rollback changed {name}"
+        );
+    }
 
     // A second writer must hit the *same* locked file and get `WouldBlock`,
     // not a freshly created replacement it can lock while the concurrent
@@ -1144,6 +1207,54 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
         .try_lock()
         .expect("a released integrity lock must be acquirable again");
     drop(after);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Runtime control files are not user data: the pre-restore whole-save backup
+/// must not carry them, and a restore must leave the live ones alone. A
+/// backup containing the integrity lock could be restored elsewhere as a
+/// second inode of the "same" lock; a backup containing the advancement lock
+/// or state would clone a lock identity the protocol treats as unique.
+#[test]
+fn the_restore_backup_excludes_runtime_control_files() {
+    let (root, save) = fixture("backup-control");
+    let id = snapshot(&save, None);
+    let control = [
+        (".talkdnd.integrity.lock", "integrity\n"),
+        (".talkdnd.advancement.lock", "advancement lock\n"),
+        (".talkdnd.advancement.state", "advancement state\n"),
+    ];
+    for (name, bytes) in control {
+        fs::write(save.join(name), bytes).unwrap();
+    }
+    restore(&save, &id, true).unwrap();
+
+    let backups = restore_backups(&root);
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    let backup = &backups[0];
+    for (name, _) in control {
+        assert!(
+            !backup.join(name).exists(),
+            "{name} leaked into the whole-save backup"
+        );
+    }
+    assert!(
+        !backup.join(".talkdnd.lock").exists(),
+        "the checkpoint lock leaked into the whole-save backup"
+    );
+    // Ordinary user data is still backed up, directories included.
+    assert!(backup.join("progress.yaml").is_file());
+    assert!(backup
+        .join("Sessions/2030-01-02-session-00-setup.md")
+        .is_file());
+    // The live control files are untouched by the backup and the restore.
+    for (name, bytes) in control {
+        assert_eq!(
+            fs::read_to_string(save.join(name)).unwrap(),
+            bytes,
+            "{name} changed"
+        );
+    }
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -1265,6 +1376,21 @@ fn same_second_restore_rolls_back_to_this_operation_not_the_earlier_backup() {
         before.iter().all(|(p, _)| p != FILE_A),
         "A must already be gone before the second restore: {before:?}"
     );
+    // The backup scope excludes runtime control files (locks, advancement
+    // state): they are not user data, and copying them would clone a lock
+    // identity. `the_restore_backup_excludes_runtime_control_files` asserts
+    // that exclusion directly; this test compares the user-data part.
+    const CONTROL: [&str; 4] = [
+        ".talkdnd.lock",
+        ".talkdnd.integrity.lock",
+        ".talkdnd.advancement.lock",
+        ".talkdnd.advancement.state",
+    ];
+    let before_user_data: Vec<(String, Vec<u8>)> = before
+        .iter()
+        .filter(|(p, _)| !CONTROL.contains(&p.as_str()))
+        .cloned()
+        .collect();
 
     let err = checkpoint::restore_injecting_backup_stamp(
         &root,
@@ -1318,8 +1444,8 @@ fn same_second_restore_rolls_back_to_this_operation_not_the_earlier_backup() {
     );
     assert_eq!(
         whole_tree(&second),
-        before,
-        "the second backup must be a complete copy of the tree this restore started from"
+        before_user_data,
+        "the second backup must be a complete copy of the user data this restore started from"
     );
     assert!(
         msg.contains("回滚到恢复前状态"),
