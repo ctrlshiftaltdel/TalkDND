@@ -114,7 +114,7 @@
 6. 通过 H 写入不可变头（`schema`、新 `save_id`、`created_at`），文件 `sync_all`。这是该文件的**唯一一次**写入。
 7. 写 state temp：同目录唯一 temp 写入完整内容（`state=ready`、`revision=1`、`checksum`、`save_id` 与锁头相同、`lock_identity`、`save_path`、时间），随后对 **temp 文件** `sync_all`。
 8. **发布前复核**“路径 → H → 文件标识”一致；不一致 → **停止，不发布 state**。若锁头已写，只能保证“不再发布 state”，**不能**声称此前未写头。
-9. 用同目录 `hard_link` 把 temp 链成 state（目标已存在则失败并保留原 state；不支持硬链接的文件系统失败关闭），成功后删除 temp；随后同步父目录。目录 sync 不可用的平台（Windows）**不得当成功**：本次 `init` 返回 `state_dir_synced=false`，并声明该平台的提交不受支持。
+9. 用同目录 `hard_link` 把 temp 链成 state（目标已存在则失败并保留原 state；不支持硬链接的文件系统失败关闭），成功后删除 temp；随后同步父目录。目录 sync 不可用的平台（Windows）**不得当成功**：`hard_link` 之后 `init` 返回 `state_published_not_durable`（state 可能已发布、持久性未知、不得自动修复），保留两个文件，并声明该平台的提交不受支持。
 10. 释放 OS 锁。
 
 失败与边界：
@@ -123,7 +123,7 @@
 - 路径在**写头前**被替换 → 不写头、不写 state；在**写头后、rename 前**被替换 → 停止且不发布 state，但锁头已经写入、无法撤回，**不得声称未写头**。最后一次复核与 rename 之间的非协作替换仍有 TOCTOU 窗口（§2.8），只能如实报告。
 - 失败按**state 是否已发布**分类：
   - state **未发布**（temp 写入/文件 sync 失败、复核不一致，或 rename 前停止）→ 留下 lock（有头或无头）而无 state；后续正常操作失败关闭，需人工在协议外处理。
-  - 发布 **成功**、但父目录 sync 失败或结果不明 → 无法证明 state 已持久。**本次 `init` 必须立即报告失败且不得继续**；由于没有持久标记，后续进程**不能声称知道这一次 init 曾同步失败**，只能报告一般性的持久化限制。后续可能看到有效的 `state=ready`（也可能在崩溃后消失），**不承诺“后续一定失败关闭”**。平台根本没有目录 sync（Windows）时，`init` 以 `state_dir_synced=false` 明确报告，不声称持久，也不允许提交。
+  - 发布 **成功**、但父目录 sync 失败或结果不明 → 无法证明 state 已持久。**本次 `init` 必须立即报告失败且不得继续**；由于没有持久标记，后续进程**不能声称知道这一次 init 曾同步失败**，只能报告一般性的持久化限制。后续可能看到有效的 `state=ready`（也可能在崩溃后消失），**不承诺“后续一定失败关闭”**。平台根本没有目录 sync（Windows）时，`init` 返回 `state_published_not_durable`：不返回 `Ok`、不声称持久、不允许提交，两个文件保留且不得自动修复。
 - `init` 不删除或改写锁头；工具不提供 `resume`/`abort`。
 - 人工恢复/清理在**协议外**：必须先备份，由人确认后手工处理（例如移除未完成的协议文件），本文不提供命令，也不假装工具能判断。
 - 不存在“state 已建、lock 未建”的合法路径：state 永远在 lock 之后写。
@@ -134,7 +134,7 @@
 
 **前置校验**（任一失败即拒绝：一般记 UNKNOWN，身份不符另记 `IDENTITY_MISMATCH`，均不进入状态表）：lock 与 state 都存在且可读；state 可解析、`checksum`/`revision` 一致；`schema` 已知（锁头与 state 都要能解析）；必填字段齐全；`state.save_id` 与锁头一致；`save_path` 由库从**可信 `root` 与实际 `save_dir`** 推导（调用方不得自报；拒绝根外、链接、`..`、`.`、重复/尾随分隔符等歧义形式），并与 state 记录一致（不符 → 见 §2.5 的复制/移动拒绝）；`lock_identity` 与当前锁句柄一致；目录**逐条枚举**（迭代错误也要传播，不能只取迭代器）；`state=ready` 必须 `stage=init` 且 `pending`/`published` 为空（自洽 checksum 不能让矛盾状态合法）。
 
-**每次更新前的复核**：每次状态更新（包括 `check_writable`）都重新读取磁盘 state，校验存在、可解析、`checksum`、`schema`、`save_id`、推导出的 `save_path`、`lock_identity`，并要求它与本持有者读到的 revision **完全相同**。缺失、零字节、损坏或被替换 → 失败关闭：不写 temp、不 rename、不重建。读取与随后的 rename 是两次系统调用，中间的非协作写入仍在残余 TOCTOU 内（§2.8）。
+**每次更新前的复核**：每次状态更新（包括 `check_writable`）都重新读取磁盘 state，校验存在、可解析、`checksum`、`schema`、`save_id`、推导出的 `save_path`、`lock_identity`，并要求它与本持有者读到的 revision **完全相同**。缺失、零字节、损坏或被替换 → 失败关闭：不写 temp、不 rename、不重建。这次读取返回的原始字节就是 §2.9 快照记录的内容，**不再二次读取**。谓词还先检查平台的目录持久能力：平台不支持时即使 `ready` 也拒绝（该能力不是可写证明）。读取与随后的 rename 仍是两次系统调用，中间的非协作写入仍在残余 TOCTOU 内（§2.8）。
 
 **revision/checksum 的检测边界**：它们能检出可验证的损坏与（在有可验证先前 `revision` 或外部可信证据时）倒退。**若把 state 整体替换为一个自洽的旧版本或整盘镜像，且没有可验证锚、重放不可观察**，v1 可能把旧记录当作合法；**不能保证失败关闭**。只有存在已知或外部证据表明发生了重放时，才停止并交人工处理。该限制必须随错误/诊断信息明确记录，不得写成“必然拒绝”；要保证检测需要可信锚或外部确认，属后续任务。
 
@@ -154,7 +154,7 @@
 
 ### 2.5 复制/移动存档：v1 不支持
 
-- `state.save_path` 由库从可信 `root` 与实际 `save_dir` 推导后与记录比较；不符 → 失败关闭，错误明确写“v1 不支持复制存档的成长提交；请恢复原路径或等待后续任务”。调用方无法通过自报路径绕过这一比较。
+- `state.save_path` 由库从可信 `root` 与实际 `save_dir` 推导后与记录比较；不符 → 失败关闭，错误明确写“v1 不支持复制存档的成长提交；请恢复原路径或等待后续任务”。调用方无法通过自报路径绕过这一比较。推导按**平台编码字节**逐组件校验，不使用有损 UTF-8 转换：任何非 UTF-8 组件、含反斜杠的组件、根外、链接、`..`/`.`、重复或尾随分隔符都拒绝；无法无损记录为 POSIX 字符串时直接 `invalid_request`。
 - 正常复制通常还会让 `lock_identity` 与当前锁句柄不符 → 同样失败关闭（这只能发现“不是写 state 时那把锁”，不是完整识别）。
 - **相同相对路径的整盘/快照级镜像**可能同时保留 `save_path`、`save_id` 与文件标识：v1 **可能无法检测**，也**不声称**能检出。文档与错误信息必须说“不支持、可能不可检测、需人工确认”，不得暗示自动识别。Windows 的尽力标识只是 `creation_time`，保留它的副本同样可能不可检测。
 - v1 **没有** `adopt`、副本独立分支或移动后重绑；这些都留到后续任务。失败后的人工处理（恢复原路径、从备份恢复、等待支持）在协议外，且必须先备份。
@@ -167,7 +167,7 @@
 - **事实**：完整性锁 `File::lock()` 阻塞且无超时；checkpoint 锁是 `create_new`、不等待。因此当前任何在 SAVE 内获取完整性锁的路径（`audit::after_command`、`PartyState::save`、`migrate::ensure`、`integrity::*`）都无法给出有界总等待。
 - **接入停止条件**：内层锁获得有界获取/取消能力之前，含完整性锁的提交路径**不得接入**；不得把 `D_save` 或并发测试结果外推为整条提交路径有界。OD-9 已决定按“新路径有界获取”执行（默认 5 秒 deadline，可显式覆盖），现有完整性锁**保持**无限阻塞语义，因此本条停止条件仍然有效；未接入前 T6b 按“未接入”记录。
 - 心跳/时间仅用于诊断；不存在强制解锁或 abort 命令。
-- **平台边界**：目录 sync 不可用的平台（当前 Windows）**不能**建立提交。`init` 报告 `state_dir_synced=false`（不声称持久），`begin_operation` 因无法同步操作证据目录而失败关闭；不得把“`init` 成功”当成“可提交”。本库也没有任何准入/拒绝网络盘或同步目录的强制门：第二句柄自检只证明同一客户端的锁 API。
+- **平台边界**：目录 sync 不可用的平台（当前 Windows）**不能**建立提交，且**可写谓词本身**必须拒绝：`check_writable` 先检查平台目录持久能力，即使 `ready` 也返回 `unwritable_state`（该能力不是可写证明）；`init` 在 state 已发布后返回 `state_published_not_durable`，`begin_operation` 同样被拒；不得把“`init` 建了文件”当成“可提交”。本库也没有任何准入/拒绝网络盘或同步目录的强制门：第二句柄自检只证明同一客户端的锁 API。
 
 ### 2.7 预览必须只读
 
@@ -195,7 +195,7 @@
 
 1. 持锁并完成 §2.4 前置校验后，先 `create_new` `<operation_id>-prestate.yaml`。
 2. 写入操作前的 **state 原始内容**（或规范化后正文）及其 `revision`/`checksum`、`lock_identity`、`save_path`、原 `operation_id`/`state`/`stage`、时间；文件 `sync_all`。
-3. 重新读取并校验字节/摘要；随后同步**包含该文件目录项的 `<slot>/` 目录**。若本次新建了目录，必须**逐层创建并在每层 `mkdir` 后同步其父目录**，最后同步新目录本身。任一同步失败/**平台不支持**（当前 Windows）→ 停止，保留原 state，不写 `active`。
+3. 用 §2.4 那次读取并校验的**原始字节**构造快照（不再二次读取），文件 `sync_all` 后重读校验；随后同步**包含该文件目录项的 `<slot>/` 目录**。若本次新建了目录，必须**从首个已存在祖先到证据目录逐层建并在每层后同步其父目录**；**已存在的层级也要重新同步**（可能是上次失败留下的），无法确认即失败关闭。任一同步失败/**平台不支持**（当前 Windows）→ 停止，保留原 state，不写 `active`。
 4. 只有以上全部成功，才允许原子替换 state 为 `state=active`。任一步失败/结果不明 → **停止**，保留原 state，不写 `active`，不写任何目标。
 5. 首次操作（前态 `ready`）同样必须先做快照；不能因为“没有旧操作”而跳过。
 
@@ -277,7 +277,7 @@ D 流程（完整备份 → 候选构建 → 逐文件发布 → 日志/完整�
 
 **只能由实现后的故障注入证明的结论**：T2a/T2c/T2d/T2e/T2f1/T2f2/T4b–T4e/T5a/T5b/T5i/T5d1/T7a/T9a/T9b/T14 的阶段边界中止、前置校验、初始化唯一赢家与同句柄锁定/复核、正常操作不建固定文件、state 原子替换与目录持久窗口、操作前快照与恢复工作证据、恢复不重复应用。`T7b` 只能证明“如实报告不可排除”（不输出注入值）；T11/T12/T13b/T5d3 需人工/特权；T13b、T5d3 只能证明“不宣称识别/不保证检出”，不能证明检测能力或必然拒绝。**T6b 在接入前按“路径未接入”记录，不得当作通过。**
 
-**实现状态（TASK-0143，库与合成测试，未接线）**：`tools/talkdnd/src/advancement_lock.rs` 实现 §2.1–§2.6 与 §2.9 前半（`admit` 操作前快照），测试在 `tools/talkdnd/tests/advancement_lock.rs`。已执行的合成场景：init 唯一赢家与部分协议状态拒绝（T2d、T5a–T5c）、init 两处路径替换中止（T2f1、T2f2）、init 首次发布不覆盖已出现的 state（T5i 的覆盖分支）、正常操作不建固定文件（T2e）、零字节/缺失/不可解析/未知字段/校验失败/矛盾 `ready`/伪造终态失败关闭（T5d1、T14）、`ready`/`complete`/`failed(零写入)`/`active`/`in_doubt` 判定与终态条件（T14）、两写者超时与第二句柄自检（T1、T3）、持有期间替换锁文件（T2a）、持锁后删除/置零/损坏/替换 state 后拒绝更新且不重建（§2.4 的每次更新复核）、复制/移动拒绝（T5f、T5g、T13a，含同卷 rename 与根外/链接拒绝）、只读成功路径与只读目录下的写失败（T4b 的 temp 分支）、目录无法枚举时失败关闭、原子替换无残留 temp（T10）、`admit` 快照成功/嵌套新建目录/目录无法创建/平台无目录 sync 时失败（T4d）。多进程用例在三个平台都跑；路径替换注入、只读权限注入与同相对路径副本用例是 Unix-only。Windows 没有目录 sync，因此 `init` 报告 `state_dir_synced=false`，`begin_operation` 必然失败：本版不支持 Windows 本地提交。这些结果只证明合成 fixture，不证明真实存档安全。
+**实现状态（TASK-0143，库与合成测试，未接线）**：`tools/talkdnd/src/advancement_lock.rs` 实现 §2.1–§2.6 与 §2.9 前半（`admit` 操作前快照），测试在 `tools/talkdnd/tests/advancement_lock.rs`。已执行的合成场景：init 唯一赢家与部分协议状态拒绝（T2d、T5a–T5c）、init 两处路径替换中止（T2f1、T2f2）、init 首次发布不覆盖已出现的 state（T5i 的覆盖分支）、正常操作不建固定文件（T2e）、零字节/缺失/不可解析/未知字段/校验失败/矛盾 `ready`/伪造终态失败关闭（T5d1、T14）、`ready`/`complete`/`failed(零写入)`/`active`/`in_doubt` 判定与终态条件（T14）、两写者超时与第二句柄自检（T1、T3）、持有期间替换锁文件（T2a）、持锁后删除/置零/损坏/替换 state 后拒绝更新且不重建（§2.4 的每次更新复核）、复制/移动拒绝（T5f、T5g、T13a，含同卷 rename 与根外/链接拒绝）、只读成功路径与只读目录下的写失败（T4b 的 temp 分支）、目录无法枚举时失败关闭、原子替换无残留 temp（T10）、`admit` 快照成功/嵌套新建目录/目录无法创建/平台无目录 sync 时失败（T4d）。多进程用例在三个平台都跑；路径替换注入、只读权限注入与同相对路径副本用例是 Unix-only。Windows 没有目录 sync，因此 `init` 在 state 已发布后返回 `state_published_not_durable`（不返回 `Ok`，两个文件保留），`check_writable` 即使 `ready` 也拒绝，`begin_operation` 必然失败：本版不支持 Windows 本地提交。第二轮复审后补充：`init` 首次发布用 `hard_link` 不覆盖、发布后目录 sync 不可用即返回 `state_published_not_durable`（不返回 `Ok`）；可写谓词纳入平台目录持久能力；每次更新前单次读取并复用该字节构造快照；`ensure_dir` 对已存在层级也重新同步；非 UTF-8 路径按平台编码字节拒绝。新增用例：`a_non_utf8_save_component_is_refused_without_touching_its_target`、`a_directory_named_with_the_replacement_character_round_trips_losslessly`、`a_failed_parent_sync_after_mkdir_is_rechecked_on_retry`、`a_state_changed_between_open_and_begin_operation_is_refused`、`init_reports_published_but_not_durable_and_refuses_every_commit`（Windows）。**NOT_RUN**：`readdir` 迭代中途错误（无可移植注入）、Windows 同长度改写检测。这些结果只证明合成 fixture，不证明真实存档安全。
 
 **不进入 CI 的**：掉电/设备谎报同步、磁盘控制器缓存、文件系统修复、杀毒软件拦截、容器/虚拟机快照恢复、真实玩家存档与非协作文本编辑器；全部保持 UNKNOWN。
 
@@ -324,6 +324,6 @@ D 流程（完整备份 → 候选构建 → 逐文件发布 → 日志/完整�
 
 TASK-0143 的九字段验收证据矩阵发布在 PR #283 的评论，`commit_sha` 绑定该 PR 的最终 head；本文件内不复制可能随 head 变化的运行结果。代码事实基线 `cc78760`（§1 的现有锁盘点）；实现基线 `30066e4`；若源码变化，§1 的定位与 §4 的「实现状态」需重新核对。
 
-已知限制：设计部分只做静态阅读；实现部分只有合成测试，故障注入只覆盖可注入的窗口（路径替换、预置快照文件、只读目录/文件权限、超时）；未读取真实存档、书籍或秘密；未验证 Windows/macOS 文件锁、网络文件系统、目录/掉电持久性；预览未实现且一致性仍为 `unverified`；`init` 与状态机**已实现但未接线**，没有 CLI 入口；**Windows 本地提交不受支持**（无目录 sync，`init` 只报告 `state_dir_synced=false`，`begin_operation` 失败关闭）；**没有强制准入**：第二句柄自检只证明同一客户端的锁 API，网络盘/FUSE/同步目录既未识别也未拒绝；v1 无 `resume`/`abort`/`adopt`，失败后只能人工在协议外处理且必须先备份；v1 不保留永久历史，操作前 state 由受保护的操作证据保存（非永久），证据清理后的可恢复性不作保证、用户数据恢复依据是 D 备份；`revision` 只能在存在可验证先前值/可信锚时检出倒退，整体旧 state 重放可能不可检测（需独立锚，不在本任务）；`lock_identity` 不能识别保留标识的整盘镜像，Windows 上只是 `creation_time` 的尽力标识（size 与写时间会随写入头部变化，不能当标识）；未初始化副本与首次 init 不可区分；每次更新前的复核与随后的 rename 之间仍有残余 TOCTOU；内层锁仍无界（§2.6、OD-9）；#264 根因仍 UNKNOWN；现有测试通过不构成锁安全证明。
+已知限制：设计部分只做静态阅读；实现部分只有合成测试，故障注入只覆盖可注入的窗口（路径替换、预置快照文件、只读目录/文件权限、超时）；未读取真实存档、书籍或秘密；未验证 Windows/macOS 文件锁、网络文件系统、目录/掉电持久性；预览未实现且一致性仍为 `unverified`；`init` 与状态机**已实现但未接线**，没有 CLI 入口；**Windows 本地提交不受支持**（无目录 sync：`init` 返回 `state_published_not_durable` 而非 `Ok`，`check_writable` 与 `begin_operation` 均拒绝）；**没有强制准入**：第二句柄自检只证明同一客户端的锁 API，网络盘/FUSE/同步目录既未识别也未拒绝；v1 无 `resume`/`abort`/`adopt`，失败后只能人工在协议外处理且必须先备份；v1 不保留永久历史，操作前 state 由受保护的操作证据保存（非永久），证据清理后的可恢复性不作保证、用户数据恢复依据是 D 备份；`revision` 只能在存在可验证先前值/可信锚时检出倒退，整体旧 state 重放可能不可检测（需独立锚，不在本任务）；`lock_identity` 不能识别保留标识的整盘镜像，Windows 上只是 `creation_time` 的尽力标识（size 与写时间会随写入头部变化，不能当标识）；未初始化副本与首次 init 不可区分；非 UTF-8 路径不能无损记录，因此这类存档不能初始化；`readdir` 迭代中途错误未注入（NOT_RUN）；Windows 上同长度改写保留 `creation_time`，`lock_identity` 无法发现；`publish_state` 删除 temp 失败只报告残留、不影响 state；每次更新前的复核与随后的 rename 之间仍有残余 TOCTOU；内层锁仍无界（§2.6、OD-9）；#264 根因仍 UNKNOWN；现有测试通过不构成锁安全证明。
 
 回退：本文件为普通文档，可整体 revert；库的回退是 revert `tools/talkdnd/src/advancement_lock.rs`、其测试与 `lib.rs` 的模块注册，不触及存档、schema 或任何运行行为。
