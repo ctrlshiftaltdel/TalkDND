@@ -11,6 +11,7 @@
 - 设计目标来源：[docs/PLAN.md](PLAN.md)；书面设计 [2026-11-10-character-advancement-design.md](superpowers/specs/2026-11-10-character-advancement-design.md)；契约与事实依据 [ADVANCEMENT-IDENTITY-CONTRACT.md](ADVANCEMENT-IDENTITY-CONTRACT.md)、[ADVANCEMENT-LOCK-DESIGN.md](ADVANCEMENT-LOCK-DESIGN.md)、[ADVANCEMENT-RECOVERY-OPTIONS.md](ADVANCEMENT-RECOVERY-OPTIONS.md)、[ADVANCEMENT-SAFETY-AUDIT.md](ADVANCEMENT-SAFETY-AUDIT.md)、[CHECKPOINT-LOCK-INVESTIGATION.md](CHECKPOINT-LOCK-INVESTIGATION.md)
 - 当前阶段：`Phase 1 — 写者覆盖与 D 前置`（入口条件见「当前状态」；任务状态见 Issue）
 - 成立日期：本文件首个提交（见 Git 历史；本文件不记录任务日期或排期）
+- 建立依据：`docs/PROJECT.md` 与 `docs/PLAN.md` 都规定阶段计划只在 Master 明确决定时建立；本次由 Master 在 Issue #288 决定。本文件因此不是第二套任务清单：它不承载状态、不替代 Issue。
 
 ## 当前状态
 
