@@ -70,8 +70,8 @@
 ### Phase 1 — 写者覆盖与 D 前置
 
 - 阶段目标：任何相关新版本写入入口（含既有旧升级写者）都不再能“静默写入且不持锁”；D 流程能走到“候选已验证、未发布”。
-- 交付：`ADV-P1-1`（盘点）、`ADV-P1-1a` … `ADV-P1-1e`（按组接入）、`ADV-P1-2`。
-- 出口条件（全部可核验）：① 写入入口清单含旧 `progress::level_up` 的结构化与 Markdown 两条路径，逐项标注持锁/拒绝/只读；② 不存在未接入却仍静默写入的入口；③ **新的**属性提升/专长选择与 D 协议提交入口仍未启用，**现有**旧升级功能仍可用且回归测试未被削弱；④ D 阶段机在合成 fixture 上完成 `admit → backup → candidate`，失败时目标文件字节不变；⑤ 顺序反转用例不死锁。
+- 交付：`ADV-P1-1`（盘点）、`ADV-P1-1pre`（跨 CLI 过渡拒绝门）、`ADV-P1-1a` … `ADV-P1-1e`（按组接入）、`ADV-P1-2`。
+- 出口条件（全部可核验）：① 写入入口清单含旧 `progress::level_up` 的结构化与 Markdown 两条路径，逐项标注持锁/拒绝/只读；② 不存在未接入却仍静默写入的入口；③ **新的**属性提升/专长选择与 D 协议提交入口仍未启用，**现有**旧升级功能仍可用且回归测试未被削弱；④ D 阶段机在合成 fixture 上完成 `admit → backup → candidate`，失败时目标文件字节不变；⑤ 顺序反转用例不死锁；⑥ 两套 CLI 共享 `ADV-P1-1pre` 过渡门：advancement lock/state 存在时未接入写入口失败关闭，只读入口保持，写者注册表覆盖盘点 §2。
 
 ### Phase 2 — 有界内层锁、发布/日志/幂等与显式恢复
 
@@ -108,7 +108,7 @@
 
 每个块只写一个可独立验收的结果。块 ID 是稳定标识，用于后续 Issue 与依赖引用；**状态不写在这里**。
 
-顺序与依赖：`1 → 1a → 1b → 1c → 1d → 1e → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11`；`1` 是盘点，`1a`–`1e` 按入口组接入；`12`、`13` 为并行调查轨，`13` 的结论是 `6` 的前置门。
+顺序与依赖：`1 → 1pre → 1a → 1b → 1c → 1d → 1e → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11`；`1` 是盘点，`1pre` 是跨 CLI 过渡拒绝门，`1a`–`1e` 按入口组接入；`12`、`13` 为并行调查轨，`13` 的结论是 `6` 的前置门。
 
 ### Task: `ADV-P1-1` — 新版本写者盘点（OD-2 第一步，本任务交付）
 
@@ -121,13 +121,25 @@
   - [ ] `AC-3`: 清单与计划不把未实现/未验证能力写成已完成；不声称现有 checkpoint/完整性锁能保护角色/party/进度/日志内容；不改变 #264 结论；未决接入语义标 `NEEDS_HUMAN_DECISION`。
   - [ ] `AC-4`: 仅修改两个允许文档；清单与计划不含真实存档、书籍或秘密；证据矩阵绑定实际 head。
 
-**分批过渡门（OD-2）**：`ADV-P1-1a`–`ADV-P1-1e` 各自是独立可交付块；每块发布时必须满足自己的过渡门 AC——同一存档上其余未接入写入口要么失败关闭拒绝写入，要么经合成测试证明**整个 CLI 运行**真正只读（不是只证明某个函数体不写）。该门是每个子块的发布条件，**不要求等 `ADV-P1-1e` 或全部组完成**；没有该证据不得发布该部分接入。测试归属写在各自 AC 中，覆盖清单引用 [写者盘点](ADVANCEMENT-WRITER-INVENTORY.md) §2/§5。
+**分批过渡门（OD-2）**：`ADV-P1-1pre` 与 `ADV-P1-1a`–`ADV-P1-1e` 各自是独立可交付块；每块发布时必须满足自己的过渡门 AC——同一存档上其余未接入写入口要么失败关闭拒绝写入，要么经合成测试证明**整个 CLI 运行**真正只读（不是只证明某个函数体不写）。该门是每个子块的发布条件，**不要求等 `ADV-P1-1e` 或全部组完成**；没有该证据不得发布该部分接入。测试归属写在各自 AC 中，覆盖清单引用 [写者盘点](ADVANCEMENT-WRITER-INVENTORY.md) §2/§5。
+
+### Task: `ADV-P1-1pre` — 跨 CLI 过渡拒绝门与未接入写者注册表
+
+- **Goal:** 让 `talkdnd` 与 `combat-sim` 两套 CLI 的所有写存档入口共享一个过渡门：当存档存在 advancement lock/state 时，未接入写入口失败关闭拒绝写入；只读入口保持可用。建立覆盖盘点 §2 的写者注册表，并直接在两套 CLI 的真实调用路径上测试拒绝，不通过包装层代替。
+- **建议允许路径：** `tools/talkdnd/src/`、`tools/combat-sim/src/`、`tools/talkdnd/tests/`、`tools/combat-sim/tests/`、`docs/ADVANCEMENT-WRITER-INVENTORY.md`（只记录注册表与证据位置）
+- **Depends on:** `ADV-P1-1`（盘点）；未初始化存档、拒绝 UX、CLI 兼容等 `NEEDS_HUMAN_DECISION` 已决定。**未决前只能设计，不得实现。**
+- **Acceptance criteria:**
+  - [ ] `AC-1`: 写者注册表覆盖盘点 §2 的全部写存档入口（两套 CLI），逐项给出命令/函数定位、写入对象、是否已接入过渡门；未接入入口不得静默写入。
+  - [ ] `AC-2`: 当存档存在 advancement lock/state 时，未接入写入口在 `talkdnd` 与 `combat-sim` 的真实调用路径上失败关闭拒绝写入；只读入口保持可用。测试必须直接调用两套 CLI 的实际入口（不是只测共享包装函数），归属 `tools/talkdnd/tests/` 与 `tools/combat-sim/tests/`。
+  - [ ] `AC-3`: 不改变既有业务语义、不启用新的属性提升/专长选择或 D 协议提交入口；拒绝只发生在写存档之前。
+  - [ ] `AC-4`: 合成测试覆盖注册表中每个写入口的拒绝或只读声明；没有证据的入口不得被登记为“已覆盖”。
+  - [ ] `AC-5`: 该过渡门是 `ADV-P1-1a`–`ADV-P1-1e` 的共享前置，不因 CLI 不同而分裂成两套语义；后续块不得绕过它。
 
 ### Task: `ADV-P1-1a` — CLI 角色 / 进度 / 账本写者接入
 
 - **Goal:** 让会写角色卡、建卡状态、进度/XP/钱袋、场景、识别/揭示/原创/实体/关系/世界时间/记忆/设置/秘密/资料/冒险索引的 CLI 入口在写存档前取得 SAVE 锁，并在锁不可用时失败关闭；纯只读入口明确声明只读。
 - **建议允许路径：** `tools/talkdnd/src/`（`lib.rs`、`progress.rs`、`charsheet.rs`、`chargen.rs`、`identify.rs`、`reveal.rs`、`original.rs`、`entity.rs`、`graph.rs`、`worldtime.rs`、`memory.rs`、`settings.rs`、`secret.rs`、`handout.rs`、`bookindex.rs`、`adventure.rs`、`start.rs`、`save.rs` 等实际写者）、`tools/talkdnd/tests/`、`docs/ADVANCEMENT-WRITER-INVENTORY.md`（只记录接入状态与证据位置）
-- **Depends on:** `ADV-P1-1`（清单）、#282、#286
+- **Depends on:** `ADV-P1-1pre`（跨 CLI 过渡门）、`ADV-P1-1`（清单）、#282、#286
 - **Acceptance criteria:**
   - [ ] `AC-1`: 清单 §2.1、§2.2、§2.6 中会写存档的入口全部在写目标前取得 SAVE 锁；锁序为 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`，不得反向。
   - [ ] `AC-2`: SAVE state 缺失、不可写、`active` 或 `in_doubt` 时，每个入口失败关闭且不写目标；合成测试逐条覆盖，错误信息说明未写/可能已写阶段。**state 缺失时的拒绝是决定前的临时保守处理**，不是最终 UX/兼容决定；最终语义按本节末 `NEEDS_HUMAN_DECISION` 处理。
@@ -139,23 +151,23 @@
 
 ### Task: `ADV-P1-1b` — party / combat 写者接入
 
-- **Goal:** 让 `combat-sim` 会改遭遇/party 的命令、`party rest|set-hp|sync`，以及 `--out` 指向存档内的 `content import*`/`pack build|release` 在写存档前取得 SAVE 锁；只读战斗命令明确声明只读。
+- **Goal:** 让 `combat-sim` 会改遭遇/party 的命令、`party rest|set-hp|sync`，以及 `--out` 指向存档内的 `content import-srd-prose`/`content import-srd-pack`/`content import-srd` 与 `content pack build|release` 在写存档前取得 SAVE 锁；只读战斗命令明确声明只读。
 - **建议允许路径：** `tools/combat-sim/src/`（`cli.rs`、`party.rs`、`state.rs`、`integrity.rs`、`player.rs`）、`tools/talkdnd/src/charsheet.rs`（party 保存调用点）、`tools/combat-sim/tests/`、`tools/talkdnd/tests/`、`docs/ADVANCEMENT-WRITER-INVENTORY.md`（只记录接入状态与证据位置）
-- **Depends on:** `ADV-P1-1a`、`ADV-P1-1`、#286
+- **Depends on:** `ADV-P1-1pre`、`ADV-P1-1a`、`ADV-P1-1`、#286
 - **Acceptance criteria:**
   - [ ] `AC-1`: 清单 §2.3 中会改状态的命令全部在写 state/party/日志前取得 SAVE 锁；`status`/`scene`/`log`/`simulate`/`content list|show|check`/`pack list|show|verify`/`party show` 不写存档并声明只读。
   - [ ] `AC-2`: 单次命令的 `state.save` → `party.save` → 日志追加顺序在 SAVE 内执行；任一步失败即停止并报告已写/未写阶段，不声称多文件原子性。
   - [ ] `AC-3`: `PartyState::save` 与 `EncounterState::save` 不再把完整性锁当作内容保护；合成测试证明 party/state 内容写入受 SAVE 约束。
   - [ ] `AC-4`: `combat-sim` 不新增对 `talkdnd` 的依赖；SAVE 锁原语是共享还是由 `talkdnd` 包装，按本节末的 `NEEDS_HUMAN_DECISION` 记录并实施。
   - [ ] `AC-5`: 活动遭遇识别算法不因本块被发明；`.state.json` 只作为未来判定输入，不声称已解决活动遭遇只预览。
-  - [ ] `AC-6`: `combat-sim content import srd-prose|srd-pack|srd` 与 `content pack build|release` 的 `--out` 指向存档内时，必须接入 SAVE 或失败关闭拒绝写入；目标在存档外时才可按存档外写入声明。`--dry-run` 保持只读。用 `tools/combat-sim/tests/` 的合成测试分别覆盖“out 在存档内”和“out 在存档外”，并把它们纳入提交入口启用前的覆盖门（`ADV-P1-10`）。
+  - [ ] `AC-6`: `combat-sim content import-srd-prose` / `content import-srd-pack` / `content import-srd` 的 `--out` 指向存档内时，必须接入 SAVE 或失败关闭拒绝写入；`content pack build|release` 的 `--out` 指向存档内时同样处理；目标在存档外时才可按存档外写入声明。**只有 `content pack build|release` 有 `--dry-run`**，其 dry-run 保持只读；三个 `import-*` 命令没有 dry-run，必须按写者处理。用 `tools/combat-sim/tests/` 的合成测试以合法参数进入实际分支，分别覆盖“out 在存档内”和“out 在存档外”，并把它们纳入提交入口启用前的覆盖门（`ADV-P1-10`）。
   - [ ] `AC-7`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/combat-sim/tests/` 与 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5，并包含 AC-6 的存档内输出目标。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
 
 ### Task: `ADV-P1-1c` — checkpoint / migrate 写者接入
 
 - **Goal:** 让 `checkpoint snapshot`、`checkpoint restore` 与 `migrate` 在整树读写前取得 SAVE 锁，并保持 `SAVE → checkpoint → integrity` 的总序；只读的 checkpoint 查询与 `migrate --dry-run` 保持只读。
 - **建议允许路径：** `tools/talkdnd/src/checkpoint.rs`、`tools/talkdnd/src/migrate.rs`、`tools/talkdnd/src/save.rs`、`tools/talkdnd/src/lib.rs`（`tracked` 分支）、`tools/talkdnd/tests/`（含必要审计测试）、`docs/ADVANCEMENT-LOCK-DESIGN.md`（只记录接入状态与证据位置）
-- **Depends on:** `ADV-P1-1b`、`ADV-P1-1`
+- **Depends on:** `ADV-P1-1pre`、`ADV-P1-1b`、`ADV-P1-1`
 - **Acceptance criteria:**
   - [ ] `AC-1`: `checkpoint snapshot` / `restore` / `migrate` 在写任何目标前取得 SAVE 锁，再按 `checkpoint .talkdnd.lock` → `integrity .talkdnd.integrity.lock` 获取；反向获取在合成用例中被判为协议违规。
   - [ ] `AC-2`: 备份/恢复继续排除根目录控制文件；特殊文件、空间不足、同步失败或结果不明时停止，保留不完整备份并报告阶段。
@@ -169,7 +181,7 @@
 
 - **Goal:** 让所有会追加 `Sessions/*.md`/`rolls.log` 或改写 `integrity.yaml` 的入口在写前取得 SAVE 锁，同时保持完整性锁只覆盖清单读改写、不声称保护内容。
 - **建议允许路径：** `tools/talkdnd/src/save.rs`、`tools/talkdnd/src/rolls.rs`、`tools/talkdnd/src/audit.rs`、`tools/talkdnd/src/progress.rs`（日志）、`tools/talkdnd/src/charsheet.rs`（`log_line`）、`tools/talkdnd/src/checkpoint.rs`（恢复日志）、`tools/talkdnd/src/migrate.rs`（迁移日志）、`tools/combat-sim/src/player.rs`（战斗日志/rolls）、`tools/combat-sim/src/integrity.rs`、`tools/talkdnd/tests/`、`tools/combat-sim/tests/`
-- **Depends on:** `ADV-P1-1c`、`ADV-P1-1`
+- **Depends on:** `ADV-P1-1pre`、`ADV-P1-1c`、`ADV-P1-1`
 - **Acceptance criteria:**
   - [ ] `AC-1`: 清单 §2.5 与 §2.8 中会追加日志或改写清单的入口全部在写前取得 SAVE 锁；`log rolls`、`checkpoint list|show` 等只读入口不取写锁。
   - [ ] `AC-2`: `audit::after_command` / `integrity accept` 在 SAVE 内按 `SAVE → integrity` 顺序取锁；完整性锁仍只覆盖 `integrity.yaml` 读改写。
@@ -182,7 +194,7 @@
 
 - **Goal:** 让既有 `save-meta.yaml` 写者与缓存/派生写入有明确归属：schema 元数据在 SAVE 内写；未来选择 sidecar 由 `ADV-P1-6` 注册到 `ADV-P1-4` 的发布协议；未实现前不得声称这些目标已受保护。
 - **建议允许路径：** `tools/talkdnd/src/migrate.rs`（`write_meta`）、`tools/talkdnd/src/secret.rs`（缓存）、`tools/talkdnd/src/start.rs`（`.cache`/`digest`）、`tools/talkdnd/tests/`、`docs/ADVANCEMENT-WRITER-INVENTORY.md` 与 `docs/ADVANCEMENT-LOCK-DESIGN.md`（只记录接入状态与证据位置）
-- **Depends on:** `ADV-P1-1d`、`ADV-P1-1`
+- **Depends on:** `ADV-P1-1pre`、`ADV-P1-1d`、`ADV-P1-1`
 - **Acceptance criteria:**
   - [ ] `AC-1`: `migrate::write_meta` 的 `save-meta.yaml` 写入在 SAVE 内；合成测试证明锁不可用时 schema 元数据不被改写。
   - [ ] `AC-2`: 当前不存在选择 sidecar 写入路径；本块不创建 sidecar、不新增 schema 11、不预设字段或路径。
@@ -320,7 +332,7 @@
 
 - **Goal:** 让一次玩家显式选择在重新验证绑定、条件与派生结果后经 D 协议恰好提交一次，过期或变化即拒绝。
 - **建议允许路径：** `tools/talkdnd/src/`（提交接线与 `lib.rs`）、`tools/talkdnd/tests/`、`LetsPlay/docs/`（玩家/DM 提交说明）、`docs/PROJECT-CHARTER.md`（按 LIVING CHARTER）
-- **Depends on:** `ADV-P1-1a`–`ADV-P1-1e`、`ADV-P1-3`、`ADV-P1-6`、`ADV-P1-7`、`ADV-P1-8`、`ADV-P1-9`；**活动遭遇识别算法由所有者决定**（未决前本块的活动遭遇 AC 不能判定通过）
+- **Depends on:** `ADV-P1-1pre`、`ADV-P1-1a`–`ADV-P1-1e`、`ADV-P1-3`、`ADV-P1-6`、`ADV-P1-7`、`ADV-P1-8`、`ADV-P1-9`；**活动遭遇识别算法由所有者决定**（未决前本块的活动遭遇 AC 不能判定通过）
 - **Acceptance criteria:**
   - [ ] `AC-1`: 提交按 §2.4 顺序取锁、重新发现、重算绑定并与 `preview_id` 比较；不一致、缺少 `preview_id`、预览后内容/授权/遭遇变化一律拒绝并要求重新预览；只给单一摘要时只报“绑定变化，原因未知”。
   - [ ] `AC-2`: 提交前重新执行选择与校验；请求必须携带玩家显式选择，缺失即拒绝、不自动替选；任一条件变为不满足或未知而缺少有效确认时拒绝，不写入。
@@ -328,13 +340,13 @@
   - [ ] `AC-4`: **提交启用前必须在本块直接验收派生值边界**：不可靠或无法判定的派生值保留原值、提示 DM、不覆盖手改、不静默重生成；用本块合成用例直接取证，不得只引用 `ADV-P1-9` 的结论。
   - [ ] `AC-5`: 活动遭遇只预览不提交；损坏、歧义或无法可靠判断的遭遇同样拒绝。**遭遇识别算法未决前本 AC 不能判定通过**，按 `NEEDS_HUMAN_DECISION` 停下，不自行发明判定规则。
   - [ ] `AC-6`: 成功后展示前后差异、逐项条件状态与依据、来源、确认依据、未实现效果和需要 DM 手动完成的操作；失败说明已写/未写阶段与可恢复位置。
-  - [ ] `AC-7`: 提交入口只在 `ADV-P1-1a`–`ADV-P1-1e` 的全部相关写者覆盖、`ADV-P1-3` 的有界获取可用、`ADV-P1-6` 的迁移与 sidecar 就绪、`ADV-P1-9` 的派生边界验收通过后启用；任一未满足时入口不存在或失败关闭。
+  - [ ] `AC-7`: 提交入口只在 `ADV-P1-1pre` 与 `ADV-P1-1a`–`ADV-P1-1e` 的全部相关写者覆盖、`ADV-P1-3` 的有界获取可用、`ADV-P1-6` 的迁移与 sidecar 就绪、`ADV-P1-9` 的派生边界验收通过后启用；任一未满足时入口不存在或失败关闭。
 
 ### Task: `ADV-P1-11` — 端到端、跨平台与故障注入收口
 
 - **Goal:** 用合成 fixture 在三个平台与故障矩阵上取证，并如实记录未跑项与无法判定项。
 - **建议允许路径：** `.github/workflows/ci.yml`、`tools/talkdnd/tests/`、`tools/combat-sim/tests/`、`tools/talkdnd/src/`（仅修复本块证据暴露的缺陷，且须在 Issue 内先说明）、`docs/`（本计划与相关设计文档的状态与限制段落）
-- **Depends on:** `ADV-P1-1a`–`ADV-P1-1e`、`ADV-P1-2` … `ADV-P1-10`
+- **Depends on:** `ADV-P1-1pre`、`ADV-P1-1a`–`ADV-P1-1e`、`ADV-P1-2` … `ADV-P1-10`
 - **Acceptance criteria:**
   - [ ] `AC-1`: 合成套件在 Linux、Windows、macOS 三平台 CI 上运行，按平台分别记录结论与 head SHA；Windows 本地提交不支持按已批准边界记录，不当作缺陷修复，也不静默降级。
   - [ ] `AC-2`: 故障注入矩阵覆盖备份、候选构建/校验、每次发布（含选择 sidecar 与主 schema 元数据目标）、日志追加、完整性更新与恢复各写入前后、满盘/短写、进程中断、并发与过期预览；每项给出 `PASS` / `FAIL` / `NOT_RUN`，未跑不得折算为通过。
@@ -372,7 +384,7 @@
 
 | 结论 | 需要的实验 | 归属块 | 当前状态 |
 |---|---|---|---|
-| 两个协作写者同时提交时恰有一方成功、失败方不写目标 | 多进程竞争（T1），三平台 | `ADV-P1-1a`–`ADV-P1-1e` | `NOT_RUN` |
+| 两个协作写者同时提交时恰有一方成功、失败方不写目标 | 多进程竞争（T1），三平台 | `ADV-P1-1pre`、`ADV-P1-1a`–`ADV-P1-1e` | `NOT_RUN` |
 | 阶段边界能检出锁/state 被替换并中止 | 路径替换注入（T2a/T2c/T2f1/T2f2） | `ADV-P1-1c`、`ADV-P1-2` | `NOT_RUN` |
 | `admit` 快照失败时不写 `active`、不写目标（含首次操作） | 快照各窗口故障注入（T4d） | `ADV-P1-2` | `NOT_RUN` |
 | 崩溃后不自动续跑，`active`/`in_doubt` 拒绝普通写入 | 分阶段 kill（T4a/T4e） | `ADV-P1-2`、`ADV-P1-4` | `NOT_RUN` |

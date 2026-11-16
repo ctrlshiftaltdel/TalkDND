@@ -59,7 +59,7 @@
 | `combat-sim new` / `quick`：`new_state`（`cli.rs:2192`）/ `quick_state`（`cli.rs:2172`） | `combat/*.state.json`、可能 `combat/party-state.yaml` | 无 | **是**（party/日志） | **SAVE 锁** | 创建/覆盖状态文件；`new` 仅当路径位于 manifest `state_dir` 才关联 party。 | `quick` 不写 scene/encounter YAML，但仍写 state/party。 |
 | `combat-sim party rest/set-hp/sync`：`run_party`（`cli.rs:2070` 起） | `combat/party-state.yaml` | 无 | **是**（party 是 D 发布目标） | **SAVE 锁** | `party rest`/`set-hp` 直接改 party；`sync` 从 state 写回 party。 | `party show` 只读，见 §3。 |
 | `combat-sim roll`：`cli.rs:1044` | 无 `--state` 时只追加 `rolls.log`（`player::append_roll`，`player.rs:225`）；`--state` 指向已存在文件时走 `run_state_command_quiet`（`cli.rs:1061`），还会写 `combat/*.state.json`、`combat/party-state.yaml` 与会话日志 | 无 | **是**（日志/party；state 不在 D 发布集合） | **SAVE 锁** | 两条分支行为不同：无 state 只写 `rolls.log`；有 state 还会保存 state/party 并追加日志。 | 不能把 `roll` 整条命令当只读或只写日志。 |
-| `combat-sim status/scene/log/simulate/content list/show/check/pack list/show/verify` | 无（只读） | 无 | 否（不写） | **声明只读** | 不写 state/party/日志；`--player` 只读 `identified.yaml`。 | `content import*`/`pack build/release` 按 `--out` 位置区分；目标在存档内时是写者，见 §2.7。 |
+| `combat-sim status/scene/log/simulate/content list/show/check/pack list/show/verify` | 无（只读） | 无 | 否（不写） | **声明只读** | 不写 state/party/日志；`--player` 只读 `identified.yaml`。 | `content import-srd-prose`/`content import-srd-pack`/`content import-srd` 与 `content pack build/release` 按 `--out` 位置区分；目标在存档内时是写者，见 §2.7。 |
 
 ### 2.4 checkpoint / migrate
 
@@ -115,7 +115,7 @@
 | `talkdnd data import`：`data_cmd`（`lib.rs:2090`）→ `classdata::run_import`（`classdata.rs:578`） | `Rules/chargen/local/imported-<ruleset>.yaml` | 无 | 否（存档外） | **声明只读（就存档内容而言）** | 从转换后的 Markdown 生成本地数据文件。 | `data status` 只读。 |
 | `talkdnd handout build/mark`：`handout::rebuild`（`handout.rs:564`）/ `mark`（`handout.rs:600`）→ `store`（`handout.rs:275`） | 书目录内 `handouts.yaml`（可能位于 `Adventures/`/`Rules/`） | 无 | 否（通常存档外；若书目录在存档内则按写存档处理） | **声明只读（存档外）；目标在存档内时拒绝写入** | 刷新/标记 registry；`mark` 不写存档内容。 | 不能因为 `handout` 有 `show` 写存档就把整组当只读。 |
 | `talkdnd` 的 `update::sync_defaults`（`update.rs:115`，由 `new` 调用） | `Rules/rulings*.md`、`Rules/.talkdnd/...` | 无 | 否（存档外） | **声明只读（就存档内容而言）** | 复制出厂裁定默认。 | 不是 CLI 命令，随 `new` 执行。 |
-| `combat-sim content import srd-prose/srd-pack/srd` / `content pack build/release`：`cli.rs:1554` 起 | 按 `--out` 实际位置：目标在存档内时写存档内内容文件；目标在存档外时写书籍/内容文件 | 无 | 目标在存档内时 **是**；存档外否 | 目标在存档内：**SAVE 锁或拒绝写入**；存档外：声明只读（就存档内容而言） | `--out` 可指向存档内；`--dry-run` 不写；非 dry-run 写 pack/内容文件。 | 不得整组列为只读；`ADV-P1-1b` AC-6 负责接入或拒绝并做合成测试，提交入口覆盖门包含它们。 |
+| `combat-sim content import-srd-prose` / `content import-srd-pack` / `content import-srd` / `content pack build/release`：`cli.rs:1554` 起 | 按 `--out` 实际位置：目标在存档内时写存档内内容文件；目标在存档外时写书籍/内容文件 | 无 | 目标在存档内时 **是**；存档外否 | 目标在存档内：**SAVE 锁或拒绝写入**；存档外：声明只读（就存档内容而言） | 三个 `import-*` 命令没有 dry-run，非 dry-run 写内容文件；`content pack build/release` 的 `--dry-run` 不写，非 dry-run 写 pack/内容文件。 | 不得整组列为只读；`ADV-P1-1b` AC-6 负责接入或拒绝并做合成测试，提交入口覆盖门包含它们。 |
 
 ### 2.8 缓存 / 派生写入
 
@@ -168,7 +168,7 @@
 | `talkdnd options`（`print_options`） | 只读规则数据。 | `None`（`Cmd::Options`） | 不写存档。 |
 | `talkdnd data status`（`lib.rs:2050`） | 只读本地数据文件。 | `None`（`Cmd::Data`） | `data import` 会写存档外文件。 |
 | `combat-sim status/scene/log/simulate` | 只读 state/日志；`--player` 只读 `identified.yaml`。 | `N/A`（无 talkdnd 审计） | `simulate` 不写 state。 |
-| `combat-sim content list/show/check` / `pack list/show/verify` | 只读内容文件。 | `N/A` | `content import*`/`pack build/release` 按 `--out` 位置区分；目标在存档内时是写者。 |
+| `combat-sim content list/show/check` / `pack list/show/verify` | 只读内容文件。 | `N/A` | `content import-srd-prose`/`content import-srd-pack`/`content import-srd` 与 `content pack build/release` 按 `--out` 位置区分；目标在存档内时是写者。 |
 | `combat-sim party show` | 只读 party-state。 | `N/A` | `party rest/set-hp/sync` 会写。 |
 
 **只读命令 ≠ 整次运行不写存档。** 上表中 `tracked` 的只读命令仍会走 `lib.rs::run` 的外层 `audit::after_command`（`lib.rs:740`），在干净存档上可能重写 `integrity.yaml` 的分钟级 baseline；#285 正是跟踪这些副作用。本文把“声明只读”作为**接入目标**；在 #285 闭合或这些命令被移出 `tracked` 之前，不得把当前实现说成“已只读”或“不写任何文件”。`tracked=None` 的条目由 #279/#281 修复或本来就在 `None` 列表，仍以各自 Issue 与代码为准。
@@ -205,14 +205,15 @@
 | 追加日志（`Sessions/*.md`、`rolls.log`） | 几乎所有写命令与 `combat-sim` | 追加可交错；重复请求重复追加；无操作 ID 去重。 |
 | `integrity.yaml` | 所有 `tracked` 命令的 `after_command`、`party/state save`、`migrate`、`restore_rebaseline`、`integrity accept` | 完整性锁只保护清单本身，不保护内容；clean 时可能重写 baseline 日期。 |
 | 未来 sidecar / `save-meta.yaml` | `save-meta.yaml` 由 `migrate::write_meta`；sidecar 不存在 | 未来目标必须由 `ADV-P1-4` 注册并纳入 D 协议；当前不得声称已保护。 |
-| 存档内任意 `--out` 内容文件 | `combat-sim content import srd-prose/srd-pack/srd`、`content pack build/release` | 可能写进 D 目标或未知路径；目标在存档内时必须 SAVE 或拒绝写入（`ADV-P1-1b` AC-6）。 |
+| 存档内任意 `--out` 内容文件 | `combat-sim content import-srd-prose`、`content import-srd-pack`、`content import-srd`、`content pack build/release` | 可能写进 D 目标或未知路径；目标在存档内时必须 SAVE 或拒绝写入（`ADV-P1-1b` AC-6）。 |
 
 ## 5. 建议接入分组（对应计划子块）
 
 | 组 | 覆盖的入口 | 计划子块 |
 |---|---|---|
+| 跨 CLI 过渡门 / 写者注册表 | §2 全部写存档入口（`talkdnd` 与 `combat-sim`） | `ADV-P1-1pre` |
 | A. CLI 角色 / 进度 / 建卡 / 账本 / 设置 | §2.1、§2.2、§2.6（identify/reveal/original/entity/relation/time/memory/settings/secret/handout/adventure section/index build） | `ADV-P1-1a` |
-| B. party / combat | §2.3、§2.7 的 `content import*`/`pack build/release`（当 `--out` 在存档内时） | `ADV-P1-1b` |
+| B. party / combat | §2.3、§2.7 的 `content import-srd-prose`/`content import-srd-pack`/`content import-srd`/`content pack build/release`（当 `--out` 在存档内时） | `ADV-P1-1b` |
 | C. checkpoint / migrate | §2.4 | `ADV-P1-1c` |
 | D. 日志 / 完整性 | §2.5、§2.8 的日志相关路径 | `ADV-P1-1d` |
 | E. sidecar / schema 元数据 / 缓存 | §2.8、§2.9 | `ADV-P1-1e` |
