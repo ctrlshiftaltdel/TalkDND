@@ -1301,6 +1301,34 @@ fn begin_operation_rejects_a_non_utf8_evidence_component() {
 
 #[cfg(unix)]
 #[test]
+fn begin_operation_rejects_a_non_utf8_evidence_root() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = root("evidence-non-utf8-root");
+    init_ok(&dir);
+    let evidence_root = dir.join(OsString::from_vec(b"root-\xff".to_vec()));
+    if let Err(e) = fs::create_dir(&evidence_root) {
+        // The filesystem refusing the name is the expected "unsupported".
+        eprintln!("skipped: this filesystem refuses a non-UTF-8 directory name ({e})");
+        return;
+    }
+    // A plain UTF-8 child: only the root itself is not valid UTF-8.
+    let evidence = evidence_root.join("ops");
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+    let mut lock = open_ok(&dir);
+    let err = lock
+        .begin_operation("op-1", &evidence_root, &evidence)
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(err.detail().contains("not valid UTF-8"), "{}", err.detail());
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+    assert_eq!(lock.state().state, adv::State::Ready);
+    assert!(!evidence.exists(), "nothing may be created");
+}
+
+#[cfg(unix)]
+#[test]
 fn a_backslash_in_a_save_component_is_refused() {
     let dir = root("backslash");
     let slot = dir.join("Saves").join("a\\b");

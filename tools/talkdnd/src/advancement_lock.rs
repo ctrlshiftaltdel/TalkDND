@@ -880,6 +880,20 @@ fn relative_levels(
     root_name: &str,
     dir_name: &str,
 ) -> Result<Vec<OsString>> {
+    // Validate the *whole* paths losslessly, not only the components below the
+    // root: a non-UTF-8 root would otherwise hide a non-UTF-8 `dir` behind
+    // UTF-8 child names.
+    for (path, name) in [(root, root_name), (dir, dir_name)] {
+        if path.to_str().is_none() {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                format!(
+                    "{name} {} is not valid UTF-8; v1 cannot handle it losslessly",
+                    path.display()
+                ),
+            ));
+        }
+    }
     check_absolute(root, root_name)?;
     check_absolute(dir, dir_name)?;
     let relative = dir.strip_prefix(root).map_err(|_| {
@@ -1512,13 +1526,18 @@ impl AdvancementLock {
     ///
     /// `evidence_root` is the caller's trusted, already existing and synced
     /// directory; it is never created. `evidence_dir` must be strictly below it
-    /// (normalized, no symlink, no `..`, no non-UTF-8 component). Every attempt
-    /// walks all levels from the root down and re-syncs every parent entry,
-    /// including levels that already exist, so a retry repairs an earlier
-    /// failure instead of skipping it. The snapshot is written, synced, read
-    /// back and its directory synced before the state becomes `active`; a
-    /// failure leaves the previous state untouched and never writes `active`.
-    /// The snapshot is control metadata, not a replacement for the D backup.
+    /// (normalized, no symlink, no `..`, no non-UTF-8 component, and both full
+    /// paths must be valid UTF-8). Every attempt walks all levels from the root
+    /// down and re-syncs every parent entry, including levels that already
+    /// exist, so a retry repairs an earlier failure instead of skipping it.
+    /// The snapshot is written, synced, read back and its directory synced
+    /// before the state becomes `active`. A failure while **preparing that
+    /// evidence** leaves the previous state untouched and never writes
+    /// `active`; if the state rename itself succeeds and only the following
+    /// directory sync fails, `active` may already be visible while its
+    /// durability is unknown, which is reported as an error and must not be
+    /// repaired automatically. The snapshot is control metadata, not a
+    /// replacement for the D backup.
     /// The writable predicate runs first, so on a platform without directory
     /// sync the answer is `unwritable_state` before any evidence path is
     /// inspected.
