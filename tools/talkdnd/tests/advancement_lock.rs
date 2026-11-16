@@ -51,8 +51,28 @@ fn init_opts() -> adv::InitOptions<'static> {
     opts
 }
 
+/// `init` on Unix publishes durably. On a platform without directory fsync the
+/// state is still published, but `init` must report
+/// `state_published_not_durable` instead of `Ok`, so the helper accepts exactly
+/// that and reads the outcome back through a normal open.
+#[cfg(unix)]
 fn init_ok(root: &Path) -> adv::InitOutcome {
     adv::init(root, &make_slot(root), &init_opts()).unwrap()
+}
+
+#[cfg(not(unix))]
+fn init_ok(root: &Path) -> adv::InitOutcome {
+    let err = adv::init(root, &make_slot(root), &init_opts()).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        adv::ErrorKind::StatePublishedNotDurable,
+        "{err}"
+    );
+    let lock = open_ok(root);
+    adv::InitOutcome {
+        header: lock.header().clone(),
+        state: lock.state().clone(),
+    }
 }
 
 fn open_opts() -> adv::OpenOptions {
@@ -176,9 +196,6 @@ fn init_creates_only_the_lock_and_state_and_a_second_init_is_refused() {
     assert_eq!(outcome.state.save_id, outcome.header.save_id);
     assert_eq!(outcome.state.save_path, "Saves/slot");
     assert!(!outcome.state.save_id.is_empty());
-    // Directory sync is available on Unix and unsupported on Windows; init
-    // must report which one happened instead of claiming durability.
-    assert_eq!(outcome.state_dir_synced, cfg!(unix));
 
     let before = snapshot(&slot(&dir));
     let err = adv::init(&dir, &slot(&dir), &init_opts()).unwrap_err();
@@ -292,6 +309,57 @@ fn init_refuses_a_symlinked_save_slot() {
     let err = adv::init(&dir, &link, &init_opts()).unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
     assert!(err.detail().contains("symlink"), "{}", err.detail());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_save_component_is_refused_without_touching_its_target() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::symlink;
+
+    let dir = root("non-utf8");
+    let real = make_slot(&dir);
+    // A symlink whose *own name* is not valid UTF-8 must not be able to
+    // masquerade as the replacement-character spelling of another name.
+    let link = dir
+        .join("Saves")
+        .join(OsString::from_vec(b"bad-\xff".to_vec()));
+    symlink(&real, &link).unwrap();
+
+    let err = adv::init(&dir, &link, &init_opts()).unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(err.detail().contains("not valid UTF-8"), "{}", err.detail());
+    // The link is untouched and still points at the real slot.
+    let meta = fs::symlink_metadata(&link).unwrap();
+    assert!(meta.file_type().is_symlink());
+    assert_eq!(fs::read_link(&link).unwrap(), real);
+    assert!(
+        !adv::lock_path(&real).exists(),
+        "nothing may be created through the link"
+    );
+
+    // A real directory with a non-UTF-8 name is refused too, not recorded
+    // lossily.
+    let plain = dir
+        .join("Saves")
+        .join(OsString::from_vec(b"plain-\xfe".to_vec()));
+    fs::create_dir(&plain).unwrap();
+    let err = adv::init(&dir, &plain, &init_opts()).unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(!adv::lock_path(&plain).exists());
+}
+
+#[test]
+fn a_directory_named_with_the_replacement_character_round_trips_losslessly() {
+    let dir = root("replacement-char");
+    let slot = dir.join("Saves").join("slot\u{FFFD}");
+    fs::create_dir_all(&slot).unwrap();
+
+    let outcome = adv::init(&dir, &slot, &init_opts()).unwrap();
+    assert_eq!(outcome.state.save_path, "Saves/slot\u{FFFD}");
+    let lock = adv::open(&dir, &slot, &open_opts()).unwrap();
+    assert_eq!(lock.save_path(), "Saves/slot\u{FFFD}");
 }
 
 #[test]
@@ -608,7 +676,14 @@ fn a_read_only_success_path_writes_nothing() {
 
     let lock = open_ok(&dir);
     assert_eq!(lock.state().state, adv::State::Ready);
+    #[cfg(unix)]
     lock.check_writable().unwrap();
+    #[cfg(not(unix))]
+    assert_eq!(
+        lock.check_writable().unwrap_err().kind(),
+        adv::ErrorKind::UnwritableState,
+        "a platform without directory sync must never answer writable"
+    );
     drop(lock);
 
     assert_eq!(
@@ -859,6 +934,7 @@ fn a_state_zeroed_corrupted_or_replaced_after_open_stops_every_update() {
     });
 }
 
+#[cfg(unix)]
 #[test]
 fn check_writable_rechecks_the_disk_state() {
     let dir = root("predicate-disk");
@@ -868,6 +944,31 @@ fn check_writable_rechecks_the_disk_state() {
     fs::remove_file(adv::state_path(&slot(&dir))).unwrap();
     let err = lock.check_writable().unwrap_err();
     assert_eq!(err.kind(), adv::ErrorKind::CorruptState);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_state_changed_between_open_and_begin_operation_is_refused() {
+    let dir = root("pre-begin-change");
+    init_ok(&dir);
+    let mut lock = open_ok(&dir);
+    // A self-consistent replacement between `open` and the operation start:
+    // the pre-state step must read and validate it, not trust the cached copy.
+    let mut record = read_state(&dir);
+    record.revision = 99;
+    adv::reseal(&mut record).unwrap();
+    write_state(&dir, &record);
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+
+    let err = lock
+        .begin_operation("op-1", &evidence_dir("pre-begin-change"))
+        .unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::CorruptState);
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+    let on_disk: adv::StateRecord = serde_json::from_slice(&before).unwrap();
+    assert_eq!(on_disk.state, adv::State::Ready);
+    assert_eq!(on_disk.revision, 99);
+    assert_eq!(lock.state().state, adv::State::Ready);
 }
 
 // -------------------------------------------------------- pre-state (D) ----
@@ -892,6 +993,13 @@ fn begin_operation_snapshots_the_previous_state_before_becoming_active() {
     assert_eq!(doc["state_revision"], 1);
     assert_eq!(doc["save_path"], "Saves/slot");
     assert!(doc["state_bytes"].as_str().unwrap().contains("\"ready\""));
+    // The recorded bytes are the ones that were validated: they re-parse to the
+    // same revision and checksum, with no second read in between.
+    let prior: adv::StateRecord =
+        serde_json::from_str(doc["state_bytes"].as_str().unwrap()).unwrap();
+    assert_eq!(prior.state, adv::State::Ready);
+    assert_eq!(prior.revision, 1);
+    assert_eq!(doc["state_checksum"], prior.checksum);
 }
 
 #[cfg(unix)]
@@ -947,27 +1055,95 @@ fn begin_operation_fails_when_a_directory_cannot_be_created() {
     assert_eq!(lock.state().state, adv::State::Ready);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_failed_parent_sync_after_mkdir_is_rechecked_on_retry() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = root("retry-sync");
+    init_ok(&dir);
+    let ops = dir.join("ops");
+    fs::create_dir(&ops).unwrap();
+    // Write and execute but not readable: `mkdir` inside works while opening
+    // the directory to fsync it fails, which is the exact injection we need.
+    let mut perms = fs::metadata(&ops).unwrap().permissions();
+    let mode = perms.mode();
+    perms.set_mode(0o333);
+    fs::set_permissions(&ops, perms).unwrap();
+
+    if fs::File::open(&ops).is_ok() {
+        let mut perms = fs::metadata(&ops).unwrap().permissions();
+        perms.set_mode(mode);
+        fs::set_permissions(&ops, perms).unwrap();
+        eprintln!("skipped: this user can open a 0o333 directory");
+        return;
+    }
+
+    let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
+    let mut lock = open_ok(&dir);
+    let evidence = ops.join("evidence");
+    assert_eq!(
+        lock.begin_operation("op-1", &evidence).unwrap_err().kind(),
+        adv::ErrorKind::EvidenceFailed
+    );
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+
+    // `evidence` now exists from the failed attempt. A retry must not skip
+    // verifying and syncing its entry just because the directory exists.
+    assert!(evidence.is_dir());
+    assert_eq!(
+        lock.begin_operation("op-2", &evidence).unwrap_err().kind(),
+        adv::ErrorKind::EvidenceFailed
+    );
+    assert_eq!(fs::read(adv::state_path(&slot(&dir))).unwrap(), before);
+    assert_eq!(lock.state().state, adv::State::Ready);
+
+    // Once the parent can be synced, the same path succeeds.
+    let mut perms = fs::metadata(&ops).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(&ops, perms).unwrap();
+    lock.begin_operation("op-3", &evidence).unwrap();
+    assert_eq!(lock.state().state, adv::State::Active);
+}
+
 #[cfg(not(unix))]
 #[test]
-fn begin_operation_is_refused_when_the_platform_cannot_sync_a_directory() {
+fn init_reports_published_but_not_durable_and_refuses_every_commit() {
     let dir = root("prestate-nosync");
-    let outcome = init_ok(&dir);
-    assert!(
-        !outcome.state_dir_synced,
-        "this platform has no directory fsync and init must say so"
+    make_slot(&dir);
+    let err = adv::init(&dir, &slot(&dir), &init_opts()).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        adv::ErrorKind::StatePublishedNotDurable,
+        "{err}"
     );
+    assert!(
+        err.detail().contains("durability is unknown"),
+        "the message must say the durability is unknown: {}",
+        err.detail()
+    );
+    // Both protocol files stay: this is not a failed creation to retry.
+    assert!(adv::lock_path(&slot(&dir)).is_file());
+    assert!(adv::state_path(&slot(&dir)).is_file());
     let before = fs::read(adv::state_path(&slot(&dir))).unwrap();
 
+    // The state is readable, but nothing may write.
     let mut lock = open_ok(&dir);
-    lock.check_writable().unwrap();
-    let err = lock
-        .begin_operation("op-1", &evidence_dir("prestate-nosync"))
-        .unwrap_err();
-    assert_eq!(err.kind(), adv::ErrorKind::EvidenceFailed);
+    assert_eq!(lock.state().state, adv::State::Ready);
+    assert_eq!(
+        lock.check_writable().unwrap_err().kind(),
+        adv::ErrorKind::UnwritableState
+    );
+    assert_eq!(
+        lock.begin_operation("op-1", &evidence_dir("prestate-nosync"))
+            .unwrap_err()
+            .kind(),
+        adv::ErrorKind::UnwritableState
+    );
     assert_eq!(
         fs::read(adv::state_path(&slot(&dir))).unwrap(),
         before,
-        "the previous state must survive byte-identically"
+        "the published state must survive byte-identically"
     );
     assert_eq!(lock.state().state, adv::State::Ready);
 }

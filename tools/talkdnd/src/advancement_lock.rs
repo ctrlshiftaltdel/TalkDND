@@ -92,11 +92,13 @@
 //!   immutable header changes them. A replacement or copy that also preserves
 //!   the creation time may go unnoticed, so a same-relative-path copy is not
 //!   claimed to be detectable there.
-//! * Windows also has no directory `fsync`. [`init`] therefore reports
-//!   `state_dir_synced = false` instead of claiming the directory entry is
-//!   durable, and every commit is refused because the pre-state snapshot
-//!   requires directory sync. Local advancement commits are **not supported**
-//!   on Windows in v1; the initial files may exist, but no commit is allowed.
+//! * Windows also has no directory `fsync`. [`init`] still publishes the state
+//!   (a hard link cannot be undone), but it returns
+//!   [`ErrorKind::StatePublishedNotDurable`] instead of `Ok`: the state may
+//!   already be published, its durability is unknown, and it must not be
+//!   repaired automatically. [`AdvancementLock::check_writable`] then refuses
+//!   every commit on such a platform, so local advancement commits are **not
+//!   supported** on Windows in v1. That capability is not a writable proof.
 //! * Network shares, FUSE and sync folders are unsupported and unverified.
 //!   Nothing in this build detects them.
 
@@ -148,6 +150,9 @@ pub enum ErrorKind {
     CorruptState,
     /// The state exists but the writable predicate refuses it.
     UnwritableState,
+    /// The state was published but its directory entry could not be synced, so
+    /// its durability is unknown. Never repair this automatically.
+    StatePublishedNotDurable,
     /// The pre-operation snapshot could not be created, synced or verified.
     EvidenceFailed,
     /// The caller asked for something the protocol does not allow.
@@ -168,6 +173,7 @@ impl ErrorKind {
             ErrorKind::SavePathMismatch => "save_path_mismatch",
             ErrorKind::CorruptState => "corrupt_state",
             ErrorKind::UnwritableState => "unwritable_state",
+            ErrorKind::StatePublishedNotDurable => "state_published_not_durable",
             ErrorKind::EvidenceFailed => "evidence_failed",
             ErrorKind::InvalidRequest => "invalid_request",
             ErrorKind::Io => "io",
@@ -443,11 +449,6 @@ impl Default for OpenOptions {
 pub struct InitOutcome {
     pub header: LockHeader,
     pub state: StateRecord,
-    /// Whether the parent directory of the published state could be synced.
-    /// `false` means this platform has no directory `fsync`; the state file
-    /// exists but its directory entry is not proven durable, and every commit
-    /// is refused. It is never a claim of durability.
-    pub state_dir_synced: bool,
 }
 
 /// What the caller must have verified before `complete` may be written.
@@ -500,51 +501,52 @@ fn new_save_id(save_path: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn is_separator(byte: u8) -> bool {
+    byte == b'/' || (cfg!(windows) && byte == b'\\')
+}
+
 /// Reject a path that is not already in one normalized absolute form, and
 /// reject `..` outright instead of resolving it.
-fn check_absolute_text(path: &Path, what: &str) -> Result<()> {
+///
+/// The decision is made on the platform-encoded bytes
+/// ([`std::ffi::OsStr::as_encoded_bytes`]), never on a lossy UTF-8 rendering: a
+/// name that is not valid UTF-8 must not be able to masquerade as the
+/// replacement-character spelling of another name.
+fn check_absolute(path: &Path, what: &str) -> Result<()> {
     if !path.is_absolute() {
         return Err(err(
             ErrorKind::InvalidRequest,
             format!("{what} {} must be an absolute path", path.display()),
         ));
     }
-    let text = path.to_string_lossy().replace('\\', "/");
-    let mut normalized = String::new();
-    let mut parent = false;
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => {
-                normalized.push_str(&prefix.as_os_str().to_string_lossy().replace('\\', "/"))
-            }
-            Component::RootDir => normalized.push('/'),
-            Component::CurDir => {}
-            Component::ParentDir => parent = true,
-            Component::Normal(name) => {
-                if !normalized.ends_with('/') && !normalized.is_empty() {
-                    normalized.push('/');
-                }
-                normalized.push_str(&name.to_string_lossy());
+    let raw = path.as_os_str().as_encoded_bytes();
+    let mut first = true;
+    for segment in raw.split(|byte| is_separator(*byte)) {
+        if first {
+            first = false;
+            // A leading empty segment is the root marker of an absolute path.
+            if segment.is_empty() {
+                continue;
             }
         }
-    }
-    if parent {
-        return Err(err(
-            ErrorKind::InvalidRequest,
-            format!(
-                "{what} {} contains `..`; v1 refuses an ambiguous path instead of resolving it",
-                path.display()
-            ),
-        ));
-    }
-    if normalized != text {
-        return Err(err(
-            ErrorKind::InvalidRequest,
-            format!(
-                "{what} {} is not a normalized absolute path (repeated, trailing or `.` separators are ambiguous)",
-                path.display()
-            ),
-        ));
+        if segment.is_empty() {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                format!(
+                    "{what} {} has a repeated or trailing separator; that is an ambiguous second spelling",
+                    path.display()
+                ),
+            ));
+        }
+        if segment == b"." || segment == b".." {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                format!(
+                    "{what} {} contains a relative segment; v1 refuses an ambiguous path instead of resolving it",
+                    path.display()
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -555,8 +557,8 @@ fn check_absolute_text(path: &Path, what: &str) -> Result<()> {
 /// Refuses a relative or non-normalized path, `..`, a save outside the root, a
 /// symlinked component below the root, and a non-directory component.
 fn derive_save_path(root: &Path, save_dir: &Path) -> Result<String> {
-    check_absolute_text(root, "root")?;
-    check_absolute_text(save_dir, "save_dir")?;
+    check_absolute(root, "root")?;
+    check_absolute(save_dir, "save_dir")?;
     let relative = save_dir.strip_prefix(root).map_err(|_| {
         err(
             ErrorKind::InvalidRequest,
@@ -570,9 +572,35 @@ fn derive_save_path(root: &Path, save_dir: &Path) -> Result<String> {
     let mut parts = Vec::new();
     for component in relative.components() {
         match component {
-            Component::Normal(name) => parts.push(name.to_string_lossy().to_string()),
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+            Component::Normal(name) => {
+                // Recording must be lossless: a name that is not valid UTF-8 (or
+                // that would need a separator to be written) has no unambiguous
+                // POSIX spelling, so it is refused instead of being lossily
+                // rewritten into a name that belongs to something else.
+                let text = name.to_str().ok_or_else(|| {
+                    err(
+                        ErrorKind::InvalidRequest,
+                        format!(
+                            "save_dir {} has a component that is not valid UTF-8; v1 cannot record it losslessly",
+                            save_dir.display()
+                        ),
+                    )
+                })?;
+                if text.contains('\\') {
+                    return Err(err(
+                        ErrorKind::InvalidRequest,
+                        format!(
+                            "save_dir {} has a component containing a backslash; the recorded POSIX path would be ambiguous",
+                            save_dir.display()
+                        ),
+                    ));
+                }
+                parts.push(text.to_string());
+            }
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
                 return Err(err(
                     ErrorKind::InvalidRequest,
                     format!(
@@ -764,9 +792,10 @@ fn stage_state(save_dir: &Path, record: &mut StateRecord) -> Result<(PathBuf, Ve
 ///
 /// A hard link fails when the target exists, so a state created by another
 /// process between the precheck and this call is never replaced. A filesystem
-/// without hard links fails closed. Returns whether the directory entry could
-/// be synced (`false` means this platform has no directory `fsync`).
-fn publish_state(save_dir: &Path, tmp: &Path) -> Result<bool> {
+/// without hard links fails closed. If the directory entry cannot be synced
+/// afterwards, the state may already be published: that is reported as
+/// [`ErrorKind::StatePublishedNotDurable`] and never repaired automatically.
+fn publish_state(save_dir: &Path, tmp: &Path) -> Result<()> {
     let target = state_path(save_dir);
     match fs::hard_link(tmp, &target) {
         Ok(()) => {}
@@ -791,14 +820,31 @@ fn publish_state(save_dir: &Path, tmp: &Path) -> Result<bool> {
             ))
         }
     }
-    let _ = fs::remove_file(tmp);
-    match sync_dir(save_dir) {
-        Ok(()) => Ok(true),
-        // The platform cannot sync a directory at all: report it, never claim
-        // durability.
-        Err(e) if e.kind() == ErrorKind::EvidenceFailed => Ok(false),
-        Err(e) => Err(e),
+    if let Err(e) = fs::remove_file(tmp) {
+        // Harmless: a leftover temp file is never read as the state.
+        eprintln!(
+            "advancement lock: could not remove the staged temp {} ({e}); it is ignored",
+            tmp.display()
+        );
     }
+    match sync_dir(save_dir) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(err(
+            ErrorKind::StatePublishedNotDurable,
+            format!(
+                "{} may already be published, but its directory entry could not be synced ({}); its durability is unknown, this is not a success, and the protocol must not be repaired automatically",
+                target.display(),
+                e.detail()
+            ),
+        )),
+    }
+}
+
+/// Whether this platform can sync a directory at all. It is a capability fact,
+/// not a writable proof: even on a platform that can, the predicate still has
+/// to pass.
+fn dir_sync_supported() -> bool {
+    cfg!(unix)
 }
 
 #[cfg(unix)]
@@ -823,17 +869,18 @@ fn sync_dir(dir: &Path) -> Result<()> {
     ))
 }
 
-/// Create `dir` level by level, syncing each new directory's parent right after
-/// the `mkdir`. Any missing sync fails the whole step.
+/// Create `dir` level by level and sync **every** directory entry involved,
+/// from the first existing ancestor down to `dir` itself.
+///
+/// A level that already exists is not skipped: it may be a leftover from an
+/// attempt whose parent sync failed, so its entry is re-synced. If any entry
+/// cannot be confirmed, the whole step fails closed.
 fn ensure_dir(dir: &Path) -> Result<()> {
-    if dir.is_dir() {
-        return Ok(());
-    }
     let mut missing = Vec::new();
     let mut current = dir;
-    loop {
+    let ancestor = loop {
         if current.exists() {
-            break;
+            break current.to_path_buf();
         }
         missing.push(current.to_path_buf());
         current = current.parent().ok_or_else(|| {
@@ -842,7 +889,7 @@ fn ensure_dir(dir: &Path) -> Result<()> {
                 format!("{} has no existing ancestor to sync", dir.display()),
             )
         })?;
-    }
+    };
     for level in missing.iter().rev() {
         fs::create_dir(level).map_err(|e| {
             ctx(
@@ -851,24 +898,29 @@ fn ensure_dir(dir: &Path) -> Result<()> {
                 e,
             )
         })?;
-        let parent = level.parent().ok_or_else(|| {
-            err(
-                ErrorKind::EvidenceFailed,
-                format!("{} has no parent to sync", level.display()),
-            )
-        })?;
-        sync_dir(parent).map_err(|e| {
-            err(
-                ErrorKind::EvidenceFailed,
-                format!(
-                    "the parent of {} could not be synced after mkdir ({}); stopping without writing active",
-                    level.display(),
-                    e.detail()
-                ),
-            )
-        })?;
+        sync_parent_of(level)?;
     }
+    // Re-sync the entry of the first existing level: on a retry it may be the
+    // directory a previous attempt created before its parent sync failed.
+    sync_parent_of(&ancestor)?;
     Ok(())
+}
+
+/// Sync the directory that contains `level`, so `level`'s entry is durable.
+fn sync_parent_of(level: &Path) -> Result<()> {
+    let Some(parent) = level.parent() else {
+        return Ok(());
+    };
+    sync_dir(parent).map_err(|e| {
+        err(
+            ErrorKind::EvidenceFailed,
+            format!(
+                "the directory entry of {} could not be synced ({}); stopping without writing active",
+                level.display(),
+                e.detail()
+            ),
+        )
+    })
 }
 
 // ---------------------------------------------------------------- acquire ----
@@ -1061,18 +1113,14 @@ pub fn init(root: &Path, save_dir: &Path, opts: &InitOptions<'_>) -> Result<Init
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
-    let state_dir_synced = match publish_state(save_dir, &tmp) {
-        Ok(synced) => synced,
-        Err(e) => {
-            let _ = fs::remove_file(&tmp);
-            return Err(e);
-        }
-    };
+    if let Err(e) = publish_state(save_dir, &tmp) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
 
     Ok(InitOutcome {
         header,
         state: record,
-        state_dir_synced,
     })
 }
 
@@ -1275,12 +1323,19 @@ impl AdvancementLock {
     }
 
     /// The only "may start a normal write" answer. Re-reads the on-disk state
-    /// first, so a state that changed after this holder opened it is refused.
+    /// first, so a state that changed after this holder opened it is refused,
+    /// and refuses outright on a platform that cannot sync a directory.
     pub fn check_writable(&self) -> Result<()> {
         if self.poisoned {
             return Err(err(
                 ErrorKind::UnwritableState,
                 "a previous state publish was linked but may not be durable; reopen the lock instead of continuing",
+            ));
+        }
+        if !dir_sync_supported() {
+            return Err(err(
+                ErrorKind::UnwritableState,
+                "this platform cannot sync a directory, so no advancement commit is allowed here; that capability is not a writable proof",
             ));
         }
         self.recheck_lock()?;
@@ -1469,10 +1524,12 @@ impl AdvancementLock {
         Ok(())
     }
 
-    /// Re-read the state file and require it to be the exact revision this
-    /// holder read. Missing, zero-byte, corrupt or replaced data fails closed;
-    /// nothing is rebuilt or overwritten.
-    fn verify_disk_state(&self) -> Result<()> {
+    /// Re-read the state file once and require it to be the exact revision this
+    /// holder read. Returns the validated raw bytes so the caller can build the
+    /// pre-state snapshot from the same read instead of reading again.
+    /// Missing, zero-byte, corrupt or replaced data fails closed; nothing is
+    /// rebuilt or overwritten.
+    fn verify_disk_state(&self) -> Result<Vec<u8>> {
         let path = state_path(&self.save_dir);
         let bytes = fs::read(&path).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => err(
@@ -1495,7 +1552,7 @@ impl AdvancementLock {
                 ),
             ));
         }
-        Ok(())
+        Ok(bytes)
     }
 
     fn require_active(&self, what: &str) -> Result<()> {
@@ -1562,10 +1619,9 @@ impl AdvancementLock {
     /// The read-back and the later link are separate syscalls, so a
     /// non-cooperating writer between them is outside what this can promise.
     fn write_prestate(&self, operation_id: &str, evidence_dir: &Path) -> Result<()> {
-        self.verify_disk_state()?;
-        let state_file = state_path(&self.save_dir);
-        let raw = fs::read(&state_file)
-            .map_err(|e| ctx(ErrorKind::Io, format!("read {}", state_file.display()), e))?;
+        // One read: the bytes that were just validated are the bytes recorded,
+        // so there is no second-read window between validation and the snapshot.
+        let raw = self.verify_disk_state()?;
         let state_bytes = String::from_utf8(raw)
             .map_err(|e| ctx(ErrorKind::CorruptState, "the state is not valid UTF-8", e))?;
         let document = PrestateDocument {
