@@ -1167,7 +1167,10 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
 /// metadata identifier available in stable `std` (`volume_serial_number` and
 /// `file_index` are still unstable, `windows_by_handle`). Size and write time
 /// are deliberately not part of it: writing the PID into the fresh file
-/// changes them, and they are not unique.
+/// changes them, and they are not unique. `creation_time` alone is not unique
+/// either: Windows file system tunneling restores it when a file is deleted
+/// and re-created under the same name within 15 seconds, so `Drop` also
+/// compares the bytes this acquire wrote (see `Lock::token_matches`).
 #[cfg(unix)]
 type FileIdentity = (u64, u64);
 #[cfg(windows)]
@@ -1204,6 +1207,10 @@ struct Lock {
     /// process created rather than to a path that may have been re-bound.
     file: Option<fs::File>,
     identity: FileIdentity,
+    /// The exact bytes this acquire wrote into the fresh file. On Windows the
+    /// delete-and-recreate tunneling window keeps `creation_time`, so the
+    /// bytes are the tie-breaker; on Unix the identity is decisive.
+    token: Vec<u8>,
 }
 
 impl Lock {
@@ -1224,7 +1231,8 @@ impl Lock {
             .open(&path)
         {
             Ok(mut f) => {
-                let _ = writeln!(f, "{}", std::process::id());
+                let token = format!("{}\n", std::process::id()).into_bytes();
+                let _ = f.write_all(&token);
                 let Some(identity) = read_identity(&f) else {
                     // Never unlink by path here: by now the path may name a
                     // replacement file, and this acquire cannot prove
@@ -1239,6 +1247,7 @@ impl Lock {
                     path,
                     file: Some(f),
                     identity,
+                    token,
                 })
             }
             // Never take over, however old the file is: a live snapshot or
@@ -1252,6 +1261,22 @@ impl Lock {
                 .with_context(|| format!("open lock {}", path.display())),
         }
     }
+
+    /// Whether the path still names the file this handle created. On Unix
+    /// `dev`+`ino` decides. On Windows `creation_time` can be tunneled across
+    /// a delete-and-recreate, so the bytes this acquire wrote must match too;
+    /// a read failure counts as "not ours" (never delete on doubt).
+    fn token_matches(&self) -> bool {
+        #[cfg(windows)]
+        {
+            fs::read(&self.path).is_ok_and(|bytes| bytes == self.token)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = &self.token;
+            true
+        }
+    }
 }
 
 impl Drop for Lock {
@@ -1263,7 +1288,8 @@ impl Drop for Lock {
             .ok()
             .as_ref()
             .and_then(identity)
-            .is_some_and(|current| current == self.identity);
+            .is_some_and(|current| current == self.identity)
+            && self.token_matches();
         if !same {
             return;
         }
@@ -1348,10 +1374,12 @@ mod lock_tests {
     }
 
     /// Windows default sharing (`FILE_SHARE_DELETE`) may allow unlinking an
-    /// open file, so the old holder cannot rely on the OS refusing: the
-    /// identity check is what protects the replacement. If this system does
-    /// refuse the unlink, the actual error is printed and the replacement
-    /// branch is not exercised (no fake pass).
+    /// open file, so the old holder cannot rely on the OS refusing. It cannot
+    /// rely on `creation_time` alone either: file system tunneling restores it
+    /// when a file is deleted and re-created under the same name within 15
+    /// seconds, so `Drop` also compares the bytes this acquire wrote. If this
+    /// system does refuse the unlink, the actual error is printed and the
+    /// replacement branch is not exercised (no fake pass).
     #[cfg(windows)]
     #[test]
     fn drop_keeps_a_replacement_lock_file_on_windows() {
