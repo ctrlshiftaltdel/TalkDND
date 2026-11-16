@@ -28,7 +28,7 @@
 //! inside it — always checkpoint lock first, integrity lock second, never
 //! the reverse.
 
-use crate::{audit, migrate, save};
+use crate::{advancement_lock, audit, migrate, save};
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use combat_sim::fsutil::atomic_write;
@@ -47,8 +47,6 @@ const VERSION: u32 = 1;
 /// Checkpoints kept after every snapshot; older ones are deleted and reported.
 const KEEP: usize = 10;
 const LOCK: &str = ".talkdnd.lock";
-/// A lock older than this counts as abandoned (mirrors the pdf2md worker lock).
-const LOCK_STALE_SECS: u64 = 600;
 const BACKUP_DIR: &str = "_backups";
 /// Top-level files covered by a checkpoint (each one when it exists).
 const COVERED_FILES: [&str; 7] = [
@@ -62,6 +60,21 @@ const COVERED_FILES: [&str; 7] = [
 ];
 /// Directories covered by a checkpoint, recursively.
 const COVERED_DIRS: [&str; 4] = ["Characters", "NPCs", "sheets", "combat"];
+
+/// Runtime control files: locks and protocol state. At the save root they are
+/// never part of a user-data backup (a copy would clone a lock identity), and
+/// a mirror rollback must never delete them. Nested entries with the same
+/// name are ordinary user data and are not excluded.
+const CONTROL_FILES: [&str; 4] = [
+    LOCK,
+    integrity::LOCK,
+    advancement_lock::LOCK_FILE,
+    advancement_lock::STATE_FILE,
+];
+
+fn is_control_file(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|n| CONTROL_FILES.contains(&n))
+}
 
 #[derive(Subcommand, Clone)]
 pub enum Cmd {
@@ -1049,18 +1062,24 @@ fn allocate_restore_backup(parent: &Path, slot: &str, stamp: &str, id: &str) -> 
     }
 }
 
-/// Recursive copy (backups and rollback); skips the checkpoint lock and the
-/// cache. Refuses any other entry it cannot reproduce (symlink, socket, …)
-/// instead of silently producing an incomplete backup that a mirror rollback
-/// would later treat as the whole pre-restore tree. Callers that need a
-/// faithful backup must pass a destination this process just created empty:
-/// entries already under `dest` are left in place.
+/// Recursive copy (backups and rollback); skips the runtime control files
+/// (see [`CONTROL_FILES`]) **at the save root only** — a nested file that
+/// merely shares one of those names is user data — and the cache. Refuses any
+/// other entry it cannot reproduce (symlink, socket, …) instead of silently
+/// producing an incomplete backup that a mirror rollback would later treat as
+/// the whole pre-restore tree. Callers that need a faithful backup must pass a
+/// destination this process just created empty: entries already under `dest`
+/// are left in place.
 fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
+    copy_tree_at(src, dest, true)
+}
+
+fn copy_tree_at(src: &Path, dest: &Path, at_root: bool) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("create {}", dest.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
         let name = entry.file_name();
-        if name == LOCK {
+        if at_root && is_control_file(&name) {
             continue;
         }
         let from = entry.path();
@@ -1070,7 +1089,7 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
             if name == ".cache" {
                 continue;
             }
-            copy_tree(&from, &to)?;
+            copy_tree_at(&from, &to, false)?;
         } else if ft.is_file() {
             fs::copy(&from, &to)
                 .with_context(|| format!("copy {} to {}", from.display(), to.display()))?;
@@ -1086,14 +1105,14 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
 
 /// The removing half of a mirror rollback: delete every entry under `dest`
 /// that has no counterpart under `src`, so the tree matches `src` exactly
-/// after `copy_tree(src, dest)`. The checkpoint lock `.talkdnd.lock`, the
-/// integrity manifest lock `.talkdnd.integrity.lock` and `.cache`
-/// directories are runtime data deliberately outside the backup scope
-/// (contract §4.1) and are never touched. Returns human-readable leftovers
-/// (`path（error）`) for entries that could not be removed — the caller
-/// must report them instead of claiming a verified rollback.
+/// after `copy_tree(src, dest)`. The runtime control files (see
+/// [`CONTROL_FILES`]) are skipped **at the save root only** (a nested file
+/// with the same name is user data) and `.cache` directories are deliberately
+/// outside the backup scope; neither is ever touched. Returns human-readable
+/// leftovers (`path（error）`) for entries that could not be removed — the
+/// caller must report them instead of claiming a verified rollback.
 fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
-    fn walk(src: &Path, dest: &Path, root: &Path, out: &mut Vec<String>) {
+    fn walk(src: &Path, dest: &Path, root: &Path, at_root: bool, out: &mut Vec<String>) {
         let Ok(rd) = fs::read_dir(dest) else {
             out.push(format!("{}（读不了）", rel(root, dest)));
             return;
@@ -1111,7 +1130,7 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let name = entry.file_name();
-            if name == LOCK || name == integrity::LOCK || name == ".cache" {
+            if (at_root && is_control_file(&name)) || name == ".cache" {
                 continue;
             }
             let path = entry.path();
@@ -1132,65 +1151,390 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
                 continue;
             }
             if ft.is_dir() {
-                walk(&src_path, &path, root, out);
+                walk(&src_path, &path, root, false, out);
             }
         }
     }
     let mut leftovers = Vec::new();
-    walk(src, dest, root, &mut leftovers);
+    walk(src, dest, root, true, &mut leftovers);
     leftovers
 }
 
 // --------------------------------------------------------------------- lock
 
-/// Per-slot mutex for snapshot/restore; the file is removed on drop.
+/// Stable identity of the lock file, re-readable from the path after the fact.
+/// Unix: device + inode. Windows: `creation_time` — the stable, re-readable
+/// metadata identifier available in stable `std` (`volume_serial_number` and
+/// `file_index` are still unstable, `windows_by_handle`). Size and write time
+/// are deliberately not part of it: writing the PID into the fresh file
+/// changes them, and they are not unique. `creation_time` alone is not unique
+/// either: Windows file system tunneling restores it when a file is deleted
+/// and re-created under the same name within 15 seconds, so `Drop` also
+/// compares the bytes this acquire wrote (see `Lock::token_matches`).
+#[cfg(unix)]
+type FileIdentity = (u64, u64);
+#[cfg(windows)]
+type FileIdentity = u64;
+#[cfg(not(any(unix, windows)))]
+type FileIdentity = (u64, u64);
+
+#[cfg(unix)]
+fn identity(meta: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    Some((meta.dev(), meta.ino()))
+}
+
+#[cfg(windows)]
+fn identity(meta: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::windows::fs::MetadataExt;
+    // Known limit: a same-length rewrite of the lock file keeps
+    // `creation_time`, so this cannot detect every replacement.
+    Some(meta.creation_time())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn identity(_meta: &fs::Metadata) -> Option<FileIdentity> {
+    None
+}
+
+/// Per-slot mutex for snapshot/restore. The file is created with
+/// `create_new` and only removed on drop when the path still names the file
+/// this handle created; an existing lock is never deleted or taken over.
+/// A unique token for one successful acquire: PID, wall-clock nanoseconds, a
+/// monotonic in-process counter and a randomly keyed hash. A bare PID is not
+/// unique — the same process can acquire again after its file was replaced —
+/// and Windows tunneling keeps `creation_time` across a delete-and-recreate,
+/// so the bytes written into the lock file are the tie-breaker there.
+fn instance_token() -> Vec<u8> {
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    // `RandomState` is seeded from the OS, so the digest is not predictable
+    // from the other fields.
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u128(nanos);
+    hasher.write_u32(std::process::id());
+    hasher.write_u64(seq);
+    let random = hasher.finish();
+    format!("{} {nanos} {seq} {random:016x}\n", std::process::id()).into_bytes()
+}
+
+#[derive(Debug)]
 struct Lock {
     path: PathBuf,
+    /// Held for the whole hold, so the identity belongs to the file this
+    /// process created rather than to a path that may have been re-bound.
+    file: Option<fs::File>,
+    identity: FileIdentity,
+    /// The exact bytes this acquire wrote into the fresh file (a per-acquire
+    /// token, not just the PID). On Windows the delete-and-recreate tunneling
+    /// window keeps `creation_time`, so the token is the tie-breaker; on Unix
+    /// the identity is decisive.
+    token: Vec<u8>,
 }
 
 impl Lock {
     fn acquire(save: &Path) -> Result<Lock> {
+        Self::acquire_with(
+            save,
+            |f| f.metadata().ok().as_ref().and_then(identity),
+            |f, bytes| f.write_all(bytes),
+        )
+    }
+
+    /// [`Lock::acquire`] with the identity read and the token write
+    /// injectable, so both failure branches can be tested: a file's metadata
+    /// read and a small write never fail in practice.
+    fn acquire_with(
+        save: &Path,
+        read_identity: impl Fn(&fs::File) -> Option<FileIdentity>,
+        write_token: impl Fn(&mut fs::File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<Lock> {
         let path = save.join(LOCK);
-        let mut stolen = false;
-        loop {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut f) => {
-                    let _ = writeln!(f, "{}", std::process::id());
-                    return Ok(Lock { path });
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                let token = instance_token();
+                if let Err(err) = write_token(&mut f, &token) {
+                    // Never unlink by path here: by now the path may name a
+                    // replacement file, and this acquire cannot prove
+                    // otherwise. Leave the file for a human.
+                    drop(f);
+                    return Err(anyhow::Error::new(err).context(format!(
+                        "无法写入锁文件 {}；本次操作已放弃，锁文件可能残留。请确认没有仍在运行的 checkpoint/恢复写者，再由人工检查并处理该锁文件",
+                        path.display()
+                    )));
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if stolen || !stale(&path) {
-                        bail!(
-                            "另一个 checkpoint 操作正在进行（锁 {}）；稍后重试",
-                            path.display()
-                        );
-                    }
-                    let _ = fs::remove_file(&path);
-                    stolen = true;
-                }
-                Err(err) => {
-                    return Err(anyhow::Error::new(err))
-                        .with_context(|| format!("open lock {}", path.display()));
-                }
+                let Some(identity) = read_identity(&f) else {
+                    drop(f);
+                    bail!(
+                        "无法读取锁文件 {} 的身份标识；本次操作已放弃，锁文件可能残留。请确认没有仍在运行的 checkpoint/恢复写者，再由人工检查并处理该锁文件",
+                        path.display()
+                    );
+                };
+                Ok(Lock {
+                    path,
+                    file: Some(f),
+                    identity,
+                    token,
+                })
             }
+            // Never take over, however old the file is: a live snapshot or
+            // restore may legitimately run for longer than any age heuristic,
+            // and a crashed one needs a human to confirm no writer is alive.
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => bail!(
+                "另一个 checkpoint 操作正在进行（锁 {} 已存在）；本工具不会删除、接管或改动已有锁文件。请先确认没有仍在运行的 checkpoint/恢复写者，再由人工检查并在确认安全后移除该锁文件",
+                path.display()
+            ),
+            Err(err) => Err(anyhow::Error::new(err))
+                .with_context(|| format!("open lock {}", path.display())),
+        }
+    }
+
+    /// Whether the path still names the file this handle created. On Unix
+    /// `dev`+`ino` decides. On Windows `creation_time` can be tunneled across
+    /// a delete-and-recreate, so the full per-acquire token must match too; a
+    /// read failure counts as "not ours" (never delete on doubt). A copied
+    /// token is not detectable, and a replacement between this check and the
+    /// unlink is not either.
+    fn token_matches(&self) -> bool {
+        #[cfg(windows)]
+        {
+            fs::read(&self.path).is_ok_and(|bytes| bytes == self.token)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = &self.token;
+            true
         }
     }
 }
 
 impl Drop for Lock {
     fn drop(&mut self) {
+        // Only remove the file this handle created. If the path was deleted
+        // and re-created (or replaced) while held, it belongs to someone else
+        // and deleting it would let a third writer in.
+        let same = fs::metadata(&self.path)
+            .ok()
+            .as_ref()
+            .and_then(identity)
+            .is_some_and(|current| current == self.identity)
+            && self.token_matches();
+        if !same {
+            return;
+        }
+        // Close the handle before unlinking (conservative: Windows may allow
+        // deleting an open file, so the OS is not the guard here). The
+        // identity was just re-checked against the path; a replacement between
+        // that check and the unlink is not detectable with portable APIs, so
+        // the window is unavoidable, only smaller than before.
+        drop(self.file.take());
         let _ = fs::remove_file(&self.path);
     }
 }
 
-fn stale(path: &Path) -> bool {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.elapsed().ok())
-        .is_some_and(|age| age.as_secs() >= LOCK_STALE_SECS)
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("talkdnd-cp-lock-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_held_lock_blocks_a_second_acquire_until_it_is_released() {
+        let save = scratch("held");
+        let held = Lock::acquire(&save).unwrap();
+        let err = Lock::acquire(&save).unwrap_err();
+        assert!(err.to_string().contains("锁"), "{err}");
+        drop(held);
+        assert!(!save.join(LOCK).exists());
+        let again = Lock::acquire(&save).unwrap();
+        drop(again);
+        assert!(!save.join(LOCK).exists());
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    #[test]
+    fn a_lock_with_an_old_mtime_is_not_taken_over() {
+        let save = scratch("old-mtime");
+        let path = save.join(LOCK);
+        fs::write(&path, "12345\n").unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        // Well past the old 600-second takeover window.
+        file.set_modified(SystemTime::now() - Duration::from_secs(3_600))
+            .unwrap();
+        drop(file);
+        let before = fs::read(&path).unwrap();
+        let err = Lock::acquire(&save).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("锁"), "{msg}");
+        assert!(
+            msg.contains("人工"),
+            "the refusal must send the operator to manual handling: {msg}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before, "the lock file changed");
+        // Releasing by hand is the only way back in.
+        fs::remove_file(&path).unwrap();
+        let again = Lock::acquire(&save).unwrap();
+        drop(again);
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    /// A lock file deleted and re-created while held belongs to the new
+    /// writer; the old holder's `Drop` must leave it alone. The Windows
+    /// equivalent is `drop_keeps_a_replacement_lock_file_on_windows`.
+    #[cfg(unix)]
+    #[test]
+    fn drop_keeps_a_lock_file_that_was_replaced_after_acquire() {
+        let save = scratch("replaced");
+        let path = save.join(LOCK);
+        let held = Lock::acquire(&save).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, "someone else\n").unwrap();
+        drop(held);
+        assert!(path.exists(), "the old holder deleted the new lock file");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "someone else\n");
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    /// Every successful acquire must get its own token. A bare PID is not
+    /// unique: the same process can acquire again after its file was replaced,
+    /// and Windows tunneling keeps `creation_time` across that replacement, so
+    /// the first holder's `Drop` would match identity *and* bytes and delete
+    /// the second lock. The Windows-only same-process case is
+    /// `a_second_acquire_in_the_same_process_keeps_its_lock`.
+    #[test]
+    fn every_acquire_gets_a_unique_token() {
+        let save = scratch("token-unique");
+        let path = save.join(LOCK);
+        let first = Lock::acquire(&save).unwrap();
+        let first_token = first.token.clone();
+        // Replace the path so a second acquire can succeed (the same-process
+        // re-acquire the Windows tunneling case is about).
+        fs::remove_file(&path).unwrap();
+        let second = Lock::acquire(&save).unwrap();
+        assert_ne!(
+            first_token, second.token,
+            "two acquires in one process must not share a token"
+        );
+        drop(second);
+        drop(first);
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    /// A failed token write must not unlink by path: the acquire leaves the
+    /// file for a human, exactly like an unreadable identity.
+    #[test]
+    fn a_failed_token_write_leaves_the_file_for_manual_handling() {
+        let save = scratch("write-fail");
+        let err = Lock::acquire_with(
+            &save,
+            |f| f.metadata().ok().as_ref().and_then(identity),
+            |_, _| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "injected short write",
+                ))
+            },
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("人工"),
+            "the failure must send the operator to manual handling: {msg}"
+        );
+        let path = save.join(LOCK);
+        assert!(
+            path.exists(),
+            "the failed acquire must not unlink the lock file by path"
+        );
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    /// Windows default sharing (`FILE_SHARE_DELETE`) allows unlinking an open
+    /// file, so the old holder cannot rely on the OS refusing. It cannot rely
+    /// on `creation_time` alone either: file system tunneling restores it when
+    /// a file is deleted and re-created under the same name within 15 seconds,
+    /// so `Drop` also compares the full instance token. NTFS on CI allows the
+    /// unlink, so a refusal is a real failure here, not a skipped branch.
+    #[cfg(windows)]
+    #[test]
+    fn drop_keeps_a_replacement_lock_file_on_windows() {
+        let save = scratch("replaced-win");
+        let path = save.join(LOCK);
+        let held = Lock::acquire(&save).unwrap();
+        fs::remove_file(&path).expect("NTFS must allow unlinking the held lock");
+        fs::write(&path, "someone else\n").unwrap();
+        drop(held);
+        assert!(path.exists(), "the old holder deleted the new lock file");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "someone else\n");
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    /// The same process re-acquiring after a delete must keep its lock when
+    /// the first holder drops: the token is per acquire, not the PID.
+    #[cfg(windows)]
+    #[test]
+    fn a_second_acquire_in_the_same_process_keeps_its_lock() {
+        let save = scratch("reacquire-win");
+        let path = save.join(LOCK);
+        let first = Lock::acquire(&save).unwrap();
+        fs::remove_file(&path).expect("NTFS must allow unlinking the held lock");
+        let second = Lock::acquire(&save).unwrap();
+        let second_bytes = fs::read(&path).unwrap();
+        drop(first);
+        assert!(
+            path.exists(),
+            "the first holder deleted the second acquire's lock"
+        );
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            second_bytes,
+            "the second acquire's token changed"
+        );
+        drop(second);
+        assert!(!path.exists(), "a released lock must be removed");
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    /// When the identity cannot be read, the acquire fails without unlinking
+    /// the path: by then the path may already name a replacement file.
+    #[test]
+    fn an_unreadable_lock_identity_leaves_the_file_for_manual_handling() {
+        let save = scratch("identity");
+        let err = Lock::acquire_with(&save, |_| None, |f, bytes| f.write_all(bytes)).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("人工"),
+            "the failure must send the operator to manual handling: {msg}"
+        );
+        let path = save.join(LOCK);
+        assert!(
+            path.exists(),
+            "the failed acquire must not unlink the lock file by path"
+        );
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains(&std::process::id().to_string()),
+            "the file is the one this acquire created"
+        );
+        let _ = fs::remove_dir_all(&save);
+    }
 }

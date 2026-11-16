@@ -1495,21 +1495,57 @@ fn backup_save(save: &Path, root: &Path, slot: &str, schema: u32) -> Result<Stri
     Ok(format!("Saves/{BACKUP_DIR}/{name}"))
 }
 
+/// Runtime control files: locks and protocol state. A user-data backup must
+/// not carry them (a copy would clone a lock identity), so the migration
+/// backup and the restore backup use the same list. Only the save root is
+/// excluded; a nested file with one of these names is user data.
+const CONTROL_FILES: [&str; 4] = [
+    // `checkpoint::LOCK`; the same path is created by checkpoint snapshots.
+    ".talkdnd.lock",
+    combat_sim::integrity::LOCK,
+    crate::advancement_lock::LOCK_FILE,
+    crate::advancement_lock::STATE_FILE,
+];
+
+fn is_control_file(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|n| CONTROL_FILES.contains(&n))
+}
+
 fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
+    copy_tree_at(src, dest, true)
+}
+
+/// `at_root` limits the runtime-control-file exclusion to the save root: a
+/// nested file that merely shares one of those names is user data and must be
+/// backed up like any other file.
+fn copy_tree_at(src: &Path, dest: &Path, at_root: bool) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("create {}", dest.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if matches!(name.as_str(), BACKUP_DIR | ".cache" | ".talkdnd") {
+        let name = entry.file_name();
+        if (at_root && is_control_file(&name))
+            || name == BACKUP_DIR
+            || name == ".cache"
+            || name == ".talkdnd"
+        {
             continue;
         }
         let from = entry.path();
         let to = dest.join(&name);
-        if entry.file_type()?.is_dir() {
-            copy_tree(&from, &to)?;
-        } else if entry.file_type()?.is_file() {
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            copy_tree_at(&from, &to, false)?;
+        } else if ft.is_file() {
             fs::copy(&from, &to)
                 .with_context(|| format!("copy {} to {}", from.display(), to.display()))?;
+        } else {
+            // A symlink, FIFO, socket or device cannot be reproduced. Skipping
+            // it would report a backup that silently lacks an entry; the
+            // caller must stop before it writes anything.
+            bail!(
+                "无法复制 {}：不是普通文件或目录（符号链接和特殊文件无法纳入整份备份）",
+                from.display()
+            );
         }
     }
     Ok(())
@@ -2477,6 +2513,140 @@ mod tests {
         let report = ensure(&save, &root, false).unwrap();
         assert_eq!((report.from, report.to), (8, CURRENT_SCHEMA));
         assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn backups(root: &Path) -> Vec<PathBuf> {
+        let Ok(rd) = fs::read_dir(root.join("Saves").join(BACKUP_DIR)) else {
+            return Vec::new();
+        };
+        let mut v: Vec<PathBuf> = rd.map(|e| e.unwrap().path()).collect();
+        v.sort();
+        v
+    }
+
+    /// Runtime control files are not user data: the pre-migration backup must
+    /// not carry them, while ordinary files and nested directories still are
+    /// copied. Only the save root is excluded; a nested file that merely
+    /// shares a control file's name is user data.
+    #[test]
+    fn the_migration_backup_excludes_runtime_control_files() {
+        let root = root("backup-control");
+        let save = v7_save(&root, "2030-06-04-01");
+        fs::create_dir_all(save.join("combat/nested")).unwrap();
+        fs::write(save.join("combat/nested/state.txt"), "keep\n").unwrap();
+        let nested = [
+            ("combat/nested/.talkdnd.lock", "nested checkpoint lock\n"),
+            (
+                "combat/nested/.talkdnd.integrity.lock",
+                "nested integrity lock\n",
+            ),
+            (
+                "combat/nested/.talkdnd.advancement.lock",
+                "nested advancement lock\n",
+            ),
+            (
+                "combat/nested/.talkdnd.advancement.state",
+                "nested advancement state\n",
+            ),
+        ];
+        for (rel, bytes) in nested {
+            fs::write(save.join(rel), bytes).unwrap();
+        }
+        let control = [
+            (".talkdnd.lock", "checkpoint\n"),
+            (".talkdnd.integrity.lock", "integrity\n"),
+            (crate::advancement_lock::LOCK_FILE, "advancement lock\n"),
+            (crate::advancement_lock::STATE_FILE, "advancement state\n"),
+        ];
+        for (name, bytes) in control {
+            fs::write(save.join(name), bytes).unwrap();
+        }
+        fs::create_dir_all(save.join(".cache")).unwrap();
+        fs::write(save.join(".cache/digest.md"), "cache\n").unwrap();
+
+        ensure(&save, &root, false).unwrap();
+
+        let dirs = backups(&root);
+        assert_eq!(dirs.len(), 1, "{dirs:?}");
+        let backup = &dirs[0];
+        for (name, _) in control {
+            assert!(
+                !backup.join(name).exists(),
+                "{name} leaked into the migration backup"
+            );
+        }
+        assert!(!backup.join(".cache").exists());
+        for (rel, bytes) in nested {
+            assert_eq!(
+                fs::read(backup.join(rel)).unwrap(),
+                bytes.as_bytes(),
+                "{rel} is missing from the migration backup"
+            );
+        }
+        assert!(backup.join("combat/nested/state.txt").is_file());
+        assert!(backup.join("Sessions/2030-06-01-session-00.md").is_file());
+        // The live control files are untouched by the backup.
+        for (name, bytes) in control {
+            assert_eq!(
+                fs::read_to_string(save.join(name)).unwrap(),
+                bytes,
+                "{name} changed"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `copy_tree` used to skip symlinks silently, so a backup could be
+    /// missing an entry and still be reported as complete. It must refuse
+    /// before the migration writes anything, naming the entry.
+    #[cfg(unix)]
+    #[test]
+    fn the_migration_backup_refuses_a_symlink_before_writing() {
+        let root = root("backup-symlink");
+        let save = v7_save(&root, "2030-06-04-02");
+        let meta_before = fs::read(save.join("save-meta.yaml")).unwrap();
+        let log = save.join("Sessions/2030-06-01-session-00.md");
+        let log_before = fs::read(&log).unwrap();
+        std::os::unix::fs::symlink("save-meta.yaml", save.join("handout-link.md")).unwrap();
+
+        let err = ensure(&save, &root, false).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("handout-link.md"), "{msg}");
+        assert!(
+            msg.contains("符号链接") || msg.contains("特殊文件"),
+            "the refusal must name the entry type: {msg}"
+        );
+        // Nothing was written: the save is still at schema 7, byte for byte.
+        assert_eq!(meta(&save).schema, 7);
+        assert_eq!(fs::read(save.join("save-meta.yaml")).unwrap(), meta_before);
+        assert_eq!(fs::read(&log).unwrap(), log_before);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Same contract for a FIFO: a non-regular, non-directory entry aborts
+    /// the backup instead of being dropped from it.
+    #[cfg(unix)]
+    #[test]
+    fn the_migration_backup_refuses_a_fifo_before_writing() {
+        let root = root("backup-fifo");
+        let save = v7_save(&root, "2030-06-04-03");
+        let meta_before = fs::read(save.join("save-meta.yaml")).unwrap();
+        let status = std::process::Command::new("mkfifo")
+            .arg(save.join("pipe"))
+            .status()
+            .expect("mkfifo must be available on Unix test runners");
+        assert!(status.success(), "mkfifo failed: {status}");
+
+        let err = ensure(&save, &root, false).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("pipe"), "{msg}");
+        assert!(
+            msg.contains("符号链接") || msg.contains("特殊文件"),
+            "the refusal must name the entry type: {msg}"
+        );
+        assert_eq!(meta(&save).schema, 7);
+        assert_eq!(fs::read(save.join("save-meta.yaml")).unwrap(), meta_before);
         let _ = fs::remove_dir_all(&root);
     }
 

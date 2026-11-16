@@ -36,7 +36,7 @@
 | 会话日志 `Sessions/*.md` | `save::append`（`progress::log`、`checkpoint` 文本、战斗日志） | 追加，同上 | 无 | **事实**：同上；日志是唯一记录“发生过什么”的载体，但可被非协作写者改写。 |
 | 完整性清单 `integrity.yaml` + `.talkdnd.integrity.lock` | `combat_sim::integrity::lock` / `store` / `after_write`；`audit::after_command`、`migrate::carry_dirty_flags_guarded`、`checkpoint::restore_rebaseline` 都取该锁 | 清单读改写全程持锁；清单本身 `atomic_write` | **有**：OS advisory 排他锁，阻塞获取，无超时 | **事实**：只序列化清单本身，不保护其它文件。**推断**：它不能阻止两个写者先后写同一角色文件。 |
 | checkpoint 快照与恢复 `checkpoints/`、`Saves/_backups/` | `checkpoint::snapshot` / `restore_inner` | 取 `.talkdnd.lock` 后：快照=复制覆盖文件 + 写 `manifest.yaml`；恢复=整档备份 → 暂存 → 逐文件 rename →（失败则镜像回滚）→ 迁移 → 追加日志 → 完整性重定基 | **有**：`.talkdnd.lock`（`create_new` 文件创建式） | **事实**：它不是 OS 锁，见 §1.2。 |
-| 迁移备份 `Saves/_backups/<slot>-<stamp>-schema<n>` | `migrate::backup_save` + `migrate::copy_tree` | 名称用 `exists` 递增，非原子分配；递归复制普通文件/目录，跳过 `_backups`、`.cache`、`.talkdnd` | 无 | **事实**：特殊文件被静默跳过；`.talkdnd.integrity.lock` 与 `.talkdnd.lock` **不在**跳过列表（名称不等于 `.talkdnd` 目录），会被复制进备份。**推断**：该备份不是“完整”证明，也不是锁内快照。 |
+| 迁移备份 `Saves/_backups/<slot>-<stamp>-schema<n>` | `migrate::backup_save` + `migrate::copy_tree` | 名称用 `exists` 递增，非原子分配；递归复制普通文件/目录，跳过 `_backups`、`.cache`、`.talkdnd`，并**仅在存档根目录**跳过四个运行控制文件；符号链接/FIFO 等非普通文件/目录**报错中止**（TASK-0146） | 无 | **事实**：备份不再包含根目录的控制文件，也不再静默跳过特殊文件；嵌套同名文件按普通用户数据保留。**推断**：它仍不是“完整”证明（不是锁内快照），中止时会留下不完整的备份目录。 |
 | 遭遇清单 `combat/campaign.yaml` | `new_save`（`lib.rs`）、`library::sync_campaign_packs`（`atomic_write` 且**不**调用完整性更新）；读取方 `charsheet::party`、`combat-sim` loader | 单文件重写（按行替换 `library:`） | 无 | **事实**：`start` 不在完整性追踪集合内（`lib.rs::run` 对 `Cmd::Start` 取 `tracked=None`），manifest 重写后可无清单更新。 |
 | 遭遇状态 `combat/*.state.json` | `EncounterState::save`（`combat-sim/src/state.rs`），`cli::run_state_command` 顺序：load → 执行 → `state.save` → `write_party_state` → 追加战斗日志 | 单文件 `atomic_write` + 清单更新；三步非事务 | 无保存级锁 | **事实**：战斗命令整套流程没有互斥；与 `talkdnd` 进程之间也没有。 |
 | 候选树 / 阶段记录 / 操作 ID | **不存在**（未来 D 流程才引入） | — | — | **事实**：今天没有操作 ID、阶段记录或候选目录，因此也没有可被锁保护的候选写入。 |
@@ -48,10 +48,10 @@
 
 **checkpoint 锁 `.talkdnd.lock`**（`tools/talkdnd/src/checkpoint.rs`）：
 
-1. 获取 = `OpenOptions::create_new(true)` 创建文件，写入本进程 PID（`Lock::acquire`）。**事实**：不持有任何 OS 文件锁。
-2. 冲突 = 文件已存在；若 `stale()` 判定（mtime 距今 ≥ `LOCK_STALE_SECS = 600` 秒）则 `remove_file` 后重试一次（`stolen` 只允许抢一次），否则报“另一个 checkpoint 操作正在进行”。
-3. 释放 = `Drop` 里 `remove_file(&self.path)`。**事实**：无归属校验、无 inode 校验。
-4. 推论（**推断**，未实测）：(a) 进程被 `SIGKILL` 后锁文件留在原处，最长 600 秒内所有 checkpoint 操作被拒，之后任意后来者删除并接管；(b) 若 A 的快照超过 600 秒（大存档复制），B 会删掉 A 的锁并开工，两个写者同时操作同一存档；(c) 若 B 已接管并新建锁文件，A 结束时 `Drop` 会删除 **B 的** 锁文件，第三个写者因此可以进入；(d) `stale` 只看 mtime，不看持有者是否存活，也不看进程 PID——PID 只被写入、从未被读取。**这不是安全基底。**
+1. 获取 = `OpenOptions::create_new(true)` 创建文件，写入本次 acquire 的**唯一 token**（PID + 纳秒时间 + 进程内单调计数 + 随机键哈希；不是裸 PID），并保留返回的**打开句柄**与其文件标识。**事实**：不持有任何 OS 文件锁。
+2. 冲突 = 文件已存在 → **一律失败关闭**，不删除、不改写、不接管，**不论 mtime 年龄**（TASK-0146 移除了旧的 600 秒 `stale()` 抢占）。错误文案要求先确认没有活写者、再由人工检查并移除锁文件。**事实**：没有自动恢复，也没有基于 PID/mtime 的存活判定。
+3. 释放 = `Drop` 先复核“路径当前指向的文件标识 == 获取时句柄的文件标识”（Unix `dev`+`ino`；Windows `creation_time`，不使用大小/写时间），Windows 上还要求路径上的字节等于本次 acquire 写入的**唯一 token**，**只在复核显示不同才不删除**；删除前先关闭句柄（保守做法：Windows 默认共享模式包含 `FILE_SHARE_DELETE`，允许删除仍打开的文件，不能依赖系统拒绝）。**事实**：路径在持有期间被删除并重建/替换时，旧持有者的 `Drop` 在复核看到不同身份或不同 token 时不会删除新文件；同一进程重新 acquire 也会得到不同 token，因此不会被旧持有者误删。**限制**：token 写在锁文件里、**可被复制**；Windows 上 `creation_time` 可能因 tunneling 或同长度改写而与旧值相同；复核与 `unlink` 之间仍有替换窗口，可移植 API 无法消除。因此**不声称任意替换都不会被误删**，只声称已列出的场景有合成测试。Windows 只能拿到 `creation_time`：`volume_serial_number` / `file_index` 仍是不稳定 API（`windows_by_handle`）。
+4. 推论（**推断**，未实测）：(a) 进程被 `SIGKILL` 后锁文件留在原处，此后所有 checkpoint 操作被拒，直到人工确认无活写者并移除锁文件——不存在“等 600 秒后自动接管”；(b) A 的快照/恢复运行再久也不会被 B 接管，B 一律失败关闭，因此不再有“抢占后两个写者同时操作同一存档”的旧路径；(c) 若 B 在 A 持有期间以非协作方式删除并重建锁文件，A 结束时不再删除 B 的文件（标识不符），但文件锁本身仍不阻止 B 与 A 同时写同一存档；(d) 身份复核只比较“路径→文件标识”，不能发现 inode 复用或保留标识的整盘镜像，也不能阻止非协作进程删除锁文件。**这不是安全基底。**
 
 **完整性锁 `.talkdnd.integrity.lock`**（`tools/combat-sim/src/integrity.rs`）：
 
@@ -65,10 +65,10 @@
 
 ### 1.3 现有锁文件在备份/回滚中的位置（事实与风险）
 
-- `checkpoint::copy_tree` 只跳过 `.talkdnd.lock`；`integrity::LOCK`（`.talkdnd.integrity.lock`）会被复制进备份/回滚镜像。
-- `checkpoint::remove_extras` 同时跳过 `.talkdnd.lock` 与 `integrity::LOCK`（不回删）。
-- 镜像回滚用 `copy_tree(&backup, save)` 写回；`std::fs::copy` 对已存在的目标是**截断写同一 inode**，不是替换 inode，但会**改写**该锁文件的字节内容。**推断**：若回滚发生时另一个进程正持有该 inode 的排他锁，OS 锁仍然有效，但基于文件内容的持有者记录会被污染；因此任何协议都应在取得 OS 锁之后才读记录，并且**不以锁记录作为“有无未结束操作”的唯一依据**（见 §2.2 的持久操作记录）。
-- `migrate::copy_tree` 不跳过任何锁文件，备份里会出现这些锁文件的副本。**推断**：用它恢复/复制时可能把锁文件带到新位置，`(路径, inode)` 级别的锁身份不能因此被当成同一把锁。
+- `checkpoint::copy_tree` **仅在存档根目录**跳过四个运行控制文件（`.talkdnd.lock`、`.talkdnd.integrity.lock`、`.talkdnd.advancement.lock`、`.talkdnd.advancement.state`），并跳过 `.cache`（TASK-0146）；其余非普通文件/目录仍报错中止。**事实**：恢复前的整份备份不再包含根目录的锁或协议状态文件；嵌套同名文件（如 `combat/nested/.talkdnd.advancement.state`）是用户数据，按普通文件备份。
+- `checkpoint::remove_extras` **仅在存档根目录**跳过同一组控制文件，并跳过 `.cache`，镜像回滚不删除它们（TASK-0146）；嵌套同名文件按普通用户数据参与回滚。**事实**：回滚期间另一个进程持有的 `.talkdnd.integrity.lock` 仍是同一 inode，互斥不被破坏；advancement 锁与状态文件字节不变。合成测试 `rollback_keeps_the_integrity_lock_a_concurrent_writer_holds`、`the_restore_backup_excludes_runtime_control_files`、`rollback_restores_a_nested_file_named_like_a_control_file` 覆盖这两点。
+- 镜像回滚用 `copy_tree(&backup, save)` 写回；备份现在不含根目录控制文件，因此回滚不再用 `std::fs::copy` 改写锁文件内容。**推断**：若回滚发生时另一个进程正持有该 inode 的排他锁，OS 锁仍然有效；但“协议应在取得 OS 锁之后才读记录，并且不以锁记录作为有无未结束操作的唯一依据”的结论不变（见 §2.2）。
+- `migrate::copy_tree`（`backup_save`）同样**仅在存档根目录**跳过这四个控制文件，并跳过 `_backups`、`.cache` 与 `.talkdnd`，并对符号链接、FIFO 等非普通文件/目录**报错中止**（消息含路径，TASK-0146），不再静默跳过。**事实**：迁移备份不再复制锁文件，也不会静默缺项。**推断**：中止时备份目录可能不完整，因此“备份目录存在”不等于“备份完整”，用它恢复前必须自行核对。
 
 ### 1.4 现有测试能证明什么（不能证明锁安全）
 
@@ -183,7 +183,7 @@
 - 锁文件被删除/替换：持有者在阶段边界复核“路径 → 句柄 → 文件标识”，不一致立即中止、不再写目标。之后：lock 缺失 → 一切正常操作失败关闭，`init` 也拒绝（state 存在）；出现新 lock（非协作创建）→ `lock_identity` 不符 → `IDENTITY_MISMATCH` 失败关闭。路径/句柄复核不能发现旧 inode 的其它持有者。
 - state 被删除/零字节/校验失败：失败关闭；**绝不**当作首次初始化，也绝不自动重建。恢复只能按 D 备份人工处理。
 - 平台：Linux/macOS `flock`（advisory，按打开文件描述）；Windows `LockFileEx`（字节区锁）。**Windows 实测（TASK-0143 CI）**：持有排他锁时，其它句柄连**读取被锁字节区**都会被拒（`ERROR_LOCK_VIOLATION`），因此持锁期间只能用元数据查询做身份复核，不能另开句柄读取锁文件内容；本库按此实现。网络盘/同步目录/FUSE **UNKNOWN**。`init` 用“第二句柄须与 H 同一文件、且 `try_lock` 必须被拒”做能力自检（不创建探针文件）；失败关闭。该自检只证明同一客户端的锁 API。
-- 共存：总序 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`；反向获取算协议违规。checkpoint/完整性锁语义不变。必须先修的旧行为：checkpoint `Drop` 无条件删除锁文件、mtime 抢占、备份/回滚复制锁文件、`migrate::backup_save` 静默跳过特殊文件——修掉前新锁只约束遵守新协议的写者。
+- 共存：总序 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`；反向获取算协议违规。checkpoint/完整性锁语义不变。旧行为已在 TASK-0146 修正：checkpoint `Drop` 按文件标识删除、取消 mtime 抢占、备份/回滚排除控制文件、`migrate::backup_save` 对特殊文件报错。**事实**：修正后 checkpoint 锁仍不是 OS 锁，也不阻止非协作写者；#264 未解决，这些修正不构成并发安全证明，新锁仍只约束遵守新协议的写者。
 - 不受约束：旧版本二进制、外部编辑器、脚本、同步客户端、杀毒软件、备份工具、其它机器客户端、PDF 转换进程、手工复制。当前 `combat-sim` 尚未接入（写遭遇/party 不取 SAVE）；接入前把遭遇写入当并发风险，活动遭遇只预览。
 - 残余 TOCTOU 无法消除：每文件 rename 前复核仍有窗口；只能缩小、记录复核值、失败时说明“可能已覆盖某次外部写入”。#264 未解决期间同样适用；本设计不解释、不修复首次 `WouldBlock`。
 
@@ -310,7 +310,7 @@ D 流程（完整备份 → 候选构建 → 逐文件发布 → 日志/完整�
 ### 5.4 建议后续任务顺序（依赖顺序，不是排期）
 
 1. **v1 原语与状态机骨架**（独立任务）：实现 lock/state 打开与锁、init 同句柄锁定与多点身份复核、锁头只写一次、state 原子替换、身份/路径/校验、§2.4 判定、§2.9 操作前快照与恢复工作证据（含目录同步）；**不写目标文件**；跑 T1/T2a–T2e/T2f1/T2f2/T3/T4b–T4e/T5a–T5i/T5d1–T5d3/T10/T14。前置：本设计经审查。**已交付（TASK-0143，库与合成测试，未接线）**：覆盖 T1、T2d、T2e、T2f1、T2f2、T3、T4b（temp 写失败分支）、T4d、T5a–T5c、T5d1、T5f、T5g、T10、T14 的合成子集，以及 `admit` 操作前快照（§2.9 前半）。**未交付**：恢复工作证据（§2.9 后半，属第 6 项）、T2c/T4a/T4c/T4e/T5d2/T5d3/T5h/T5i/T6a/T6b/T7a/T7b/T9a/T9b/T11/T12/T13b、真实掉电/网络盘/整盘镜像。库**没有调用方**，所以“不写目标文件”目前靠未接线成立，不是运行时拒绝。
-2. **旧锁行为修正**（独立任务，需行为变更审查）：checkpoint `Drop` 归属校验、取消 mtime 抢占、备份/回滚排除控制文件、`backup_save` 对特殊文件报错；不声称修复 #264。
+2. **旧锁行为修正**（独立任务，需行为变更审查）：checkpoint `Drop` 归属校验、取消 mtime 抢占、备份/回滚排除控制文件、`backup_save` 对特殊文件报错；不声称修复 #264。**已交付（TASK-0146，行为变更）**：`Lock` 保留打开句柄与文件标识（Unix `dev`+`ino`；Windows `creation_time`），`Drop` 只在路径仍指向同一文件时删除；取消 mtime 抢占，锁存在即失败关闭（崩溃后需人工确认无活写者再移除锁文件，**无自动恢复**）；`checkpoint::copy_tree`、`checkpoint::remove_extras` 与 `migrate::copy_tree` **仅在存档根目录**排除 `.talkdnd.lock`、`.talkdnd.integrity.lock`、`.talkdnd.advancement.lock`、`.talkdnd.advancement.state`；嵌套同名文件按普通用户数据备份与回滚；`migrate::copy_tree` 对符号链接/FIFO 报错中止。合成测试覆盖：替换后的锁不被旧持有者删除、陈旧 mtime 仍失败关闭且文件不变、两处备份不含根目录控制文件但保留嵌套同名文件、部分提交失败后回滚恢复嵌套同名文件原字节、回滚保留 integrity 与 advancement 控制文件、Unix 符号链接与 FIFO 下 `ensure` 在写入前失败。**未交付 / 仍未解决**：#264 的首次 `WouldBlock` 根因仍 UNKNOWN，本任务不解释也不修复；checkpoint 锁仍不是 OS 锁，不阻止非协作写者、旧二进制或外部编辑器；没有自动恢复、租约/TTL 或跨主机/网络盘互斥；Windows 的替换与同进程重获取场景由 CI 用真实的删除/重建覆盖（删除失败即测试失败，不静默通过）；Windows 身份 = 稳定的 `creation_time` + 每次 acquire 生成的唯一 token（PID + 纳秒 + 单调计数 + 随机键哈希；`volume_serial_number`/`file_index` 仍不稳定；tunneling 会沿用 `creation_time`），不依赖大小/写时间。**限制**：token 可被复制、`creation_time` 可能碰撞、复核→unlink 仍有窗口，因此不声称任意替换都不会误删。
 3. **接入所有新版本写者**（依赖 1、2 与 OD-2）：跑 T6a；不改变业务语义。
 4. **D 阶段机与备份验证**（依赖 3）：`admit`/`backup`/`candidate`，只到“候选已验证、未发布”；跑 T4a 发布前分支与 OD-7 确认的备份范围。
 5. **发布、日志/完整性与幂等**（依赖 4 与 OD-9）：跑 T2a/T7a/T7b/T8；T6b 未接入前按“未接入”记录。
