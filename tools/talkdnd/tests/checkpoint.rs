@@ -1214,10 +1214,31 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
 /// must not carry them, and a restore must leave the live ones alone. A
 /// backup containing the integrity lock could be restored elsewhere as a
 /// second inode of the "same" lock; a backup containing the advancement lock
-/// or state would clone a lock identity the protocol treats as unique.
+/// or state would clone a lock identity the protocol treats as unique. Only
+/// the save root is excluded: a nested file that merely shares one of these
+/// names is ordinary user data and must stay in the backup.
 #[test]
 fn the_restore_backup_excludes_runtime_control_files() {
     let (root, save) = fixture("backup-control");
+    fs::create_dir_all(save.join("combat/nested")).unwrap();
+    let nested = [
+        ("combat/nested/.talkdnd.lock", "nested checkpoint lock\n"),
+        (
+            "combat/nested/.talkdnd.integrity.lock",
+            "nested integrity lock\n",
+        ),
+        (
+            "combat/nested/.talkdnd.advancement.lock",
+            "nested advancement lock\n",
+        ),
+        (
+            "combat/nested/.talkdnd.advancement.state",
+            "nested advancement state\n",
+        ),
+    ];
+    for (rel, bytes) in nested {
+        fs::write(save.join(rel), bytes).unwrap();
+    }
     let id = snapshot(&save, None);
     let control = [
         (".talkdnd.integrity.lock", "integrity\n"),
@@ -1242,6 +1263,14 @@ fn the_restore_backup_excludes_runtime_control_files() {
         !backup.join(".talkdnd.lock").exists(),
         "the checkpoint lock leaked into the whole-save backup"
     );
+    // A nested file with a control-file name is user data, not a control file.
+    for (rel, bytes) in nested {
+        assert_eq!(
+            fs::read(backup.join(rel)).unwrap(),
+            bytes.as_bytes(),
+            "{rel} is missing from the whole-save backup"
+        );
+    }
     // Ordinary user data is still backed up, directories included.
     assert!(backup.join("progress.yaml").is_file());
     assert!(backup
@@ -1255,6 +1284,43 @@ fn the_restore_backup_excludes_runtime_control_files() {
             "{name} changed"
         );
     }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A nested file that merely shares a control file's name is user data. It
+/// must be in the pre-restore backup and must come back when the commit fails
+/// and the mirror rollback runs. Excluding by basename at every level would
+/// leave the changed copy behind while the message claims a rollback.
+#[test]
+fn rollback_restores_a_nested_file_named_like_a_control_file() {
+    let (root, save) = fixture("nested-control-rollback");
+    let rel = "combat/nested/.talkdnd.advancement.state";
+    fs::create_dir_all(save.join("combat/nested")).unwrap();
+    fs::write(save.join(rel), "original state\n").unwrap();
+    let id = snapshot(&save, None);
+    // A change after the backup is what the rollback has to undo.
+    let hook_save = save.clone();
+    let after_backup = move || {
+        fs::write(hook_save.join(rel), "changed after the backup\n").unwrap();
+    };
+    let err = checkpoint::restore_injecting_after_backup(
+        &root,
+        &save,
+        &id,
+        checkpoint::RestoreFault {
+            fail_rename_at: Some(1),
+            fail_rollback: false,
+            ..Default::default()
+        },
+        &after_backup,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("回滚到恢复前状态"), "{err}");
+    assert_eq!(
+        fs::read_to_string(save.join(rel)).unwrap(),
+        "original state\n",
+        "the rollback left the post-backup change in place"
+    );
     let _ = fs::remove_dir_all(&root);
 }
 

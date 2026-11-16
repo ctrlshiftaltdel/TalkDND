@@ -1497,7 +1497,8 @@ fn backup_save(save: &Path, root: &Path, slot: &str, schema: u32) -> Result<Stri
 
 /// Runtime control files: locks and protocol state. A user-data backup must
 /// not carry them (a copy would clone a lock identity), so the migration
-/// backup and the restore backup use the same list.
+/// backup and the restore backup use the same list. Only the save root is
+/// excluded; a nested file with one of these names is user data.
 const CONTROL_FILES: [&str; 4] = [
     // `checkpoint::LOCK`; the same path is created by checkpoint snapshots.
     ".talkdnd.lock",
@@ -1511,18 +1512,29 @@ fn is_control_file(name: &std::ffi::OsStr) -> bool {
 }
 
 fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
+    copy_tree_at(src, dest, true)
+}
+
+/// `at_root` limits the runtime-control-file exclusion to the save root: a
+/// nested file that merely shares one of those names is user data and must be
+/// backed up like any other file.
+fn copy_tree_at(src: &Path, dest: &Path, at_root: bool) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("create {}", dest.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
         let name = entry.file_name();
-        if is_control_file(&name) || name == BACKUP_DIR || name == ".cache" || name == ".talkdnd" {
+        if (at_root && is_control_file(&name))
+            || name == BACKUP_DIR
+            || name == ".cache"
+            || name == ".talkdnd"
+        {
             continue;
         }
         let from = entry.path();
         let to = dest.join(&name);
         let ft = entry.file_type()?;
         if ft.is_dir() {
-            copy_tree(&from, &to)?;
+            copy_tree_at(&from, &to, false)?;
         } else if ft.is_file() {
             fs::copy(&from, &to)
                 .with_context(|| format!("copy {} to {}", from.display(), to.display()))?;
@@ -2515,13 +2527,32 @@ mod tests {
 
     /// Runtime control files are not user data: the pre-migration backup must
     /// not carry them, while ordinary files and nested directories still are
-    /// copied.
+    /// copied. Only the save root is excluded; a nested file that merely
+    /// shares a control file's name is user data.
     #[test]
     fn the_migration_backup_excludes_runtime_control_files() {
         let root = root("backup-control");
         let save = v7_save(&root, "2030-06-04-01");
         fs::create_dir_all(save.join("combat/nested")).unwrap();
         fs::write(save.join("combat/nested/state.txt"), "keep\n").unwrap();
+        let nested = [
+            ("combat/nested/.talkdnd.lock", "nested checkpoint lock\n"),
+            (
+                "combat/nested/.talkdnd.integrity.lock",
+                "nested integrity lock\n",
+            ),
+            (
+                "combat/nested/.talkdnd.advancement.lock",
+                "nested advancement lock\n",
+            ),
+            (
+                "combat/nested/.talkdnd.advancement.state",
+                "nested advancement state\n",
+            ),
+        ];
+        for (rel, bytes) in nested {
+            fs::write(save.join(rel), bytes).unwrap();
+        }
         let control = [
             (".talkdnd.lock", "checkpoint\n"),
             (".talkdnd.integrity.lock", "integrity\n"),
@@ -2546,6 +2577,13 @@ mod tests {
             );
         }
         assert!(!backup.join(".cache").exists());
+        for (rel, bytes) in nested {
+            assert_eq!(
+                fs::read(backup.join(rel)).unwrap(),
+                bytes.as_bytes(),
+                "{rel} is missing from the migration backup"
+            );
+        }
         assert!(backup.join("combat/nested/state.txt").is_file());
         assert!(backup.join("Sessions/2030-06-01-session-00.md").is_file());
         // The live control files are untouched by the backup.

@@ -61,9 +61,10 @@ const COVERED_FILES: [&str; 7] = [
 /// Directories covered by a checkpoint, recursively.
 const COVERED_DIRS: [&str; 4] = ["Characters", "NPCs", "sheets", "combat"];
 
-/// Runtime control files: locks and protocol state. They are never part of a
-/// user-data backup (a copy would clone a lock identity), and a mirror
-/// rollback must never delete them.
+/// Runtime control files: locks and protocol state. At the save root they are
+/// never part of a user-data backup (a copy would clone a lock identity), and
+/// a mirror rollback must never delete them. Nested entries with the same
+/// name are ordinary user data and are not excluded.
 const CONTROL_FILES: [&str; 4] = [
     LOCK,
     integrity::LOCK,
@@ -1062,17 +1063,23 @@ fn allocate_restore_backup(parent: &Path, slot: &str, stamp: &str, id: &str) -> 
 }
 
 /// Recursive copy (backups and rollback); skips the runtime control files
-/// (see [`CONTROL_FILES`]) and the cache. Refuses any other entry it cannot
-/// reproduce (symlink, socket, …) instead of silently producing an incomplete
-/// backup that a mirror rollback would later treat as the whole pre-restore
-/// tree. Callers that need a faithful backup must pass a destination this
-/// process just created empty: entries already under `dest` are left in place.
+/// (see [`CONTROL_FILES`]) **at the save root only** — a nested file that
+/// merely shares one of those names is user data — and the cache. Refuses any
+/// other entry it cannot reproduce (symlink, socket, …) instead of silently
+/// producing an incomplete backup that a mirror rollback would later treat as
+/// the whole pre-restore tree. Callers that need a faithful backup must pass a
+/// destination this process just created empty: entries already under `dest`
+/// are left in place.
 fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
+    copy_tree_at(src, dest, true)
+}
+
+fn copy_tree_at(src: &Path, dest: &Path, at_root: bool) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("create {}", dest.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
         let name = entry.file_name();
-        if is_control_file(&name) {
+        if at_root && is_control_file(&name) {
             continue;
         }
         let from = entry.path();
@@ -1082,7 +1089,7 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
             if name == ".cache" {
                 continue;
             }
-            copy_tree(&from, &to)?;
+            copy_tree_at(&from, &to, false)?;
         } else if ft.is_file() {
             fs::copy(&from, &to)
                 .with_context(|| format!("copy {} to {}", from.display(), to.display()))?;
@@ -1099,12 +1106,13 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
 /// The removing half of a mirror rollback: delete every entry under `dest`
 /// that has no counterpart under `src`, so the tree matches `src` exactly
 /// after `copy_tree(src, dest)`. The runtime control files (see
-/// [`CONTROL_FILES`]) and `.cache` directories are deliberately outside the
-/// backup scope and are never touched. Returns human-readable leftovers
-/// (`path（error）`) for entries that could not be removed — the caller
-/// must report them instead of claiming a verified rollback.
+/// [`CONTROL_FILES`]) are skipped **at the save root only** (a nested file
+/// with the same name is user data) and `.cache` directories are deliberately
+/// outside the backup scope; neither is ever touched. Returns human-readable
+/// leftovers (`path（error）`) for entries that could not be removed — the
+/// caller must report them instead of claiming a verified rollback.
 fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
-    fn walk(src: &Path, dest: &Path, root: &Path, out: &mut Vec<String>) {
+    fn walk(src: &Path, dest: &Path, root: &Path, at_root: bool, out: &mut Vec<String>) {
         let Ok(rd) = fs::read_dir(dest) else {
             out.push(format!("{}（读不了）", rel(root, dest)));
             return;
@@ -1122,7 +1130,7 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let name = entry.file_name();
-            if is_control_file(&name) || name == ".cache" {
+            if (at_root && is_control_file(&name)) || name == ".cache" {
                 continue;
             }
             let path = entry.path();
@@ -1143,12 +1151,12 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
                 continue;
             }
             if ft.is_dir() {
-                walk(&src_path, &path, root, out);
+                walk(&src_path, &path, root, false, out);
             }
         }
     }
     let mut leftovers = Vec::new();
-    walk(src, dest, root, &mut leftovers);
+    walk(src, dest, root, true, &mut leftovers);
     leftovers
 }
 
@@ -1200,6 +1208,15 @@ struct Lock {
 
 impl Lock {
     fn acquire(save: &Path) -> Result<Lock> {
+        Self::acquire_with(save, |f| f.metadata().ok().as_ref().and_then(identity))
+    }
+
+    /// [`Lock::acquire`] with the identity read injectable, so the failure
+    /// branch can be tested: a file's metadata read never fails in practice.
+    fn acquire_with(
+        save: &Path,
+        read_identity: impl Fn(&fs::File) -> Option<FileIdentity>,
+    ) -> Result<Lock> {
         let path = save.join(LOCK);
         match fs::OpenOptions::new()
             .write(true)
@@ -1208,11 +1225,13 @@ impl Lock {
         {
             Ok(mut f) => {
                 let _ = writeln!(f, "{}", std::process::id());
-                let Some(identity) = f.metadata().ok().as_ref().and_then(identity) else {
+                let Some(identity) = read_identity(&f) else {
+                    // Never unlink by path here: by now the path may name a
+                    // replacement file, and this acquire cannot prove
+                    // otherwise. Leave the file for a human.
                     drop(f);
-                    let _ = fs::remove_file(&path);
                     bail!(
-                        "无法读取锁文件 {} 的身份标识；已放弃获取锁（不会按路径盲删他人锁）",
+                        "无法读取锁文件 {} 的身份标识；本次操作已放弃，锁文件可能残留。请确认没有仍在运行的 checkpoint/恢复写者，再由人工检查并处理该锁文件",
                         path.display()
                     );
                 };
@@ -1248,10 +1267,11 @@ impl Drop for Lock {
         if !same {
             return;
         }
-        // Close the handle first: Windows refuses to unlink an open file, and
-        // the identity was just re-checked against the path. A replacement
-        // between this check and the unlink is not detectable with portable
-        // APIs; the window is unavoidable, only smaller than before.
+        // Close the handle before unlinking (conservative: Windows may allow
+        // deleting an open file, so the OS is not the guard here). The
+        // identity was just re-checked against the path; a replacement between
+        // that check and the unlink is not detectable with portable APIs, so
+        // the window is unavoidable, only smaller than before.
         drop(self.file.take());
         let _ = fs::remove_file(&self.path);
     }
@@ -1311,9 +1331,8 @@ mod lock_tests {
     }
 
     /// A lock file deleted and re-created while held belongs to the new
-    /// writer; the old holder's `Drop` must leave it alone. Windows refuses
-    /// to unlink a file that still has an open handle, so the replacement
-    /// cannot be constructed there.
+    /// writer; the old holder's `Drop` must leave it alone. The Windows
+    /// equivalent is `drop_keeps_a_replacement_lock_file_on_windows`.
     #[cfg(unix)]
     #[test]
     fn drop_keeps_a_lock_file_that_was_replaced_after_acquire() {
@@ -1325,6 +1344,64 @@ mod lock_tests {
         drop(held);
         assert!(path.exists(), "the old holder deleted the new lock file");
         assert_eq!(fs::read_to_string(&path).unwrap(), "someone else\n");
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    /// Windows default sharing (`FILE_SHARE_DELETE`) may allow unlinking an
+    /// open file, so the old holder cannot rely on the OS refusing: the
+    /// identity check is what protects the replacement. If this system does
+    /// refuse the unlink, the actual error is printed and the replacement
+    /// branch is not exercised (no fake pass).
+    #[cfg(windows)]
+    #[test]
+    fn drop_keeps_a_replacement_lock_file_on_windows() {
+        let save = scratch("replaced-win");
+        let path = save.join(LOCK);
+        let held = Lock::acquire(&save).unwrap();
+        match fs::remove_file(&path) {
+            Ok(()) => {
+                fs::write(&path, "someone else\n").unwrap();
+                drop(held);
+                assert!(path.exists(), "the old holder deleted the new lock file");
+                assert_eq!(fs::read_to_string(&path).unwrap(), "someone else\n");
+            }
+            Err(err) => {
+                println!(
+                    "this system refused to unlink the held lock file ({err}); \
+                     the replacement branch was not exercised"
+                );
+                drop(held);
+                assert!(
+                    !path.exists(),
+                    "a normally released lock must be removed by its own holder"
+                );
+            }
+        }
+        let _ = fs::remove_dir_all(&save);
+    }
+
+    /// When the identity cannot be read, the acquire fails without unlinking
+    /// the path: by then the path may already name a replacement file.
+    #[test]
+    fn an_unreadable_lock_identity_leaves_the_file_for_manual_handling() {
+        let save = scratch("identity");
+        let err = Lock::acquire_with(&save, |_| None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("人工"),
+            "the failure must send the operator to manual handling: {msg}"
+        );
+        let path = save.join(LOCK);
+        assert!(
+            path.exists(),
+            "the failed acquire must not unlink the lock file by path"
+        );
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains(&std::process::id().to_string()),
+            "the file is the one this acquire created"
+        );
         let _ = fs::remove_dir_all(&save);
     }
 }
