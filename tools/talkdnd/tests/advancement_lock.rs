@@ -1,11 +1,14 @@
 //! Synthetic tests for the cooperative advancement lock (v1).
 //!
 //! Every fixture is created here; no test reads a real save, a book or a
-//! secret. Path-replacement injection and the read-only permission tests are
-//! Unix-only because Windows file-sharing and mode semantics for them are
-//! unverified (see `docs/ADVANCEMENT-LOCK-DESIGN.md` §2.8 and the task's
-//! `unverified_assumptions`). Everything else, including the multi-process
-//! cases, runs on every platform.
+//! secret. Path-replacement injection, the read-only permission tests and the
+//! tests that need a commit (`begin_operation`) are Unix-only: the first two
+//! because Windows file-sharing and mode semantics for them are unverified,
+//! the last because a commit requires directory fsync, which Windows does not
+//! provide. The Windows-only test asserts that refusal, and every test that
+//! does not need a commit — including the multi-process cases — runs on every
+//! platform. See `docs/ADVANCEMENT-LOCK-DESIGN.md` §2.6 and the task's
+//! `unverified_assumptions`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -589,6 +592,7 @@ fn a_read_only_success_path_writes_nothing() {
 
 // ------------------------------------------------------------ predicate ----
 
+#[cfg(unix)]
 #[test]
 fn only_ready_complete_or_zero_write_failed_is_writable() {
     let dir = root("predicate");
@@ -613,6 +617,7 @@ fn only_ready_complete_or_zero_write_failed_is_writable() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn failed_is_only_allowed_before_any_target_write() {
     let dir = root("failed");
@@ -644,6 +649,7 @@ fn failed_is_only_allowed_before_any_target_write() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn complete_needs_all_verification_and_no_pending_intent() {
     let dir = root("complete");
@@ -731,6 +737,7 @@ fn a_forged_self_consistent_complete_with_an_unfinished_publish_is_refused() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn state_updates_replace_atomically_and_never_truncate_in_place() {
     let dir = root("revisions");
@@ -761,6 +768,7 @@ fn state_updates_replace_atomically_and_never_truncate_in_place() {
 
 // --------------------------------------------------- on-disk state recheck ----
 
+#[cfg(unix)]
 #[test]
 fn a_state_deleted_after_open_is_not_rebuilt() {
     let dir = root("disk-delete");
@@ -785,6 +793,7 @@ fn a_state_deleted_after_open_is_not_rebuilt() {
     assert!(!state.exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_state_zeroed_corrupted_or_replaced_after_open_stops_every_update() {
     fn case(tag: &str, mutate: impl Fn(&Path)) {
@@ -835,6 +844,7 @@ fn check_writable_rechecks_the_disk_state() {
 
 // -------------------------------------------------------- pre-state (D) ----
 
+#[cfg(unix)]
 #[test]
 fn begin_operation_snapshots_the_previous_state_before_becoming_active() {
     let dir = root("prestate");
@@ -856,6 +866,7 @@ fn begin_operation_snapshots_the_previous_state_before_becoming_active() {
     assert!(doc["state_bytes"].as_str().unwrap().contains("\"ready\""));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_failed_prestate_snapshot_leaves_the_state_untouched() {
     let dir = root("prestate-fail");
@@ -889,6 +900,7 @@ fn begin_operation_creates_and_syncs_nested_evidence_directories() {
     assert_eq!(lock.state().state, adv::State::Active);
 }
 
+#[cfg(unix)]
 #[test]
 fn begin_operation_fails_when_a_directory_cannot_be_created() {
     let dir = root("prestate-dirfail");
