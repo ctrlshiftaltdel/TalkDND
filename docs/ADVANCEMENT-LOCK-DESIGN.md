@@ -50,7 +50,7 @@
 
 1. 获取 = `OpenOptions::create_new(true)` 创建文件，写入本进程 PID（`Lock::acquire`），并保留返回的**打开句柄**与其文件标识。**事实**：不持有任何 OS 文件锁。
 2. 冲突 = 文件已存在 → **一律失败关闭**，不删除、不改写、不接管，**不论 mtime 年龄**（TASK-0146 移除了旧的 600 秒 `stale()` 抢占）。错误文案要求先确认没有活写者、再由人工检查并移除锁文件。**事实**：没有自动恢复，也没有基于 PID/mtime 的存活判定。
-3. 释放 = `Drop` 先复核“路径当前指向的文件标识 == 获取时句柄的文件标识”（Unix `dev`+`ino`；Windows `creation_time`，不使用大小/写时间），一致才删除；删除前先关闭句柄（Windows 不允许 unlink 仍打开的文件）。**事实**：路径在持有期间被删除并重建或替换时，旧持有者的 `Drop` 不会删除新文件。Windows 只能拿到 `creation_time`：`volume_serial_number` / `file_index` 仍是不稳定 API（`windows_by_handle`），且同长度改写会保留 `creation_time`，因此不能发现每一次替换。
+3. 释放 = `Drop` 先复核“路径当前指向的文件标识 == 获取时句柄的文件标识”（Unix `dev`+`ino`；Windows `creation_time`，不使用大小/写时间），一致才删除；删除前先关闭句柄（Windows 不允许 unlink 仍打开的文件）。**事实**：路径在持有期间被删除并重建或替换时，旧持有者的 `Drop` 不会删除新文件；复核与 `unlink` 之间仍有极小窗口，可移植 API 无法消除。Windows 只能拿到 `creation_time`：`volume_serial_number` / `file_index` 仍是不稳定 API（`windows_by_handle`），且同长度改写会保留 `creation_time`，因此不能发现每一次替换。
 4. 推论（**推断**，未实测）：(a) 进程被 `SIGKILL` 后锁文件留在原处，此后所有 checkpoint 操作被拒，直到人工确认无活写者并移除锁文件——不存在“等 600 秒后自动接管”；(b) A 的快照/恢复运行再久也不会被 B 接管，B 一律失败关闭，因此不再有“抢占后两个写者同时操作同一存档”的旧路径；(c) 若 B 在 A 持有期间以非协作方式删除并重建锁文件，A 结束时不再删除 B 的文件（标识不符），但文件锁本身仍不阻止 B 与 A 同时写同一存档；(d) 身份复核只比较“路径→文件标识”，不能发现 inode 复用或保留标识的整盘镜像，也不能阻止非协作进程删除锁文件。**这不是安全基底。**
 
 **完整性锁 `.talkdnd.integrity.lock`**（`tools/combat-sim/src/integrity.rs`）：

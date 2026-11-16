@@ -1249,7 +1249,9 @@ impl Drop for Lock {
             return;
         }
         // Close the handle first: Windows refuses to unlink an open file, and
-        // the identity was just re-checked against the path.
+        // the identity was just re-checked against the path. A replacement
+        // between this check and the unlink is not detectable with portable
+        // APIs; the window is unavoidable, only smaller than before.
         drop(self.file.take());
         let _ = fs::remove_file(&self.path);
     }
