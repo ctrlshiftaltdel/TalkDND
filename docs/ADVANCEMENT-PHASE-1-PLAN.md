@@ -121,6 +121,8 @@
   - [ ] `AC-3`: 清单与计划不把未实现/未验证能力写成已完成；不声称现有 checkpoint/完整性锁能保护角色/party/进度/日志内容；不改变 #264 结论；未决接入语义标 `NEEDS_HUMAN_DECISION`。
   - [ ] `AC-4`: 仅修改两个允许文档；清单与计划不含真实存档、书籍或秘密；证据矩阵绑定实际 head。
 
+**分批过渡门（OD-2）**：`ADV-P1-1a`–`ADV-P1-1e` 各自是独立可交付块；每块发布时必须满足自己的过渡门 AC——同一存档上其余未接入写入口要么失败关闭拒绝写入，要么经合成测试证明**整个 CLI 运行**真正只读（不是只证明某个函数体不写）。该门是每个子块的发布条件，**不要求等 `ADV-P1-1e` 或全部组完成**；没有该证据不得发布该部分接入。测试归属写在各自 AC 中，覆盖清单引用 [写者盘点](ADVANCEMENT-WRITER-INVENTORY.md) §2/§5。
+
 ### Task: `ADV-P1-1a` — CLI 角色 / 进度 / 账本写者接入
 
 - **Goal:** 让会写角色卡、建卡状态、进度/XP/钱袋、场景、识别/揭示/原创/实体/关系/世界时间/记忆/设置/秘密/资料/冒险索引的 CLI 入口在写存档前取得 SAVE 锁，并在锁不可用时失败关闭；纯只读入口明确声明只读。
@@ -128,15 +130,16 @@
 - **Depends on:** `ADV-P1-1`（清单）、#282、#286
 - **Acceptance criteria:**
   - [ ] `AC-1`: 清单 §2.1、§2.2、§2.6 中会写存档的入口全部在写目标前取得 SAVE 锁；锁序为 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`，不得反向。
-  - [ ] `AC-2`: SAVE state 缺失、不可写、`active` 或 `in_doubt` 时，每个入口失败关闭且不写目标；合成测试逐条覆盖，错误信息说明未写/可能已写阶段。
+  - [ ] `AC-2`: SAVE state 缺失、不可写、`active` 或 `in_doubt` 时，每个入口失败关闭且不写目标；合成测试逐条覆盖，错误信息说明未写/可能已写阶段。**state 缺失时的拒绝是决定前的临时保守处理**，不是最终 UX/兼容决定；最终语义按本节末 `NEEDS_HUMAN_DECISION` 处理。
   - [ ] `AC-3`: `char <who> spells` 普通视图保持只读（运行前后整树字节一致）；`char show` 及其余 `char` op 走 SAVE；`guard`/`secret list` 的缓存写入要么在 SAVE 内，要么按 `NEEDS_HUMAN_DECISION` 改为不写缓存。
   - [ ] `AC-4`: 旧 `progress::level_up` 的结构化与 Markdown 两条路径仍可用；回归测试证明未删除、未跳过、未弱化，且两条路径都被盘点并纳入保护。
   - [ ] `AC-5`: 本块不启用任何新的属性提升/专长选择或 D 协议提交入口；不新增 schema/sidecar。
   - [ ] `AC-6`: 未初始化存档、拒绝 UX 与 CLI 兼容按本节末的 `NEEDS_HUMAN_DECISION` 记录，不由执行者自行决定。
+  - [ ] `AC-7`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
 
 ### Task: `ADV-P1-1b` — party / combat 写者接入
 
-- **Goal:** 让 `combat-sim` 会改遭遇/party 的命令与 `party rest|set-hp|sync` 在写 `combat/*.state.json`、`combat/party-state.yaml`、`rolls.log` 或会话日志前取得 SAVE 锁；只读战斗命令明确声明只读。
+- **Goal:** 让 `combat-sim` 会改遭遇/party 的命令、`party rest|set-hp|sync`，以及 `--out` 指向存档内的 `content import*`/`pack build|release` 在写存档前取得 SAVE 锁；只读战斗命令明确声明只读。
 - **建议允许路径：** `tools/combat-sim/src/`（`cli.rs`、`party.rs`、`state.rs`、`integrity.rs`、`player.rs`）、`tools/talkdnd/src/charsheet.rs`（party 保存调用点）、`tools/combat-sim/tests/`、`tools/talkdnd/tests/`、`docs/ADVANCEMENT-WRITER-INVENTORY.md`（只记录接入状态与证据位置）
 - **Depends on:** `ADV-P1-1a`、`ADV-P1-1`、#286
 - **Acceptance criteria:**
@@ -145,18 +148,22 @@
   - [ ] `AC-3`: `PartyState::save` 与 `EncounterState::save` 不再把完整性锁当作内容保护；合成测试证明 party/state 内容写入受 SAVE 约束。
   - [ ] `AC-4`: `combat-sim` 不新增对 `talkdnd` 的依赖；SAVE 锁原语是共享还是由 `talkdnd` 包装，按本节末的 `NEEDS_HUMAN_DECISION` 记录并实施。
   - [ ] `AC-5`: 活动遭遇识别算法不因本块被发明；`.state.json` 只作为未来判定输入，不声称已解决活动遭遇只预览。
+  - [ ] `AC-6`: `combat-sim content import srd-prose|srd-pack|srd` 与 `content pack build|release` 的 `--out` 指向存档内时，必须接入 SAVE 或失败关闭拒绝写入；目标在存档外时才可按存档外写入声明。`--dry-run` 保持只读。用 `tools/combat-sim/tests/` 的合成测试分别覆盖“out 在存档内”和“out 在存档外”，并把它们纳入提交入口启用前的覆盖门（`ADV-P1-10`）。
+  - [ ] `AC-7`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/combat-sim/tests/` 与 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5，并包含 AC-6 的存档内输出目标。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
 
 ### Task: `ADV-P1-1c` — checkpoint / migrate 写者接入
 
 - **Goal:** 让 `checkpoint snapshot`、`checkpoint restore` 与 `migrate` 在整树读写前取得 SAVE 锁，并保持 `SAVE → checkpoint → integrity` 的总序；只读的 checkpoint 查询与 `migrate --dry-run` 保持只读。
-- **建议允许路径：** `tools/talkdnd/src/checkpoint.rs`、`tools/talkdnd/src/migrate.rs`、`tools/talkdnd/src/save.rs`、`tools/talkdnd/tests/`、`docs/ADVANCEMENT-LOCK-DESIGN.md`（只记录接入状态与证据位置）
+- **建议允许路径：** `tools/talkdnd/src/checkpoint.rs`、`tools/talkdnd/src/migrate.rs`、`tools/talkdnd/src/save.rs`、`tools/talkdnd/src/lib.rs`（`tracked` 分支）、`tools/talkdnd/tests/`（含必要审计测试）、`docs/ADVANCEMENT-LOCK-DESIGN.md`（只记录接入状态与证据位置）
 - **Depends on:** `ADV-P1-1b`、`ADV-P1-1`
 - **Acceptance criteria:**
   - [ ] `AC-1`: `checkpoint snapshot` / `restore` / `migrate` 在写任何目标前取得 SAVE 锁，再按 `checkpoint .talkdnd.lock` → `integrity .talkdnd.integrity.lock` 获取；反向获取在合成用例中被判为协议违规。
   - [ ] `AC-2`: 备份/恢复继续排除根目录控制文件；特殊文件、空间不足、同步失败或结果不明时停止，保留不完整备份并报告阶段。
-  - [ ] `AC-3`: `checkpoint list|show` 与 `migrate --dry-run` 运行前后整树字节一致；不得因接入锁而创建 lock/state 或写探针。
+  - [ ] `AC-3`: `checkpoint list|show` 与 `migrate --dry-run` 运行**整个 CLI** 前后整树字节一致；必须调整 `lib.rs` 的 `tracked` 分支或等价机制以消除外层审计写入，不得只证明函数体只读，也不得因接入锁而创建 lock/state 或写探针。
   - [ ] `AC-4`: 不改变 #264 结论；不声称 checkpoint 锁是 OS 锁、能保护内容或约束非协作写者。
   - [ ] `AC-5`: 未初始化存档与“迁移/恢复是否自动 init”的语义按本节末的 `NEEDS_HUMAN_DECISION` 记录。
+  - [ ] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
+  - [ ] `AC-7`: T6a 独立取证：`checkpoint snapshot` / `restore` 与成长路径按总序 `SAVE → checkpoint → integrity` 竞争，使用两进程 + 测试级超时；挂起即判失败，不以“没死锁”代替证据。若正式提交尚未接线，使用等价合成持锁路径并限定证据范围；记录平台、head 与逐项结果。
 
 ### Task: `ADV-P1-1d` — 日志 / 完整性写者接入
 
@@ -169,6 +176,7 @@
   - [ ] `AC-3`: 日志追加保持不截断、不改写既有行；重复请求的幂等仍由 `ADV-P1-4` 设计，不在本块声称已实现。
   - [ ] `AC-4`: `check`（无参数）与 `integrity status` 的“可能创建清单/baseline”按写入入口处理，不列为纯只读。
   - [ ] `AC-5`: 合成测试覆盖锁不可用时的拒绝、日志不重复/不丢失的既有语义，以及清单更新失败不洗掉 dirty 标记。
+  - [ ] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 与 `tools/combat-sim/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
 
 ### Task: `ADV-P1-1e` — sidecar / schema 元数据 / 缓存写者接入
 
@@ -180,7 +188,8 @@
   - [ ] `AC-2`: 当前不存在选择 sidecar 写入路径；本块不创建 sidecar、不新增 schema 11、不预设字段或路径。
   - [ ] `AC-3`: 选择 sidecar 与主 schema 元数据作为未来发布目标，由 `ADV-P1-6` 按 `ADV-P1-4` 的注册方式接入；本块只记录归属，不声称已覆盖。
   - [ ] `AC-4`: `guard`/`secret list` 的缓存与 `start` 的 `.cache`/`digest` 按本节末的 `NEEDS_HUMAN_DECISION` 决定是纳入 SAVE 还是改为不写；未决前按保守方式处理。
-  - [ ] `AC-5`: 不把缓存、备份目录或控制元数据当成用户数据完整备份的一部分；保留/清理责任仍按已批准边界未定。
+  - [ ] `AC-5`: D 完整备份**包含既有用户备份**；lock、操作前快照、恢复工作记录等控制元数据**单独保留、不并入该备份**；缓存/派生文件按已批准分类处理，保留与清理责任未定。不得把“备份目录存在”当成完整备份，也不得把控制元数据混入用户数据备份。
+  - [ ] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等全部组完成。
 
 **接入语义未决（`NEEDS_HUMAN_DECISION`，不得由执行者自行决定）：**
 
