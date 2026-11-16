@@ -1155,13 +1155,15 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
 // --------------------------------------------------------------------- lock
 
 /// Stable identity of the lock file, re-readable from the path after the fact.
-/// Unix: device + inode. Windows: volume serial + file index + creation time.
-/// Size and write time are deliberately not part of it: writing the PID into
-/// the fresh file changes them, and they are not unique.
+/// Unix: device + inode. Windows: `creation_time` — the stable, re-readable
+/// metadata identifier available in stable `std` (`volume_serial_number` and
+/// `file_index` are still unstable, `windows_by_handle`). Size and write time
+/// are deliberately not part of it: writing the PID into the fresh file
+/// changes them, and they are not unique.
 #[cfg(unix)]
 type FileIdentity = (u64, u64);
 #[cfg(windows)]
-type FileIdentity = (u64, u64, u64);
+type FileIdentity = u64;
 #[cfg(not(any(unix, windows)))]
 type FileIdentity = (u64, u64);
 
@@ -1174,11 +1176,9 @@ fn identity(meta: &fs::Metadata) -> Option<FileIdentity> {
 #[cfg(windows)]
 fn identity(meta: &fs::Metadata) -> Option<FileIdentity> {
     use std::os::windows::fs::MetadataExt;
-    Some((
-        u64::from(meta.volume_serial_number()?),
-        meta.file_index()?,
-        meta.creation_time(),
-    ))
+    // Known limit: a same-length rewrite of the lock file keeps
+    // `creation_time`, so this cannot detect every replacement.
+    Some(meta.creation_time())
 }
 
 #[cfg(not(any(unix, windows)))]
