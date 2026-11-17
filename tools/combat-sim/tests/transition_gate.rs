@@ -265,25 +265,10 @@ fn help_declares_the_refusal_and_its_exit_code() {
     let top = output_text(&out);
     assert!(top.contains("成长协议"), "{top}");
     assert!(top.contains("退出码 1"), "{top}");
-    for command in ["attack", "party", "content"] {
+    for &args in WRITE_HELP {
         let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
             .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .args([command, "--help"])
-            .output()
-            .expect("failed to run combat-sim --help");
-        let text = output_text(&out);
-        assert!(
-            text.contains("退出码 1"),
-            "`combat-sim {command} --help` must declare the refusal\n{text}"
-        );
-    }
-    for args in [
-        vec!["party", "rest", "--help"],
-        vec!["content", "pack", "build", "--help"],
-    ] {
-        let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .args(&args)
+            .args(args)
             .output()
             .expect("failed to run combat-sim --help");
         let text = output_text(&out);
@@ -293,4 +278,200 @@ fn help_declares_the_refusal_and_its_exit_code() {
             args.join(" ")
         );
     }
+}
+
+/// Every write leaf of `combat-sim`, as a `--help` path.
+const WRITE_HELP: &[&[&str]] = &[
+    &["new", "--help"],
+    &["quick", "--help"],
+    &["init", "--help"],
+    &["attack", "--help"],
+    &["grapple", "--help"],
+    &["shove", "--help"],
+    &["damage", "--help"],
+    &["heal", "--help"],
+    &["save", "--help"],
+    &["check", "--help"],
+    &["roll", "--help"],
+    &["cast", "--help"],
+    &["use", "--help"],
+    &["condition", "add", "--help"],
+    &["condition", "remove", "--help"],
+    &["move", "--help"],
+    &["ready", "--help"],
+    &["trigger", "--help"],
+    &["ready-clear", "--help"],
+    &["fly", "--help"],
+    &["fall", "--help"],
+    &["interact", "--help"],
+    &["deathsave", "--help"],
+    &["next", "--help"],
+    &["rest", "--help"],
+    &["activate", "--help"],
+    &["add", "--help"],
+    &["party", "rest", "--help"],
+    &["party", "set-hp", "--help"],
+    &["party", "sync", "--help"],
+    &["content", "import-srd", "--help"],
+    &["content", "import-srd-prose", "--help"],
+    &["content", "import-srd-pack", "--help"],
+    &["content", "pack", "build", "--help"],
+    &["content", "pack", "release", "--help"],
+];
+
+/// A relative `--state` that points into a protected save is refused even
+/// though `--save` names an unprotected directory.
+#[test]
+fn a_relative_state_path_inside_a_protected_save_is_refused() {
+    let fixture = fixture("relative-state");
+    let protected = fixture.root.join("Saves/p");
+    fs::create_dir_all(protected.join("combat")).unwrap();
+    fs::write(protected.join(LOCK), b"probe lock\n").unwrap();
+    let plain = fixture.root.join("Saves/plain");
+    fs::create_dir_all(&plain).unwrap();
+    let before = snapshot(&protected);
+    let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .current_dir(fixture.root.join("Saves"))
+        .args(["--state", "p/combat/e.state.json", "--save"])
+        .arg(&plain)
+        .args(["init", "--seed", "1"])
+        .output()
+        .expect("failed to run combat-sim");
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&protected), before);
+}
+
+/// A symlink that reaches a protected save is resolved, not walked lexically.
+#[cfg(unix)]
+#[test]
+fn a_state_path_through_a_symlink_to_a_protected_save_is_refused() {
+    let fixture = fixture("symlink-state");
+    let protected = fixture.root.join("Saves/p");
+    fs::create_dir_all(protected.join("combat")).unwrap();
+    fs::write(protected.join(STATE), b"probe state\n").unwrap();
+    let plain = fixture.root.join("Saves/plain");
+    fs::create_dir_all(&plain).unwrap();
+    let alias = fixture.root.join("alias");
+    std::os::unix::fs::symlink(&protected, &alias).unwrap();
+    let before = snapshot(&protected);
+    let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .args(["--state"])
+        .arg(alias.join("combat/e.state.json"))
+        .arg("--save")
+        .arg(&plain)
+        .args(["init", "--seed", "1"])
+        .output()
+        .expect("failed to run combat-sim");
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&protected), before);
+}
+
+/// A campaign outside the save whose `state_dir` points into a protected save
+/// is refused: the party state target is a write target.
+#[test]
+fn a_campaign_state_dir_inside_a_protected_save_is_refused() {
+    let fixture = fixture("manifest-state-dir");
+    let protected = fixture.root.join("Saves/p");
+    let state_dir = protected.join("combat");
+    fs::create_dir_all(&state_dir).unwrap();
+    fs::write(protected.join(LOCK), b"probe lock\n").unwrap();
+    let plain = fixture.root.join("Saves/plain");
+    fs::create_dir_all(&plain).unwrap();
+    let outside = fixture.root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let campaign = outside.join("campaign.yaml");
+    fs::write(
+        &campaign,
+        format!(
+            "name: Outside\nparty: [striker-a]\nstate_dir: {}\n",
+            state_dir.display()
+        ),
+    )
+    .unwrap();
+    let before = snapshot(&protected);
+    let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .arg("--save")
+        .arg(&plain)
+        .arg("--campaign")
+        .arg(&campaign)
+        .args(["party", "set-hp", "striker-a", "1"])
+        .output()
+        .expect("failed to run combat-sim");
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&protected), before);
+}
+
+/// A state file outside the save whose recorded `party_state` points into a
+/// protected save is refused.
+#[test]
+fn a_state_party_state_inside_a_protected_save_is_refused() {
+    let fixture = fixture("state-party-state");
+    let protected = fixture.root.join("Saves/p");
+    let party = protected.join("combat/party-state.yaml");
+    fs::create_dir_all(party.parent().unwrap()).unwrap();
+    fs::write(protected.join(LOCK), b"probe lock\n").unwrap();
+    let plain = fixture.root.join("Saves/plain");
+    fs::create_dir_all(&plain).unwrap();
+    let outside = fixture.root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    // Start from the valid fixture state and only rewrite `party_state`.
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&fixture.state).unwrap()).unwrap();
+    value["party_state"] = serde_json::Value::String(party.to_string_lossy().into_owned());
+    let state = outside.join("e.state.json");
+    fs::write(&state, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    let before = snapshot(&protected);
+    let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .arg("--state")
+        .arg(&state)
+        .arg("--save")
+        .arg(&plain)
+        .args(["init", "--seed", "1"])
+        .output()
+        .expect("failed to run combat-sim");
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&protected), before);
+}
+
+/// A state file whose `party_state` is outside every save keeps its old
+/// behaviour.
+#[test]
+fn a_state_party_state_outside_the_saves_is_not_refused() {
+    let fixture = fixture("state-party-state-outside");
+    let plain = fixture.root.join("Saves/plain");
+    fs::create_dir_all(&plain).unwrap();
+    let outside = fixture.root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&fixture.state).unwrap()).unwrap();
+    value["party_state"] = serde_json::Value::String(
+        outside
+            .join("party-state.yaml")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let state = outside.join("e.state.json");
+    fs::write(&state, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .arg("--state")
+        .arg(&state)
+        .arg("--save")
+        .arg(&plain)
+        .args(["status"])
+        .output()
+        .expect("failed to run combat-sim");
+    let text = output_text(&out);
+    assert!(!text.contains("尚未接入成长协议"), "{text}");
+    assert!(
+        out.status.success(),
+        "status on an external state must keep working\n{text}"
+    );
 }

@@ -31,7 +31,8 @@
 
 - 程序**不会**自己创建这两个文件；没有它们的存档与以前完全一样。
 - 有这两个文件时，尚未接入成长协议的写命令（例如 `talkdnd xp add`、`talkdnd char`、`talkdnd log`、`talkdnd checkpoint "<内容>"`、`combat-sim attack`）会**以退出码 1 拒绝执行**，并说明“已启用成长协议、该入口尚未接入、未写入任何目标文件”。不要当成临时错误反复重试，也不要删除或改写这两个文件。
-- 只读命令（`known`、`xp show`、`log rolls`、`checkpoint list`、`combat-sim status` 等）照常可用；`guard` 与 `secret list` 的缓存、`start` 的 `digest.md` 仍会写入，它们属于控制元数据，不算用户数据。
+- 只读命令（`known`、`xp show`、`log rolls`、`checkpoint list`、`combat-sim status` 等）照常可用；`guard` 与 `secret list` 的缓存仍会写入，它属于控制元数据，不算用户数据。
+- `start` **整条命令会被拒绝**：它既写 `digest.md` 与缓存，也会迁移存档内容，属于尚未接入的写命令。`digest.md`/缓存被归为控制元数据，不代表 `start` 会运行；需要摘要时先等该入口接入或使用已接入的只读命令。
 - `talkdnd new` 仍可创建新存档；新存档默认不启用协议。
 - 具体命令的 `--help` 会重复这条说明。
 

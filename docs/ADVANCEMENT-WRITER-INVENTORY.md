@@ -238,9 +238,13 @@
 | 没有 lock/state | 既有行为完全不变；门不创建控制文件，也不自动 `init` |
 | 有任一控制文件 + 未接入写入口 | 退出码 1，文案说明“已启用成长协议 / 该入口尚未接入 / 未写入任何目标文件”；在 dispatch 之前拒绝 |
 | 有控制文件 + 只读入口 | 命令照常运行；同时关闭该次运行的命令后完整性审计写入，保证整次运行不改存档字节（#285 跟踪无协议时的同类副作用） |
-| 有控制文件 + 缓存/控制元数据（`guard`、`secret list` 的 `secret-terms.cache.json`，`start` 的 `digest.md`/`.cache`） | 放行；缓存写入按控制元数据，不取 SAVE 锁、不并入用户备份 |
+| 有控制文件 + 缓存/控制元数据（`guard`、`secret list` 的 `secret-terms.cache.json`） | 放行；缓存写入按控制元数据，不取 SAVE 锁、不并入用户备份 |
+| 有控制文件 + `start` | **整条命令被拒绝**（`UnadoptedWrite`）：它既写 `digest.md`/缓存，也会迁移存档内容。`digest.md`/`.cache` 属于控制元数据这一分类**不**代表 `start` 会运行，也不代表它只跑缓存 |
 | `new`（新存档） | 放行：只创建新槽，不写已启用协议的存档 |
 | 控制文件存在但损坏 / 零字节 / 悬空符号链接 | 一律视为“协议存在”，失败关闭（不做任何解析） |
+| 写目标无法解析为绝对路径（不可读祖先、符号链接环、缺失段后的 `..`、无工作目录） | 失败关闭（`Unresolved`，退出码 1）：门不会猜测它属于哪个存档 |
+| `--book` 指向另一存档内的书目录（`adventure index build`、`handout build/mark`） | 逐目标解析并检查其所属存档；属于已启用协议的存档即拒绝，选中的存档未初始化也不放行 |
+| `combat-sim` 的 campaign `state_dir/party-state.yaml` 或 state 里记录的 `party_state` 指向已启用协议的存档 | 在首次写入前拒绝，即使 `--save` 指向未受保护的目录 |
 
 **§2 行 → 注册表条目映射（`WRITERS` 逐条对应，注册表是权威）：**
 
@@ -270,7 +274,7 @@
 | §2.4 `checkpoint snapshot` | `talkdnd:checkpoint-snapshot` | `UnadoptedWrite` | 否（过渡门拒绝） |
 | §2.4 `checkpoint restore` | `talkdnd:checkpoint-restore` | `UnadoptedWrite` | 否（过渡门拒绝） |
 | §2.4 `migrate`（非 dry-run） | `talkdnd:migrate` | `UnadoptedWrite` | 否（过渡门拒绝） |
-| §2.4 `start` | `talkdnd:start` | `UnadoptedWrite` | 否（过渡门拒绝） |
+| §2.4 `start` | `talkdnd:start` | `UnadoptedWrite` | 否（过渡门拒绝**整条命令**，`digest.md`/缓存也不写） |
 | §2.5 `log <text>` | `talkdnd:log` | `UnadoptedWrite` | 否（过渡门拒绝） |
 | §2.5 `check`（含无参数） | `talkdnd:check` | `UnadoptedWrite` | 否（过渡门拒绝） |
 | §2.5 `integrity status` | `talkdnd:integrity-status` | `UnadoptedWrite` | 否（过渡门拒绝） |
@@ -302,18 +306,19 @@
 | §2.7 `content pack build/release --dry-run` | `combat-sim:pack-build-dry-run` / `:pack-release-dry-run` | `ReadOnly` | 不适用（不写文件） |
 | §2.8 `guard` | `talkdnd:guard` | `ControlMetadata` | 不适用（只写缓存） |
 | §2.8 `secret list` | `talkdnd:secret-list` | `ControlMetadata` | 不适用（只写缓存） |
-| §2.8 `start` 的 `digest.md`/`.cache` | 归入 `talkdnd:start`（整条命令仍按写者处理，因为它还会迁移存档内容） | — | 否（过渡门拒绝） |
+| §2.8 `start` 的 `digest.md`/`.cache` | 归入 `talkdnd:start`（整条命令按写者处理，因为它还会迁移存档内容；控制元数据分类只说明这些文件将来不并入备份） | — | 否（过渡门拒绝整条命令，不跑缓存） |
 | §2.9 未来目标（sidecar、schema 11、候选树、D 备份） | 无条目 | — | 仍不存在，不声称已覆盖 |
 
 **只读条目（同样逐条列入注册表并由测试覆盖）：** `talkdnd:xp-show`、`talkdnd:loot-show`、`talkdnd:memory-list`、`talkdnd:entity-read`、`talkdnd:relation-read`、`talkdnd:time-read`、`talkdnd:settings-read`、`talkdnd:settings-style-read`、`talkdnd:checkpoint-read`、`talkdnd:snapshot-diff`、`talkdnd:migrate-dry-run`、`talkdnd:secret-scan`、`talkdnd:secret-import-dry-run`、`talkdnd:handout-list`、`talkdnd:original-read`、`talkdnd:reveal-read`、`talkdnd:chargen-status`、`talkdnd:chargen-validate`、`talkdnd:char-spells-read`、`talkdnd:adventure-search`、`talkdnd:adventure-index-read`、`talkdnd:adventure-section-read`、`talkdnd:known`、`talkdnd:knowledge`、`talkdnd:oracle`、`talkdnd:options`、`talkdnd:data-status`、`talkdnd:library`、`talkdnd:log-rolls`，以及 `combat-sim:status`、`combat-sim:scene`、`combat-sim:log`、`combat-sim:simulate`、`combat-sim:content-read`、`combat-sim:pack-read`、`combat-sim:party-show`。
 
 **证据与已知限制：**
 
-- 两套 CLI 的真实调用路径测试逐条覆盖上表：写入口在 lock/state 存在时退出 1、文案齐全、存档树逐字节不变；只读入口不被拒绝且整树不变；缓存入口只改缓存；无控制文件时既有写命令照常工作；`new` 在协议存在时仍可创建新槽。
-- 少量只读入口在合成存档上会因缺少书籍内容或施法职业而自行报错（`snapshot diff`、`adventure search/section --list/index show`、`char <who> spells`、`data import`、`combat-sim simulate`、两个 pack `--dry-run`）。测试断言的是“门没有拒绝且存档不变”，不是这些命令一定成功；它们各自的成功条件不属于本块。
-- `--help` 声明覆盖顶层命令与 `lib.rs` / `cli.rs` 中定义的每个叶子子命令。少数叶子子命令的枚举定义在本任务禁改的模块里（`checkpoint.rs`、`memory.rs`、`entity.rs`、`graph.rs`、`worldtime.rs`、`charsheet.rs`、`bookindex.rs`、`diff.rs`、`settings::AutomationCmd`），它们的声明出现在父命令的 `--help`（例如 `talkdnd checkpoint --help`）与玩家文档中，不在各自的 `--help` 里；补齐需要另开任务放开对应路径。
-- `tools/advancement-lock` 目前**不在** `.github/workflows/ci.yml` 的 fmt/clippy/test 清单里（CI 是本次任务的禁改路径），它的单元测试只在本地运行；CI 覆盖它的间接方式是 `talkdnd` / `combat-sim` 的编译与集成测试。补一条 CI job 需要单独任务。
-- 门只约束遵守协议的入口；旧二进制、外部编辑器与不遵守协议的进程仍不受约束（#264 未解决，结论不变）。
+- 两套 CLI 的真实调用路径测试逐条覆盖上表：写入口在 lock/state 存在时退出 1、文案齐全、存档树逐字节不变；只读入口不被拒绝且整树不变；缓存入口只改缓存；无控制文件时既有写命令照常工作；`new` 在协议存在时仍可创建新槽；`start` 整条被拒绝（不跑 digest/缓存）。
+- 跨存档与路径解析另有独立用例：`--book` 指向另一存档内的书目录（绝对路径与 root 相对路径）时 `adventure index build` 与 `handout build/mark` 均退出 1 且目标存档不变；存档外的书目录不被拒绝；`adventure section --list --reason` 成功且整树不变；`combat-sim` 的相对 `--state`、经符号链接的 `--state`、外部 manifest 的 `state_dir`、外部 state 记录的 `party_state` 都按实际写目标拒绝，且不因 `--save` 指向未受保护目录而放行；外部 `party_state` 的目标在存档外时保持原行为。
+- 少量只读入口在合成存档上会因缺少书籍内容或施法职业而自行报错（`snapshot diff`、`adventure search`、`adventure index show`、`char <who> spells`、`data import`、`combat-sim simulate`、两个 pack `--dry-run`）。测试断言的是“门没有拒绝且存档不变”，不是这些命令一定成功；它们各自的成功条件不属于本块。
+- `--help` 声明覆盖顶层命令与每个写叶子（两套 CLI 各有一张显式清单，测试逐条断言）。`talkdnd` 的 `checkpoint`/`memory`/`entity`/`relation`/`time`/`char`/`adventure index` 等叶子枚举现在也带声明；`diff.rs` 的唯一子命令是只读，不需要声明。
+- `tools/advancement-lock` 已加入 `.github/workflows/ci.yml` 的 fmt、clippy 与三平台 test 矩阵；`docs/versioning.md` 说明它是 `publish = false` 的内部库、跟随产品版本、不产生发布产物。
+- 门只约束遵守协议的入口；旧二进制、外部编辑器与不遵守协议的进程仍不受约束（#264 未解决，结论不变）。写目标解析是对“检查后、写入前”这一窗口的尽力而为：在检查之后才创建的符号链接仍无法被任何写前检查看见。
 
 ## 6. 接入语义（已由决定记录 #292 决定）
 

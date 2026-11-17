@@ -358,16 +358,8 @@ fn help_declares_the_refusal_and_its_exit_code() {
     let top = ok(&root, &["--help"]);
     assert!(top.contains("成长协议"), "{top}");
     assert!(top.contains("退出码 1"), "{top}");
-    for args in [
-        vec!["xp", "--help"],
-        vec!["xp", "add", "--help"],
-        vec!["char", "--help"],
-        vec!["chargen", "sheet", "--help"],
-        vec!["checkpoint", "--help"],
-        vec!["secret", "--help"],
-        vec!["secret", "import", "--help"],
-    ] {
-        let text = ok(&root, &args);
+    for &args in WRITE_HELP {
+        let text = ok(&root, args);
         assert!(
             text.contains("退出码 1"),
             "`{}` help must declare the refusal\n{text}",
@@ -378,4 +370,189 @@ fn help_declares_the_refusal_and_its_exit_code() {
     // a refusal.
     let guard = ok(&root, &["guard", "--help"]);
     assert!(!guard.contains("退出码 1"), "{guard}");
+}
+
+/// Every write leaf of `talkdnd`, as a `--help` path. Kept explicit so a new
+/// write command has to add itself here.
+const WRITE_HELP: &[&[&str]] = &[
+    &["start", "--help"],
+    &["migrate", "--help"],
+    &["level-up", "--help"],
+    &["xp", "add", "--help"],
+    &["loot", "add", "--help"],
+    &["loot", "spend", "--help"],
+    &["loot", "give", "--help"],
+    &["loot", "split", "--help"],
+    &["scene", "--help"],
+    &["char", "--help"],
+    &["char", "aria", "show", "--help"],
+    &["char", "aria", "init", "--help"],
+    &["char", "aria", "damage", "--help"],
+    &["char", "aria", "heal", "--help"],
+    &["char", "aria", "temp", "--help"],
+    &["char", "aria", "use", "--help"],
+    &["char", "aria", "restore", "--help"],
+    &["char", "aria", "rest", "--help"],
+    &["char", "aria", "condition", "--help"],
+    &["char", "aria", "exhaustion", "--help"],
+    &["char", "aria", "inspiration", "--help"],
+    &["char", "aria", "death-save", "--help"],
+    &["char", "aria", "gold", "--help"],
+    &["char", "aria", "item", "--help"],
+    &["char", "aria", "ammo", "--help"],
+    &["char", "aria", "note", "--help"],
+    &["char", "aria", "dm-note", "--help"],
+    &["char", "aria", "set", "--help"],
+    &["char", "aria", "batch", "--help"],
+    &["char", "aria", "spells", "--help"],
+    &["char", "aria", "spells", "adopt", "--help"],
+    &["char", "aria", "spells", "sync", "--help"],
+    &["char", "aria", "spells", "terrain", "--help"],
+    &["char", "aria", "prepare", "--help"],
+    &["char", "aria", "unprepare", "--help"],
+    &["char", "aria", "learn", "--help"],
+    &["char", "aria", "scribe", "--help"],
+    &["char", "aria", "ritual", "--help"],
+    &["chargen", "roll", "--help"],
+    &["chargen", "array", "--help"],
+    &["chargen", "pointbuy", "--help"],
+    &["chargen", "assign", "--help"],
+    &["chargen", "asi", "--help"],
+    &["chargen", "set", "--help"],
+    &["chargen", "sheet", "--help"],
+    &["chargen", "confirm", "--help"],
+    &["companion", "random", "--help"],
+    &["companion", "sheet", "--help"],
+    &["npc", "random", "--help"],
+    &["npc", "sheet", "--help"],
+    &["check", "--help"],
+    &["integrity", "status", "--help"],
+    &["integrity", "accept", "--help"],
+    &["checkpoint", "--help"],
+    &["checkpoint", "snapshot", "--help"],
+    &["checkpoint", "restore", "--help"],
+    &["log", "--help"],
+    &["memory", "add", "--help"],
+    &["memory", "remove", "--help"],
+    &["entity", "add", "--help"],
+    &["entity", "rename", "--help"],
+    &["entity", "retire", "--help"],
+    &["relation", "add", "--help"],
+    &["relation", "end", "--help"],
+    &["time", "enable", "--help"],
+    &["time", "disable", "--help"],
+    &["time", "set", "--help"],
+    &["time", "advance", "--help"],
+    &["time", "event", "add", "--help"],
+    &["time", "event", "done", "--help"],
+    &["time", "event", "skip", "--help"],
+    &["settings", "dice", "--help"],
+    &["settings", "style", "set", "--help"],
+    &["settings", "automation", "set", "--help"],
+    &["settings", "automation", "reset", "--help"],
+    &["secret", "add", "--help"],
+    &["secret", "remove", "--help"],
+    &["secret", "import", "--help"],
+    &["identify", "--help"],
+    &["reveal", "add", "--help"],
+    &["original", "add", "--help"],
+    &["original", "plan", "--help"],
+    &["handout", "show", "--help"],
+    &["handout", "build", "--help"],
+    &["handout", "mark", "--help"],
+    &["adventure", "section", "--help"],
+    &["adventure", "index", "build", "--help"],
+];
+
+/// A book folder inside another, adopted save must be refused even when the
+/// selected save is uninitialised.
+#[test]
+fn a_book_folder_in_another_save_is_refused() {
+    let root = playable("book-other-save");
+    let selected = root.join(SAVE);
+    assert!(!selected.join(LOCK).exists());
+    let other = root.join("Saves/2030-05-05-01");
+    let book = other.join("Adventures/probe/index");
+    fs::create_dir_all(&book).unwrap();
+    fs::write(book.join("index.json"), b"{}\n").unwrap();
+    fs::write(book.join("Probe.pages.md"), b"# Chapter 1\n").unwrap();
+    fs::write(other.join(LOCK), b"probe lock\n").unwrap();
+    let before = snapshot(&other);
+    let absolute = book.to_string_lossy().into_owned();
+    let relative = "Saves/2030-05-05-01/Adventures/probe/index".to_string();
+    for args in [
+        vec!["adventure", "index", "build", "--book", &absolute],
+        vec!["adventure", "index", "build", "--book", &relative],
+        vec!["handout", "--book", &absolute, "build"],
+        vec![
+            "handout", "--book", &absolute, "mark", "p0001-00", "--player",
+        ],
+    ] {
+        let out = run_slot(&root, &args);
+        let text = output_text(&out);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "`{}` must exit 1\n{text}",
+            args.join(" ")
+        );
+        assert!(
+            text.contains("已启用成长协议"),
+            "`{}` must name the protocol\n{text}",
+            args.join(" ")
+        );
+        assert_eq!(
+            snapshot(&other),
+            before,
+            "`{}` changed the other save",
+            args.join(" ")
+        );
+    }
+}
+
+/// A book folder outside every save keeps its old behaviour: no protocol, no
+/// refusal.
+#[test]
+fn a_book_folder_outside_the_saves_is_not_refused() {
+    let root = playable("book-outside");
+    let book = root.join("Adventures/probe/index");
+    fs::create_dir_all(&book).unwrap();
+    fs::write(book.join("index.json"), b"{}\n").unwrap();
+    fs::write(book.join("Probe.pages.md"), b"# Chapter 1\n").unwrap();
+    let absolute = book.to_string_lossy().into_owned();
+    for args in [
+        vec!["adventure", "index", "build", "--book", &absolute],
+        vec!["handout", "--book", &absolute, "build"],
+    ] {
+        let out = run_slot(&root, &args);
+        let text = output_text(&out);
+        assert!(
+            !text.contains("尚未接入成长协议"),
+            "`{}` must not be refused outside a save\n{text}",
+            args.join(" ")
+        );
+    }
+}
+
+/// `--list` prints headings and returns before the log write, so it stays
+/// read-only even with `--reason`.
+#[test]
+fn adventure_section_list_with_reason_is_read_only() {
+    let root = playable("section-list");
+    let save = root.join(SAVE);
+    let book = root.join("Adventures/gate-probe/index");
+    fs::create_dir_all(&book).unwrap();
+    fs::write(
+        book.join("Gate Probe.pages.md"),
+        b"<a id=\"p1\"></a>\n# Chapter 1: Probe\n\nSome text.\n\n## Area A\n\nMore text.\n",
+    )
+    .unwrap();
+    adopt_protocol(&save);
+    let before = snapshot(&save);
+    let text = ok_slot(
+        &root,
+        &["adventure", "section", "--list", "--reason", "gate probe"],
+    );
+    assert!(text.contains("Chapter 1"), "{text}");
+    assert_eq!(snapshot(&save), before, "`--list --reason` wrote the save");
 }

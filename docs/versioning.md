@@ -10,12 +10,13 @@ TalkDND 用 `主版本.次版本.补丁` 三段版本号，tag 写成 `vX.Y.Z`�
 
 - 每段是独立的整数，不是小数：`0.9` 之后是 `0.10`，不是 `1.0`。
 - 加次版本时补丁归零，加主版本时另两段归零。
-- 三个 crate（`tools/combat-sim`、`tools/talkdnd`、`tools/talkdnd-dev`）的版本与发布 tag 保持一致，`Cargo.lock` 同步更新。
+- 三个**产品** crate（`tools/combat-sim`、`tools/talkdnd`、`tools/talkdnd-dev`）的版本与发布 tag 保持一致，`Cargo.lock` 同步更新。
+- 第四个 crate `tools/advancement-lock` 是 `publish = false` 的**内部库**：不单独发布、不作为发布产物，但版本跟随产品版本（当前 1.6.0），与三个产品 crate 一起升级。`release.yml` 只构建 `combat-sim` 与 `talkdnd` 两个二进制，内部库不产生单独产物。
 - 存档结构有变化的版本必须是次版本或主版本，并在 `talkdnd` 里加对应的自动迁移步骤（见 `LetsPlay/docs/layout.md` 的「存档结构版本」）。
 
 ## 发布流程
 
 1. 在 `CHANGELOG.md` 顶部写新版本小节（中文；新功能 / 变更 / 修复 / 更新说明·迁移 / 已知限制），日期用发布当天。
-2. 提升三个 crate 的版本号，随功能 PR 一起合并（CI 全绿后正常合并）。
+2. 提升三个产品 crate 的版本号（内部库 `tools/advancement-lock` 同步到同一版本），随功能 PR 一起合并（CI 全绿后正常合并）。
 3. 在 main 上打 tag `vX.Y.Z` 并推送；`release.yml` 构建三个平台包和 sha256，并用 `talkdnd-dev release-notes vX.Y.Z` 从更新日志生成 Release 说明。没有对应小节时发布失败。
 4. 改已发布版本的说明：先改 `CHANGELOG.md`，再 `gh release edit vX.Y.Z --notes-file <生成的说明>`。

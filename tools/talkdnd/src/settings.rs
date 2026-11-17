@@ -105,6 +105,8 @@ pub enum AutomationCmd {
         encounter: Option<String>,
     },
     /// Set one category at the save/scene/encounter scope
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Set {
         /// resolution | combat | npc | player_choice | reaction | near_limit
         category: String,
@@ -121,6 +123,8 @@ pub enum AutomationCmd {
         reason: String,
     },
     /// Reset one category (or all) at the save/scene/encounter scope
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Reset {
         /// category name, or `all`
         category: String,

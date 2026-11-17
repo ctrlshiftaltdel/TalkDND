@@ -417,6 +417,8 @@ pub enum Command {
     },
 
     /// Clear a prepared response without triggering it.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     ReadyClear { who: String },
 
     /// Take off or change altitude in a grid scene.
@@ -460,9 +462,13 @@ pub enum Command {
     Scene,
 
     /// Roll a death saving throw.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Deathsave { who: String },
 
     /// End the current turn and start the next one.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Next,
 
     /// Print the encounter log.
@@ -494,6 +500,8 @@ pub enum Command {
     },
 
     /// Wake dormant creatures matching a name, creature id or tag.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Activate { name: String },
 
     /// Add new combatants to an encounter that already exists. Mid-fight
@@ -661,6 +669,8 @@ pub enum PackCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum ConditionCommand {
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         who: String,
         condition: String,
@@ -689,10 +699,9 @@ pub enum ConditionCommand {
         #[arg(long = "save-ends", value_name = "ABILITY:DC")]
         save_ends: Option<String>,
     },
-    Remove {
-        who: String,
-        condition: String,
-    },
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    Remove { who: String, condition: String },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -780,6 +789,8 @@ pub enum PartyCommand {
         hd: Option<u32>,
     },
     /// Set a member's current HP (DM correction, healing outside combat).
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     SetHp { who: String, hp: i32 },
     /// Copy the party from an encounter state into party-state.yaml.
     ///
@@ -887,11 +898,14 @@ fn content_out_dirs(command: &ContentCommand) -> Vec<PathBuf> {
 
 /// Consult the shared transition gate before anything writes.
 ///
-/// The save is found from `--save`, the campaign manifest, the state path or a
-/// content `--out` directory, in that order. An unadopted writer is refused
-/// (exit code 1) as soon as one of those locations belongs to a save that has
-/// adopted the advancement protocol; read-only commands and control metadata
-/// are allowed.
+/// Every location this invocation could write is resolved to an absolute,
+/// symlink-resolved path and checked for an owning save that adopted the
+/// protocol: `--save`, the campaign manifest, the resolved state file, the
+/// state file's recorded `party_state`, the campaign's `state_dir` party state,
+/// and content `--out` directories. An unadopted writer is refused with exit
+/// code 1 as soon as one target belongs to such a save; a target whose absolute
+/// location cannot be established fails closed the same way. Read-only
+/// commands and control metadata are allowed and never load the state.
 fn check_transition_gate(
     command: &Command,
     save: Option<&Path>,
@@ -902,22 +916,42 @@ fn check_transition_gate(
     if gate::class_of(entry).allowed_under_protocol() {
         return Ok(());
     }
-    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut targets: Vec<PathBuf> = Vec::new();
     if let Some(dir) = save {
-        candidates.push(dir.to_path_buf());
+        targets.push(dir.to_path_buf());
     }
     if let Some(campaign) = sources.campaign_path() {
-        candidates.push(campaign);
+        targets.push(campaign);
     }
     match command {
-        Command::Content { command } => candidates.extend(content_out_dirs(command)),
-        _ => candidates.push(state_path(sources, state)),
+        Command::Content { command } => targets.extend(content_out_dirs(command)),
+        _ => {
+            let resolved = state_path(sources, state);
+            // A state file may point at a party state outside the save.
+            if let Some(party_state) = loaded_party_state(&resolved) {
+                targets.push(party_state);
+            }
+            targets.push(resolved);
+            // `party rest|set-hp|sync` writes the campaign's state_dir party
+            // state; the state_dir itself may belong to another save.
+            if let Some(dir) = manifest_state_dir(sources) {
+                targets.push(dir.join(crate::party::FILE_NAME));
+            }
+        }
     }
-    let protocol = candidates
-        .iter()
-        .find_map(|candidate| gate::enclosing_protocol_dir(candidate));
-    gate::check_save(protocol.as_deref(), entry)?;
+    for target in targets {
+        gate::check_target(&target, entry)?;
+    }
     Ok(())
+}
+
+/// The `party_state` recorded in an existing state file, if any.
+///
+/// Read-only: the gate runs before dispatch and never writes. A missing or
+/// unreadable state file has no party state to protect; the command reports its
+/// own error before writing anything.
+fn loaded_party_state(state_path: &Path) -> Option<PathBuf> {
+    EncounterState::load(state_path).ok()?.party_state
 }
 
 pub fn run() -> Result<()> {

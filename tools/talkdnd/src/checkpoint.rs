@@ -79,6 +79,8 @@ fn is_control_file(name: &std::ffi::OsStr) -> bool {
 #[derive(Subcommand, Clone)]
 pub enum Cmd {
     /// New checkpoint: snapshot the whole save and write a manifest
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Snapshot {
         /// Why this checkpoint is taken (logged)
         #[arg(long)]
@@ -102,6 +104,8 @@ pub enum Cmd {
         json: bool,
     },
     /// Restore a checkpoint (the whole save is backed up first); needs --yes
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Restore {
         /// Checkpoint id
         id: String,

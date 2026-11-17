@@ -39,8 +39,8 @@ pub const STATE_FILE: &str = ".talkdnd.advancement.state";
 /// player-facing documentation repeats.
 pub const REFUSAL_HELP: &str =
     "存档启用成长协议（.talkdnd.advancement.lock / .talkdnd.advancement.state）后，\
-尚未接入成长协议的写命令以退出码 1 拒绝执行且不写任何目标文件；只读命令、`guard`/`secret list` \
-的缓存与 `start` 的 digest/缓存仍可用。";
+尚未接入成长协议的写命令以退出码 1 拒绝执行且不写任何目标文件。只读命令与 `guard`/`secret list` \
+的缓存写入仍可用；`start` 等写命令整条被拒绝，它的 digest/缓存属于控制元数据，不代表它会运行。";
 
 /// The lock file path inside `save_dir`.
 pub fn lock_path(save_dir: &Path) -> PathBuf {
@@ -80,24 +80,143 @@ pub fn protocol_files(save_dir: &Path) -> Vec<&'static str> {
     files
 }
 
-/// Walk up from `start` (a file, a directory, or a path that does not exist
-/// yet) and return the nearest directory holding a control file.
+/// A write target whose absolute location could not be established reliably.
 ///
-/// This is how `combat-sim` finds the save for `--state`/`--out` paths it was
-/// given instead of an explicit `--save`.
-pub fn enclosing_protocol_dir(start: &Path) -> Option<PathBuf> {
-    let mut dir = if start.is_dir() {
-        Some(start)
+/// The gate fails closed on these instead of guessing: a target it cannot
+/// resolve could belong to a save that has adopted the protocol.
+#[derive(Debug, Clone)]
+pub struct Unresolved {
+    /// The target as the caller passed it.
+    pub target: PathBuf,
+    /// Why it could not be resolved.
+    pub reason: String,
+}
+
+impl fmt::Display for Unresolved {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "写目标 {} 无法可靠解析为绝对路径（{}）：已拒绝执行，未写入任何目标文件。\
+请改用绝对路径，并确认路径上的目录存在且可访问。",
+            self.target.display(),
+            self.reason
+        )
+    }
+}
+
+impl std::error::Error for Unresolved {}
+
+/// A gate outcome: either a protocol refusal or an unresolvable target.
+///
+/// Both mean "do not write"; both reach the CLI as exit code 1.
+#[derive(Debug, Clone)]
+pub enum GateError {
+    /// A save that has adopted the protocol owns the target.
+    Refused(Refused),
+    /// The target's absolute location could not be established.
+    Unresolved(Unresolved),
+}
+
+impl From<Unresolved> for GateError {
+    fn from(value: Unresolved) -> Self {
+        GateError::Unresolved(value)
+    }
+}
+
+impl fmt::Display for GateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GateError::Refused(err) => err.fmt(f),
+            GateError::Unresolved(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for GateError {}
+
+/// Absolute, symlink-resolved form of a write target.
+///
+/// Relative targets are anchored at the process working directory, which is
+/// exactly how both CLIs open them. The deepest existing ancestor is
+/// canonicalized (so symlinks and `..` are resolved the way the operating
+/// system will resolve them); the remaining, not-yet-existing components are
+/// appended. Anything that cannot be resolved — an unreadable ancestor, a
+/// symlink loop, a `..` after a missing component, no working directory — is
+/// an [`Unresolved`] error, and the gate refuses the write.
+///
+/// Residual limit: a symlink created in the missing tail *after* this check
+/// and before the write is outside what any pre-write check can see (the same
+/// non-cooperative-writer limit the protocol already documents).
+pub fn resolve_target(target: &Path) -> Result<PathBuf, Unresolved> {
+    let anchored = if target.is_absolute() {
+        target.to_path_buf()
     } else {
-        start.parent()
+        let cwd = std::env::current_dir().map_err(|err| Unresolved {
+            target: target.to_path_buf(),
+            reason: format!("cannot read the current directory: {err}"),
+        })?;
+        cwd.join(target)
     };
+    let mut probe = anchored.as_path();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match fs::symlink_metadata(probe) {
+            Ok(_) => break,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                let Some(name) = probe.file_name() else {
+                    return Err(Unresolved {
+                        target: target.to_path_buf(),
+                        reason: format!("no existing ancestor for {}", probe.display()),
+                    });
+                };
+                tail.push(name.to_os_string());
+                let Some(parent) = probe.parent() else {
+                    return Err(Unresolved {
+                        target: target.to_path_buf(),
+                        reason: format!("no existing ancestor for {}", probe.display()),
+                    });
+                };
+                probe = parent;
+            }
+            Err(err) => {
+                return Err(Unresolved {
+                    target: target.to_path_buf(),
+                    reason: format!("cannot inspect {}: {err}", probe.display()),
+                })
+            }
+        }
+    }
+    let mut resolved = fs::canonicalize(probe).map_err(|err| Unresolved {
+        target: target.to_path_buf(),
+        reason: format!("cannot resolve {}: {err}", probe.display()),
+    })?;
+    for name in tail.iter().rev() {
+        resolved.push(name);
+    }
+    Ok(resolved)
+}
+
+/// Walk up from a resolved write target and return the nearest directory
+/// holding a control file.
+///
+/// This is how `combat-sim` finds the save for `--state`, `--out`, the
+/// campaign's `state_dir` and a loaded state's `party_state`, and how
+/// `talkdnd` checks a `--book` folder that may live in another save.
+pub fn enclosing_protocol_dir(target: &Path) -> Result<Option<PathBuf>, Unresolved> {
+    let resolved = resolve_target(target)?;
+    let start = if resolved.is_dir() {
+        resolved.as_path()
+    } else {
+        resolved.parent().unwrap_or(resolved.as_path())
+    };
+    let mut dir = Some(start);
     while let Some(current) = dir {
         if has_protocol(current) {
-            return Some(current.to_path_buf());
+            return Ok(Some(current.to_path_buf()));
         }
         dir = current.parent();
     }
-    None
+    Ok(None)
 }
 
 // ------------------------------------------------------------------- class ----
@@ -202,7 +321,7 @@ pub static WRITERS: &[Writer] = &[
         "lib.rs::dispatch Cmd::Start; start.rs::digest",
         "save-meta.yaml, sheets/*.yaml, combat/campaign.yaml, digest.md, .cache/, Sessions/*.md",
         UnadoptedWrite,
-        "resume digest: migrates old schemas, rewrites campaign content sources, writes digest and cache",
+        "resume digest: migrates old schemas, rewrites campaign content sources, writes digest and cache; the whole command is refused, so its digest and cache are not written either",
         &["start", "--no-pdf2md"]
     ),
     writer!(
@@ -792,7 +911,7 @@ pub static WRITERS: &[Writer] = &[
         "lib.rs::dispatch Cmd::Adventure; adventure.rs::section",
         "none",
         ReadOnly,
-        "a normal read and --list write no log",
+        "a normal read writes no log; --list prints headings and returns before the log write, even with --reason",
         &["adventure", "section", "--list"]
     ),
     writer!(
@@ -1135,31 +1254,49 @@ impl fmt::Display for Refused {
 
 impl std::error::Error for Refused {}
 
-/// Consult the gate for one entry in a known save directory.
+/// Consult the gate for one resolved-or-resolvable write target.
 ///
-/// Returns `Ok(())` when the save has no control file, or when the entry is
-/// allowed under the protocol (read-only, control metadata, new save). Returns
-/// a [`Refused`] error — exit code 1 at both CLIs — for an unadopted writer.
-pub fn check(save_dir: &Path, entry: &str) -> Result<(), Refused> {
+/// Returns `Ok(())` when the entry is allowed under the protocol (read-only,
+/// control metadata, new save) or when no enclosing directory has a control
+/// file. Returns [`GateError::Refused`] when a save that adopted the protocol
+/// owns the target, and [`GateError::Unresolved`] when the target's absolute
+/// location cannot be established. Both reach the CLI as exit code 1 and write
+/// nothing.
+pub fn check_target(target: &Path, entry: &str) -> Result<(), GateError> {
     let writer =
         writer(entry).unwrap_or_else(|| panic!("transition gate: unknown writer entry `{entry}`"));
-    if writer.class.allowed_under_protocol() || !has_protocol(save_dir) {
+    if writer.class.allowed_under_protocol() {
         return Ok(());
     }
-    Err(Refused {
-        entry: writer.entry,
-        command: writer.command,
-        save_dir: save_dir.to_path_buf(),
-        files: protocol_files(save_dir),
-    })
+    match enclosing_protocol_dir(target)? {
+        Some(save_dir) => Err(GateError::Refused(Refused {
+            entry: writer.entry,
+            command: writer.command,
+            save_dir: save_dir.clone(),
+            files: protocol_files(&save_dir),
+        })),
+        None => Ok(()),
+    }
 }
 
 /// Consult the gate when the save directory may be unknown.
-pub fn check_save(save_dir: Option<&Path>, entry: &str) -> Result<(), Refused> {
+pub fn check_save(save_dir: Option<&Path>, entry: &str) -> Result<(), GateError> {
     match save_dir {
-        Some(dir) => check(dir, entry),
+        Some(dir) => check_target(dir, entry),
         None => Ok(()),
     }
+}
+
+/// Consult the gate for several write targets; the first refusal or
+/// unresolvable target stops the command.
+pub fn check_targets<'a, I>(targets: I, entry: &str) -> Result<(), GateError>
+where
+    I: IntoIterator<Item = &'a Path>,
+{
+    for target in targets {
+        check_target(target, entry)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1181,7 +1318,7 @@ mod tests {
         let dir = temp("none");
         assert!(!has_protocol(&dir));
         assert!(protocol_files(&dir).is_empty());
-        assert!(check(&dir, "talkdnd:xp-add").is_ok());
+        assert!(check_save(Some(&dir), "talkdnd:xp-add").is_ok());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1217,7 +1354,7 @@ mod tests {
     fn an_unadopted_writer_is_refused_with_the_shared_message() {
         let dir = temp("refuse");
         fs::write(lock_path(&dir), b"").unwrap();
-        let err = check(&dir, "talkdnd:xp-add").expect_err("must refuse");
+        let err = check_save(Some(&dir), "talkdnd:xp-add").expect_err("must refuse");
         let text = err.to_string();
         assert!(text.contains("已启用成长协议"), "{text}");
         assert!(text.contains("尚未接入成长协议"), "{text}");
@@ -1238,7 +1375,10 @@ mod tests {
             "combat-sim:status",
             "combat-sim:pack-build-dry-run",
         ] {
-            assert!(check(&dir, entry).is_ok(), "{entry} must be allowed");
+            assert!(
+                check_save(Some(&dir), entry).is_ok(),
+                "{entry} must be allowed"
+            );
         }
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1250,10 +1390,108 @@ mod tests {
         fs::create_dir_all(save.join("combat")).unwrap();
         fs::write(lock_path(&save), b"").unwrap();
         assert_eq!(
-            enclosing_protocol_dir(&save.join("combat/e.state.json")),
+            enclosing_protocol_dir(&save.join("combat/e.state.json")).unwrap(),
             Some(save.clone())
         );
-        assert_eq!(enclosing_protocol_dir(&root), None);
+        assert_eq!(enclosing_protocol_dir(&root).unwrap(), None);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resolve_target_anchors_relative_paths_at_the_working_directory() {
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = resolve_target(Path::new("relative/child.state.json")).unwrap();
+        assert!(resolved.is_absolute());
+        assert_eq!(resolved, cwd.join("relative/child.state.json"));
+    }
+
+    #[test]
+    fn resolve_target_resolves_dot_dot_and_symlinks() {
+        let root = temp("resolve");
+        let real = root.join("real");
+        fs::create_dir_all(real.join("combat")).unwrap();
+        let nested = real.join("combat/../combat/e.state.json");
+        assert_eq!(
+            resolve_target(&nested).unwrap(),
+            fs::canonicalize(real.join("combat"))
+                .unwrap()
+                .join("e.state.json")
+        );
+        #[cfg(unix)]
+        {
+            let link = root.join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            assert_eq!(
+                resolve_target(&link.join("combat/e.state.json")).unwrap(),
+                fs::canonicalize(real.join("combat"))
+                    .unwrap()
+                    .join("e.state.json")
+            );
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resolve_target_appends_a_missing_tail_under_the_canonical_ancestor() {
+        let root = temp("missing-tail");
+        let resolved = resolve_target(&root.join("new/content")).unwrap();
+        assert_eq!(
+            resolved,
+            fs::canonicalize(&root).unwrap().join("new/content")
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_unresolvable_target_fails_closed() {
+        // A `..` after a missing component has no reliable absolute meaning.
+        let root = temp("unresolvable");
+        let target = root.join("missing/../child");
+        let err = check_target(&target, "talkdnd:xp-add").expect_err("must fail closed");
+        assert!(matches!(err, GateError::Unresolved(_)), "{err}");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_relative_target_inside_a_protected_save_is_refused() {
+        // The save is reached through a relative path; the lexical walk alone
+        // would only inspect the working directory.
+        let root = temp("relative-save");
+        let save = root.join("Saves/x");
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::write(state_path(&save), b"").unwrap();
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&root).unwrap();
+        let relative = Path::new("Saves/x/combat/e.state.json");
+        assert!(matches!(
+            check_target(relative, "combat-sim:state-write"),
+            Err(GateError::Refused(_))
+        ));
+        std::env::set_current_dir(previous).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_external_state_file_whose_party_state_points_into_a_save_is_refused() {
+        // The gate is asked about the party-state target read from a state file
+        // that lives outside the save.
+        let root = temp("party-state");
+        let save = root.join("Saves/x");
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::write(lock_path(&save), b"").unwrap();
+        let outside = root.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        assert!(matches!(
+            check_target(&outside.join("party-state.yaml"), "combat-sim:party-write"),
+            Ok(())
+        ));
+        assert!(matches!(
+            check_target(
+                &save.join("combat/party-state.yaml"),
+                "combat-sim:party-write"
+            ),
+            Err(GateError::Refused(_))
+        ));
         fs::remove_dir_all(&root).unwrap();
     }
 

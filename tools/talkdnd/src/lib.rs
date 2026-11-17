@@ -291,6 +291,8 @@ enum Cmd {
         cmd: knowledge::Cmd,
     },
     /// Record the current scene/location and print `known`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Scene { name: Vec<String> },
     /// Secret terms for the spoiler guard (DM only, stored in the save)
     ///
@@ -404,6 +406,8 @@ enum LibraryCmd {
 #[derive(Subcommand, Clone)]
 enum IntegrityCmd {
     /// Files changed outside the tools and unexplained value changes
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Status,
     /// Accept the current files and values (logged with the reason)
     ///
@@ -436,6 +440,8 @@ enum HandoutCmd {
         dm: bool,
     },
     /// Build or refresh the registry from the pdf2md index (keeps markings)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Build,
     /// Mark a handout player-safe (--player) or DM-only (--dm)
     ///
@@ -485,6 +491,8 @@ enum OriginalCmd {
     /// Show the deviation settings, caps and the current chapter budget
     Status,
     /// Create Saves/<slot>/dm-plan.md (DM-only long-term plan template)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Plan,
 }
 
@@ -538,6 +546,8 @@ enum SecretCmd {
     /// List every unrevealed secret term and its source
     List,
     /// Remove a manual secret term
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Remove { term: Vec<String> },
     /// Read-only scan of a DM notes file: explicit marker coverage, counts
     /// and line numbers only, never file content
@@ -566,6 +576,8 @@ enum SecretCmd {
 #[derive(Subcommand, Clone)]
 enum SettingsCmd {
     /// Show or change dice display: `settings dice on|off`
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Dice { value: Option<String> },
     /// Narration style: `settings style show`, `settings style set <字段> <值> --reason R`
     ///
@@ -707,6 +719,8 @@ enum LootCmd {
         to: String,
     },
     /// Split the party pool's coins evenly among the party
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Split,
     /// Show every purse
     Show,
@@ -717,16 +731,28 @@ enum ChargenCmd {
     /// Show choices so far and the next step
     Status,
     /// Roll 6 x 4d6dl1 (logged); the player then assigns them
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Roll,
     /// Use the standard array 15 14 13 12 10 8
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Array,
     /// Point buy: e.g. `str=15 dex=14 con=13 int=10 wis=10 cha=8` (27 points)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Pointbuy { scores: Vec<String> },
     /// Player assigns pool numbers: `str=15 dex=14 ...`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Assign { scores: Vec<String> },
     /// Player-chosen increases: `str=2 con=1`, or `none`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Asi { values: Vec<String> },
     /// Record a choice: ruleset|adventure|species|class|level|subclass|fighting-style|masteries|background|background-equipment|skills|background-skills|languages|tools|feats|class-equipment|armor|shield|equipment|spells|name|traits|ideals|bonds|flaws|alignment
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Set { field: String, value: Vec<String> },
     /// Check the character against the ruleset
     Validate,
@@ -738,6 +764,8 @@ enum ChargenCmd {
         player: String,
     },
     /// Player confirmed the sheet: mark creation complete
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Confirm,
 }
 
@@ -893,8 +921,11 @@ fn gate_entry(cli: &Cli) -> &'static str {
                 }
             },
             AdventureCmd::Search { .. } => "talkdnd:adventure-search",
-            AdventureCmd::Section { reason, .. } => {
-                if reason.is_some() {
+            // `--list` only prints headings and returns before the log write,
+            // even when `--reason` is present; only a real section read that
+            // is ahead of progress or DM-only appends a log line.
+            AdventureCmd::Section { list, reason, .. } => {
+                if !*list && reason.is_some() {
                     "talkdnd:adventure-section-write"
                 } else {
                     "talkdnd:adventure-section-read"
@@ -960,6 +991,69 @@ fn gate_entry(cli: &Cli) -> &'static str {
     }
 }
 
+/// The `--book` folders `adventure index build` will write `structured.json`
+/// into. Mirrors `bookindex::index_dirs` (that function is private and its
+/// module is only cleared for help text this round), so the gate checks the
+/// same targets the command resolves.
+fn bookindex_targets(root: &Path, save: &Path, book: Option<&str>) -> Vec<PathBuf> {
+    let want = match book {
+        Some(book) => book.to_string(),
+        None => match start::adventure_slug(save) {
+            Some(slug) => slug,
+            None => return Vec::new(),
+        },
+    };
+    // A path to an index folder or to a book folder, tried exactly like the
+    // command: working-directory-relative first, then root-relative.
+    for candidate in [PathBuf::from(&want), root.join(&want)] {
+        if candidate.join("index.json").is_file() {
+            return vec![candidate];
+        }
+        let dirs = library::book_indexes(&candidate);
+        if !dirs.is_empty() {
+            return dirs;
+        }
+    }
+    // A book name: this save's Adventures first, then both rulesets.
+    let mut out = library::adventure_indexes(root, &want);
+    if book.is_some() {
+        let mut rules: Vec<(u8, usize, PathBuf)> = Vec::new();
+        for (edition, ruleset) in library::EDITIONS.iter().enumerate() {
+            for (key, dir) in library::category_indexes(&root.join("Rules").join(ruleset)) {
+                if let Some(rank) = library::key_rank(&key, &want) {
+                    rules.push((rank, edition, dir));
+                }
+            }
+        }
+        rules.sort();
+        out.extend(rules.into_iter().map(|(_, _, dir)| dir));
+    }
+    out
+}
+
+/// Write targets a command can reach **outside** the selected save.
+///
+/// `adventure index build --book` and `handout [--book] build|mark` write into
+/// a book folder that may belong to another save; the gate must check each of
+/// them, not only the selected save. A resolution error means the command
+/// cannot write at all (it reports its own error), so there is nothing to
+/// check.
+fn extra_write_targets(root: &Path, cli: &Cli, save: &Path) -> Vec<PathBuf> {
+    match &cli.cmd {
+        Cmd::Adventure {
+            cmd:
+                AdventureCmd::Index {
+                    cmd: bookindex::Cmd::Build { book },
+                },
+        } => bookindex_targets(root, save, book.as_deref()),
+        Cmd::Handout {
+            book,
+            cmd: HandoutCmd::Build | HandoutCmd::Mark { .. },
+        } => handout::book_dirs(root, save, book.as_deref()).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     let cli = Cli::parse_from(args);
     let root = save::find_root(cli.root.as_deref())?;
@@ -969,6 +1063,13 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     let gate_entry = gate_entry(&cli);
     let gate_save = save::resolve_slot(&root, cli.save.as_deref()).ok();
     gate::check_save(gate_save.as_deref(), gate_entry)?;
+    // A command may also write outside the selected save: `--book` can point at
+    // a folder that belongs to another save, so every such target is checked.
+    if let Some(save) = gate_save.as_deref() {
+        for target in extra_write_targets(&root, &cli, save) {
+            gate::check_target(&target, gate_entry)?;
+        }
+    }
     let protocol_present = gate_save.as_deref().is_some_and(gate::has_protocol);
     let gate_class = gate::class_of(gate_entry);
     let mut os = step_rng();
