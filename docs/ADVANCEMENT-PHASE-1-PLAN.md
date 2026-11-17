@@ -144,11 +144,11 @@
 - **Depends on:** `ADV-P1-1pre`（跨 CLI 过渡门）、`ADV-P1-1`（清单）、#282、#286
 - **Acceptance criteria:**
   - [ ] `AC-1`: 清单 §2.1、§2.2、§2.6 中会写存档的入口全部在写目标前取得 SAVE 锁；锁序为 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`，不得反向。
-  - [ ] `AC-2`: SAVE state 缺失、不可写、`active` 或 `in_doubt` 时，每个入口失败关闭且不写目标；合成测试逐条覆盖，错误信息说明未写/可能已写阶段。**state 缺失时的拒绝是决定前的临时保守处理**，不是最终 UX/兼容决定；最终语义按本节末 `NEEDS_HUMAN_DECISION` 处理。
-  - [ ] `AC-3`: `char <who> spells` 普通视图保持只读（运行前后整树字节一致）；`char show` 及其余 `char` op 走 SAVE；`guard`/`secret list` 的缓存写入要么在 SAVE 内，要么按 `NEEDS_HUMAN_DECISION` 改为不写缓存。
+  - [ ] `AC-2`: SAVE state 缺失、不可写、`active` 或 `in_doubt` 时，每个入口失败关闭且不写目标；合成测试逐条覆盖，错误信息说明未写/可能已写阶段。**state 缺失时的拒绝是决定前的临时保守处理**，不是最终 UX/兼容决定；最终语义按本节末的「接入语义」表（#292 已决定）处理。
+  - [ ] `AC-3`: `char <who> spells` 普通视图保持只读（运行前后整树字节一致）；`char show` 及其余 `char` op 走 SAVE；`guard`/`secret list` 的缓存写入要么在 SAVE 内，要么按本节末的「接入语义」表（#292 已决定：控制元数据放行）改为不写缓存。
   - [ ] `AC-4`: 旧 `progress::level_up` 的结构化与 Markdown 两条路径仍可用；回归测试证明未删除、未跳过、未弱化，且两条路径都被盘点并纳入保护。
   - [ ] `AC-5`: 本块不启用任何新的属性提升/专长选择或 D 协议提交入口；不新增 schema/sidecar。
-  - [ ] `AC-6`: 未初始化存档、拒绝 UX 与 CLI 兼容按本节末的 `NEEDS_HUMAN_DECISION` 记录，不由执行者自行决定。
+  - [ ] `AC-6`: 未初始化存档、拒绝 UX 与 CLI 兼容按本节末的「接入语义」表（#292 已决定）执行，不由执行者自行决定。
   - [ ] `AC-7`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
 
 ### Task: `ADV-P1-1b` — party / combat 写者接入
@@ -160,7 +160,7 @@
   - [ ] `AC-1`: 清单 §2.3 中会改状态的命令全部在写 state/party/日志前取得 SAVE 锁；`status`/`scene`/`log`/`simulate`/`content list|show|check`/`pack list|show|verify`/`party show` 不写存档并声明只读。
   - [ ] `AC-2`: 单次命令的 `state.save` → `party.save` → 日志追加顺序在 SAVE 内执行；任一步失败即停止并报告已写/未写阶段，不声称多文件原子性。
   - [ ] `AC-3`: `PartyState::save` 与 `EncounterState::save` 不再把完整性锁当作内容保护；合成测试证明 party/state 内容写入受 SAVE 约束。
-  - [ ] `AC-4`: `combat-sim` 不新增对 `talkdnd` 的依赖；SAVE 锁原语是共享还是由 `talkdnd` 包装，按本节末的 `NEEDS_HUMAN_DECISION` 记录并实施。
+  - [ ] `AC-4`: `combat-sim` 不新增对 `talkdnd` 的依赖；SAVE 锁原语是共享还是由 `talkdnd` 包装，按本节末的「接入语义」表（#292 已决定：共享 crate）实施。
   - [ ] `AC-5`: 活动遭遇识别算法不因本块被发明；`.state.json` 只作为未来判定输入，不声称已解决活动遭遇只预览。
   - [ ] `AC-6`: `combat-sim content import-srd-prose` / `content import-srd-pack` / `content import-srd` 的 `--out` 指向存档内时，必须接入 SAVE 或失败关闭拒绝写入；`content pack build|release` 的 `--out` 指向存档内时同样处理；目标在存档外时才可按存档外写入声明。**只有 `content pack build|release` 有 `--dry-run`**，其 dry-run 保持只读；三个 `import-*` 命令没有 dry-run，必须按写者处理。用 `tools/combat-sim/tests/` 的合成测试以合法参数进入实际分支，分别覆盖“out 在存档内”和“out 在存档外”，并把它们纳入提交入口启用前的覆盖门（`ADV-P1-10`）。
   - [ ] `AC-7`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/combat-sim/tests/` 与 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5，并包含 AC-6 的存档内输出目标。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
@@ -175,7 +175,7 @@
   - [ ] `AC-2`: 备份/恢复继续排除根目录控制文件；特殊文件、空间不足、同步失败或结果不明时停止，保留不完整备份并报告阶段。
   - [ ] `AC-3`: `checkpoint list|show` 与 `migrate --dry-run` 运行**整个 CLI** 前后整树字节一致；必须调整 `lib.rs` 的 `tracked` 分支或等价机制以消除外层审计写入，不得只证明函数体只读，也不得因接入锁而创建 lock/state 或写探针。
   - [ ] `AC-4`: 不改变 #264 结论；不声称 checkpoint 锁是 OS 锁、能保护内容或约束非协作写者。
-  - [ ] `AC-5`: 未初始化存档与“迁移/恢复是否自动 init”的语义按本节末的 `NEEDS_HUMAN_DECISION` 记录。
+  - [ ] `AC-5`: 未初始化存档与“迁移/恢复是否自动 init”的语义按本节末的「接入语义」表（#292 已决定：不自动 init）。
   - [ ] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
   - [ ] `AC-7`: T6a 独立取证：`checkpoint snapshot` / `restore` 与成长路径按总序 `SAVE → checkpoint → integrity` 竞争，使用两进程 + 测试级超时；挂起即判失败，不以“没死锁”代替证据。若正式提交尚未接线，使用等价合成持锁路径并限定证据范围；记录平台、head 与逐项结果。
 
@@ -201,7 +201,7 @@
   - [ ] `AC-1`: `migrate::write_meta` 的 `save-meta.yaml` 写入在 SAVE 内；合成测试证明锁不可用时 schema 元数据不被改写。
   - [ ] `AC-2`: 当前不存在选择 sidecar 写入路径；本块不创建 sidecar、不新增 schema 11、不预设字段或路径。
   - [ ] `AC-3`: 选择 sidecar 与主 schema 元数据作为未来发布目标，由 `ADV-P1-6` 按 `ADV-P1-4` 的注册方式接入；本块只记录归属，不声称已覆盖。
-  - [ ] `AC-4`: `guard`/`secret list` 的缓存与 `start` 的 `.cache`/`digest` 按本节末的 `NEEDS_HUMAN_DECISION` 决定是纳入 SAVE 还是改为不写；未决前按保守方式处理。
+  - [ ] `AC-4`: `guard`/`secret list` 的缓存与 `start` 的 `.cache`/`digest` 按本节末的「接入语义」表（#292 已决定：控制元数据放行）处理。
   - [ ] `AC-5`: D 完整备份**包含既有用户备份**；lock、操作前快照、恢复工作记录等控制元数据**单独保留、不并入该备份**；缓存/派生文件按已批准分类处理，保留与清理责任未定。不得把“备份目录存在”当成完整备份，也不得把控制元数据混入用户数据备份。
   - [ ] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等全部组完成。
 
