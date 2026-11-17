@@ -135,6 +135,8 @@
   - [ ] `AC-4`: 合成测试覆盖注册表中每个写入口的拒绝或只读声明；没有证据的入口不得被登记为“已覆盖”。
   - [ ] `AC-5`: 该过渡门是 `ADV-P1-1a`–`ADV-P1-1e` 的共享前置，不因 CLI 不同而分裂成两套语义；后续块不得绕过它。
 
+**交付记录（TASK-0149 / Issue #293）：** 本块已交付。共享 crate `tools/advancement-lock`（控制文件名、`has_protocol`、跨 CLI 写者注册表、统一拒绝文案）、`talkdnd` 与 `combat-sim` 的真实调用路径接入、两套 CLI 的合成拒绝/只读/缓存放行测试、`--help` 与玩家文档声明均随该 Issue 的 PR 落地；`docs/ADVANCEMENT-WRITER-INVENTORY.md` §5.1 记录逐条注册表与过渡门状态。任务状态与证据仍只在 Issue / PR / CI，本文件不设状态列。本块不接入 SAVE 锁、不启用提交入口、不新增 schema/sidecar。
+
 ### Task: `ADV-P1-1a` — CLI 角色 / 进度 / 账本写者接入
 
 - **Goal:** 让会写角色卡、建卡状态、进度/XP/钱袋、场景、识别/揭示/原创/实体/关系/世界时间/记忆/设置/秘密/资料/冒险索引的 CLI 入口在写存档前取得 SAVE 锁，并在锁不可用时失败关闭；纯只读入口明确声明只读。
@@ -203,18 +205,20 @@
   - [ ] `AC-5`: D 完整备份**包含既有用户备份**；lock、操作前快照、恢复工作记录等控制元数据**单独保留、不并入该备份**；缓存/派生文件按已批准分类处理，保留与清理责任未定。不得把“备份目录存在”当成完整备份，也不得把控制元数据混入用户数据备份。
   - [ ] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等全部组完成。
 
-**接入语义未决（`NEEDS_HUMAN_DECISION`，不得由执行者自行决定）：**
+**接入语义（已由决定记录 #292 于 2026-11-17 确认，不再是未决项）：**
 
-- **未初始化存档**：没有 `.talkdnd.advancement.lock`/`.state` 的存档，普通写命令应全部拒绝、只读命令仍可用、还是由 `new`/`start`/`migrate` 自动 `init`？
-- **未接入入口的拒绝 UX**：错误文案、退出码、是否在 `--help` 与玩家文档中声明只读，以及现有脚本兼容性。
-- **CLI 兼容**：`new`、`start`、`migrate`、`chargen` 等创建/迁移入口是否自动初始化 SAVE；旧存档首次运行是否强制 `init`。
-- **缓存写入**：`guard`/`secret list` 的 `secret-terms.cache.json`、`start` 的 `.cache`/`digest` 是纳入 SAVE 锁，还是改为不写缓存以保持只读承诺。
-- **`combat-sim` 锁实现**：`combat-sim` 不依赖 `talkdnd`；SAVE 锁原语是共享还是由 `talkdnd` 包装，属架构取舍。
-- **日志并发语义**：活动操作期间独立 `log`/`checkpoint <text>` 是拒绝、排队，还是允许并标记“可能交错”。
-- **`new` 与 SAVE 的关系**：新存档创建时是否立即 `init`，以及失败时留下 lock 无 state 的处理。
-- **控制元数据范围**：`.cache/`、`digest.md`、操作证据与备份目录的保留/清理责任未定。
+| 原未决问题 | 已确认的决定 | 落地位置 |
+|---|---|---|
+| 未初始化存档 | 显式 `init`，不自动初始化；没有 lock/state 的存档保持现状，有任一控制文件的存档让未接入写入口失败关闭 | `ADV-P1-1pre`（过渡门）、后续 `ADV-P1-1a`–`ADV-P1-1e`（SAVE 锁接入） |
+| 未接入入口的拒绝 UX | 退出码 1 + 明确文案（已启用成长协议、该入口尚未接入、未写目标、需升级/等待接入），在 `--help` 与玩家文档声明；不得只警告后继续写 | `ADV-P1-1pre` |
+| CLI 兼容 | `new`/`start`/`migrate`/`chargen` 不自动 `init`；旧存档首次运行不强制 `init`；旧二进制与外部编辑器仍不受约束 | `ADV-P1-1pre` |
+| 缓存写入 | `guard`/`secret list` 的 `secret-terms.cache.json`、`start` 的 `.cache`/`digest.md` 是控制元数据：原子写、不进用户数据备份、不取 SAVE 锁 | `ADV-P1-1pre`（分类与放行）、`ADV-P1-1e`（接入归属） |
+| `combat-sim` 锁实现 | 新建共享 crate `tools/advancement-lock`，两套 CLI 共同依赖；`combat-sim` 不依赖 `talkdnd` | `ADV-P1-1pre` |
+| 日志并发语义 | 活动操作期间独立 `log`/`checkpoint <text>` 失败关闭；只读日志查询不受影响 | `ADV-P1-1pre`（拒绝）、`ADV-P1-1d`（接入） |
+| `new` 与 SAVE 的关系 | 新存档创建时不 `init`；`new` 只创建新槽，不写已启用协议的存档 | `ADV-P1-1pre` |
+| 控制元数据范围 | 保留策略只记录、不实现自动清理；未定前不得假定可删除或可排除 | 本文「已批准边界」第 2 条、`ADV-P1-2` |
 
-以上决定记录在对应 Issue；决定前子块只能按保守方式实现或停在设计，不得把未决项写成已完成。
+以上决定记录见 Issue #292；实现与证据见 Issue #293。决定前子块只能按保守方式实现或停在设计，不得把未决项写成已完成。
 
 
 ### Task: `ADV-P1-2` — D 阶段机与备份验证（admit / backup / candidate）
@@ -385,7 +389,7 @@
 | 结论 | 需要的实验 | 归属块 | 当前状态 |
 |---|---|---|---|
 | 两个协作写者同时提交时恰有一方成功、失败方不写目标 | 多进程竞争（T1），三平台 | `ADV-P1-1a`–`ADV-P1-1e` | `NOT_RUN` |
-| 过渡拒绝门：未接入写者在 lock/state 存在时拒绝 | 过渡拒绝门合成测试（两套 CLI 直接调用） | `ADV-P1-1pre` | `NOT_RUN` |
+| 过渡拒绝门：未接入写者在 lock/state 存在时拒绝 | 过渡拒绝门合成测试（两套 CLI 直接调用） | `ADV-P1-1pre` | 已交付：两套 CLI 直接调用 PASS（Linux 本地，head 与证据见 Issue #293）；Windows/macOS 由该 head 的 CI 记录 |
 | 阶段边界能检出锁/state 被替换并中止 | 路径替换注入（T2a/T2c/T2f1/T2f2） | `ADV-P1-1c`、`ADV-P1-2` | `NOT_RUN` |
 | `admit` 快照失败时不写 `active`、不写目标（含首次操作） | 快照各窗口故障注入（T4d） | `ADV-P1-2` | `NOT_RUN` |
 | 崩溃后不自动续跑，`active`/`in_doubt` 拒绝普通写入 | 分阶段 kill（T4a/T4e） | `ADV-P1-2`、`ADV-P1-4` | `NOT_RUN` |
