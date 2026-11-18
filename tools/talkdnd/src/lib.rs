@@ -435,6 +435,8 @@ enum HandoutCmd {
         png: bool,
     },
     /// Handouts shown so far; --dm lists the whole registry with visibility
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     List {
         #[arg(long)]
         dm: bool,

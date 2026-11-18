@@ -460,6 +460,7 @@ const WRITE_HELP: &[&[&str]] = &[
     &["handout", "show", "--help"],
     &["handout", "build", "--help"],
     &["handout", "mark", "--help"],
+    &["handout", "list", "--dm", "--help"],
     &["adventure", "section", "--help"],
     &["adventure", "index", "build", "--help"],
 ];
