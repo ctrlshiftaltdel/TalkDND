@@ -556,3 +556,105 @@ fn adventure_section_list_with_reason_is_read_only() {
     assert!(text.contains("Chapter 1"), "{text}");
     assert_eq!(snapshot(&save), before, "`--list --reason` wrote the save");
 }
+
+/// `handout list --dm` builds and writes a missing book registry, so it is a
+/// writer; the player view stays read-only.
+#[test]
+fn handout_list_dm_is_a_writer_but_the_player_view_is_not() {
+    let root = playable("handout-list-dm");
+    let save = root.join(SAVE);
+    adopt_protocol(&save);
+    let before = snapshot(&save);
+    let out = run_slot(&root, &["handout", "list", "--dm"]);
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&save), before);
+    let player = run_slot(&root, &["handout", "list"]);
+    assert!(
+        player.status.success(),
+        "the player view must stay available\n{}",
+        output_text(&player)
+    );
+    assert!(!output_text(&player).contains("尚未接入成长协议"));
+    assert_eq!(snapshot(&save), before);
+}
+
+/// A `--book` folder in another, adopted save is refused for `handout show`
+/// and `handout list --dm` too, even when the registry there does not exist
+/// yet (both would build and write it).
+#[test]
+fn handout_show_and_dm_list_check_the_book_folder_of_another_save() {
+    let root = playable("handout-book-other-save");
+    let selected = root.join(SAVE);
+    assert!(!selected.join(LOCK).exists());
+    let other = root.join("Saves/2030-05-05-01");
+    let book = other.join("Adventures/probe/index");
+    fs::create_dir_all(&book).unwrap();
+    fs::write(book.join("index.json"), b"{\"headings\":[]}\n").unwrap();
+    fs::write(other.join(LOCK), b"probe lock\n").unwrap();
+    assert!(!book.join("handouts.yaml").exists());
+    let before = snapshot(&other);
+    let absolute = book.to_string_lossy().into_owned();
+    for args in [
+        vec!["handout", "--book", &absolute, "show", "probe"],
+        vec!["handout", "--book", &absolute, "list", "--dm"],
+    ] {
+        let out = run_slot(&root, &args);
+        let text = output_text(&out);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "`{}` must exit 1\n{text}",
+            args.join(" ")
+        );
+        assert!(
+            text.contains("已启用成长协议"),
+            "`{}` must name the protocol\n{text}",
+            args.join(" ")
+        );
+        assert_eq!(
+            snapshot(&other),
+            before,
+            "`{}` wrote the other save",
+            args.join(" ")
+        );
+    }
+}
+
+/// `new` audits the save it created, never a later-dated save that happens to
+/// be the newest slot.
+#[test]
+fn new_audits_only_the_save_it_created() {
+    for with_integrity in [false, true] {
+        let root = playable(if with_integrity {
+            "new-audit-with-integrity"
+        } else {
+            "new-audit-without-integrity"
+        });
+        let old = root.join("Saves/2030-12-31-01");
+        fs::create_dir_all(old.join("Sessions")).unwrap();
+        fs::write(old.join("canon.md"), b"# old save\n").unwrap();
+        fs::write(
+            old.join("Sessions/2030-12-31-session-00-setup.md"),
+            b"# setup\n",
+        )
+        .unwrap();
+        if with_integrity {
+            fs::write(old.join("integrity.yaml"), b"version: 1\nfiles: {}\n").unwrap();
+        }
+        fs::write(old.join(LOCK), b"probe lock\n").unwrap();
+        let before = snapshot(&old);
+        let text = ok(&root, &["new", "--date", "2030-01-03"]);
+        assert!(text.contains("created Saves/2030-01-03-01"), "{text}");
+        assert_eq!(
+            snapshot(&old),
+            before,
+            "`new` audited or touched the later-dated save"
+        );
+        assert!(
+            root.join("Saves/2030-01-03-01/integrity.yaml").is_file(),
+            "the created save was not audited"
+        );
+    }
+}

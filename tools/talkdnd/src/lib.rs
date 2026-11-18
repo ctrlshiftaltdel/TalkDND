@@ -971,7 +971,10 @@ fn gate_entry(cli: &Cli) -> &'static str {
         },
         Cmd::Handout { cmd, .. } => match cmd {
             HandoutCmd::Show { .. } => "talkdnd:handout-show",
-            HandoutCmd::List { .. } => "talkdnd:handout-list",
+            // `--dm` builds and writes the book registry when it is missing;
+            // the player view only reads the save's shown list.
+            HandoutCmd::List { dm: true } => "talkdnd:handout-list-dm",
+            HandoutCmd::List { dm: false } => "talkdnd:handout-list",
             HandoutCmd::Build => "talkdnd:handout-build",
             HandoutCmd::Mark { .. } => "talkdnd:handout-mark",
         },
@@ -1048,7 +1051,11 @@ fn extra_write_targets(root: &Path, cli: &Cli, save: &Path) -> Vec<PathBuf> {
         } => bookindex_targets(root, save, book.as_deref()),
         Cmd::Handout {
             book,
-            cmd: HandoutCmd::Build | HandoutCmd::Mark { .. },
+            cmd:
+                HandoutCmd::Show { .. }
+                | HandoutCmd::List { dm: true }
+                | HandoutCmd::Build
+                | HandoutCmd::Mark { .. },
         } => handout::book_dirs(root, save, book.as_deref()).unwrap_or_default(),
         _ => Vec::new(),
     }
@@ -1124,16 +1131,18 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         tracked
     };
     let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
-    let is_new = matches!(cli.cmd, Cmd::New { .. });
-    let result = dispatch(&root, &cli, rng);
+    let mut created = None;
+    let result = dispatch(&root, &cli, rng, &mut created);
     if let (Some(s), Some(before)) = (tracked.as_deref(), before.as_ref()) {
         if s.is_dir() {
             audit::after_command(s, before)?;
         }
     }
-    if is_new && result.is_ok() {
-        if let Ok(s) = save::resolve_slot(&root, None) {
-            audit::audit(&s)?;
+    // Audit the save `new` actually created: inferring the newest slot would
+    // pick a later-dated save that was never touched by this command.
+    if result.is_ok() {
+        if let Some(dir) = created {
+            audit::audit(&dir)?;
         }
     }
     result
@@ -1156,7 +1165,12 @@ fn print_audit(s: &Path) -> Result<()> {
     Ok(())
 }
 
-fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
+fn dispatch(
+    root: &Path,
+    cli: &Cli,
+    rng: &mut dyn DiceRng,
+    created: &mut Option<PathBuf>,
+) -> Result<()> {
     let root = root.to_path_buf();
     match cli.cmd.clone() {
         Cmd::Char { who, op } => {
@@ -1437,7 +1451,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             date,
             scope,
             ratio,
-        } => new_save(&root, ruleset, adventure, date, scope, ratio)?,
+        } => *created = Some(new_save(&root, ruleset, adventure, date, scope, ratio)?),
         Cmd::Chargen { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             chargen_cmd(&s, cmd, rng, cli.seed.is_some())?
@@ -1847,7 +1861,7 @@ fn new_save(
     date: Option<String>,
     scope: Option<u32>,
     ratio: Option<u32>,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let chosen = ruleset.as_deref().map(check_ruleset).transpose()?;
     let manifest_ruleset = chosen.unwrap_or(Ruleset::FivePointFiveESrd);
     let deviation = deviation_input(scope, ratio)?;
@@ -1907,7 +1921,7 @@ fn new_save(
         println!("{line}");
     }
     print_next(&c);
-    Ok(())
+    Ok(dir)
 }
 
 fn print_next(c: &Creation) {

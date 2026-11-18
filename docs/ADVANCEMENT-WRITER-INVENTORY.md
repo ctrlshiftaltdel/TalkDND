@@ -162,7 +162,7 @@
 | `talkdnd migrate --dry-run`（`lib.rs:1033` → `ensure(..., true)`） | `migrate::ensure` 的 dry-run 分支只读。 | `None`（`Cmd::Migrate`） | 不写备份、不迁移。 |
 | `talkdnd secret scan`（`secret::scan_lines`，`secret.rs:542`） | 只读指定文件并报告数量/行号。 | `tracked` | 不写缓存。 |
 | `talkdnd secret import`（默认 dry-run，`secret.rs:658` 的 `!apply` 分支） | 只读来源文件与手动词，输出预览。 | `tracked` | `--apply` 会写（§2.6）。 |
-| `talkdnd handout list`（`handout::list`，`handout.rs:519`） | 只读 registry。 | `tracked` | `handout show/build/mark` 会写。 |
+| `talkdnd handout list`（`handout::list`，`handout.rs:519`） | 只读 registry。 | `tracked` | 仅 player 视图只读；`--dm` 会在 registry 缺失时 build/store 书目录 `handouts.yaml`，按写者处理。 |
 | `talkdnd original list/status`（`original::list`/`status_lines`） | 只读 `original.yaml`。 | `tracked` | `original add/plan` 会写。 |
 | `talkdnd reveal list/check`（`reveal::list`/`check`） | 只读 `reveals.yaml`。 | `tracked` | `reveal add` 会写。 |
 | `talkdnd options`（`print_options`） | 只读规则数据。 | `None`（`Cmd::Options`） | 不写存档。 |
@@ -243,7 +243,10 @@
 | `new`（新存档） | 放行：只创建新槽，不写已启用协议的存档 |
 | 控制文件存在但损坏 / 零字节 / 悬空符号链接 | 一律视为“协议存在”，失败关闭（不做任何解析） |
 | 写目标无法解析为绝对路径（不可读祖先、符号链接环、缺失段后的 `..`、无工作目录） | 失败关闭（`Unresolved`，退出码 1）：门不会猜测它属于哪个存档 |
-| `--book` 指向另一存档内的书目录（`adventure index build`、`handout build/mark`） | 逐目标解析并检查其所属存档；属于已启用协议的存档即拒绝，选中的存档未初始化也不放行 |
+| `--book` 指向另一存档内的书目录（`adventure index build`、`handout show/list --dm/build/mark`） | 逐目标解析并检查其所属存档；属于已启用协议的存档即拒绝，选中的存档未初始化也不放行；`handout show` 在查找失败前也会 build 缺失的 registry，所以先拒绝 |
+| 最终组件是符号链接 / 会被原子 rename 替换的目标 | 同时检查**目录项路径**（父目录解析、末组件不跟随）与**跟随路径**（末组件存在时 canonicalize）；任一落在协议存档内即拒绝 |
+| `combat-sim` 的具体输出文件（`<save>/rolls.log`、`content pack release` 的每个 `<out>/<pack 文件名>` 与 `full-packs-manifest.json`） | 按文件而非只按目录检查目录项与跟随路径 |
+| `talkdnd new` 的命令后审计 | 只审计 `new_save` 实际创建的路径；不再用“最新存档”推断，避免审计到更晚日期的旧存档 |
 | `combat-sim` 的 campaign `state_dir/party-state.yaml` 或 state 里记录的 `party_state` 指向已启用协议的存档 | 在首次写入前拒绝，即使 `--save` 指向未受保护的目录 |
 
 **§2 行 → 注册表条目映射（`WRITERS` 逐条对应，注册表是权威）：**
@@ -294,6 +297,7 @@
 | §2.6 `secret add/remove` | `talkdnd:secret-write` | `UnadoptedWrite` | 否（过渡门拒绝） |
 | §2.6 `secret import --apply` | `talkdnd:secret-import-apply` | `UnadoptedWrite` | 否（过渡门拒绝） |
 | §2.6 `handout show` | `talkdnd:handout-show` | `UnadoptedWrite` | 否（过渡门拒绝） |
+| §2.6/§2.7 `handout list --dm` | `talkdnd:handout-list-dm` | `UnadoptedWrite` | 否（`--dm` 会 build/store 书目录 `handouts.yaml`） |
 | §2.6 `adventure section ... --reason` | `talkdnd:adventure-section-write` | `UnadoptedWrite` | 否（过渡门拒绝） |
 | §2.6 `adventure index build` | `talkdnd:adventure-index-build` | `UnadoptedWrite` | 否（过渡门拒绝；目标可能在存档内） |
 | §2.6 `new` | `talkdnd:new` | `NewSave` | 不适用（只创建新槽） |
@@ -309,11 +313,14 @@
 | §2.8 `start` 的 `digest.md`/`.cache` | 归入 `talkdnd:start`（整条命令按写者处理，因为它还会迁移存档内容；控制元数据分类只说明这些文件将来不并入备份） | — | 否（过渡门拒绝整条命令，不跑缓存） |
 | §2.9 未来目标（sidecar、schema 11、候选树、D 备份） | 无条目 | — | 仍不存在，不声称已覆盖 |
 
-**只读条目（同样逐条列入注册表并由测试覆盖）：** `talkdnd:xp-show`、`talkdnd:loot-show`、`talkdnd:memory-list`、`talkdnd:entity-read`、`talkdnd:relation-read`、`talkdnd:time-read`、`talkdnd:settings-read`、`talkdnd:settings-style-read`、`talkdnd:checkpoint-read`、`talkdnd:snapshot-diff`、`talkdnd:migrate-dry-run`、`talkdnd:secret-scan`、`talkdnd:secret-import-dry-run`、`talkdnd:handout-list`、`talkdnd:original-read`、`talkdnd:reveal-read`、`talkdnd:chargen-status`、`talkdnd:chargen-validate`、`talkdnd:char-spells-read`、`talkdnd:adventure-search`、`talkdnd:adventure-index-read`、`talkdnd:adventure-section-read`、`talkdnd:known`、`talkdnd:knowledge`、`talkdnd:oracle`、`talkdnd:options`、`talkdnd:data-status`、`talkdnd:library`、`talkdnd:log-rolls`，以及 `combat-sim:status`、`combat-sim:scene`、`combat-sim:log`、`combat-sim:simulate`、`combat-sim:content-read`、`combat-sim:pack-read`、`combat-sim:party-show`。
+**只读条目（同样逐条列入注册表并由测试覆盖）：** `talkdnd:xp-show`、`talkdnd:loot-show`、`talkdnd:memory-list`、`talkdnd:entity-read`、`talkdnd:relation-read`、`talkdnd:time-read`、`talkdnd:settings-read`、`talkdnd:settings-style-read`、`talkdnd:checkpoint-read`、`talkdnd:snapshot-diff`、`talkdnd:migrate-dry-run`、`talkdnd:secret-scan`、`talkdnd:secret-import-dry-run`、`talkdnd:handout-list`（player 视图）、`talkdnd:original-read`、`talkdnd:reveal-read`、`talkdnd:chargen-status`、`talkdnd:chargen-validate`、`talkdnd:char-spells-read`、`talkdnd:adventure-search`、`talkdnd:adventure-index-read`、`talkdnd:adventure-section-read`、`talkdnd:known`、`talkdnd:knowledge`、`talkdnd:oracle`、`talkdnd:options`、`talkdnd:data-status`、`talkdnd:library`、`talkdnd:log-rolls`，以及 `combat-sim:status`、`combat-sim:scene`、`combat-sim:log`、`combat-sim:simulate`、`combat-sim:content-read`、`combat-sim:pack-read`、`combat-sim:party-show`。
 
 **证据与已知限制：**
 
 - 两套 CLI 的真实调用路径测试逐条覆盖上表：写入口在 lock/state 存在时退出 1、文案齐全、存档树逐字节不变；只读入口不被拒绝且整树不变；缓存入口只改缓存；无控制文件时既有写命令照常工作；`new` 在协议存在时仍可创建新槽；`start` 整条被拒绝（不跑 digest/缓存）。
+- `handout list --dm` 是写者（registry 缺失时 build/store `handouts.yaml`），player 视图只读；`handout show` 与 `list --dm` 的 `--book` 书目录在查找失败前也纳入检查。
+- 最终符号链接用例：受保护存档内 `combat/e.state.json` 指向外部有效 state 时，用未受保护 `--save` 的写命令仍被拒绝；`<save>/rolls.log` 与 `pack release` 目标文件链接到受保护文件时同样拒绝，链接与受保护文件内容不变。
+- `new` 只审计实际创建的存档：更晚日期的旧存档（缺/有 `integrity.yaml`）在新存档创建前后逐字节不变。
 - 跨存档与路径解析另有独立用例：`--book` 指向另一存档内的书目录（绝对路径与 root 相对路径）时 `adventure index build` 与 `handout build/mark` 均退出 1 且目标存档不变；存档外的书目录不被拒绝；`adventure section --list --reason` 成功且整树不变；`combat-sim` 的相对 `--state`、经符号链接的 `--state`、外部 manifest 的 `state_dir`、外部 state 记录的 `party_state` 都按实际写目标拒绝，且不因 `--save` 指向未受保护目录而放行；外部 `party_state` 的目标在存档外时保持原行为。
 - 少量只读入口在合成存档上会因缺少书籍内容或施法职业而自行报错（`snapshot diff`、`adventure search`、`adventure index show`、`char <who> spells`、`data import`、`combat-sim simulate`、两个 pack `--dry-run`）。测试断言的是“门没有拒绝且存档不变”，不是这些命令一定成功；它们各自的成功条件不属于本块。
 - `--help` 声明覆盖顶层命令与每个写叶子（两套 CLI 各有一张显式清单，测试逐条断言）。`talkdnd` 的 `checkpoint`/`memory`/`entity`/`relation`/`time`/`char`/`adventure index` 等叶子枚举现在也带声明；`diff.rs` 的唯一子命令是只读，不需要声明。

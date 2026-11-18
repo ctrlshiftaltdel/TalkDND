@@ -475,3 +475,81 @@ fn a_state_party_state_outside_the_saves_is_not_refused() {
         "status on an external state must keep working\n{text}"
     );
 }
+
+/// `<save>/rolls.log` is a concrete write target: a symlink into a protected
+/// save is refused before the append follows it.
+#[cfg(unix)]
+#[test]
+fn a_rolls_log_symlink_into_a_protected_save_is_refused() {
+    let fixture = fixture("rolls-log-link");
+    let protected = fixture.root.join("Saves/p");
+    fs::create_dir_all(protected.join("combat")).unwrap();
+    fs::write(protected.join(LOCK), b"probe lock\n").unwrap();
+    let protected_file = protected.join("combat/party-state.yaml");
+    fs::write(&protected_file, b"party: []\n").unwrap();
+    let plain = fixture.root.join("Saves/plain");
+    fs::create_dir_all(&plain).unwrap();
+    let link = plain.join("rolls.log");
+    std::os::unix::fs::symlink(&protected_file, &link).unwrap();
+    let before = snapshot(&protected);
+    let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .arg("--save")
+        .arg(&plain)
+        .args(["roll", "1d20"])
+        .output()
+        .expect("failed to run combat-sim");
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&protected), before, "the protected save changed");
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the rolls.log symlink was replaced"
+    );
+}
+
+/// `content pack release` writes one concrete file per input pack; a target
+/// that is a symlink into a protected save is refused.
+#[cfg(unix)]
+#[test]
+fn a_pack_release_target_symlink_into_a_protected_save_is_refused() {
+    let fixture = fixture("release-link");
+    let protected = fixture.root.join("Saves/p");
+    fs::create_dir_all(protected.join("combat")).unwrap();
+    fs::write(protected.join(LOCK), b"probe lock\n").unwrap();
+    let protected_file = protected.join("combat/party-state.yaml");
+    fs::write(&protected_file, b"party: []\n").unwrap();
+    let plain = fixture.root.join("Saves/plain");
+    fs::create_dir_all(&plain).unwrap();
+    let packs = fixture.root.join("packs");
+    fs::create_dir_all(&packs).unwrap();
+    fs::write(packs.join("probe.pack.json"), b"{}\n").unwrap();
+    let out_dir = fixture.root.join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let target = out_dir.join("probe.pack.json");
+    std::os::unix::fs::symlink(&protected_file, &target).unwrap();
+    let before = snapshot(&protected);
+    let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .arg("--save")
+        .arg(&plain)
+        .args(["content", "pack", "release", "--packs"])
+        .arg(&packs)
+        .arg("--out")
+        .arg(&out_dir)
+        .output()
+        .expect("failed to run combat-sim");
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&protected), before, "the protected save changed");
+    assert!(
+        fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the release target symlink was replaced"
+    );
+}

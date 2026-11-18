@@ -5,6 +5,7 @@
 //! only commands that need content sources.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -887,7 +888,36 @@ fn content_out_dirs(command: &ContentCommand) -> Vec<PathBuf> {
         | ContentCommand::ImportSrd { out, .. } => vec![out.clone()],
         ContentCommand::Pack { command } => match command {
             PackCommand::Build { out, .. } => vec![out.clone()],
-            PackCommand::Release { out, .. } => out.iter().cloned().collect(),
+            PackCommand::Release {
+                packs,
+                out: Some(out),
+                ..
+            } => {
+                // `release` copies every `<packs>/*.pack.json` to
+                // `<out>/<file name>` and then writes the manifest; each of
+                // those concrete files is a write target, not just the
+                // directory. Reading the input directory is read-only; when it
+                // cannot be read the command fails before writing anything.
+                let mut targets = vec![out.clone()];
+                if let Ok(entries) = fs::read_dir(packs) {
+                    let mut files: Vec<PathBuf> = entries
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| {
+                            path.is_file() && path.to_string_lossy().ends_with(".pack.json")
+                        })
+                        .collect();
+                    files.sort();
+                    for file in files {
+                        if let Some(name) = file.file_name() {
+                            targets.push(out.join(name));
+                        }
+                    }
+                }
+                targets.push(out.join("full-packs-manifest.json"));
+                targets
+            }
+            PackCommand::Release { out: None, .. } => Vec::new(),
             PackCommand::List | PackCommand::Show { .. } | PackCommand::Verify => Vec::new(),
         },
         ContentCommand::List { .. } | ContentCommand::Show { .. } | ContentCommand::Check => {
@@ -936,6 +966,11 @@ fn check_transition_gate(
             // state; the state_dir itself may belong to another save.
             if let Some(dir) = manifest_state_dir(sources) {
                 targets.push(dir.join(crate::party::FILE_NAME));
+            }
+            // `roll` and every state command append `<save>/rolls.log`; the
+            // file itself may be a symlink into a protected save.
+            if let Some(dir) = save {
+                targets.push(dir.join("rolls.log"));
             }
         }
     }

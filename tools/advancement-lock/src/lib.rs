@@ -134,30 +134,96 @@ impl fmt::Display for GateError {
 
 impl std::error::Error for GateError {}
 
-/// Absolute, symlink-resolved form of a write target.
+/// Absolute, symlink-resolved form of a write target's **directory entry**.
 ///
 /// Relative targets are anchored at the process working directory, which is
-/// exactly how both CLIs open them. The deepest existing ancestor is
-/// canonicalized (so symlinks and `..` are resolved the way the operating
-/// system will resolve them); the remaining, not-yet-existing components are
-/// appended. Anything that cannot be resolved — an unreadable ancestor, a
-/// symlink loop, a `..` after a missing component, no working directory — is
-/// an [`Unresolved`] error, and the gate refuses the write.
-///
-/// Residual limit: a symlink created in the missing tail *after* this check
-/// and before the write is outside what any pre-write check can see (the same
-/// non-cooperative-writer limit the protocol already documents).
+/// exactly how both CLIs open them. The parent is canonicalized (so symlinks
+/// and `..` are resolved the way the operating system will resolve them); the
+/// final component is appended literally, because an atomic rename replaces
+/// that directory entry and does not follow a final symlink. Anything that
+/// cannot be resolved — an unreadable ancestor, a symlink loop, no final
+/// component, no working directory — is an [`Unresolved`] error, and the gate
+/// refuses the write.
 pub fn resolve_target(target: &Path) -> Result<PathBuf, Unresolved> {
-    let anchored = if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        let cwd = std::env::current_dir().map_err(|err| Unresolved {
+    let anchored = anchor(target)?;
+    let Some(name) = anchored.file_name() else {
+        return Err(Unresolved {
             target: target.to_path_buf(),
-            reason: format!("cannot read the current directory: {err}"),
-        })?;
-        cwd.join(target)
+            reason: "the path has no final component".to_string(),
+        });
     };
-    let mut probe = anchored.as_path();
+    let parent = anchored.parent().unwrap_or(anchored.as_path());
+    Ok(canonical_existing(parent, target)?.join(name))
+}
+
+/// The two ways a write can land, for one target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteTargets {
+    /// The directory entry that an atomic rename replaces (the final component
+    /// is not followed).
+    pub entry: PathBuf,
+    /// The path an append or copy follows when the final component already
+    /// exists as a symlink. Equal to `entry` when it does not.
+    pub followed: PathBuf,
+}
+
+/// Resolve both the directory-entry path and the followed path of a target.
+///
+/// An atomic rename replaces the entry, while an append or copy follows a
+/// final symlink; a save that adopted the protocol is reached through either
+/// one, so both must be checked.
+pub fn resolve_write_targets(target: &Path) -> Result<WriteTargets, Unresolved> {
+    let entry = resolve_target(target)?;
+    let followed = match fs::symlink_metadata(&entry) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            let link = fs::read_link(&entry).map_err(|err| Unresolved {
+                target: target.to_path_buf(),
+                reason: format!("cannot read link {}: {err}", entry.display()),
+            })?;
+            let destination = if link.is_absolute() {
+                link
+            } else {
+                entry.parent().unwrap_or_else(|| Path::new("")).join(link)
+            };
+            match fs::canonicalize(&destination) {
+                Ok(path) => path,
+                // A dangling link still names where the write would land: its
+                // directory entry. Resolve that without following further.
+                Err(err) if err.kind() == ErrorKind::NotFound => resolve_target(&destination)?,
+                Err(err) => {
+                    return Err(Unresolved {
+                        target: target.to_path_buf(),
+                        reason: format!("cannot resolve {}: {err}", destination.display()),
+                    })
+                }
+            }
+        }
+        Ok(_) => entry.clone(),
+        Err(err) if err.kind() == ErrorKind::NotFound => entry.clone(),
+        Err(err) => {
+            return Err(Unresolved {
+                target: target.to_path_buf(),
+                reason: format!("cannot inspect {}: {err}", entry.display()),
+            })
+        }
+    };
+    Ok(WriteTargets { entry, followed })
+}
+
+fn anchor(target: &Path) -> Result<PathBuf, Unresolved> {
+    if target.is_absolute() {
+        return Ok(target.to_path_buf());
+    }
+    let cwd = std::env::current_dir().map_err(|err| Unresolved {
+        target: target.to_path_buf(),
+        reason: format!("cannot read the current directory: {err}"),
+    })?;
+    Ok(cwd.join(target))
+}
+
+/// Canonicalize the deepest existing ancestor of `path` and append the rest.
+fn canonical_existing(path: &Path, original: &Path) -> Result<PathBuf, Unresolved> {
+    let mut probe = path;
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     loop {
         match fs::symlink_metadata(probe) {
@@ -165,14 +231,14 @@ pub fn resolve_target(target: &Path) -> Result<PathBuf, Unresolved> {
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 let Some(name) = probe.file_name() else {
                     return Err(Unresolved {
-                        target: target.to_path_buf(),
+                        target: original.to_path_buf(),
                         reason: format!("no existing ancestor for {}", probe.display()),
                     });
                 };
                 tail.push(name.to_os_string());
                 let Some(parent) = probe.parent() else {
                     return Err(Unresolved {
-                        target: target.to_path_buf(),
+                        target: original.to_path_buf(),
                         reason: format!("no existing ancestor for {}", probe.display()),
                     });
                 };
@@ -180,14 +246,14 @@ pub fn resolve_target(target: &Path) -> Result<PathBuf, Unresolved> {
             }
             Err(err) => {
                 return Err(Unresolved {
-                    target: target.to_path_buf(),
+                    target: original.to_path_buf(),
                     reason: format!("cannot inspect {}: {err}", probe.display()),
                 })
             }
         }
     }
     let mut resolved = fs::canonicalize(probe).map_err(|err| Unresolved {
-        target: target.to_path_buf(),
+        target: original.to_path_buf(),
         reason: format!("cannot resolve {}: {err}", probe.display()),
     })?;
     for name in tail.iter().rev() {
@@ -196,25 +262,38 @@ pub fn resolve_target(target: &Path) -> Result<PathBuf, Unresolved> {
     Ok(resolved)
 }
 
-/// Walk up from a resolved write target and return the nearest directory
-/// holding a control file.
-///
-/// This is how `combat-sim` finds the save for `--state`, `--out`, the
-/// campaign's `state_dir` and a loaded state's `party_state`, and how
-/// `talkdnd` checks a `--book` folder that may live in another save.
-pub fn enclosing_protocol_dir(target: &Path) -> Result<Option<PathBuf>, Unresolved> {
-    let resolved = resolve_target(target)?;
-    let start = if resolved.is_dir() {
-        resolved.as_path()
+/// Walk up from a resolved path and return the nearest directory holding a
+/// control file.
+fn nearest_protocol(path: &Path) -> Option<PathBuf> {
+    let mut dir = if path.is_dir() {
+        Some(path)
     } else {
-        resolved.parent().unwrap_or(resolved.as_path())
+        path.parent()
     };
-    let mut dir = Some(start);
     while let Some(current) = dir {
         if has_protocol(current) {
-            return Ok(Some(current.to_path_buf()));
+            return Some(current.to_path_buf());
         }
         dir = current.parent();
+    }
+    None
+}
+
+/// Walk up from a write target and return the nearest directory holding a
+/// control file.
+///
+/// Both the directory entry and the followed path are checked: a final symlink
+/// inside a save is reached by an atomic rename even when it points outside,
+/// and a symlink outside pointing into a save is reached by an append or copy.
+/// This is how `combat-sim` finds the save for `--state`, `--out`, the
+/// campaign's `state_dir`, a loaded state's `party_state` and `rolls.log`, and
+/// how `talkdnd` checks a `--book` folder that may live in another save.
+pub fn enclosing_protocol_dir(target: &Path) -> Result<Option<PathBuf>, Unresolved> {
+    let targets = resolve_write_targets(target)?;
+    for candidate in [&targets.entry, &targets.followed] {
+        if let Some(dir) = nearest_protocol(candidate) {
+            return Ok(Some(dir));
+        }
     }
     Ok(None)
 }
@@ -859,7 +938,7 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd:handout-show",
         "talkdnd handout show",
         "lib.rs::dispatch Cmd::Handout; handout.rs::show",
-        "handouts/<id>.<ext>, handouts.yaml, reveals.yaml, Sessions/*.md",
+        "handouts/<id>.<ext>, handouts.yaml, reveals.yaml, Sessions/*.md, book-dir handouts.yaml (built when missing)",
         UnadoptedWrite,
         "exports the image, records it shown and writes the reveal or log",
         &["handout", "show", "gate-probe"]
@@ -887,12 +966,22 @@ pub static WRITERS: &[Writer] = &[
     writer!(
         Talkdnd,
         "talkdnd:handout-list",
-        "talkdnd handout list",
-        "lib.rs::dispatch Cmd::Handout; handout.rs::list",
+        "talkdnd handout list (player view)",
+        "lib.rs::dispatch Cmd::Handout; handout.rs::list (!dm)",
         "none",
         ReadOnly,
-        "reads the registry only",
+        "the player view reads the save's shown list and never touches a book registry",
         &["handout", "list"]
+    ),
+    writer!(
+        Talkdnd,
+        "talkdnd:handout-list-dm",
+        "talkdnd handout list --dm",
+        "lib.rs::dispatch Cmd::Handout; handout.rs::list; handout.rs::registries; handout.rs::build; handout.rs::store",
+        "book-dir handouts.yaml",
+        UnadoptedWrite,
+        "--dm lists the whole registry and builds/writes handouts.yaml when it is missing",
+        &["handout", "list", "--dm"]
     ),
     writer!(
         Talkdnd,
@@ -1441,6 +1530,59 @@ mod tests {
             resolved,
             fs::canonicalize(&root).unwrap().join("new/content")
         );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_final_symlink_inside_a_protected_save_is_refused() {
+        // The symlink's directory entry lives in the save, so an atomic rename
+        // replaces it even though it points outside.
+        let root = temp("final-symlink");
+        let save = root.join("Saves/p");
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::write(lock_path(&save), b"").unwrap();
+        let outside = root.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let external = outside.join("e.state.json");
+        fs::write(&external, b"{}").unwrap();
+        let link = save.join("combat/e.state.json");
+        std::os::unix::fs::symlink(&external, &link).unwrap();
+
+        let targets = resolve_write_targets(&link).unwrap();
+        assert_eq!(
+            targets.entry,
+            fs::canonicalize(save.join("combat"))
+                .unwrap()
+                .join("e.state.json")
+        );
+        assert_eq!(targets.followed, fs::canonicalize(&external).unwrap());
+        assert!(matches!(
+            check_target(&link, "combat-sim:state-write"),
+            Err(GateError::Refused(_))
+        ));
+
+        // The reverse: a symlink outside the save that points into it is
+        // followed by an append or copy.
+        let alias = outside.join("alias-party.yaml");
+        std::os::unix::fs::symlink(save.join("combat/party-state.yaml"), &alias).unwrap();
+        assert!(matches!(
+            check_target(&alias, "combat-sim:party-write"),
+            Err(GateError::Refused(_))
+        ));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_regular_file_outside_the_saves_is_allowed() {
+        let root = temp("regular-file");
+        let outside = root.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let file = outside.join("party-state.yaml");
+        fs::write(&file, b"party: []\n").unwrap();
+        let targets = resolve_write_targets(&file).unwrap();
+        assert_eq!(targets.entry, targets.followed);
+        assert!(check_target(&file, "combat-sim:party-write").is_ok());
         fs::remove_dir_all(&root).unwrap();
     }
 
