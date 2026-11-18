@@ -1391,7 +1391,7 @@ mod tests {
         fs::write(lock_path(&save), b"").unwrap();
         assert_eq!(
             enclosing_protocol_dir(&save.join("combat/e.state.json")).unwrap(),
-            Some(save.clone())
+            Some(fs::canonicalize(&save).unwrap())
         );
         assert_eq!(enclosing_protocol_dir(&root).unwrap(), None);
         fs::remove_dir_all(&root).unwrap();
@@ -1399,10 +1399,12 @@ mod tests {
 
     #[test]
     fn resolve_target_anchors_relative_paths_at_the_working_directory() {
-        let cwd = std::env::current_dir().unwrap();
+        // `resolve_target` returns the canonical form; compare with the
+        // canonical working directory so the test is platform-neutral.
+        let cwd = fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
         let resolved = resolve_target(Path::new("relative/child.state.json")).unwrap();
         assert!(resolved.is_absolute());
-        assert_eq!(resolved, cwd.join("relative/child.state.json"));
+        assert_eq!(resolved, cwd.join("relative").join("child.state.json"));
     }
 
     #[test]
@@ -1442,9 +1444,12 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_unresolvable_target_fails_closed() {
-        // A `..` after a missing component has no reliable absolute meaning.
+        // On Unix a `..` after a missing component has no reliable absolute
+        // meaning (the kernel cannot resolve it); Windows normalizes it
+        // lexically, so the case only exists here.
         let root = temp("unresolvable");
         let target = root.join("missing/../child");
         let err = check_target(&target, "talkdnd:xp-add").expect_err("must fail closed");
