@@ -30,7 +30,7 @@
 14. 写 `dm-secrets.md`，在会话日志写开场，进入第一个场景
 中途断了：`$T chargen status` 看下一步，接着问。`chargen sheet` 若打印 `warning: ... run \`...\``（缺非 SRD 数据），照抄执行；导入说明见 `docs/chargen.md`「本地规则书数据」。
 ## 接档
-1. `$T start [--save <存档名>]`：确认规则集、跑战斗数据检查和存档校验、后台启动 PDF 转换，并输出 `Saves/<存档>/digest.md`。**先只读这份摘要。** 有校验警告先按「桌面诚信」处理。
+1. `$T start [--save <存档名>]`：确认规则集、跑战斗数据检查和存档校验、后台启动 PDF 转换，并输出 `Saves/<存档>/digest.md`。**先只读这份摘要。** 有校验警告先按「桌面诚信」处理。若报错“已启用成长协议…尚未接入”，按 `docs/layout.md`「成长协议过渡期」处理：只读命令照常可用，写命令以退出码 1 拒绝且不写任何文件，不要删除 `.talkdnd.advancement.lock`/`.state`。
 2. 开场前再读：`dm-secrets.md`、`Characters/_party.md`、有的话 `house-rules.md`。`canon.md`、角色卡、冒险书章节用到时再查（冒险书按场景读）。
 3. 用简短的「前情提要」+ 当前场景开场，结尾给选项。
 ## 桌规（必须遵守）

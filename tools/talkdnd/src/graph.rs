@@ -61,6 +61,8 @@ pub struct Relations {
 #[derive(Subcommand, Clone)]
 pub enum Cmd {
     /// Add a relation (idempotent: an existing identical relation keeps its id)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         /// member | ally | enemy | located_at | holds | seeks | knows
         #[arg(long = "type")]
@@ -97,6 +99,8 @@ pub enum Cmd {
         all: bool,
     },
     /// End a relation (writes until_session; the record is kept)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     End {
         /// Relation id
         id: String,

@@ -2715,45 +2715,71 @@ pub struct Coins {
 #[derive(clap::Subcommand, Clone, Debug)]
 pub enum Op {
     /// One-line status (default)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Show,
     /// Create sheets/<id>.yaml from the Markdown sheet (done automatically on first use)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Init,
     /// Take damage (temp HP first): `damage 7`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Damage { amount: i32 },
     /// Regain HP: `heal 5`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Heal { amount: i32 },
     /// Set temporary HP (keeps the higher value): `temp 8`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Temp { amount: i32 },
     /// Spend a resource or spell slot: `use spell-slot-1`, `use slot2`, `use rage`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Use {
         resource: String,
         #[arg(default_value_t = 1)]
         n: i32,
     },
     /// Restore a resource: `restore ki 2`, `restore slot1 all`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Restore {
         resource: String,
         #[arg(default_value = "all")]
         n: String,
     },
     /// `rest short [--hd N]` (spends Hit Dice, rolls logged) or `rest long`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Rest {
         kind: String,
         #[arg(long, default_value_t = 0)]
         hd: u32,
     },
     /// `condition add poisoned` / `condition remove poisoned`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Condition { action: String, name: String },
     /// Exhaustion: `exhaustion +1`, `exhaustion -1`, `exhaustion 0`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Exhaustion {
         #[arg(allow_hyphen_values = true)]
         value: String,
     },
     /// Heroic Inspiration: `inspiration on|off`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Inspiration { state: String },
     /// Death save at 0 HP: `death-save roll` (d20, logged), `success`, `fail`, `stable`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     DeathSave { result: String },
     /// Coins via the progress.yaml purse: `gold add --gp 5 --sp 3`, `gold spend --gp 2`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Gold {
         action: String,
         #[command(flatten)]
@@ -2765,6 +2791,8 @@ pub enum Op {
     /// `item remove torch --qty 2`, `item attune "ring of protection"`.
     /// Names outside the weapon/armor/common-gear data need `--canon` or
     /// `--original O-xxx` (a registered original item)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Item {
         action: String,
         name: Vec<String>,
@@ -2788,18 +2816,26 @@ pub enum Op {
         original: Option<String>,
     },
     /// Ammunition: `ammo arrows -3` (spent) or `ammo arrows +2` (recovered)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Ammo {
         name: String,
         #[arg(allow_hyphen_values = true)]
         delta: i32,
     },
     /// Append a player-visible note
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Note { text: Vec<String> },
     /// Append to the freeform DM notes (only what programs cannot model)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     DmNote { text: Vec<String> },
     /// Sheet choices: fighting-style, background, feats, languages, tools,
     /// masteries, class, alignment, traits, ideals, bonds, flaws, appearance,
     /// backstory, allies, ac-base
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Set {
         field: String,
         value: Vec<String>,
@@ -2814,11 +2850,15 @@ pub enum Op {
         no_items: bool,
     },
     /// Several changes at once: `batch "damage 7; use slot1; ammo arrows -2"`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Batch { ops: Vec<String> },
     /// Spell lists (v1.6 T3, docs/SPELLCASTING.md §4): `spells` shows them,
     /// `spells --json` is the stable machine view, `spells adopt` maps old
     /// free-text names precisely, `spells sync` rebuilds the combat block's
     /// spell refs from the lists
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Spells {
         /// Stable JSON view (fixed keys, sorted lists); same as `spells show --json`
         #[arg(long)]
@@ -2827,14 +2867,22 @@ pub enum Op {
         cmd: Option<SpellsCmd>,
     },
     /// Add a prepared spell: `prepare bless` (prepared/spellbook classes)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Prepare { spell: String },
     /// Remove a prepared spell: `unprepare bless` (`always_prepared` refuses)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Unprepare { spell: String },
     /// Add a known spell (known classes) or a Mystic Arcanum pick (warlock,
     /// rings 6-9): `learn magic-missile`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Learn { spell: String },
     /// Copy a spell into the wizard spellbook (costs gold/time; not prepared):
     /// `scribe magic-missile` (override with `--hours N --cost-gp N`)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Scribe {
         spell: String,
         #[arg(long)]
@@ -2844,6 +2892,8 @@ pub enum Op {
     },
     /// Ritual-cast a spell (validated and logged; no slot spent, no effects):
     /// `ritual detect-magic`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Ritual { spell: String },
 }
 
@@ -2859,6 +2909,8 @@ pub enum SpellsCmd {
     /// Adopt free-text names into the lists (D-9: exact id/slug/name match,
     /// no fuzzy matching; unmatched entries stay in `legacy`):
     /// `spells adopt --map "旧名字=magic-missile"`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Adopt {
         /// Map a legacy entry to a spell id: `--map 原名=spell-id` (repeatable)
         #[arg(long = "map")]
@@ -2866,6 +2918,8 @@ pub enum SpellsCmd {
     },
     /// Rebuild the combat block's spell refs from the lists (managed set
     /// only; unmanaged refs are kept and logged): `spells sync --dry-run`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Sync {
         /// Print the planned ref changes without writing anything
         #[arg(long)]
@@ -2874,6 +2928,8 @@ pub enum SpellsCmd {
     /// Choose the terrain for a Land subclass's terrain-grouped
     /// always-prepared spells (2014: arctic/coast/…; 2024: arid/polar/…):
     /// `spells terrain arctic`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Terrain { terrain: String },
 }
 

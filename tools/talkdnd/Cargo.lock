@@ -9,6 +9,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "advancement-lock"
+version = "1.6.0"
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -189,6 +193,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "combat-sim"
 version = "1.6.0"
 dependencies = [
+ "advancement-lock",
  "anyhow",
  "clap",
  "rand",
@@ -757,6 +762,7 @@ dependencies = [
 name = "talkdnd"
 version = "1.6.0"
 dependencies = [
+ "advancement-lock",
  "anyhow",
  "chrono",
  "clap",

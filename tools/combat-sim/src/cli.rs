@@ -5,6 +5,7 @@
 //! only commands that need content sources.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -27,12 +28,17 @@ use crate::state::{
     ReadyResponse, ReadyState, ReadyTrigger,
 };
 
+// The shared transition gate and control-file names (ADV-P1-1pre). `combat-sim`
+// depends on `advancement-lock` directly; it must never depend on `talkdnd`.
+use ::advancement_lock as gate;
+
 /// Global options shared by every command.
 #[derive(Debug, Parser)]
 #[command(
     name = "combat-sim",
     version,
-    about = "Headless D&D 5e (2014 / 2024 rules, selected per campaign) combat helper"
+    about = "Headless D&D 5e (2014 / 2024 rules, selected per campaign) combat helper",
+    after_help = gate::REFUSAL_HELP
 )]
 pub struct Cli {
     /// Persisted encounter state. A bare name resolves to
@@ -82,6 +88,8 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Create a new encounter state from an encounter id.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     New {
         #[arg(long, value_name = "ID")]
         encounter: String,
@@ -98,6 +106,8 @@ pub enum Command {
 
     /// Start an ad-hoc encounter without writing scene/encounter YAML:
     /// a 5-row grid, the party in zone `near`, foes in zone `far`, `--distance` ft apart.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Quick {
         /// Foes: `id[:count][@zone]` (repeatable; zone `near` or `far`, default far).
         #[arg(long = "foe", value_name = "ID[:N][@ZONE]", required = true)]
@@ -114,6 +124,8 @@ pub enum Command {
     },
 
     /// Roll initiative.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Init {
         /// Fixed initiative total for one combatant, repeatable.
         #[arg(long = "set", value_name = "NAME=TOTAL")]
@@ -135,6 +147,8 @@ pub enum Command {
     /// Resolve one attack or multiattack. Extra Attack data resolves every
     /// attack in the Attack action; use `--unarmed` or `--offhand` for the
     /// special attack forms.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Attack {
         attacker: String,
         target: String,
@@ -170,6 +184,8 @@ pub enum Command {
     },
 
     /// Grapple a creature in reach (2014 Athletics contest, 2024 STR/DEX save).
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Grapple {
         attacker: String,
         target: String,
@@ -183,6 +199,8 @@ pub enum Command {
     },
 
     /// Shove a creature in reach: knock it down or move it 5 ft away.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Shove {
         attacker: String,
         target: String,
@@ -198,6 +216,8 @@ pub enum Command {
     },
 
     /// Apply damage from an expression or flat number.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Damage {
         target: String,
         expression: String,
@@ -211,6 +231,8 @@ pub enum Command {
     },
 
     /// Heal a creature.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Heal {
         target: String,
         expression: String,
@@ -223,6 +245,8 @@ pub enum Command {
     },
 
     /// Roll a saving throw.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Save {
         who: String,
         ability: String,
@@ -234,6 +258,8 @@ pub enum Command {
     },
 
     /// Roll a skill or ability check.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Check {
         who: String,
         skill_or_ability: String,
@@ -247,6 +273,8 @@ pub enum Command {
     },
 
     /// Roll an arbitrary dice expression.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Roll {
         expression: String,
         #[arg(long)]
@@ -261,6 +289,8 @@ pub enum Command {
     },
 
     /// Cast an owned ability.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Cast {
         who: String,
         ability: String,
@@ -291,6 +321,8 @@ pub enum Command {
     },
 
     /// Use an owned ability or a creature attack.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Use {
         who: String,
         ability: String,
@@ -321,12 +353,16 @@ pub enum Command {
     },
 
     /// Add or remove a condition.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Condition {
         #[command(subcommand)]
         command: ConditionCommand,
     },
 
     /// Move a combatant to another zone or grid cell.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Move {
         who: String,
         /// Destination zone (grid: any free cell with that zone tag).
@@ -341,6 +377,8 @@ pub enum Command {
     },
 
     /// Prepare one response to a perceivable trigger (Ready action).
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Ready {
         who: String,
         /// Perceivable circumstance, recorded in the combat log.
@@ -370,6 +408,8 @@ pub enum Command {
     },
 
     /// Fire a prepared response explicitly (DM trigger).
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Trigger {
         who: String,
         /// Creature that caused the trigger; used when the response has no stored target.
@@ -378,9 +418,13 @@ pub enum Command {
     },
 
     /// Clear a prepared response without triggering it.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     ReadyClear { who: String },
 
     /// Take off or change altitude in a grid scene.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Fly {
         who: String,
         /// Height above the local floor in feet (0 lands).
@@ -389,6 +433,8 @@ pub enum Command {
 
     /// Resolve a fall, rolling the R-09 landing check and the 2024 liquid
     /// landing reaction. Needs a save that has explicit spatial state.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Fall {
         who: String,
         /// Pre-rolled Acrobatics total for the R-09 check (DM override).
@@ -403,6 +449,8 @@ pub enum Command {
     },
 
     /// Interact with a scene object.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Interact {
         who: String,
         object: String,
@@ -415,9 +463,13 @@ pub enum Command {
     Scene,
 
     /// Roll a death saving throw.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Deathsave { who: String },
 
     /// End the current turn and start the next one.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Next,
 
     /// Print the encounter log.
@@ -428,6 +480,8 @@ pub enum Command {
     },
 
     /// Apply a short or long rest.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Rest {
         #[arg(value_enum)]
         kind: RestKindArg,
@@ -439,12 +493,16 @@ pub enum Command {
     },
 
     /// Persistent party state between encounters (`party-state.yaml` in the save).
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Party {
         #[command(subcommand)]
         command: PartyCommand,
     },
 
     /// Wake dormant creatures matching a name, creature id or tag.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Activate { name: String },
 
     /// Add new combatants to an encounter that already exists. Mid-fight
@@ -452,6 +510,8 @@ pub enum Command {
     /// or `--initiative`); one inserted at or before the current turn
     /// position does not act in the running round. Added combatants join
     /// awake, and the party side writes back to party-state as usual.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         /// Creatures to add: `id[:count][@zone]` (repeatable). The zone
         /// defaults to the encounter's party zone.
@@ -469,6 +529,8 @@ pub enum Command {
     },
 
     /// Inspect and validate campaign content without loading an encounter.
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Content {
         #[command(subcommand)]
         command: ContentCommand,
@@ -509,11 +571,15 @@ pub enum ContentCommand {
     /// Validate references, expressions and TODO notes.
     Check,
     /// List, show or verify loaded content packs.
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Pack {
         #[command(subcommand)]
         command: PackCommand,
     },
     /// Extract the SRD rules prose that 5e-database does not carry.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     ImportSrdProse {
         /// Currently only `2024` has prose gaps.
         #[arg(long, value_name = "EDITION")]
@@ -526,6 +592,8 @@ pub enum ContentCommand {
         out: PathBuf,
     },
     /// Import SRD 5.1 / 5.2.1 JSON (5e-database) into content packs.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     ImportSrdPack {
         /// `2014` or `2024`.
         #[arg(long, value_name = "EDITION")]
@@ -538,6 +606,8 @@ pub enum ContentCommand {
         out: PathBuf,
     },
     /// Convert SRD 5.1 JSON (5e-database) into library YAML.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     ImportSrd {
         /// `5e-SRD-Monsters.json`.
         #[arg(long, value_name = "FILE")]
@@ -563,6 +633,8 @@ pub enum PackCommand {
     /// Verify loaded packs and run the content check.
     Verify,
     /// Build a full-book pack from a local pdf2md index.
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Build {
         /// `2014` or `2024`.
         #[arg(long, value_name = "EDITION")]
@@ -581,6 +653,8 @@ pub enum PackCommand {
         dry_run: bool,
     },
     /// Validate full packs and stage a release bundle with a manifest.
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Release {
         /// Directory holding locally built `*.pack.json` full packs.
         #[arg(long, value_name = "DIR")]
@@ -596,6 +670,8 @@ pub enum PackCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum ConditionCommand {
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         who: String,
         condition: String,
@@ -624,10 +700,9 @@ pub enum ConditionCommand {
         #[arg(long = "save-ends", value_name = "ABILITY:DC")]
         save_ends: Option<String>,
     },
-    Remove {
-        who: String,
-        condition: String,
-    },
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    Remove { who: String, condition: String },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -703,6 +778,8 @@ pub enum PartyCommand {
     /// Print current HP, resources and conditions of every party member.
     Show,
     /// Rest outside combat (living members of the manifest party).
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Rest {
         #[arg(value_enum)]
         kind: RestKindArg,
@@ -713,8 +790,12 @@ pub enum PartyCommand {
         hd: Option<u32>,
     },
     /// Set a member's current HP (DM correction, healing outside combat).
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     SetHp { who: String, hp: i32 },
     /// Copy the party from an encounter state into party-state.yaml.
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Sync {
         #[arg(long = "from-state", value_name = "NAME")]
         from_state: Option<PathBuf>,
@@ -734,6 +815,178 @@ impl From<RestKindArg> for RestKind {
             RestKindArg::Long => RestKind::Long,
         }
     }
+}
+
+/// Transition gate (ADV-P1-1pre): the writer-registry row for this invocation.
+///
+/// The registry lives in the shared `advancement-lock` crate so both CLIs use
+/// one list; this match is exhaustive over `Command`, so a new command cannot
+/// be added without classifying it here.
+fn gate_entry(command: &Command) -> &'static str {
+    match command {
+        Command::New { .. } => "combat-sim:new",
+        Command::Quick { .. } => "combat-sim:quick",
+        Command::Init { .. }
+        | Command::Attack { .. }
+        | Command::Grapple { .. }
+        | Command::Shove { .. }
+        | Command::Damage { .. }
+        | Command::Heal { .. }
+        | Command::Save { .. }
+        | Command::Check { .. }
+        | Command::Cast { .. }
+        | Command::Use { .. }
+        | Command::Condition { .. }
+        | Command::Move { .. }
+        | Command::Ready { .. }
+        | Command::Trigger { .. }
+        | Command::ReadyClear { .. }
+        | Command::Fly { .. }
+        | Command::Fall { .. }
+        | Command::Interact { .. }
+        | Command::Deathsave { .. }
+        | Command::Next
+        | Command::Rest { .. }
+        | Command::Activate { .. }
+        | Command::Add { .. } => "combat-sim:state-write",
+        Command::Roll { .. } => "combat-sim:roll",
+        Command::Status => "combat-sim:status",
+        Command::Scene => "combat-sim:scene",
+        Command::Log { .. } => "combat-sim:log",
+        Command::Simulate { .. } => "combat-sim:simulate",
+        Command::Party { command } => match command {
+            PartyCommand::Show => "combat-sim:party-show",
+            PartyCommand::Rest { .. } | PartyCommand::SetHp { .. } | PartyCommand::Sync { .. } => {
+                "combat-sim:party-write"
+            }
+        },
+        Command::Content { command } => match command {
+            ContentCommand::List { .. } | ContentCommand::Show { .. } | ContentCommand::Check => {
+                "combat-sim:content-read"
+            }
+            ContentCommand::ImportSrdProse { .. } => "combat-sim:content-import-srd-prose",
+            ContentCommand::ImportSrdPack { .. } => "combat-sim:content-import-srd-pack",
+            ContentCommand::ImportSrd { .. } => "combat-sim:content-import-srd",
+            ContentCommand::Pack { command } => match command {
+                PackCommand::List | PackCommand::Show { .. } | PackCommand::Verify => {
+                    "combat-sim:pack-read"
+                }
+                PackCommand::Build { dry_run: true, .. } => "combat-sim:pack-build-dry-run",
+                PackCommand::Build { .. } => "combat-sim:pack-build",
+                PackCommand::Release { dry_run: true, .. } => "combat-sim:pack-release-dry-run",
+                PackCommand::Release { .. } => "combat-sim:pack-release",
+            },
+        },
+    }
+}
+
+/// The `--out` directories a content command writes to.
+fn content_out_dirs(command: &ContentCommand) -> Vec<PathBuf> {
+    match command {
+        ContentCommand::ImportSrdProse { out, .. }
+        | ContentCommand::ImportSrdPack { out, .. }
+        | ContentCommand::ImportSrd { out, .. } => vec![out.clone()],
+        ContentCommand::Pack { command } => match command {
+            PackCommand::Build { out, .. } => vec![out.clone()],
+            PackCommand::Release {
+                packs,
+                out: Some(out),
+                ..
+            } => {
+                // `release` copies every `<packs>/*.pack.json` to
+                // `<out>/<file name>` and then writes the manifest; each of
+                // those concrete files is a write target, not just the
+                // directory. Reading the input directory is read-only; when it
+                // cannot be read the command fails before writing anything.
+                let mut targets = vec![out.clone()];
+                if let Ok(entries) = fs::read_dir(packs) {
+                    let mut files: Vec<PathBuf> = entries
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| {
+                            path.is_file() && path.to_string_lossy().ends_with(".pack.json")
+                        })
+                        .collect();
+                    files.sort();
+                    for file in files {
+                        if let Some(name) = file.file_name() {
+                            targets.push(out.join(name));
+                        }
+                    }
+                }
+                targets.push(out.join("full-packs-manifest.json"));
+                targets
+            }
+            PackCommand::Release { out: None, .. } => Vec::new(),
+            PackCommand::List | PackCommand::Show { .. } | PackCommand::Verify => Vec::new(),
+        },
+        ContentCommand::List { .. } | ContentCommand::Show { .. } | ContentCommand::Check => {
+            Vec::new()
+        }
+    }
+}
+
+/// Consult the shared transition gate before anything writes.
+///
+/// Every location this invocation could write is resolved to an absolute,
+/// symlink-resolved path and checked for an owning save that adopted the
+/// protocol: `--save`, the campaign manifest, the resolved state file, the
+/// state file's recorded `party_state`, the campaign's `state_dir` party state,
+/// and content `--out` directories. An unadopted writer is refused with exit
+/// code 1 as soon as one target belongs to such a save; a target whose absolute
+/// location cannot be established fails closed the same way. Read-only
+/// commands and control metadata are allowed and never load the state.
+fn check_transition_gate(
+    command: &Command,
+    save: Option<&Path>,
+    state: Option<&Path>,
+    sources: &ContentSources,
+) -> Result<()> {
+    let entry = gate_entry(command);
+    if gate::class_of(entry).allowed_under_protocol() {
+        return Ok(());
+    }
+    let mut targets: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = save {
+        targets.push(dir.to_path_buf());
+    }
+    if let Some(campaign) = sources.campaign_path() {
+        targets.push(campaign);
+    }
+    match command {
+        Command::Content { command } => targets.extend(content_out_dirs(command)),
+        _ => {
+            let resolved = state_path(sources, state);
+            // A state file may point at a party state outside the save.
+            if let Some(party_state) = loaded_party_state(&resolved) {
+                targets.push(party_state);
+            }
+            targets.push(resolved);
+            // `party rest|set-hp|sync` writes the campaign's state_dir party
+            // state; the state_dir itself may belong to another save.
+            if let Some(dir) = manifest_state_dir(sources) {
+                targets.push(dir.join(crate::party::FILE_NAME));
+            }
+            // `roll` and every state command append `<save>/rolls.log`; the
+            // file itself may be a symlink into a protected save.
+            if let Some(dir) = save {
+                targets.push(dir.join("rolls.log"));
+            }
+        }
+    }
+    for target in targets {
+        gate::check_target(&target, entry)?;
+    }
+    Ok(())
+}
+
+/// The `party_state` recorded in an existing state file, if any.
+///
+/// Read-only: the gate runs before dispatch and never writes. A missing or
+/// unreadable state file has no party state to protect; the command reports its
+/// own error before writing anything.
+fn loaded_party_state(state_path: &Path) -> Option<PathBuf> {
+    EncounterState::load(state_path).ok()?.party_state
 }
 
 pub fn run() -> Result<()> {
@@ -773,6 +1026,7 @@ fn run_cli() -> Result<()> {
     };
     let save = crate::player::save_dir(save.as_deref(), sources.campaign_path().as_deref());
     let mask = crate::player::PlayerMask::load(save.as_deref());
+    check_transition_gate(&command, save.as_deref(), state.as_deref(), &sources)?;
 
     match command {
         Command::New {
