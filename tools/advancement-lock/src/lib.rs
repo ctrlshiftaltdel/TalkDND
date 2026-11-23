@@ -1616,6 +1616,53 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_multi_hop_dangling_symlink_into_a_protected_save_is_refused() {
+        // plain/rolls.log -> outside/link -> protected/new-file (dangling).
+        // canonicalize(outside/link) fails with NotFound, so the gate must
+        // keep following the chain instead of stopping at the intermediate
+        // entry, which lives outside the protected save.
+        let root = temp("multi-hop-dangling");
+        let save = root.join("Saves/p");
+        fs::create_dir_all(save.join("combat")).unwrap();
+        fs::write(lock_path(&save), b"").unwrap();
+        let landing = save.join("new-file");
+        assert!(!landing.exists());
+        let outside = root.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let mid = outside.join("link");
+        std::os::unix::fs::symlink(&landing, &mid).unwrap();
+        let plain = root.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        let start = plain.join("rolls.log");
+        std::os::unix::fs::symlink(&mid, &start).unwrap();
+
+        let targets = resolve_write_targets(&start).unwrap();
+        assert_eq!(
+            targets.followed,
+            fs::canonicalize(&save).unwrap().join("new-file")
+        );
+        assert!(matches!(
+            check_target(&start, "talkdnd:log"),
+            Err(GateError::Refused(_))
+        ));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_loop_fails_closed() {
+        let root = temp("symlink-loop");
+        let a = root.join("a.link");
+        let b = root.join("b.link");
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        let err = check_target(&a, "talkdnd:log").expect_err("must fail closed");
+        assert!(matches!(err, GateError::Unresolved(_)), "{err}");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn a_regular_file_outside_the_saves_is_allowed() {
         let root = temp("regular-file");

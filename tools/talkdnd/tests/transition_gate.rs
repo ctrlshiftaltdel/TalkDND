@@ -153,6 +153,21 @@ fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
     out
 }
 
+fn latest_session_log(save: &Path) -> PathBuf {
+    let mut logs: Vec<PathBuf> = fs::read_dir(save.join("Sessions"))
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "md")
+                && !path
+                    .file_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("README.md"))
+        })
+        .collect();
+    logs.sort();
+    logs.pop().expect("playable save has a session log")
+}
+
 fn argv(row: &advancement_lock::Writer, save: &Path) -> Vec<String> {
     let save = save.to_string_lossy();
     row.argv
@@ -658,4 +673,65 @@ fn new_audits_only_the_save_it_created() {
             "the created save was not audited"
         );
     }
+}
+
+/// The latest session log is a concrete write target: a symlink into a
+/// protected save is refused before `talkdnd log` follows it.
+#[cfg(unix)]
+#[test]
+fn a_session_log_symlink_into_a_protected_save_is_refused() {
+    let root = playable("session-log-link");
+    let selected = root.join(SAVE);
+    assert!(!selected.join(LOCK).exists());
+    let other = root.join("Saves/2030-05-05-01");
+    fs::create_dir_all(other.join("Sessions")).unwrap();
+    fs::write(other.join(LOCK), b"probe lock\n").unwrap();
+    let protected_file = other.join("Sessions/protected.md");
+    fs::write(&protected_file, b"# protected\n").unwrap();
+    let latest = latest_session_log(&selected);
+    fs::remove_file(&latest).unwrap();
+    std::os::unix::fs::symlink(&protected_file, &latest).unwrap();
+    let before = snapshot(&other);
+    let out = run_slot(&root, &["log", "gate-probe"]);
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&other), before, "the protected save changed");
+    assert!(
+        fs::symlink_metadata(&latest)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the session log symlink was replaced"
+    );
+}
+
+/// `<save>/rolls.log` is a concrete write target: a symlink into a protected
+/// save is refused before a rolls-appending command follows it.
+#[cfg(unix)]
+#[test]
+fn a_rolls_log_symlink_into_a_protected_save_is_refused() {
+    let root = playable("rolls-log-link");
+    let selected = root.join(SAVE);
+    assert!(!selected.join(LOCK).exists());
+    let other = root.join("Saves/2030-05-05-01");
+    fs::create_dir_all(other.join("Sessions")).unwrap();
+    fs::write(other.join(LOCK), b"probe lock\n").unwrap();
+    let protected_file = other.join("Sessions/protected.md");
+    fs::write(&protected_file, b"# protected\n").unwrap();
+    let link = selected.join("rolls.log");
+    std::os::unix::fs::symlink(&protected_file, &link).unwrap();
+    let before = snapshot(&other);
+    let out = run_slot(&root, &["check", "aria", "athletics"]);
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&other), before, "the protected save changed");
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the rolls.log symlink was replaced"
+    );
 }

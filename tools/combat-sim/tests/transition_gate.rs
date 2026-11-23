@@ -553,3 +553,73 @@ fn a_pack_release_target_symlink_into_a_protected_save_is_refused() {
         "the release target symlink was replaced"
     );
 }
+
+/// When the input pack file name is not valid UTF-8, `release` copies it to
+/// `<out>/pack.json`. That fallback path is a write target too.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_pack_release_fallback_pack_json_symlink_into_a_protected_save_is_refused() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let fixture = fixture("release-pack-json-fallback");
+    let protected = fixture.root.join("Saves/p");
+    fs::create_dir_all(protected.join("combat")).unwrap();
+    fs::write(protected.join(LOCK), b"probe lock\n").unwrap();
+    let protected_file = protected.join("combat/party-state.yaml");
+    fs::write(&protected_file, b"party: []\n").unwrap();
+    let plain = fixture.root.join("Saves/plain");
+    fs::create_dir_all(&plain).unwrap();
+    let packs = fixture.root.join("packs");
+    fs::create_dir_all(&packs).unwrap();
+    let pack_name = OsStr::from_bytes(b"probe\xff.pack.json");
+    // Validation runs before the copy, so the input must be a real full pack
+    // or the command fails for the wrong reason and never reaches pack.json.
+    let content: combat_sim::content::schema::ContentFile =
+        serde_json::from_value(serde_json::json!({
+            "conditions": [{"id": "packed", "name": "Packed"}]
+        }))
+        .unwrap();
+    let pack = combat_sim::content::pack::ContentPack::new(
+        combat_sim::content::pack::PackMeta {
+            id: "probe".into(),
+            name: Some("Probe".into()),
+            edition: "2024".into(),
+            source: None,
+            license: None,
+            distribution: combat_sim::content::pack::Distribution::Full,
+            schema_version: combat_sim::content::pack::SCHEMA_VERSION,
+            content_hash: None,
+            created_at: None,
+            description: None,
+        },
+        content,
+    )
+    .unwrap();
+    fs::write(packs.join(pack_name), serde_json::to_string(&pack).unwrap()).unwrap();
+    let out_dir = fixture.root.join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let target = out_dir.join("pack.json");
+    std::os::unix::fs::symlink(&protected_file, &target).unwrap();
+    let before = snapshot(&protected);
+    let out = Command::new(env!("CARGO_BIN_EXE_combat-sim"))
+        .arg("--save")
+        .arg(&plain)
+        .args(["content", "pack", "release", "--packs"])
+        .arg(&packs)
+        .arg("--out")
+        .arg(&out_dir)
+        .output()
+        .expect("failed to run combat-sim");
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "must exit 1\n{text}");
+    assert!(text.contains("已启用成长协议"), "{text}");
+    assert_eq!(snapshot(&protected), before, "the protected save changed");
+    assert!(
+        fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the pack.json fallback symlink was replaced"
+    );
+}
