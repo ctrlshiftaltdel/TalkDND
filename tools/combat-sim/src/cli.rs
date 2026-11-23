@@ -909,9 +909,7 @@ fn content_out_dirs(command: &ContentCommand) -> Vec<PathBuf> {
                         .collect();
                     files.sort();
                     for file in files {
-                        if let Some(name) = file.file_name() {
-                            targets.push(out.join(name));
-                        }
+                        targets.push(out.join(crate::content::full_pack::release_file_name(&file)));
                     }
                 }
                 targets.push(out.join("full-packs-manifest.json"));

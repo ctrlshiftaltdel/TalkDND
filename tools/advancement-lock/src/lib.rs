@@ -175,29 +175,7 @@ pub struct WriteTargets {
 pub fn resolve_write_targets(target: &Path) -> Result<WriteTargets, Unresolved> {
     let entry = resolve_target(target)?;
     let followed = match fs::symlink_metadata(&entry) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            let link = fs::read_link(&entry).map_err(|err| Unresolved {
-                target: target.to_path_buf(),
-                reason: format!("cannot read link {}: {err}", entry.display()),
-            })?;
-            let destination = if link.is_absolute() {
-                link
-            } else {
-                entry.parent().unwrap_or_else(|| Path::new("")).join(link)
-            };
-            match fs::canonicalize(&destination) {
-                Ok(path) => path,
-                // A dangling link still names where the write would land: its
-                // directory entry. Resolve that without following further.
-                Err(err) if err.kind() == ErrorKind::NotFound => resolve_target(&destination)?,
-                Err(err) => {
-                    return Err(Unresolved {
-                        target: target.to_path_buf(),
-                        reason: format!("cannot resolve {}: {err}", destination.display()),
-                    })
-                }
-            }
-        }
+        Ok(meta) if meta.file_type().is_symlink() => follow_symlink_chain(&entry, target)?,
         Ok(_) => entry.clone(),
         Err(err) if err.kind() == ErrorKind::NotFound => entry.clone(),
         Err(err) => {
@@ -208,6 +186,71 @@ pub fn resolve_write_targets(target: &Path) -> Result<WriteTargets, Unresolved> 
         }
     };
     Ok(WriteTargets { entry, followed })
+}
+
+/// Follow a final symlink — and any further symlink hops — to the path an
+/// append or copy would land on.
+///
+/// `start` is the directory-entry path of a symlink. Each dangling hop is
+/// resolved the same way [`resolve_target`] would resolve it, so a missing
+/// landing file still names a path; a hop that is itself a symlink is
+/// followed. Loops and unreadable hops fail closed.
+fn follow_symlink_chain(start: &Path, original: &Path) -> Result<PathBuf, Unresolved> {
+    let mut current = start.to_path_buf();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current.clone()) {
+            return Err(Unresolved {
+                target: original.to_path_buf(),
+                reason: format!("symlink loop at {}", current.display()),
+            });
+        }
+        if seen.len() > 256 {
+            return Err(Unresolved {
+                target: original.to_path_buf(),
+                reason: format!("too many symlink hops at {}", current.display()),
+            });
+        }
+        let link = fs::read_link(&current).map_err(|err| Unresolved {
+            target: original.to_path_buf(),
+            reason: format!("cannot read link {}: {err}", current.display()),
+        })?;
+        let destination = if link.is_absolute() {
+            link
+        } else {
+            current.parent().unwrap_or_else(|| Path::new("")).join(link)
+        };
+        match fs::canonicalize(&destination) {
+            Ok(path) => return Ok(path),
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                let next = resolve_target(&destination)?;
+                match fs::symlink_metadata(&next) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        current = next;
+                    }
+                    Ok(_) => {
+                        return fs::canonicalize(&next).map_err(|err| Unresolved {
+                            target: original.to_path_buf(),
+                            reason: format!("cannot resolve {}: {err}", next.display()),
+                        });
+                    }
+                    Err(err) if err.kind() == ErrorKind::NotFound => return Ok(next),
+                    Err(err) => {
+                        return Err(Unresolved {
+                            target: original.to_path_buf(),
+                            reason: format!("cannot inspect {}: {err}", next.display()),
+                        });
+                    }
+                }
+            }
+            Err(err) => {
+                return Err(Unresolved {
+                    target: original.to_path_buf(),
+                    reason: format!("cannot resolve {}: {err}", destination.display()),
+                });
+            }
+        }
+    }
 }
 
 fn anchor(target: &Path) -> Result<PathBuf, Unresolved> {

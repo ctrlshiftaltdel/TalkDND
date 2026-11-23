@@ -384,6 +384,16 @@ pub fn build(
     Ok(report)
 }
 
+/// Destination file name used when [`release`] copies a pack into `--out`.
+///
+/// A non-UTF-8 input name falls back to `pack.json`. The transition gate
+/// must use this same rule so it checks the path the writer will open.
+pub fn release_file_name(path: &Path) -> &str {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("pack.json")
+}
+
 /// Validates a directory of full packs and optionally copies them plus a
 /// deterministic `full-packs-manifest.json` into `out`.
 ///
@@ -443,11 +453,7 @@ pub fn release(packs_dir: &Path, out: Option<&Path>) -> Result<ReleaseReport> {
         report.total_bytes += bytes;
         report.packs.push(ReleaseEntry {
             id: pack.pack.id.clone(),
-            file: path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("pack.json")
-                .to_string(),
+            file: release_file_name(path).to_string(),
             edition: pack.pack.edition.clone(),
             book: book_from_id(&pack.pack.id),
             bytes,
@@ -464,11 +470,7 @@ pub fn release(packs_dir: &Path, out: Option<&Path>) -> Result<ReleaseReport> {
         fs::create_dir_all(out)
             .with_context(|| format!("create release directory {}", out.display()))?;
         for (path, _) in &packs {
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("pack.json");
-            let destination = out.join(name);
+            let destination = out.join(release_file_name(path));
             if destination != *path {
                 fs::copy(path, &destination).with_context(|| {
                     format!(

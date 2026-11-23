@@ -1036,15 +1036,22 @@ fn bookindex_targets(root: &Path, save: &Path, book: Option<&str>) -> Vec<PathBu
     out
 }
 
-/// Write targets a command can reach **outside** the selected save.
+/// Write targets a command can reach **outside** the selected save, or
+/// through a symlink inside it.
 ///
 /// `adventure index build --book` and `handout [--book] build|mark` write into
 /// a book folder that may belong to another save; the gate must check each of
 /// them, not only the selected save. A resolution error means the command
 /// cannot write at all (it reports its own error), so there is nothing to
 /// check.
+///
+/// Commands that append the latest session log or `rolls.log` must also
+/// check those concrete files: the selected save may have no control file,
+/// while a symlink there lands in another save that has adopted the protocol.
+/// The paths come from the same helpers the write path uses
+/// ([`save::latest_log`], [`rolls::FILE`]).
 fn extra_write_targets(root: &Path, cli: &Cli, save: &Path) -> Vec<PathBuf> {
-    match &cli.cmd {
+    let mut targets = match &cli.cmd {
         Cmd::Adventure {
             cmd:
                 AdventureCmd::Index {
@@ -1060,7 +1067,24 @@ fn extra_write_targets(root: &Path, cli: &Cli, save: &Path) -> Vec<PathBuf> {
                 | HandoutCmd::Mark { .. },
         } => handout::book_dirs(root, save, book.as_deref()).unwrap_or_default(),
         _ => Vec::new(),
+    };
+    if let Some(writer) = gate::writer(gate_entry(cli)) {
+        if writer.class == gate::Class::UnadoptedWrite {
+            if writer_lists(writer.targets, "Sessions/*.md") {
+                if let Some(log) = save::latest_log(save) {
+                    targets.push(log);
+                }
+            }
+            if writer_lists(writer.targets, "rolls.log") {
+                targets.push(save.join(rolls::FILE));
+            }
+        }
     }
+    targets
+}
+
+fn writer_lists(targets: &str, name: &str) -> bool {
+    targets.split(',').any(|item| item.trim() == name)
 }
 
 pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
