@@ -975,3 +975,28 @@ fn tidy(text: &str) -> String {
     }
     out.trim().to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::release_file_name;
+    use std::path::Path;
+
+    #[test]
+    fn release_file_name_preserves_a_utf8_name() {
+        assert_eq!(
+            release_file_name(Path::new("probe.pack.json")),
+            "probe.pack.json"
+        );
+    }
+
+    /// Constructed in memory only: APFS/HFS+ reject this name on disk (EILSEQ).
+    #[cfg(unix)]
+    #[test]
+    fn release_file_name_falls_back_to_pack_json_for_a_non_utf8_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = Path::new(OsStr::from_bytes(b"probe\xff.pack.json"));
+        assert_eq!(release_file_name(path), "pack.json");
+    }
+}

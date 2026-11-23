@@ -556,7 +556,10 @@ fn a_pack_release_target_symlink_into_a_protected_save_is_refused() {
 
 /// When the input pack file name is not valid UTF-8, `release` copies it to
 /// `<out>/pack.json`. That fallback path is a write target too.
-#[cfg(unix)]
+///
+/// APFS/HFS+ reject illegal UTF-8 names (EILSEQ), so this filesystem path is
+/// only exercisable on filesystems that allow them.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn a_non_utf8_pack_release_fallback_pack_json_symlink_into_a_protected_save_is_refused() {
     use std::ffi::OsStr;
