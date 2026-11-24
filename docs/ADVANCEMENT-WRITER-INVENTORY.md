@@ -192,7 +192,7 @@
 
 ## 4. 与成长提交的并发关系（事实与推断）
 
-**事实**：组 A 的 `talkdnd` 写入口在写目标前取得 SAVE 锁（见 §5.1）；其余写入口仍不取 SAVE 锁，由过渡门在协议存档上拒绝。完整性锁只覆盖 `integrity.yaml` 的读改写；checkpoint 锁只覆盖 snapshot/restore，且不是 OS 锁。组 A 的锁序是 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`。**推断**：两个未接入或非协作的写者仍可能先后写同一目标；日志追加通常不截断彼此，但重复操作会重复追加，无法用追加语义判断“是否已应用”。
+**事实**：组 A 的 `talkdnd` 写入口与组 B 的 `combat-sim` 写入口在写目标前取得 SAVE 锁（见 §5.1）；其余写入口仍不取 SAVE 锁，由过渡门在协议存档上拒绝。完整性锁只覆盖 `integrity.yaml` 的读改写，不保护 party/state 内容；checkpoint 锁只覆盖 snapshot/restore，且不是 OS 锁。组 A / 组 B 的锁序是 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`。**推断**：两个未接入或非协作的写者仍可能先后写同一目标；日志追加通常不截断彼此，但重复操作会重复追加，无法用追加语义判断“是否已应用”。
 
 按 D 发布目标分组：
 
@@ -220,16 +220,16 @@
 
 分组只表示接入顺序，不表示组内每个入口已经安全；每组必须逐条验收。
 
-### 5.1 过渡门与接入状态（`ADV-P1-1pre` / `ADV-P1-1a`）
+### 5.1 过渡门与接入状态（`ADV-P1-1pre` / `ADV-P1-1a` / `ADV-P1-1b`）
 
-`ADV-P1-1pre` 交付了一个共享的**过渡门**：存档存在 `.talkdnd.advancement.lock` 或 `.talkdnd.advancement.state` 时，尚未接入成长协议的写存档入口失败关闭（退出码 1、明确文案、不写目标），只读入口保持可用。`ADV-P1-1a` 将组 A（§2.1、§2.2、§2.6 的 `talkdnd` 写入口，含 `start`）从“过渡门拒绝”改为“已接入 SAVE 锁”：这些入口在写目标前取得已有的 SAVE 锁 v1，锁不可用（state 缺失、不可写、`active` 或 `in_doubt`）时失败关闭且不写目标。缺失 SAVE state 时的拒绝是接入期的保守处理，不自动 `init`。**没有启用提交入口、没有新增 schema/sidecar、没有把 SAVE 锁搬进共享 crate。** 1b–1e 与 `combat-sim` 写入口仍走过渡门拒绝。
+`ADV-P1-1pre` 交付了一个共享的**过渡门**：存档存在 `.talkdnd.advancement.lock` 或 `.talkdnd.advancement.state` 时，尚未接入成长协议的写存档入口失败关闭（退出码 1、明确文案、不写目标），只读入口保持可用。`ADV-P1-1a` 将组 A（§2.1、§2.2、§2.6 的 `talkdnd` 写入口，含 `start`）从“过渡门拒绝”改为“已接入 SAVE 锁”。`ADV-P1-1b` 将组 B（§2.3 的 `combat-sim` 状态/`new`/`quick`/`party rest|set-hp|sync`/`roll`，以及 §2.7 中 `--out` 可能落入存档的 `content import-*` 与 `content pack build|release`）同样改为“已接入 SAVE 锁”，并把 SAVE 锁原语从 `talkdnd` 迁入共享 crate `tools/advancement-lock`（两套 CLI 共同依赖；`combat-sim` 不依赖 `talkdnd`）。这些入口在写目标前取得已有的 SAVE 锁 v1（`open` + `check_ordinary_write`），锁不可用（state 缺失、不可写、`active` 或 `in_doubt`）时失败关闭且不写目标。缺失 SAVE state 时的拒绝是接入期的保守处理，不自动 `init`。`--out` 在存档外时按存档外写入允许；`pack build|release --dry-run` 只读。**没有启用提交入口、没有新增 schema/sidecar、没有实现 D 提交。** 1c–1e 与 §2.7 的 `handout list --dm`/`build`/`mark` 仍走过渡门拒绝。
 
 **实现位置（代码为准）：**
 
-- 共享 crate `tools/advancement-lock`：控制文件名 `LOCK_FILE`/`STATE_FILE`、`has_protocol`、`enclosing_protocol_dir`、写者注册表 `WRITERS`、分类 `Class`（含 `AdoptedWrite`）、统一拒绝错误 `Refused` 与 `--help` 文案 `REFUSAL_HELP`。本 crate 不实现 SAVE 锁。无第三方依赖。
-- `talkdnd`：`tools/talkdnd/src/lib.rs` 的 `gate_entry`（对 `Cmd` 穷尽分类）、`run()` 中的门检查，以及对 `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（`open` + `check_ordinary_write`，持锁至命令后审计结束）；`tools/talkdnd/src/advancement_lock.rs` 保留 v1 原语（含普通写者谓词 `check_ordinary_write`）。
-- `combat-sim`：`tools/combat-sim/src/cli.rs` 的 `gate_entry`、`content_out_dirs`、`check_transition_gate` 与 `run_cli` 中的门检查。`combat-sim` 不依赖 `talkdnd`。本块不接入其写者。
-- 测试：`tools/advancement-lock/src/lib.rs` 单元测试、`tools/talkdnd/tests/transition_gate.rs`、`tools/talkdnd/tests/advancement_save_lock.rs`、`tools/combat-sim/tests/transition_gate.rs`（CLI 测试直接调用真实二进制，不是只测包装函数）。
+- 共享 crate `tools/advancement-lock`：控制文件名 `LOCK_FILE`/`STATE_FILE`、`has_protocol`、`enclosing_protocol_dir`、写者注册表 `WRITERS`、分类 `Class`（含 `AdoptedWrite`）、统一拒绝错误 `Refused` 与 `--help` 文案，以及 SAVE 锁原语（`init`/`open`、`check_ordinary_write`、`check_writable`）。普通写入必须用 `check_ordinary_write`（不要求目录 sync，以免 Windows 上拒绝所有普通写入）；D 提交仍应使用 `check_writable`。依赖 `serde`/`serde_json`/`sha2`/`chrono`。
+- `talkdnd`：`tools/talkdnd/src/lib.rs` 的 `gate_entry`（对 `Cmd` 穷尽分类）、`run()` 中的门检查，以及对组 A `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（`open` + `check_ordinary_write`，持锁至命令后审计结束）；`tools/talkdnd/src/advancement_lock.rs` 再导出共享 crate 的 v1 原语，组 A 行为不变。
+- `combat-sim`：`tools/combat-sim/src/cli.rs` 的 `gate_entry`、`write_targets`/`content_out_dirs`、`check_transition_gate` 与 `run_cli` 中对组 B `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（同样 `open` + `check_ordinary_write`，持锁至命令与完整性清单更新结束）。`PartyState::save` 与 `EncounterState::save` 仍在写后更新完整性清单，但完整性锁只序列化清单、不再被当作内容保护；内容写入受 SAVE 锁约束。单次状态命令的 `state.save` → `party.save` → 日志追加在 SAVE 内执行，失败时报告已写/未写阶段，不声称多文件原子性。`combat-sim` 不依赖 `talkdnd`。
+- 测试：`tools/advancement-lock` 单元测试与 `tests/save_lock.rs`、`tools/talkdnd/tests/transition_gate.rs`、`tools/talkdnd/tests/advancement_save_lock.rs`、`tools/talkdnd/tests/advancement_lock.rs`（经再导出回归原语）、`tools/combat-sim/tests/transition_gate.rs`、`tools/combat-sim/tests/advancement_save_lock.rs`（CLI 测试直接调用真实二进制，不是只测包装函数）。
 
 **门的语义（两套 CLI 相同）：**
 
@@ -268,10 +268,10 @@
 | §2.2 `companion/npc random` | `talkdnd:companion-random` | `AdoptedWrite` | 是（已接入 SAVE 锁） |
 | §2.2 `companion/npc sheet`（含 `lib.rs::add_to_party`） | `talkdnd:companion-sheet` | `AdoptedWrite` | 是（已接入 SAVE 锁） |
 | §2.2 `lib.rs::add_to_party`（内部） | 归入 `talkdnd:chargen-sheet` / `talkdnd:companion-sheet` 的定位字段 | — | 随调用方 |
-| §2.3 `combat-sim` 状态命令 | `combat-sim:state-write` | `UnadoptedWrite` | 否（过渡门拒绝） |
-| §2.3 `new` / `quick` | `combat-sim:new` / `combat-sim:quick` | `UnadoptedWrite` | 否（过渡门拒绝） |
-| §2.3 `party rest/set-hp/sync` | `combat-sim:party-write` | `UnadoptedWrite` | 否（过渡门拒绝） |
-| §2.3 `roll` | `combat-sim:roll` | `UnadoptedWrite` | 否（过渡门拒绝） |
+| §2.3 `combat-sim` 状态命令 | `combat-sim:state-write` | `AdoptedWrite` | 是（SAVE 锁；`open` + `check_ordinary_write`） |
+| §2.3 `new` / `quick` | `combat-sim:new` / `combat-sim:quick` | `AdoptedWrite` | 是（SAVE 锁） |
+| §2.3 `party rest/set-hp/sync` | `combat-sim:party-write` | `AdoptedWrite` | 是（SAVE 锁） |
+| §2.3 `roll` | `combat-sim:roll` | `AdoptedWrite` | 是（SAVE 锁；按实际写目标：无 `--state` 只追加 `rolls.log`） |
 | §2.3 `status/scene/log/simulate` | `combat-sim:status` / `:scene` / `:log` / `:simulate` | `ReadOnly` | 不适用 |
 | §2.3 `content list/show/check`、`pack list/show/verify`、`party show` | `combat-sim:content-read` / `:pack-read` / `:party-show` | `ReadOnly` | 不适用 |
 | §2.4 `checkpoint <text>` | `talkdnd:checkpoint-text` | `UnadoptedWrite` | 否（过渡门拒绝） |
@@ -306,8 +306,8 @@
 | §2.7 `data import` | `talkdnd:data-import` | `ReadOnly` | 不适用（只写 `Rules/chargen/local/`） |
 | §2.7 `handout build/mark` | `talkdnd:handout-build` / `talkdnd:handout-mark` | `UnadoptedWrite` | 否（保守：书目录可能在存档内） |
 | §2.7 `update::sync_defaults`（随 `new`） | 归入 `talkdnd:new` | — | 不适用 |
-| §2.7 `content import-srd` / `import-srd-prose` / `import-srd-pack` | `combat-sim:content-import-srd` / `:content-import-srd-prose` / `:content-import-srd-pack` | `UnadoptedWrite` | 否（`--out` 在存档内时拒绝） |
-| §2.7 `content pack build/release` | `combat-sim:pack-build` / `:pack-release` | `UnadoptedWrite` | 否（`--out` 在存档内时拒绝） |
+| §2.7 `content import-srd` / `import-srd-prose` / `import-srd-pack` | `combat-sim:content-import-srd` / `:content-import-srd-prose` / `:content-import-srd-pack` | `AdoptedWrite` | 是（`--out` 在协议存档内时取 SAVE 锁；存档外允许） |
+| §2.7 `content pack build/release` | `combat-sim:pack-build` / `:pack-release` | `AdoptedWrite` | 是（`--out` 在协议存档内时取 SAVE 锁；存档外允许） |
 | §2.7 `content pack build/release --dry-run` | `combat-sim:pack-build-dry-run` / `:pack-release-dry-run` | `ReadOnly` | 不适用（不写文件） |
 | §2.8 `guard` | `talkdnd:guard` | `ControlMetadata` | 不适用（只写缓存） |
 | §2.8 `secret list` | `talkdnd:secret-list` | `ControlMetadata` | 不适用（只写缓存） |

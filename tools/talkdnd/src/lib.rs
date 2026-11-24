@@ -49,9 +49,10 @@ use std::fs;
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
-// The local `advancement_lock` module owns the protocol implementation; the
-// shared crate of the same name owns the control-file names and the transition
-// gate both CLIs consult. Alias the crate so the two never get confused.
+// The local `advancement_lock` module re-exports the shared SAVE lock
+// primitive. The shared crate of the same name also owns the control-file
+// names and the transition gate both CLIs consult. Alias the crate so the
+// two never get confused.
 use ::advancement_lock as gate;
 
 #[derive(Parser)]

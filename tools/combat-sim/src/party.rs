@@ -83,6 +83,10 @@ impl PartyState {
             "# TalkDND party state (written by combat-sim; edit with care)\n{}",
             serde_norway::to_string(&current)?
         );
+        // The integrity lock only serializes the integrity.yaml read-modify-write.
+        // It is not content protection: party bytes are written first, then the
+        // manifest is refreshed. On a protocol-enabled save, content writes are
+        // constrained by the SAVE lock held by the calling CLI, not by this lock.
         let save = crate::integrity::save_of_combat_file(path);
         let before = save.as_deref().map(crate::integrity::snapshot);
         crate::fsutil::atomic_write(path, text.as_bytes())

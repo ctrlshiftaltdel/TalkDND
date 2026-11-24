@@ -1,4 +1,5 @@
-//! Shared advancement-protocol control files and the cross-CLI transition gate.
+//! Shared advancement-protocol control files, the cross-CLI transition gate,
+//! and the SAVE lock primitive.
 //!
 //! The advancement protocol (see `docs/ADVANCEMENT-LOCK-DESIGN.md`) owns two
 //! fixed control files inside one save slot:
@@ -6,30 +7,31 @@
 //! * `.talkdnd.advancement.lock` — the stable lock file / initialisation mark;
 //! * `.talkdnd.advancement.state` — the only authoritative protocol state.
 //!
-//! This crate is the single home for those names and for the **transition
-//! gate** that `talkdnd` and `combat-sim` share (decision #292, `ADV-P1-1pre`).
-//! Neither binary may grow its own copy of the semantics: a save that has
-//! either control file has adopted the protocol, and every save-writing entry
-//! that has not adopted it must fail closed instead of writing.
+//! This crate is the single home for those names, for the **transition gate**
+//! that `talkdnd` and `combat-sim` share (decision #292, `ADV-P1-1pre`), and
+//! for the SAVE lock primitive itself (`ADV-P1-1b`). Neither binary may grow
+//! its own copy of the semantics: a save that has either control file has
+//! adopted the protocol, and every save-writing entry that has not adopted it
+//! must fail closed instead of writing. Adopted writers acquire the SAVE lock
+//! from this crate (`open` + `check_ordinary_write`) before writing.
 //!
-//! What this crate does **not** do: it does not create, lock, read or repair
-//! the control files, and it does not implement the SAVE lock or the D commit
-//! flow. `has_protocol` only answers "is either control file present?".
-//! `ADV-P1-1a` marks some `talkdnd` writers as [`Class::AdoptedWrite`]; the
-//! owning CLI acquires the SAVE lock. This crate still only classifies the
-//! entry and runs the transition gate.
+//! The transition gate (`has_protocol`, `check_save`, the writer registry)
+//! still only answers presence and classifies entries; it does not acquire the
+//! lock. The D commit flow and auto-init are not implemented here. Ordinary
+//! writers must not call [`check_writable`], which requires directory sync and
+//! would refuse every ordinary write on Windows.
 //!
-//! Fail-closed rules:
+//! Fail-closed rules for the gate:
 //!
 //! * presence is decided with `symlink_metadata`, so a dangling or otherwise
 //!   unreadable control file still counts as present;
 //! * any metadata error other than "not found" counts as present;
-//! * nothing here creates a control file. A save without one keeps its
+//! * nothing in the gate creates a control file. A save without one keeps its
 //!   existing behaviour.
 
 use std::fmt;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::ErrorKind as IoErrorKind;
 use std::path::{Path, PathBuf};
 
 /// Fixed lock file name inside one save slot.
@@ -40,7 +42,7 @@ pub const STATE_FILE: &str = ".talkdnd.advancement.state";
 /// One line every affected command shows in `--help`, and the wording the
 /// player-facing documentation repeats.
 pub const REFUSAL_HELP: &str =
-    "存档启用成长协议（.talkdnd.advancement.lock / .talkdnd.advancement.state）后，尚未接入成长协议的写命令以退出码 1 拒绝执行且不写任何目标文件。已接入的 talkdnd 写命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时同样以退出码 1 拒绝且不写任何目标文件（接入期对缺失 state 的保守处理，不自动初始化）。只读命令与 `guard`/`secret list` 的缓存写入仍可用，不取 SAVE 锁。`start` 的用户数据/迁移写入取 SAVE 锁；其 digest/缓存仍是控制元数据，不单独取 SAVE 锁，但锁不可用时整条命令拒绝，也不写 digest/缓存。没有协议文件的存档保持既有行为。";
+    "存档启用成长协议（.talkdnd.advancement.lock / .talkdnd.advancement.state）后，尚未接入成长协议的写命令以退出码 1 拒绝执行且不写任何目标文件。已接入的 talkdnd 与 combat-sim 写命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时同样以退出码 1 拒绝且不写任何目标文件（接入期对缺失 state 的保守处理，不自动初始化）。`combat-sim` 的 content import / pack build|release 仅在 `--out` 指向已启用协议的存档内时取 SAVE 锁；`--out` 在存档外时按存档外写入允许；`pack build|release --dry-run` 只读。只读命令与 `guard`/`secret list` 的缓存写入仍可用，不取 SAVE 锁。`start` 的用户数据/迁移写入取 SAVE 锁；其 digest/缓存仍是控制元数据，不单独取 SAVE 锁，但锁不可用时整条命令拒绝，也不写 digest/缓存。没有协议文件的存档保持既有行为。";
 
 /// `--help` wording for a group-A command that only writes (no read-only form).
 pub const ADOPTED_WRITE_HELP: &str =
@@ -49,6 +51,14 @@ pub const ADOPTED_WRITE_HELP: &str =
 /// `--help` wording for a group-A family that has both write and read-only forms.
 pub const ADOPTED_WRITE_MIXED_HELP: &str =
     "存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。";
+
+/// `--help` wording for a content command whose `--out` may land inside a save.
+pub const ADOPTED_OUT_HELP: &str =
+    "存档启用成长协议后，当 --out 指向已启用协议的存档内时，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。--out 在任何存档之外时按存档外写入允许。没有协议文件的存档保持既有行为，不自动初始化。";
+
+/// `--help` wording for `content pack build|release`, which also have `--dry-run`.
+pub const ADOPTED_OUT_MIXED_HELP: &str =
+    "存档启用成长协议后，当 --out 指向已启用协议的存档内时，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；--dry-run 只读仍可用；--out 在任何存档之外时按存档外写入允许。没有协议文件的存档保持既有行为，不自动初始化。";
 
 /// The lock file path inside `save_dir`.
 pub fn lock_path(save_dir: &Path) -> PathBuf {
@@ -60,10 +70,52 @@ pub fn state_path(save_dir: &Path) -> PathBuf {
     save_dir.join(STATE_FILE)
 }
 
+/// Marker file at the top of a play folder (shipped in the release).
+pub const ROOT_MARKER: &str = ".talkdnd-root";
+
+/// A play folder: has the marker, or the classic `AGENTS.md` + `Saves/` pair.
+///
+/// Both CLIs use this so `combat-sim` can call [`open`] without depending on
+/// `talkdnd`.
+pub fn is_play_root(path: &Path) -> bool {
+    path.join(ROOT_MARKER).is_file()
+        || (path.join("AGENTS.md").is_file() && path.join("Saves").is_dir())
+}
+
+/// The play folder that contains `save_dir`, if one can be found by walking
+/// ancestors. The returned path is the ancestor as it appears in `save_dir`
+/// (absolute, not canonicalized), so [`open`] can derive the recorded
+/// `save_path` without introducing `.` / `..`.
+pub fn play_root_for_save(save_dir: &Path) -> Option<PathBuf> {
+    let absolute = if save_dir.is_absolute() {
+        save_dir.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(save_dir)
+    };
+    for dir in absolute.ancestors() {
+        if is_play_root(dir) {
+            return Some(dir.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Make `path` absolute by prefixing the current directory. Does not resolve
+/// `.` / `..` or follow symlinks: the SAVE lock refuses those spellings.
+pub fn absolute_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
 fn present(path: &Path) -> bool {
     match fs::symlink_metadata(path) {
         Ok(_) => true,
-        Err(err) if err.kind() == ErrorKind::NotFound => false,
+        Err(err) if err.kind() == IoErrorKind::NotFound => false,
         // Unreadable metadata is not proof of absence: fail closed.
         Err(_) => true,
     }
@@ -185,7 +237,7 @@ pub fn resolve_write_targets(target: &Path) -> Result<WriteTargets, Unresolved> 
     let followed = match fs::symlink_metadata(&entry) {
         Ok(meta) if meta.file_type().is_symlink() => follow_symlink_chain(&entry, target)?,
         Ok(_) => entry.clone(),
-        Err(err) if err.kind() == ErrorKind::NotFound => entry.clone(),
+        Err(err) if err.kind() == IoErrorKind::NotFound => entry.clone(),
         Err(err) => {
             return Err(Unresolved {
                 target: target.to_path_buf(),
@@ -230,7 +282,7 @@ fn follow_symlink_chain(start: &Path, original: &Path) -> Result<PathBuf, Unreso
         };
         match fs::canonicalize(&destination) {
             Ok(path) => return Ok(path),
-            Err(err) if err.kind() == ErrorKind::NotFound => {
+            Err(err) if err.kind() == IoErrorKind::NotFound => {
                 let next = resolve_target(&destination)?;
                 match fs::symlink_metadata(&next) {
                     Ok(meta) if meta.file_type().is_symlink() => {
@@ -242,7 +294,7 @@ fn follow_symlink_chain(start: &Path, original: &Path) -> Result<PathBuf, Unreso
                             reason: format!("cannot resolve {}: {err}", next.display()),
                         });
                     }
-                    Err(err) if err.kind() == ErrorKind::NotFound => return Ok(next),
+                    Err(err) if err.kind() == IoErrorKind::NotFound => return Ok(next),
                     Err(err) => {
                         return Err(Unresolved {
                             target: original.to_path_buf(),
@@ -279,7 +331,7 @@ fn canonical_existing(path: &Path, original: &Path) -> Result<PathBuf, Unresolve
     loop {
         match fs::symlink_metadata(probe) {
             Ok(_) => break,
-            Err(err) if err.kind() == ErrorKind::NotFound => {
+            Err(err) if err.kind() == IoErrorKind::NotFound => {
                 let Some(name) = probe.file_name() else {
                     return Err(Unresolved {
                         target: original.to_path_buf(),
@@ -366,8 +418,8 @@ pub enum Class {
     NewSave,
     /// Writes save content through an entry that has adopted the SAVE lock.
     /// The transition gate allows it; the owning CLI must acquire the SAVE
-    /// lock before writing and fail closed if the lock is unavailable. This
-    /// crate does not implement the SAVE lock itself.
+    /// lock ([`open`] + [`AdvancementLock::check_ordinary_write`]) before
+    /// writing and fail closed if the lock is unavailable.
     AdoptedWrite,
     /// Writes save content through an entry that has not adopted the protocol.
     /// Refused (exit code 1) whenever the save has a control file.
@@ -1169,8 +1221,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim init|attack|grapple|shove|damage|heal|save|check|cast|use|condition add|remove|move|ready|trigger|ready-clear|fly|fall|interact|deathsave|next|rest|activate|add",
         "cli.rs::run_cli; cli.rs::run_state_command",
         "combat/*.state.json, combat/party-state.yaml, rolls.log, Sessions/*.md",
-        UnadoptedWrite,
-        "load, run, state.save, write_party_state and log append with no save-level lock",
+        AdoptedWrite,
+        "adopted (SAVE lock): state.save, party.save and log append run while the SAVE lock is held; a failed step reports which stage was written",
         &["init"]
     ),
     writer!(
@@ -1179,8 +1231,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim new",
         "cli.rs::run_cli Command::New; cli.rs::new_state",
         "combat/*.state.json, combat/party-state.yaml",
-        UnadoptedWrite,
-        "creates or overwrites a state file and writes party state",
+        AdoptedWrite,
+        "adopted (SAVE lock): creates or overwrites a state file (and associates party when the path is in the manifest state_dir) after taking the SAVE lock",
         &["new", "--encounter", "gate-probe"]
     ),
     writer!(
@@ -1189,8 +1241,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim quick",
         "cli.rs::run_cli Command::Quick; cli.rs::quick_state",
         "combat/*.state.json, combat/party-state.yaml",
-        UnadoptedWrite,
-        "creates the ad-hoc encounter state and party state",
+        AdoptedWrite,
+        "adopted (SAVE lock): creates the ad-hoc encounter state after taking the SAVE lock",
         &["quick", "--foe", "gate-probe"]
     ),
     writer!(
@@ -1199,8 +1251,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim roll",
         "cli.rs::run_cli Command::Roll; player.rs::append_roll",
         "combat/*.state.json, combat/party-state.yaml, rolls.log, Sessions/*.md",
-        UnadoptedWrite,
-        "appends rolls.log; with --state pointing at an existing file it also saves state and party",
+        AdoptedWrite,
+        "adopted (SAVE lock) by actual write targets: without --state only appends rolls.log; with --state pointing at an existing file also saves state/party and the session log",
         &["roll", "1d20"]
     ),
     writer!(
@@ -1209,8 +1261,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim party rest|set-hp|sync",
         "cli.rs::run_party",
         "combat/party-state.yaml",
-        UnadoptedWrite,
-        "rewrites party-state.yaml",
+        AdoptedWrite,
+        "adopted (SAVE lock): rewrites party-state.yaml after taking the SAVE lock",
         &["party", "set-hp", "gate-probe", "1"]
     ),
     writer!(
@@ -1229,8 +1281,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim content import-srd",
         "cli.rs::run_content ContentCommand::ImportSrd",
         "--out content files (inside the save when --out points there)",
-        UnadoptedWrite,
-        "writes content files under --out; no dry-run exists",
+        AdoptedWrite,
+        "adopted (SAVE lock) when --out is inside a protocol-enabled save; out-of-save --out is allowed; no dry-run exists",
         &["content", "import-srd", "--out", "{save}/content"]
     ),
     writer!(
@@ -1239,8 +1291,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim content import-srd-prose",
         "cli.rs::run_content ContentCommand::ImportSrdProse; srd_prose::import",
         "--out content files (inside the save when --out points there)",
-        UnadoptedWrite,
-        "writes content files under --out; no dry-run exists",
+        AdoptedWrite,
+        "adopted (SAVE lock) when --out is inside a protocol-enabled save; out-of-save --out is allowed; no dry-run exists",
         &["content", "import-srd-prose", "--edition", "2024", "--index", "gate-probe", "--out", "{save}/content"]
     ),
     writer!(
@@ -1249,8 +1301,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim content import-srd-pack",
         "cli.rs::run_content ContentCommand::ImportSrdPack; srd_pack::import",
         "--out content files (inside the save when --out points there)",
-        UnadoptedWrite,
-        "writes content files under --out; no dry-run exists",
+        AdoptedWrite,
+        "adopted (SAVE lock) when --out is inside a protocol-enabled save; out-of-save --out is allowed; no dry-run exists",
         &["content", "import-srd-pack", "--edition", "2024", "--src", "gate-probe", "--out", "{save}/content"]
     ),
     writer!(
@@ -1259,8 +1311,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim content pack build (without --dry-run)",
         "cli.rs::run_content PackCommand::Build; content::full_pack::build",
         "--out pack file (inside the save when --out points there)",
-        UnadoptedWrite,
-        "writes the full pack under --out; only --dry-run is read-only",
+        AdoptedWrite,
+        "adopted (SAVE lock) when --out is inside a protocol-enabled save; out-of-save --out is allowed; only --dry-run is read-only",
         &["content", "pack", "build", "--edition", "2024", "--book", "phb", "--index", "gate-probe", "--out", "{save}/content"]
     ),
     writer!(
@@ -1269,8 +1321,8 @@ pub static WRITERS: &[Writer] = &[
         "combat-sim content pack release (without --dry-run)",
         "cli.rs::run_content PackCommand::Release; content::full_pack::release",
         "--out release bundle (inside the save when --out points there)",
-        UnadoptedWrite,
-        "writes the release bundle under --out; only --dry-run is read-only",
+        AdoptedWrite,
+        "adopted (SAVE lock) when --out is inside a protocol-enabled save; out-of-save --out is allowed; only --dry-run is read-only",
         &["content", "pack", "release", "--packs", "gate-probe", "--out", "{save}/content"]
     ),
     writer!(
@@ -1447,6 +1499,18 @@ where
     Ok(())
 }
 
+// ----------------------------------------------------------------- SAVE lock ----
+
+/// The v1 SAVE lock primitive: [`init`], [`open`],
+/// [`AdvancementLock::check_ordinary_write`] and
+/// [`AdvancementLock::check_writable`].
+pub mod save_lock;
+pub use save_lock::{
+    init, open, reseal, AcquireOptions, AdvancementLock, CompletionEvidence, Error, ErrorKind,
+    InitHooks, InitOptions, InitOutcome, LockHeader, LockIdentity, OpenOptions, Pending, Published,
+    Stage, State, StateRecord, COPY_LIMITATION, DEFAULT_ACQUIRE_TIMEOUT, SCHEMA,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1616,8 +1680,9 @@ mod tests {
                 .join("e.state.json")
         );
         assert_eq!(targets.followed, fs::canonicalize(&external).unwrap());
+        assert!(check_target(&link, "combat-sim:state-write").is_ok());
         assert!(matches!(
-            check_target(&link, "combat-sim:state-write"),
+            check_target(&link, "talkdnd:log"),
             Err(GateError::Refused(_))
         ));
 
@@ -1625,8 +1690,9 @@ mod tests {
         // followed by an append or copy.
         let alias = outside.join("alias-party.yaml");
         std::os::unix::fs::symlink(save.join("combat/party-state.yaml"), &alias).unwrap();
+        assert!(check_target(&alias, "combat-sim:party-write").is_ok());
         assert!(matches!(
-            check_target(&alias, "combat-sim:party-write"),
+            check_target(&alias, "talkdnd:log"),
             Err(GateError::Refused(_))
         ));
         fs::remove_dir_all(&root).unwrap();
@@ -1716,8 +1782,9 @@ mod tests {
         let previous = std::env::current_dir().unwrap();
         std::env::set_current_dir(&root).unwrap();
         let relative = Path::new("Saves/x/combat/e.state.json");
+        assert!(check_target(relative, "combat-sim:state-write").is_ok());
         assert!(matches!(
-            check_target(relative, "combat-sim:state-write"),
+            check_target(relative, "talkdnd:log"),
             Err(GateError::Refused(_))
         ));
         std::env::set_current_dir(previous).unwrap();
@@ -1734,15 +1801,14 @@ mod tests {
         fs::write(lock_path(&save), b"").unwrap();
         let outside = root.join("outside");
         fs::create_dir_all(&outside).unwrap();
+        assert!(check_target(&outside.join("party-state.yaml"), "combat-sim:party-write").is_ok());
+        assert!(check_target(
+            &save.join("combat/party-state.yaml"),
+            "combat-sim:party-write"
+        )
+        .is_ok());
         assert!(matches!(
-            check_target(&outside.join("party-state.yaml"), "combat-sim:party-write"),
-            Ok(())
-        ));
-        assert!(matches!(
-            check_target(
-                &save.join("combat/party-state.yaml"),
-                "combat-sim:party-write"
-            ),
+            check_target(&save.join("combat/party-state.yaml"), "talkdnd:log"),
             Err(GateError::Refused(_))
         ));
         fs::remove_dir_all(&root).unwrap();
@@ -1780,10 +1846,10 @@ mod tests {
         assert!(WRITERS
             .iter()
             .any(|w| w.cli == Cli::Talkdnd && w.class == Class::AdoptedWrite));
-        assert!(WRITERS
+        assert!(!WRITERS
             .iter()
             .any(|w| w.cli == Cli::CombatSim && w.class == Class::UnadoptedWrite));
-        assert!(!WRITERS
+        assert!(WRITERS
             .iter()
             .any(|w| w.cli == Cli::CombatSim && w.class == Class::AdoptedWrite));
     }
@@ -1799,8 +1865,11 @@ mod tests {
             check_save(Some(&dir), "talkdnd:log"),
             Err(GateError::Refused(_))
         ));
+        assert!(check_save(Some(&dir), "combat-sim:state-write").is_ok());
+        assert!(check_save(Some(&dir), "combat-sim:roll").is_ok());
+        assert!(check_save(Some(&dir), "combat-sim:content-import-srd").is_ok());
         assert!(matches!(
-            check_save(Some(&dir), "combat-sim:state-write"),
+            check_save(Some(&dir), "talkdnd:handout-build"),
             Err(GateError::Refused(_))
         ));
         fs::remove_dir_all(&dir).unwrap();
