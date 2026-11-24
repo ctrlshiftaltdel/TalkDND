@@ -203,7 +203,25 @@ fn unadopted_writers_exit_one_and_leave_the_save_untouched() {
         .iter()
         .filter(|row| row.cli == Cli::Talkdnd && row.class == Class::UnadoptedWrite)
         .collect();
-    assert!(rows.len() > 30, "the talkdnd registry looks too small");
+    // Group A (ADV-P1-1a) has moved to AdoptedWrite; these leftover writers
+    // must still be refused by the transition gate.
+    let leftover: Vec<_> = rows.iter().map(|row| row.entry).collect();
+    assert_eq!(
+        leftover,
+        vec![
+            "talkdnd:migrate",
+            "talkdnd:check",
+            "talkdnd:integrity-status",
+            "talkdnd:integrity-accept",
+            "talkdnd:checkpoint-text",
+            "talkdnd:checkpoint-snapshot",
+            "talkdnd:checkpoint-restore",
+            "talkdnd:log",
+            "talkdnd:handout-build",
+            "talkdnd:handout-mark",
+            "talkdnd:handout-list-dm",
+        ]
+    );
     for row in rows {
         let args = argv(row, &save);
         let out = run_slot(&root, &argv_refs(&args));

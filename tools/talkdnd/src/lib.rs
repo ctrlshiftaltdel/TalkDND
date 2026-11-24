@@ -79,7 +79,7 @@ struct Cli {
 enum Cmd {
     /// Resume: content check, background pdf2md, write and print Saves/<slot>/digest.md
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Start {
         #[arg(long)]
         no_pdf2md: bool,
@@ -113,21 +113,21 @@ enum Cmd {
     },
     /// Character creation (player decides every step)
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Chargen {
         #[command(subcommand)]
         cmd: ChargenCmd,
     },
     /// Party companions run by the DM (written to Characters/, `controller: dm`)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Companion {
         #[command(subcommand)]
         cmd: NpcCmd,
     },
     /// Old name of `companion` (still works; companions now live in Characters/)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Npc {
         #[command(subcommand)]
         cmd: NpcCmd,
@@ -186,28 +186,28 @@ enum Cmd {
     },
     /// Long-term memory: facts that survive session gaps (P03)
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Memory {
         #[command(subcommand)]
         cmd: memory::Cmd,
     },
     /// Story entities: NPCs, locations, factions, quests, items (P04)
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Entity {
         #[command(subcommand)]
         cmd: entity::Cmd,
     },
     /// Relations between entities (P04)
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Relation {
         #[command(subcommand)]
         cmd: graph::Cmd,
     },
     /// World time: calendar labels and due-dated events (P06)
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Time {
         #[command(subcommand)]
         cmd: worldtime::Cmd,
@@ -229,14 +229,14 @@ enum Cmd {
     },
     /// Experience points (ledger in Saves/<slot>/progress.yaml)
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Xp {
         #[command(subcommand)]
         cmd: XpCmd,
     },
     /// Level a character up: edits the sheet's combat block (level, HP, proficiency, hit dice)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     LevelUp {
         /// Character id or name
         who: String,
@@ -255,7 +255,7 @@ enum Cmd {
     },
     /// Coins and items per character and the shared `party` pool
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Loot {
         #[command(subcommand)]
         cmd: LootCmd,
@@ -270,14 +270,14 @@ enum Cmd {
     /// Original content ledger for this save (DM only): register an original
     /// element before introducing it, list them, or show the budget
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Original {
         #[command(subcommand)]
         cmd: OriginalCmd,
     },
     /// Read one scene of the locally imported adventure (never the whole book)
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Adventure {
         #[command(subcommand)]
         cmd: AdventureCmd,
@@ -292,11 +292,11 @@ enum Cmd {
     },
     /// Record the current scene/location and print `known`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Scene { name: Vec<String> },
     /// Secret terms for the spoiler guard (DM only, stored in the save)
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Secret {
         #[command(subcommand)]
         cmd: SecretCmd,
@@ -310,7 +310,7 @@ enum Cmd {
     /// Record that the players identified a monster/item, or set the
     /// player-facing appearance used until they do
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Identify {
         /// Creature/item name or id
         thing: Option<String>,
@@ -326,14 +326,14 @@ enum Cmd {
     },
     /// Table settings (dice display) and `log rolls`
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Settings {
         #[command(subcommand)]
         cmd: Option<SettingsCmd>,
     },
     /// Revealed-knowledge ledger (what the party has actually learned)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Reveal {
         #[command(subcommand)]
         cmd: RevealCmd,
@@ -341,7 +341,7 @@ enum Cmd {
     /// Book images shown to the players (maps, letters, items). Only
     /// player-safe entries are exported; DM-only maps never are
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，`handout show` 在写目标前取得 SAVE 锁，锁不可用时以退出码 1 拒绝且不写目标文件；`handout list --dm` / `build` / `mark` 尚未接入成长协议，以退出码 1 拒绝且不写目标文件；玩家视图 `handout list` 只读仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Handout {
         /// Converted book folder or book/adventure name (default: the save's adventure)
         #[arg(long, global = true)]
@@ -353,7 +353,7 @@ enum Cmd {
     /// choices, notes). The sheet is rendered from Saves/<slot>/sheets/<id>.yaml;
     /// never hand-edit it. `talkdnd char Yier batch "damage 7; use slot1"`
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Char {
         /// Character id or name (`all` for `rest`)
         who: String,
@@ -423,7 +423,7 @@ enum HandoutCmd {
     /// Export a player-safe handout to Saves/<slot>/handouts/, print its path
     /// and a Markdown image link, and record it (reveal ledger, session log)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Show {
         /// Handout id (p0012-00) or a caption / area search
         query: Vec<String>,
@@ -468,7 +468,7 @@ enum HandoutCmd {
 enum OriginalCmd {
     /// Register an original element before it appears in play (DM only)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Add {
         /// encounter | npc | item | location | sidequest
         #[arg(long = "type")]
@@ -494,7 +494,7 @@ enum OriginalCmd {
     Status,
     /// Create Saves/<slot>/dm-plan.md (DM-only long-term plan template)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Plan,
 }
 
@@ -502,7 +502,7 @@ enum OriginalCmd {
 enum AdventureCmd {
     /// Print one heading-delimited section; `--list` lists headings only
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Section {
         /// Heading, chapter or area search
         query: Vec<String>,
@@ -536,7 +536,7 @@ enum AdventureCmd {
 enum SecretCmd {
     /// Add a manual secret term (stored only in this save)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Add {
         term: Vec<String>,
         /// Chapter number this secret belongs to (optional)
@@ -549,7 +549,7 @@ enum SecretCmd {
     List,
     /// Remove a manual secret term
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Remove { term: Vec<String> },
     /// Read-only scan of a DM notes file: explicit marker coverage, counts
     /// and line numbers only, never file content
@@ -561,7 +561,7 @@ enum SecretCmd {
     /// Import DM-reviewed explicit terms from a file (one per line or the
     /// existing marker forms); the default is a dry-run preview
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Import {
         /// File to read terms from
         #[arg(long)]
@@ -579,18 +579,18 @@ enum SecretCmd {
 enum SettingsCmd {
     /// Show or change dice display: `settings dice on|off`
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Dice { value: Option<String> },
     /// Narration style: `settings style show`, `settings style set <字段> <值> --reason R`
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Style {
         #[command(subcommand)]
         cmd: memory::StyleCmd,
     },
     /// Automation switches: save defaults, scene/encounter overrides
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Automation {
         #[command(subcommand)]
         cmd: Option<settings::AutomationCmd>,
@@ -601,7 +601,7 @@ enum SettingsCmd {
 enum RevealCmd {
     /// Record a fact the party has learned (also logged)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Add {
         fact: Vec<String>,
         /// How they learned it (check, NPC, document, rumour)
@@ -630,7 +630,7 @@ enum XpCmd {
     /// `xp add 450 --category combat --reason "museum guards"` or
     /// `xp add --difficulty hard --category noncombat --reason "baron talks"`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Add {
         /// Total XP (omit with --difficulty)
         amount: Option<i64>,
@@ -685,7 +685,7 @@ impl Coins {
 enum LootCmd {
     /// Add coins/items: `loot add --gp 50 "potion of healing" --to party`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Add {
         items: Vec<String>,
         #[command(flatten)]
@@ -698,7 +698,7 @@ enum LootCmd {
     },
     /// Spend or lose coins/items
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Spend {
         items: Vec<String>,
         #[command(flatten)]
@@ -710,7 +710,7 @@ enum LootCmd {
     },
     /// Move coins/items between purses
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Give {
         items: Vec<String>,
         #[command(flatten)]
@@ -722,7 +722,7 @@ enum LootCmd {
     },
     /// Split the party pool's coins evenly among the party
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Split,
     /// Show every purse
     Show,
@@ -734,40 +734,40 @@ enum ChargenCmd {
     Status,
     /// Roll 6 x 4d6dl1 (logged); the player then assigns them
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Roll,
     /// Use the standard array 15 14 13 12 10 8
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Array,
     /// Point buy: e.g. `str=15 dex=14 con=13 int=10 wis=10 cha=8` (27 points)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Pointbuy { scores: Vec<String> },
     /// Player assigns pool numbers: `str=15 dex=14 ...`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Assign { scores: Vec<String> },
     /// Player-chosen increases: `str=2 con=1`, or `none`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Asi { values: Vec<String> },
     /// Record a choice: ruleset|adventure|species|class|level|subclass|fighting-style|masteries|background|background-equipment|skills|background-skills|languages|tools|feats|class-equipment|armor|shield|equipment|spells|name|traits|ideals|bonds|flaws|alignment
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Set { field: String, value: Vec<String> },
     /// Check the character against the ruleset
     Validate,
     /// Write Characters/<name>.md (sheet + combat yaml in sync)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Sheet {
         #[arg(long, default_value = "玩家")]
         player: String,
     },
     /// Player confirmed the sheet: mark creation complete
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Confirm,
 }
 
@@ -789,7 +789,7 @@ enum DataCmd {
 enum NpcCmd {
     /// Generate random SRD companions (rolls logged when a save exists); DM adds name/backstory
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Random {
         #[arg(long)]
         ruleset: Option<String>,
@@ -801,7 +801,7 @@ enum NpcCmd {
     },
     /// Write Characters/<name>.md (controller: dm) from draft N (after the player confirms) and add to party
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Sheet {
         draft: usize,
         #[arg(long)]
@@ -1069,7 +1069,10 @@ fn extra_write_targets(root: &Path, cli: &Cli, save: &Path) -> Vec<PathBuf> {
         _ => Vec::new(),
     };
     if let Some(writer) = gate::writer(gate_entry(cli)) {
-        if writer.class == gate::Class::UnadoptedWrite {
+        if matches!(
+            writer.class,
+            gate::Class::UnadoptedWrite | gate::Class::AdoptedWrite
+        ) {
             if writer_lists(writer.targets, "Sessions/*.md") {
                 if let Some(log) = save::latest_log(save) {
                     targets.push(log);
@@ -1105,6 +1108,14 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     }
     let protocol_present = gate_save.as_deref().is_some_and(gate::has_protocol);
     let gate_class = gate::class_of(gate_entry);
+    // ADV-P1-1a: adopted writers take the SAVE lock before any target write.
+    // The lock is held through dispatch and the post-command audit so those
+    // writes stay inside SAVE → checkpoint → integrity. No auto-init.
+    let save_locks = if gate_class == gate::Class::AdoptedWrite {
+        hold_adopted_save_locks(&root, &cli, gate_save.as_deref(), gate_entry)?
+    } else {
+        Vec::new()
+    };
     let mut os = step_rng();
     let mut seeded = cli.seed.map(seeded_rng);
     let rng: &mut dyn DiceRng = match seeded.as_mut() {
@@ -1159,19 +1170,127 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
     let mut created = None;
     let result = dispatch(&root, &cli, rng, &mut created);
-    if let (Some(s), Some(before)) = (tracked.as_deref(), before.as_ref()) {
+    let result = if let (Some(s), Some(before)) = (tracked.as_deref(), before.as_ref()) {
         if s.is_dir() {
-            audit::after_command(s, before)?;
+            match result {
+                Ok(()) => audit::after_command(s, before),
+                Err(err) => Err(err),
+            }
+        } else {
+            result
         }
-    }
+    } else {
+        result
+    };
     // Audit the save `new` actually created: inferring the newest slot would
     // pick a later-dated save that was never touched by this command.
-    if result.is_ok() {
+    let result = if result.is_ok() {
         if let Some(dir) = created {
-            audit::audit(&dir)?;
+            audit::audit(&dir).map(|_| ())
+        } else {
+            result
+        }
+    } else {
+        result
+    };
+    // The SAVE lock is still held here. If the command (or its audit) failed
+    // after the lock was taken, targets may already have been written: the
+    // existing multi-file writes are not a transaction.
+    let result = if result.is_err() && !save_locks.is_empty() {
+        result.context("SAVE 锁已取得后命令失败，目标文件可能已被写入（本命令的多步写入不是事务）")
+    } else {
+        result
+    };
+    drop(save_locks);
+    result
+}
+
+/// Acquire the SAVE lock on every protocol-enabled save this adopted entry
+/// might write, in a stable path order, and prove each one is writable for
+/// an ordinary (non-commit) writer. Failure is fail-closed: nothing has
+/// been written yet.
+fn hold_adopted_save_locks(
+    root: &Path,
+    cli: &Cli,
+    selected: Option<&Path>,
+    entry: &'static str,
+) -> Result<Vec<advancement_lock::AdvancementLock>> {
+    let mut dirs = Vec::new();
+    if let Some(save) = selected {
+        if gate::has_protocol(save) {
+            dirs.push(save.to_path_buf());
+        }
+        for target in extra_write_targets(root, cli, save) {
+            match gate::enclosing_protocol_dir(&target) {
+                Ok(Some(dir)) => dirs.push(dir),
+                Ok(None) => {}
+                Err(err) => return Err(err.into()),
+            }
         }
     }
-    result
+    let mut unique = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for dir in dirs {
+        let key = fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if seen.insert(key) {
+            unique.push(dir);
+        }
+    }
+    unique.sort();
+    let mut locks = Vec::with_capacity(unique.len());
+    for dir in unique {
+        locks.push(hold_ordinary_save_lock(root, &dir, entry)?);
+    }
+    Ok(locks)
+}
+
+fn hold_ordinary_save_lock(
+    root: &Path,
+    save_dir: &Path,
+    entry: &'static str,
+) -> Result<advancement_lock::AdvancementLock> {
+    let command = gate::writer(entry).map(|w| w.command).unwrap_or(entry);
+    let lock = advancement_lock::open(root, save_dir, &advancement_lock::OpenOptions::new())
+        .map_err(|err| save_lock_unavailable(save_dir, command, err))?;
+    lock.check_ordinary_write()
+        .map_err(|err| save_lock_unavailable(save_dir, command, err))?;
+    Ok(lock)
+}
+
+/// User-facing refusal when an adopted writer cannot take the SAVE lock.
+/// This path always runs before any target write, so the copy says nothing
+/// was written. A missing SAVE state on a protocol-enabled save is the
+/// plan's conservative temporary handling, not auto-init.
+fn save_lock_unavailable(
+    save_dir: &Path,
+    command: &str,
+    err: advancement_lock::Error,
+) -> anyhow::Error {
+    let reason = match err.kind() {
+        advancement_lock::ErrorKind::NotInitialized => {
+            "SAVE 锁文件缺失（存档已有协议文件，但这不是一次初始化）。这是接入期的保守处理，不自动初始化"
+        }
+        advancement_lock::ErrorKind::CorruptState
+            if err.detail().contains("is missing while the lock exists") =>
+        {
+            "SAVE state 缺失。这是接入期的保守处理，不自动初始化"
+        }
+        advancement_lock::ErrorKind::UnwritableState if err.detail().contains("(active)") => {
+            "SAVE state 为 active（先前操作未完成）"
+        }
+        advancement_lock::ErrorKind::UnwritableState if err.detail().contains("(in_doubt)") => {
+            "SAVE state 为 in_doubt（先前操作结果不明）"
+        }
+        advancement_lock::ErrorKind::UnwritableState => "SAVE state 不可写",
+        advancement_lock::ErrorKind::LockTimeout => "SAVE 锁被其他持有者占用",
+        advancement_lock::ErrorKind::CorruptState => "SAVE state 不可用或损坏",
+        _ => "无法取得 SAVE 锁",
+    };
+    anyhow::anyhow!(
+        "存档已启用成长协议（{}）：{command} 无法取得 SAVE 锁（{reason}；{}）。已拒绝执行，未写入任何目标文件。不要把协议文件当成普通文件删改。",
+        save_dir.display(),
+        err
+    )
 }
 
 fn print_audit(s: &Path) -> Result<()> {

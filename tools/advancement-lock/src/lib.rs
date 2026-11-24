@@ -14,8 +14,10 @@
 //!
 //! What this crate does **not** do: it does not create, lock, read or repair
 //! the control files, and it does not implement the SAVE lock or the D commit
-//! flow. `has_protocol` only answers "is either control file present?"; the
-//! rest belongs to later blocks (`ADV-P1-1a` … `ADV-P1-1e`).
+//! flow. `has_protocol` only answers "is either control file present?".
+//! `ADV-P1-1a` marks some `talkdnd` writers as [`Class::AdoptedWrite`]; the
+//! owning CLI acquires the SAVE lock. This crate still only classifies the
+//! entry and runs the transition gate.
 //!
 //! Fail-closed rules:
 //!
@@ -38,9 +40,15 @@ pub const STATE_FILE: &str = ".talkdnd.advancement.state";
 /// One line every affected command shows in `--help`, and the wording the
 /// player-facing documentation repeats.
 pub const REFUSAL_HELP: &str =
-    "存档启用成长协议（.talkdnd.advancement.lock / .talkdnd.advancement.state）后，\
-尚未接入成长协议的写命令以退出码 1 拒绝执行且不写任何目标文件。只读命令与 `guard`/`secret list` \
-的缓存写入仍可用；`start` 等写命令整条被拒绝，它的 digest/缓存属于控制元数据，不代表它会运行。";
+    "存档启用成长协议（.talkdnd.advancement.lock / .talkdnd.advancement.state）后，尚未接入成长协议的写命令以退出码 1 拒绝执行且不写任何目标文件。已接入的 talkdnd 写命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时同样以退出码 1 拒绝且不写任何目标文件（接入期对缺失 state 的保守处理，不自动初始化）。只读命令与 `guard`/`secret list` 的缓存写入仍可用，不取 SAVE 锁。`start` 的用户数据/迁移写入取 SAVE 锁；其 digest/缓存仍是控制元数据，不单独取 SAVE 锁，但锁不可用时整条命令拒绝，也不写 digest/缓存。没有协议文件的存档保持既有行为。";
+
+/// `--help` wording for a group-A command that only writes (no read-only form).
+pub const ADOPTED_WRITE_HELP: &str =
+    "存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。";
+
+/// `--help` wording for a group-A family that has both write and read-only forms.
+pub const ADOPTED_WRITE_MIXED_HELP: &str =
+    "存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。";
 
 /// The lock file path inside `save_dir`.
 pub fn lock_path(save_dir: &Path) -> PathBuf {
@@ -356,13 +364,21 @@ pub enum Class {
     /// Creates a brand-new save slot. It cannot write an existing save, so the
     /// gate does not apply.
     NewSave,
+    /// Writes save content through an entry that has adopted the SAVE lock.
+    /// The transition gate allows it; the owning CLI must acquire the SAVE
+    /// lock before writing and fail closed if the lock is unavailable. This
+    /// crate does not implement the SAVE lock itself.
+    AdoptedWrite,
     /// Writes save content through an entry that has not adopted the protocol.
     /// Refused (exit code 1) whenever the save has a control file.
     UnadoptedWrite,
 }
 
 impl Class {
-    /// True when the entry may write while the protocol is present.
+    /// True when the transition gate itself will not refuse the entry.
+    ///
+    /// [`Class::AdoptedWrite`] is allowed here; the owning CLI still has to
+    /// acquire the SAVE lock before writing.
     pub fn allowed_under_protocol(self) -> bool {
         !matches!(self, Class::UnadoptedWrite)
     }
@@ -442,8 +458,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd start",
         "lib.rs::dispatch Cmd::Start; start.rs::digest",
         "save-meta.yaml, sheets/*.yaml, combat/campaign.yaml, digest.md, .cache/, Sessions/*.md",
-        UnadoptedWrite,
-        "resume digest: migrates old schemas, rewrites campaign content sources, writes digest and cache; the whole command is refused, so its digest and cache are not written either",
+        AdoptedWrite,
+        "adopted (SAVE lock): user-data and migration writes take the SAVE lock before any target is written; digest.md/.cache are control metadata and do not take SAVE themselves, but are not written when the lock is unavailable",
         &["start", "--no-pdf2md"]
     ),
     writer!(
@@ -482,8 +498,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd level-up <who> (structured and Markdown paths)",
         "lib.rs::dispatch Cmd::LevelUp; progress.rs::level_up",
         "sheets/<id>.yaml, combat/party-state.yaml, Characters/*.md, progress.yaml, Sessions/*.md, rolls.log",
-        UnadoptedWrite,
-        "old level-up still writes the sheet, party, Markdown, progress and logs",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["level-up", "aria"]
     ),
     writer!(
@@ -492,8 +508,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd xp add",
         "lib.rs::dispatch Cmd::Xp; progress.rs::xp_add",
         "progress.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes progress then appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["xp", "add", "10", "--reason", "gate-probe"]
     ),
     writer!(
@@ -512,8 +528,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd loot add|spend|give|split",
         "lib.rs::dispatch Cmd::Loot; progress.rs::loot",
         "progress.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "single-file progress write plus log append",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["loot", "add", "--gp", "1", "probe", "--reason", "gate-probe"]
     ),
     writer!(
@@ -532,8 +548,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd scene <name>",
         "lib.rs::dispatch Cmd::Scene; known.rs::scene_change; progress.rs::set_scene",
         "progress.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes the scene to progress.yaml and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["scene", "gate-probe"]
     ),
     writer!(
@@ -542,8 +558,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd char <who> <op> (every op except the plain spells view)",
         "lib.rs::dispatch Cmd::Char; charsheet.rs::run; charsheet.rs::commit",
         "sheets/<id>.yaml, combat/party-state.yaml, Characters/*.md, Sessions/*.md",
-        UnadoptedWrite,
-        "commit() writes YAML, party state and Markdown; `char show` takes the same path",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["char", "aria", "damage", "1"]
     ),
     writer!(
@@ -562,8 +578,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd chargen roll|array|pointbuy|assign|asi|set",
         "lib.rs::chargen_cmd; chargen.rs::store",
         "chargen.json, Sessions/*.md, rolls.log",
-        UnadoptedWrite,
-        "every step rewrites chargen.json; roll also appends the log and rolls.log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["chargen", "array"]
     ),
     writer!(
@@ -572,8 +588,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd chargen sheet",
         "lib.rs::chargen_cmd; charsheet.rs::from_chargen; lib.rs::add_to_party",
         "Characters/<id>.md, combat/campaign.yaml, sheets/<id>.yaml",
-        UnadoptedWrite,
-        "writes the Markdown sheet, the campaign party line and the structured sheet",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["chargen", "sheet"]
     ),
     writer!(
@@ -582,8 +598,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd chargen confirm",
         "lib.rs::chargen_cmd; progress.rs::loot; chargen.rs::store",
         "progress.yaml, Sessions/*.md, chargen.json",
-        UnadoptedWrite,
-        "first confirmation may grant starting gold (progress plus log), then rewrites chargen.json",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["chargen", "confirm"]
     ),
     writer!(
@@ -612,8 +628,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd companion random / talkdnd npc random",
         "lib.rs::npc_cmd NpcCmd::Random",
         "npc-drafts/<n>.json, rolls.log, Sessions/*.md",
-        UnadoptedWrite,
-        "writes draft JSON and appends roll logs when a save exists",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["companion", "random", "--count", "1"]
     ),
     writer!(
@@ -622,8 +638,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd companion sheet / talkdnd npc sheet",
         "lib.rs::npc_cmd NpcCmd::Sheet; lib.rs::add_to_party",
         "Characters/<id>.md, combat/campaign.yaml",
-        UnadoptedWrite,
-        "writes the companion Markdown sheet and the campaign party line",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["companion", "sheet", "1", "--name", "Probe"]
     ),
     writer!(
@@ -732,8 +748,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd memory add|remove",
         "lib.rs::dispatch Cmd::Memory; memory.rs::run; memory.rs::store",
         "memory.yaml, save-meta.yaml",
-        UnadoptedWrite,
-        "writes memory.yaml and may migrate an old save first",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["memory", "add", "gate-probe", "fact"]
     ),
     writer!(
@@ -752,8 +768,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd entity add|rename|retire",
         "lib.rs::dispatch Cmd::Entity; entity.rs::run; entity.rs::store; entity.rs::log_line",
         "entities.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes the entity ledger and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["entity", "add", "--type", "npc", "--name", "Probe"]
     ),
     writer!(
@@ -772,8 +788,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd relation add|end",
         "lib.rs::dispatch Cmd::Relation; graph.rs::run; graph.rs::store",
         "relations.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes the relation ledger and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["relation", "add", "--type", "knows", "--from", "a", "--to", "b"]
     ),
     writer!(
@@ -792,8 +808,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd time enable|disable|set|advance|event add|done|skip",
         "lib.rs::dispatch Cmd::Time; worldtime.rs::run; worldtime.rs::store; worldtime.rs::log_line",
         "world-time.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes world-time.yaml and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["time", "enable"]
     ),
     writer!(
@@ -812,8 +828,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd settings dice on|off",
         "lib.rs::dispatch Cmd::Settings; settings.rs::set_dice; migrate.rs::write_meta",
         "save-meta.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes the dice setting to save-meta.yaml and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["settings", "dice", "on"]
     ),
     writer!(
@@ -822,8 +838,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd settings style set",
         "lib.rs::dispatch Cmd::Settings; memory.rs::run_style; migrate.rs::write_meta",
         "save-meta.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes the narration style to save-meta.yaml and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["settings", "style", "set", "pace", "fast", "--reason", "gate-probe"]
     ),
     writer!(
@@ -842,8 +858,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd settings automation set|reset",
         "lib.rs::dispatch Cmd::Settings; settings.rs::run_automation; migrate.rs::write_meta",
         "save-meta.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes automation overrides to save-meta.yaml and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["settings", "automation", "set", "resolution", "auto", "--reason", "gate-probe"]
     ),
     writer!(
@@ -862,8 +878,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd secret add|remove",
         "lib.rs::dispatch Cmd::Secret; secret.rs::add/remove; secret.rs::store_manual; secret.rs::invalidate",
         "secret-terms.yaml, secret-terms.cache.json",
-        UnadoptedWrite,
-        "writes the manual term list and deletes the cache",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["secret", "add", "gate-probe"]
     ),
     writer!(
@@ -872,8 +888,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd secret import --apply",
         "lib.rs::dispatch Cmd::Secret; secret.rs::import_lines",
         "secret-terms.yaml, secret-terms.cache.json",
-        UnadoptedWrite,
-        "imports the reviewed terms and invalidates the cache",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["secret", "import", "--from", "{save}/gate-probe-terms.txt", "--apply"]
     ),
     writer!(
@@ -922,8 +938,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd identify / talkdnd identify --appearance",
         "lib.rs::dispatch Cmd::Identify; identify.rs::identify; identify.rs::set_appearance",
         "identified.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes identified.yaml and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["identify", "gate-probe"]
     ),
     writer!(
@@ -932,8 +948,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd reveal add",
         "lib.rs::dispatch Cmd::Reveal; reveal.rs::add; reveal.rs::add_original",
         "reveals.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes the reveal ledger and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["reveal", "add", "gate-probe", "fact"]
     ),
     writer!(
@@ -952,8 +968,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd original add",
         "lib.rs::dispatch Cmd::Original; original.rs::add; original.rs::store",
         "original.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "writes the original-content ledger and appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["original", "add", "--type", "npc", "--name", "Probe"]
     ),
     writer!(
@@ -962,8 +978,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd original plan",
         "lib.rs::dispatch Cmd::Original; original.rs::plan",
         "dm-plan.md",
-        UnadoptedWrite,
-        "creates dm-plan.md when it does not exist yet",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["original", "plan"]
     ),
     writer!(
@@ -982,8 +998,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd handout show",
         "lib.rs::dispatch Cmd::Handout; handout.rs::show",
         "handouts/<id>.<ext>, handouts.yaml, reveals.yaml, Sessions/*.md, book-dir handouts.yaml (built when missing)",
-        UnadoptedWrite,
-        "exports the image, records it shown and writes the reveal or log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["handout", "show", "gate-probe"]
     ),
     writer!(
@@ -1032,8 +1048,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd adventure section ... --reason",
         "lib.rs::dispatch Cmd::Adventure; adventure.rs::section",
         "Sessions/*.md",
-        UnadoptedWrite,
-        "reading ahead of progress or a DM-only section with --reason appends the log",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["adventure", "section", "gate-probe", "--reason", "gate-probe"]
     ),
     writer!(
@@ -1062,8 +1078,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd adventure index build",
         "lib.rs::dispatch Cmd::Adventure; bookindex.rs::run Build; bookindex.rs::build_one",
         "book-dir structured.json (may be inside the save)",
-        UnadoptedWrite,
-        "writes structured.json; --book may name a folder inside the save",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["adventure", "index", "build"]
     ),
     writer!(
@@ -1389,8 +1405,8 @@ impl std::error::Error for Refused {}
 /// Consult the gate for one resolved-or-resolvable write target.
 ///
 /// Returns `Ok(())` when the entry is allowed under the protocol (read-only,
-/// control metadata, new save) or when no enclosing directory has a control
-/// file. Returns [`GateError::Refused`] when a save that adopted the protocol
+/// control metadata, new save, or adopted SAVE-lock writers) or when no
+/// enclosing directory has a control file. Returns [`GateError::Refused`] when a save that adopted the protocol
 /// owns the target, and [`GateError::Unresolved`] when the target's absolute
 /// location cannot be established. Both reach the CLI as exit code 1 and write
 /// nothing.
@@ -1486,7 +1502,7 @@ mod tests {
     fn an_unadopted_writer_is_refused_with_the_shared_message() {
         let dir = temp("refuse");
         fs::write(lock_path(&dir), b"").unwrap();
-        let err = check_save(Some(&dir), "talkdnd:xp-add").expect_err("must refuse");
+        let err = check_save(Some(&dir), "talkdnd:log").expect_err("must refuse");
         let text = err.to_string();
         assert!(text.contains("已启用成长协议"), "{text}");
         assert!(text.contains("尚未接入成长协议"), "{text}");
@@ -1684,7 +1700,7 @@ mod tests {
         // lexically, so the case only exists here.
         let root = temp("unresolvable");
         let target = root.join("missing/../child");
-        let err = check_target(&target, "talkdnd:xp-add").expect_err("must fail closed");
+        let err = check_target(&target, "talkdnd:log").expect_err("must fail closed");
         assert!(matches!(err, GateError::Unresolved(_)), "{err}");
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1741,7 +1757,7 @@ mod tests {
             assert!(!w.location.is_empty(), "{} has no location", w.entry);
             assert!(!w.targets.is_empty(), "{} has no targets", w.entry);
             assert!(!w.basis.is_empty(), "{} has no basis", w.entry);
-            if w.class == Class::UnadoptedWrite {
+            if matches!(w.class, Class::UnadoptedWrite | Class::AdoptedWrite) {
                 assert!(!w.argv.is_empty(), "{} is a writer with no probe", w.entry);
             }
             if !w.argv.is_empty() {
@@ -1763,6 +1779,30 @@ mod tests {
             .any(|w| w.cli == Cli::Talkdnd && w.class == Class::UnadoptedWrite));
         assert!(WRITERS
             .iter()
+            .any(|w| w.cli == Cli::Talkdnd && w.class == Class::AdoptedWrite));
+        assert!(WRITERS
+            .iter()
             .any(|w| w.cli == Cli::CombatSim && w.class == Class::UnadoptedWrite));
+        assert!(!WRITERS
+            .iter()
+            .any(|w| w.cli == Cli::CombatSim && w.class == Class::AdoptedWrite));
+    }
+
+    #[test]
+    fn adopted_writers_pass_the_transition_gate() {
+        let dir = temp("adopted-ok");
+        fs::write(lock_path(&dir), b"").unwrap();
+        assert!(check_save(Some(&dir), "talkdnd:xp-add").is_ok());
+        assert!(check_save(Some(&dir), "talkdnd:start").is_ok());
+        assert!(check_save(Some(&dir), "talkdnd:char").is_ok());
+        assert!(matches!(
+            check_save(Some(&dir), "talkdnd:log"),
+            Err(GateError::Refused(_))
+        ));
+        assert!(matches!(
+            check_save(Some(&dir), "combat-sim:state-write"),
+            Err(GateError::Refused(_))
+        ));
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

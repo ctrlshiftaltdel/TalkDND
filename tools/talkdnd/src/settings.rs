@@ -106,7 +106,7 @@ pub enum AutomationCmd {
     },
     /// Set one category at the save/scene/encounter scope
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Set {
         /// resolution | combat | npc | player_choice | reaction | near_limit
         category: String,
@@ -124,7 +124,7 @@ pub enum AutomationCmd {
     },
     /// Reset one category (or all) at the save/scene/encounter scope
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Reset {
         /// category name, or `all`
         category: String,

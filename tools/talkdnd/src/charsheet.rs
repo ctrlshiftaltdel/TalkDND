@@ -2716,27 +2716,27 @@ pub struct Coins {
 pub enum Op {
     /// One-line status (default)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Show,
     /// Create sheets/<id>.yaml from the Markdown sheet (done automatically on first use)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Init,
     /// Take damage (temp HP first): `damage 7`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Damage { amount: i32 },
     /// Regain HP: `heal 5`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Heal { amount: i32 },
     /// Set temporary HP (keeps the higher value): `temp 8`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Temp { amount: i32 },
     /// Spend a resource or spell slot: `use spell-slot-1`, `use slot2`, `use rage`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Use {
         resource: String,
         #[arg(default_value_t = 1)]
@@ -2744,7 +2744,7 @@ pub enum Op {
     },
     /// Restore a resource: `restore ki 2`, `restore slot1 all`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Restore {
         resource: String,
         #[arg(default_value = "all")]
@@ -2752,7 +2752,7 @@ pub enum Op {
     },
     /// `rest short [--hd N]` (spends Hit Dice, rolls logged) or `rest long`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Rest {
         kind: String,
         #[arg(long, default_value_t = 0)]
@@ -2760,26 +2760,26 @@ pub enum Op {
     },
     /// `condition add poisoned` / `condition remove poisoned`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Condition { action: String, name: String },
     /// Exhaustion: `exhaustion +1`, `exhaustion -1`, `exhaustion 0`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Exhaustion {
         #[arg(allow_hyphen_values = true)]
         value: String,
     },
     /// Heroic Inspiration: `inspiration on|off`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Inspiration { state: String },
     /// Death save at 0 HP: `death-save roll` (d20, logged), `success`, `fail`, `stable`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     DeathSave { result: String },
     /// Coins via the progress.yaml purse: `gold add --gp 5 --sp 3`, `gold spend --gp 2`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Gold {
         action: String,
         #[command(flatten)]
@@ -2792,7 +2792,7 @@ pub enum Op {
     /// Names outside the weapon/armor/common-gear data need `--canon` or
     /// `--original O-xxx` (a registered original item)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Item {
         action: String,
         name: Vec<String>,
@@ -2817,7 +2817,7 @@ pub enum Op {
     },
     /// Ammunition: `ammo arrows -3` (spent) or `ammo arrows +2` (recovered)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Ammo {
         name: String,
         #[arg(allow_hyphen_values = true)]
@@ -2825,17 +2825,17 @@ pub enum Op {
     },
     /// Append a player-visible note
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Note { text: Vec<String> },
     /// Append to the freeform DM notes (only what programs cannot model)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     DmNote { text: Vec<String> },
     /// Sheet choices: fighting-style, background, feats, languages, tools,
     /// masteries, class, alignment, traits, ideals, bonds, flaws, appearance,
     /// backstory, allies, ac-base
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Set {
         field: String,
         value: Vec<String>,
@@ -2851,14 +2851,14 @@ pub enum Op {
     },
     /// Several changes at once: `batch "damage 7; use slot1; ammo arrows -2"`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Batch { ops: Vec<String> },
     /// Spell lists (v1.6 T3, docs/SPELLCASTING.md §4): `spells` shows them,
     /// `spells --json` is the stable machine view, `spells adopt` maps old
     /// free-text names precisely, `spells sync` rebuilds the combat block's
     /// spell refs from the lists
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；只读用法仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Spells {
         /// Stable JSON view (fixed keys, sorted lists); same as `spells show --json`
         #[arg(long)]
@@ -2868,21 +2868,21 @@ pub enum Op {
     },
     /// Add a prepared spell: `prepare bless` (prepared/spellbook classes)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Prepare { spell: String },
     /// Remove a prepared spell: `unprepare bless` (`always_prepared` refuses)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Unprepare { spell: String },
     /// Add a known spell (known classes) or a Mystic Arcanum pick (warlock,
     /// rings 6-9): `learn magic-missile`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Learn { spell: String },
     /// Copy a spell into the wizard spellbook (costs gold/time; not prepared):
     /// `scribe magic-missile` (override with `--hours N --cost-gp N`)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Scribe {
         spell: String,
         #[arg(long)]
@@ -2893,7 +2893,7 @@ pub enum Op {
     /// Ritual-cast a spell (validated and logged; no slot spent, no effects):
     /// `ritual detect-magic`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Ritual { spell: String },
 }
 
@@ -2910,7 +2910,7 @@ pub enum SpellsCmd {
     /// no fuzzy matching; unmatched entries stay in `legacy`):
     /// `spells adopt --map "旧名字=magic-missile"`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Adopt {
         /// Map a legacy entry to a spell id: `--map 原名=spell-id` (repeatable)
         #[arg(long = "map")]
@@ -2919,7 +2919,7 @@ pub enum SpellsCmd {
     /// Rebuild the combat block's spell refs from the lists (managed set
     /// only; unmanaged refs are kept and logged): `spells sync --dry-run`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Sync {
         /// Print the planned ref changes without writing anything
         #[arg(long)]
@@ -2929,7 +2929,7 @@ pub enum SpellsCmd {
     /// always-prepared spells (2014: arctic/coast/…; 2024: arid/polar/…):
     /// `spells terrain arctic`
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Terrain { terrain: String },
 }
 

@@ -151,6 +151,8 @@
   - [ ] `AC-6`: 未初始化存档、拒绝 UX 与 CLI 兼容按本节末的「接入语义」表（#292 已决定）执行，不由执行者自行决定。
   - [ ] `AC-7`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
 
+**交付记录（TASK-0150 / Issue #295）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。组 A 的 `talkdnd` 写入口改为注册表 `AdoptedWrite`，在写目标前取得已有 SAVE 锁 v1（`open` + `check_ordinary_write`），锁不可用时失败关闭且不写目标；`char spells` 普通视图与 `chargen status`/`validate`、`time show`/`event list` 等保持只读；`guard`/`secret list` 仍为控制元数据、不取 SAVE 锁；`start` 的用户数据取 SAVE 锁，digest/缓存不单独取锁；`new` 不 `init`、不写已启用协议的存档。证据见 `tools/talkdnd/tests/advancement_save_lock.rs` 与既有 `transition_gate` / `progress::level_up` 回归。任务状态与证据仍只在 Issue / PR / CI，本文件不设状态列。本块不启用提交入口、不实现 D 流程、不新增 schema/sidecar，也不把 SAVE 锁搬进共享 crate。
+
 ### Task: `ADV-P1-1b` — party / combat 写者接入
 
 - **Goal:** 让 `combat-sim` 会改遭遇/party 的命令、`party rest|set-hp|sync`，以及 `--out` 指向存档内的 `content import-srd-prose`/`content import-srd-pack`/`content import-srd` 与 `content pack build|release` 在写存档前取得 SAVE 锁；只读战斗命令明确声明只读。

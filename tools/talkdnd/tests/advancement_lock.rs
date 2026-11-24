@@ -715,6 +715,43 @@ fn a_read_only_success_path_writes_nothing() {
     );
 }
 
+#[test]
+fn ordinary_write_allows_ready_state_without_directory_sync() {
+    let dir = root("ordinary-ready");
+    init_ok(&dir);
+    let before = snapshot(&slot(&dir));
+    let lock = open_ok(&dir);
+    lock.check_ordinary_write().unwrap();
+    drop(lock);
+    assert_eq!(
+        snapshot(&slot(&dir)),
+        before,
+        "check_ordinary_write must not write"
+    );
+
+    // Planted active / in_doubt states fail closed on every platform,
+    // including those that cannot fsync a directory.
+    let path = adv::state_path(&slot(&dir));
+    let mut record: adv::StateRecord = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    record.state = adv::State::Active;
+    record.stage = adv::Stage::Admit;
+    record.operation_id = "plant-active".into();
+    adv::reseal(&mut record).unwrap();
+    fs::write(&path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+    let err = open_ok(&dir).check_ordinary_write().unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::UnwritableState);
+    assert!(err.detail().contains("active"), "{}", err.detail());
+
+    record.state = adv::State::InDoubt;
+    record.stage = adv::Stage::Publish;
+    record.last_error = Some("planted".into());
+    adv::reseal(&mut record).unwrap();
+    fs::write(&path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+    let err = open_ok(&dir).check_ordinary_write().unwrap_err();
+    assert_eq!(err.kind(), adv::ErrorKind::UnwritableState);
+    assert!(err.detail().contains("in_doubt"), "{}", err.detail());
+}
+
 // ------------------------------------------------------------ predicate ----
 
 #[cfg(unix)]
