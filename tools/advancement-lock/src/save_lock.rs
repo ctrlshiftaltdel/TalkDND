@@ -884,6 +884,57 @@ fn validate_operation_id(operation_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate an absolute directory path and record it with forward slashes.
+///
+/// The path must already exist, be a real directory (not a symlink), and be
+/// lossless UTF-8. Backslashes are stored as `/` so double-quoted path fields
+/// stay unambiguous on Windows.
+fn recorded_existing_dir(path: &str, what: &str) -> Result<String> {
+    if path.is_empty() || path.trim() != path {
+        return Err(err(
+            ErrorKind::InvalidRequest,
+            format!("{what} must be a non-blank absolute path"),
+        ));
+    }
+    let as_path = Path::new(path);
+    check_absolute(as_path, what)?;
+    let text = as_path.to_str().ok_or_else(|| {
+        err(
+            ErrorKind::InvalidRequest,
+            format!(
+                "{what} {} is not valid UTF-8; v1 cannot record it losslessly",
+                as_path.display()
+            ),
+        )
+    })?;
+    let meta = fs::symlink_metadata(as_path).map_err(|e| {
+        ctx(
+            ErrorKind::InvalidRequest,
+            format!(
+                "{what} {} must already exist as a real directory",
+                as_path.display()
+            ),
+            e,
+        )
+    })?;
+    if meta.file_type().is_symlink() {
+        return Err(err(
+            ErrorKind::InvalidRequest,
+            format!(
+                "{what} {} is a symlink; it must be a real directory",
+                as_path.display()
+            ),
+        ));
+    }
+    if !meta.is_dir() {
+        return Err(err(
+            ErrorKind::InvalidRequest,
+            format!("{what} {} is not a directory", as_path.display()),
+        ));
+    }
+    Ok(text.replace("\\", "/"))
+}
+
 fn validate_relative_target(path: &str) -> Result<()> {
     let bad = path.is_empty()
         || path.trim() != path
@@ -1875,6 +1926,91 @@ impl AdvancementLock {
         next.pending.clear();
         next.backup_dir = None;
         next.candidate_dir = None;
+        next.last_error = None;
+        self.store(next)
+    }
+
+    /// Record a verified user-data backup directory and advance to `backup`.
+    ///
+    /// The directory must already exist as a real (non-symlink) directory.
+    /// This method does not create or copy files; the caller must have
+    /// exclusive-created the directory, copied and verified the backup, and
+    /// synced it first. Recording an existing path a second time is refused:
+    /// a directory's presence is not proof the backup is complete. A redo in
+    /// the same operation must use a new exclusive directory and clears any
+    /// previously recorded candidate.
+    pub fn record_backup(&mut self, backup_dir: &str) -> Result<()> {
+        self.require_active("record a verified backup")?;
+        if !self.state.published.is_empty() || !self.state.pending.is_empty() {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                "a backup cannot be recorded after a publish intent; use in_doubt",
+            ));
+        }
+        match self.state.stage {
+            Stage::Admit | Stage::Backup | Stage::Candidate => {}
+            other => {
+                return Err(err(
+                    ErrorKind::InvalidRequest,
+                    format!("cannot record a backup from stage {other:?}"),
+                ))
+            }
+        }
+        let recorded = recorded_existing_dir(backup_dir, "backup_dir")?;
+        if self.state.backup_dir.as_deref() == Some(recorded.as_str()) {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                "this backup directory is already recorded; a directory existing is not proof the backup is complete, so a redo must use a new exclusive directory",
+            ));
+        }
+        let mut next = self.state.clone();
+        next.backup_dir = Some(recorded);
+        next.candidate_dir = None;
+        next.stage = Stage::Backup;
+        next.last_error = None;
+        self.store(next)
+    }
+
+    /// Record a verified unpublished candidate directory and advance to
+    /// `candidate`.
+    ///
+    /// Requires a previously recorded verified `backup_dir`. The candidate
+    /// directory must already exist as a real directory and must have been
+    /// validated by the caller. An incomplete or failed candidate must not be
+    /// passed here. Recording the same path twice is refused.
+    pub fn record_candidate_verified(&mut self, candidate_dir: &str) -> Result<()> {
+        self.require_active("record a verified candidate")?;
+        if !self.state.published.is_empty() || !self.state.pending.is_empty() {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                "a candidate cannot be recorded after a publish intent; use in_doubt",
+            ));
+        }
+        if self.state.backup_dir.is_none() {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                "a verified candidate requires a previously recorded verified backup",
+            ));
+        }
+        match self.state.stage {
+            Stage::Backup | Stage::Candidate => {}
+            other => {
+                return Err(err(
+                    ErrorKind::InvalidRequest,
+                    format!("cannot record a verified candidate from stage {other:?}"),
+                ))
+            }
+        }
+        let recorded = recorded_existing_dir(candidate_dir, "candidate_dir")?;
+        if self.state.candidate_dir.as_deref() == Some(recorded.as_str()) {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                "this candidate directory is already recorded; an incomplete or previously recorded candidate must not be marked verified again",
+            ));
+        }
+        let mut next = self.state.clone();
+        next.candidate_dir = Some(recorded);
+        next.stage = Stage::Candidate;
         next.last_error = None;
         self.store(next)
     }

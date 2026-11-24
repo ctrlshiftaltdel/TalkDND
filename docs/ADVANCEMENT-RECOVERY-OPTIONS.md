@@ -1,6 +1,6 @@
 # 单职业成长：迁移与显式恢复备选方案
 
-状态：历史选项分析，基线为 `2dbdb1018d20957cfbde7ca2801a32b7ac913579`。所有者 [2026-11-11 决定](https://github.com/ctrlshiftaltdel/TalkDND/issues/183#issuecomment-6788131462) 选 B/D；A/C 和第 6 节原推荐保留作历史，不是当前选择或实现授权。本文不是安全保证；下文候选机制不等于已实现。依据 [成长设计](superpowers/specs/2026-11-10-character-advancement-design.md)、[安全审计](ADVANCEMENT-SAFETY-AUDIT.md) 和 [锁调查](CHECKPOINT-LOCK-INVESTIGATION.md)，未读取真实存档、书籍或秘密。
+状态：历史选项分析，基线为 `2dbdb1018d20957cfbde7ca2801a32b7ac913579`。所有者 [2026-11-11 决定](https://github.com/ctrlshiftaltdel/TalkDND/issues/183#issuecomment-6788131462) 选 B/D；A/C 和第 6 节原推荐保留作历史，不是当前选择或实现授权。本文不是安全保证；下文候选机制不等于已实现。**ADV-P1-2（TASK-0155 / Issue #305）实现状态：** 合成 fixture 上已有 `admit` → `backup` → `candidate` 的库编排，停在「候选已验证、未发布」（`tools/talkdnd/src/advancement_commit.rs`，证据 `tools/talkdnd/tests/advancement_commit.rs`）。这不是 `publish` / 日志与完整性 / `complete` / 显式恢复的实现，也不构成安全保证；真实存档、网络盘、掉电与 Windows 目录持久性仍按实际执行标 `NOT_RUN` / `UNKNOWN`。依据 [成长设计](superpowers/specs/2026-11-10-character-advancement-design.md)、[安全审计](ADVANCEMENT-SAFETY-AUDIT.md) 和 [锁调查](CHECKPOINT-LOCK-INVESTIGATION.md)，未读取真实存档、书籍或秘密。
 
 ## 1. 已批准边界和事实
 
