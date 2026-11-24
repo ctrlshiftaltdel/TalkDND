@@ -48,6 +48,12 @@ struct Fixture {
     state: PathBuf,
 }
 
+/// YAML double quotes treat `\` as an escape. Forward slashes work on Windows
+/// (`C:\\Users\\...` would be parsed as a Unicode escape and fail).
+fn yaml_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 /// A temp copy of the engine fixture campaign plus one real encounter state.
 fn fixture(tag: &str) -> Fixture {
     let root = temp_root(tag);
@@ -360,8 +366,8 @@ fn a_campaign_state_dir_inside_a_protected_save_is_refused() {
     fs::write(
         &campaign,
         format!(
-            "name: Outside\nparty: [striker-a]\nstate_dir: {}\n",
-            state_dir.display()
+            "name: Outside\nparty: [striker-a]\nstate_dir: \"{}\"\n",
+            yaml_path(&state_dir)
         ),
     )
     .unwrap();

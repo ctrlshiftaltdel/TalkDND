@@ -54,6 +54,12 @@ struct Play {
     state: PathBuf,
 }
 
+/// YAML double quotes treat `\` as an escape. Forward slashes work on Windows
+/// (`C:\\Users\\...` would be parsed as a Unicode escape and fail).
+fn yaml_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn play(tag: &str) -> Play {
     let root = temp_root(tag);
     let library = root.join("library");
@@ -69,8 +75,8 @@ fn play(tag: &str) -> Play {
         &campaign,
         format!(
             "name: P1b Fixtures\nlibrary:\n  - \"{}\"\nstate_dir: \"{}\"\nparty:\n  - striker-a\n  - warden-b\n",
-            library.display(),
-            combat.display()
+            yaml_path(&library),
+            yaml_path(&combat)
         ),
     )
     .unwrap();

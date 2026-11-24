@@ -1594,4 +1594,36 @@ mod play_root_tests {
         assert_eq!(out, vec![with.join("combat/goblin.yaml")]);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn campaign_yaml_double_quoted_windows_paths_need_forward_slashes() {
+        // YAML treats `\U` / `\x` in double-quoted scalars as hex escapes, so a
+        // raw Windows path such as CI's `C:\\Users\\...` fails to parse.
+        let dir = std::env::temp_dir().join(format!("cs-yaml-win-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("campaign.yaml");
+
+        let raw = "name: Probe\nlibrary:\n  - \"C:\\Users\\runner\\library\"\nstate_dir: \"C:\\x\\combat\"\n";
+        std::fs::write(&path, raw).unwrap();
+        let err = format!("{:#}", load_manifest(&path).unwrap_err());
+        assert!(
+            err.contains("hexadecimal") && err.contains("quoted scalar"),
+            "{err}"
+        );
+
+        let safe =
+            "name: Probe\nlibrary:\n  - \"C:/Users/runner/library\"\nstate_dir: \"C:/x/combat\"\n";
+        std::fs::write(&path, safe).unwrap();
+        let manifest = load_manifest(&path).expect("forward-slash Windows paths must parse");
+        assert_eq!(
+            manifest.library,
+            vec![PathBuf::from("C:/Users/runner/library")]
+        );
+        assert_eq!(
+            manifest.state_dir.as_deref(),
+            Some(Path::new("C:/x/combat"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
