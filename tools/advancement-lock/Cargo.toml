@@ -2,8 +2,12 @@
 name = "advancement-lock"
 version = "1.6.0"
 edition = "2021"
-description = "Shared TalkDND advancement control files and the cross-CLI transition gate"
+description = "Shared TalkDND advancement control files, transition gate, and SAVE lock"
 license = "MIT"
 publish = false
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"

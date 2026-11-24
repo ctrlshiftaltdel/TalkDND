@@ -51,6 +51,8 @@ struct Fixture {
 /// A temp copy of the engine fixture campaign plus one real encounter state.
 fn fixture(tag: &str) -> Fixture {
     let root = temp_root(tag);
+    fs::write(root.join("AGENTS.md"), "x").unwrap();
+    fs::create_dir_all(root.join("Saves")).unwrap();
     let campaign = root.join("campaign");
     copy_tree(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/engine"),
@@ -157,48 +159,19 @@ fn adopted_save(fixture: &Fixture) -> PathBuf {
 }
 
 #[test]
-fn unadopted_writers_exit_one_and_leave_the_save_untouched() {
-    let fixture = fixture("refuse");
-    let save = adopted_save(&fixture);
-    let before = snapshot(&save);
-    let rows: Vec<_> = WRITERS
+fn combat_sim_has_no_leftover_unadopted_writers() {
+    let leftover: Vec<_> = WRITERS
         .iter()
         .filter(|row| row.cli == Cli::CombatSim && row.class == Class::UnadoptedWrite)
+        .map(|row| row.entry)
         .collect();
-    assert!(rows.len() > 8, "the combat-sim registry looks too small");
-    for row in rows {
-        let args = argv(row, &save);
-        let out = run(&fixture, &save, &argv_refs(&args));
-        let text = output_text(&out);
-        assert_eq!(
-            out.status.code(),
-            Some(1),
-            "{} must exit 1, got {:?}\n{text}",
-            row.entry,
-            out.status.code()
-        );
-        assert!(
-            text.contains("已启用成长协议"),
-            "{}: refusal must name the protocol\n{text}",
-            row.entry
-        );
-        assert!(
-            text.contains("尚未接入成长协议"),
-            "{}: refusal must say the entry is not wired\n{text}",
-            row.entry
-        );
-        assert!(
-            text.contains("未写入任何目标文件"),
-            "{}: refusal must say nothing was written\n{text}",
-            row.entry
-        );
-        assert_eq!(
-            snapshot(&save),
-            before,
-            "{} changed the save tree while refusing",
-            row.entry
-        );
-    }
+    assert!(
+        leftover.is_empty(),
+        "ADV-P1-1b must adopt every combat-sim writer; leftover: {leftover:?}"
+    );
+    assert!(WRITERS
+        .iter()
+        .any(|row| row.cli == Cli::CombatSim && row.class == Class::AdoptedWrite));
 }
 
 #[test]

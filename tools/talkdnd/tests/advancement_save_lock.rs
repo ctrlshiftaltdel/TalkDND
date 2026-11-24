@@ -6,7 +6,7 @@
 //! SAVE lock before writing; if the lock or state is missing, unwritable,
 //! `active` or `in_doubt`, they fail closed and leave the tree unchanged.
 //! Missing SAVE state on a protocol-enabled save is the plan's conservative
-//! temporary handling, documented in the refusal text. Leftover 1b–1e and
+//! temporary handling, documented in the refusal text. Leftover 1c–1e and
 //! `handout build|mark|list --dm` writers still hit the transition gate.
 
 use advancement_lock::{Class, Cli, WRITERS};

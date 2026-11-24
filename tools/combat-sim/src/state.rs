@@ -1680,6 +1680,10 @@ impl EncounterState {
         // write so the tool's own writes are never reported as hand edits.
         // Scratch states outside a save are not tracked, and a failed write
         // must not advance the baseline.
+        // The integrity lock only serializes that manifest update. It is not
+        // content protection: encounter bytes are written first. On a
+        // protocol-enabled save, content writes are constrained by the SAVE
+        // lock held by the calling CLI, not by this lock.
         let save = crate::integrity::save_of_combat_file(path);
         let before = save.as_deref().map(crate::integrity::snapshot);
         crate::fsutil::atomic_write(path, json.as_bytes())

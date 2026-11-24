@@ -205,12 +205,13 @@ pub fn save_dir(explicit: Option<&Path>, campaign: Option<&Path>) -> Option<Path
 /// Append roll-bearing state-command lines to `<save>/rolls.log`. Only lines
 /// with dice notation are kept, so condition/status narration does not flood
 /// the roll log; the state log itself is unchanged.
-pub fn append_combat_lines(save: Option<&Path>, lines: &[String]) {
+pub fn append_combat_lines(save: Option<&Path>, lines: &[String]) -> anyhow::Result<()> {
     for line in lines {
         if looks_like_dice(line) {
-            append_roll(save, "combat", line);
+            append_roll(save, "combat", line)?;
         }
     }
+    Ok(())
 }
 
 fn looks_like_dice(line: &str) -> bool {
@@ -222,9 +223,9 @@ fn looks_like_dice(line: &str) -> bool {
 }
 
 /// Append a roll to `<save>/rolls.log` (same line format as talkdnd).
-pub fn append_roll(save: Option<&Path>, what: &str, text: &str) {
+pub fn append_roll(save: Option<&Path>, what: &str, text: &str) -> anyhow::Result<()> {
     let Some(save) = save else {
-        return;
+        return Ok(());
     };
     let line = format!(
         "- [{}] combat-sim {what}：{}\n",
@@ -232,11 +233,13 @@ pub fn append_roll(save: Option<&Path>, what: &str, text: &str) {
         text.trim()
     );
     let path = save.join("rolls.log");
-    let _ = fs::OpenOptions::new()
+    fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+        .open(&path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()))
+        .map_err(|err| anyhow::anyhow!("追加 {} 失败: {err}", path.display()))?;
+    Ok(())
 }
 
 fn chrono_like_now() -> String {

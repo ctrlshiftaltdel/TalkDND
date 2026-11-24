@@ -167,6 +167,8 @@
   - [ ] `AC-6`: `combat-sim content import-srd-prose` / `content import-srd-pack` / `content import-srd` 的 `--out` 指向存档内时，必须接入 SAVE 或失败关闭拒绝写入；`content pack build|release` 的 `--out` 指向存档内时同样处理；目标在存档外时才可按存档外写入声明。**只有 `content pack build|release` 有 `--dry-run`**，其 dry-run 保持只读；三个 `import-*` 命令没有 dry-run，必须按写者处理。用 `tools/combat-sim/tests/` 的合成测试以合法参数进入实际分支，分别覆盖“out 在存档内”和“out 在存档外”，并把它们纳入提交入口启用前的覆盖门（`ADV-P1-10`）。
   - [ ] `AC-7`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/combat-sim/tests/` 与 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5，并包含 AC-6 的存档内输出目标。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
 
+**交付记录（TASK-0151 / Issue #297）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。SAVE 锁原语从 `talkdnd` 迁入共享 crate `tools/advancement-lock`，两套 CLI 共同依赖；`combat-sim` 不依赖 `talkdnd`。组 B 的 `combat-sim` 写入口（§2.3 状态命令、`new`/`quick`、`party rest|set-hp|sync`、`roll` 的两条分支，以及 `--out` 落在协议存档内的 `content import-*` 与 `content pack build|release`）改为注册表 `AdoptedWrite`，在写目标前取得已有 SAVE 锁 v1（`open` + `check_ordinary_write`），锁不可用时失败关闭且不写目标；`--out` 在存档外时按存档外写入允许；`pack build|release --dry-run` 与 `status`/`scene`/`log`/`simulate`/`party show`/`content list|show|check`/`pack list|show|verify` 保持只读。普通写入仍用 `check_ordinary_write`（不要求目录 sync）；本块不实现 D 提交。证据见 `tools/combat-sim/tests/advancement_save_lock.rs`、`tools/combat-sim/tests/transition_gate.rs` 与既有 `talkdnd` SAVE / 过渡门 / `progress::level_up` 回归。任务状态与证据仍只在 Issue / PR / CI，本文件不设状态列。本块不启用提交入口、不实现 D 流程、不新增 schema/sidecar，也不把 1c–1e 或 §2.7 handout 写入口纳入接入。
+
 ### Task: `ADV-P1-1c` — checkpoint / migrate 写者接入
 
 - **Goal:** 让 `checkpoint snapshot`、`checkpoint restore` 与 `migrate` 在整树读写前取得 SAVE 锁，并保持 `SAVE → checkpoint → integrity` 的总序；只读的 checkpoint 查询与 `migrate --dry-run` 保持只读。
