@@ -1524,6 +1524,58 @@ impl AdvancementLock {
         }
     }
 
+    /// May an adopted ordinary writer (not a D commit) start writing targets?
+    ///
+    /// This is the ADV-P1-1a predicate. It re-reads the on-disk state and
+    /// refuses a missing, unreadable, contradictory, `active` or `in_doubt`
+    /// state, same as [`Self::check_writable`], but it does **not** require
+    /// directory sync: these writers are the existing non-commit commands,
+    /// and `check_writable` would refuse every write on a platform that
+    /// cannot fsync a directory (Windows). A D commit still has to use
+    /// [`Self::check_writable`]. Opening and checking must not write.
+    pub fn check_ordinary_write(&self) -> Result<()> {
+        if self.poisoned {
+            return Err(err(
+                ErrorKind::UnwritableState,
+                "a previous state publish was linked but may not be durable; reopen the lock instead of continuing",
+            ));
+        }
+        self.recheck_lock()?;
+        self.verify_disk_state()?;
+        match self.state.state {
+            State::Ready => Ok(()),
+            State::Complete
+                if self.state.pending.is_empty()
+                    && self.state.published.iter().all(|entry| entry.done) =>
+            {
+                Ok(())
+            }
+            State::Complete => Err(err(
+                ErrorKind::UnwritableState,
+                "complete with a pending intent or an unfinished publish is a contradiction; treat it as in_doubt",
+            )),
+            State::Failed
+                if self.state.published.is_empty()
+                    && self.state.pending.is_empty()
+                    && self.state.stage == Stage::StoppedBeforeWrite =>
+            {
+                Ok(())
+            }
+            State::Failed => Err(err(
+                ErrorKind::UnwritableState,
+                "failed records published or intended work; treat it as in_doubt",
+            )),
+            State::Active => Err(err(
+                ErrorKind::UnwritableState,
+                "a previous operation never finished (active); a human must recover from the D backup",
+            )),
+            State::InDoubt => Err(err(
+                ErrorKind::UnwritableState,
+                "the previous operation published partially or is unknown (in_doubt); a human must recover from the D backup",
+            )),
+        }
+    }
+
     /// Snapshot the previous state, then move to `active`/`admit`.
     ///
     /// `evidence_root` is the caller's trusted, already existing and synced

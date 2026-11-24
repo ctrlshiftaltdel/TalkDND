@@ -50,7 +50,7 @@ pub struct Ledger {
 pub enum Cmd {
     /// Register a new entity (name/alias conflicts are rejected)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Add {
         /// npc | location | faction | quest | item
         #[arg(long = "type")]
@@ -80,7 +80,7 @@ pub enum Cmd {
     Show { id: String },
     /// Rename an entity (the old name becomes an alias)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Rename {
         /// Entity id or name
         id: String,
@@ -89,7 +89,7 @@ pub enum Cmd {
     },
     /// Retire an entity (the record is kept)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Retire { id: String },
 }
 
