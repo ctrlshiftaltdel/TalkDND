@@ -620,7 +620,16 @@ pub fn init_with_deviation(save: &Path, deviation: &Deviation) -> Result<()> {
     write_meta(save, &meta)
 }
 
+/// Write `save-meta.yaml`. On a protocol-enabled save the caller must already
+/// hold SAVE; this helper fails closed before rewriting the file. Saves
+/// without the protocol (including `talkdnd new` / [`init`] /
+/// [`init_with_deviation`]) keep writing as before.
 pub(crate) fn write_meta(save: &Path, meta: &SaveMeta) -> Result<()> {
+    if ::advancement_lock::has_protocol(save) && !::advancement_lock::is_save_lock_held(save) {
+        bail!(
+            "协议违规：在取得 SAVE 锁之前写入 save-meta.yaml；总序必须是先持有 SAVE 再写 schema 元数据。未写入任何目标文件"
+        );
+    }
     // Fail closed on any programmatic write too, not only on serde load.
     meta.settings.automation.check()?;
     let text = format!(
@@ -1507,23 +1516,33 @@ const CONTROL_FILES: [&str; 4] = [
     crate::advancement_lock::STATE_FILE,
 ];
 
+/// Cache / derived files at the save root (decision #292): atomic-written
+/// control metadata, never part of a user-data backup. Nested files with the
+/// same name are ordinary user data.
+const CACHE_FILES: [&str; 2] = ["digest.md", "secret-terms.cache.json"];
+
 fn is_control_file(name: &std::ffi::OsStr) -> bool {
     name.to_str().is_some_and(|n| CONTROL_FILES.contains(&n))
+}
+
+fn is_cache_file(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|n| CACHE_FILES.contains(&n))
 }
 
 fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     copy_tree_at(src, dest, true)
 }
 
-/// `at_root` limits the runtime-control-file exclusion to the save root: a
-/// nested file that merely shares one of those names is user data and must be
-/// backed up like any other file.
+/// `at_root` limits the runtime-control-file and cache-file exclusion to the
+/// save root: a nested file that merely shares one of those names is user
+/// data and must be backed up like any other file. Existing user backups
+/// (`checkpoints/`) are user data and are copied.
 fn copy_tree_at(src: &Path, dest: &Path, at_root: bool) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("create {}", dest.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
         let name = entry.file_name();
-        if (at_root && is_control_file(&name))
+        if (at_root && (is_control_file(&name) || is_cache_file(&name)))
             || name == BACKUP_DIR
             || name == ".cache"
             || name == ".talkdnd"
@@ -2566,6 +2585,20 @@ mod tests {
         }
         fs::create_dir_all(save.join(".cache")).unwrap();
         fs::write(save.join(".cache/digest.md"), "cache\n").unwrap();
+        fs::write(save.join("digest.md"), "root digest\n").unwrap();
+        fs::write(save.join("secret-terms.cache.json"), "{\"terms\":[]}\n").unwrap();
+        fs::write(save.join("combat/nested/digest.md"), "nested digest\n").unwrap();
+        fs::write(
+            save.join("combat/nested/secret-terms.cache.json"),
+            "nested cache\n",
+        )
+        .unwrap();
+        fs::create_dir_all(save.join("checkpoints/user-cp")).unwrap();
+        fs::write(
+            save.join("checkpoints/user-cp/manifest.yaml"),
+            "id: user-cp\n",
+        )
+        .unwrap();
         match crate::advancement_lock::init(
             &root,
             &save,
@@ -2621,6 +2654,14 @@ mod tests {
             );
         }
         assert!(!backup.join(".cache").exists());
+        assert!(
+            !backup.join("digest.md").exists(),
+            "root digest.md leaked into the migration backup"
+        );
+        assert!(
+            !backup.join("secret-terms.cache.json").exists(),
+            "root secret-terms.cache.json leaked into the migration backup"
+        );
         for (rel, bytes) in nested {
             assert_eq!(
                 fs::read(backup.join(rel)).unwrap(),
@@ -2628,6 +2669,19 @@ mod tests {
                 "{rel} is missing from the migration backup"
             );
         }
+        assert_eq!(
+            fs::read(backup.join("combat/nested/digest.md")).unwrap(),
+            b"nested digest\n"
+        );
+        assert_eq!(
+            fs::read(backup.join("combat/nested/secret-terms.cache.json")).unwrap(),
+            b"nested cache\n"
+        );
+        assert_eq!(
+            fs::read(backup.join("checkpoints/user-cp/manifest.yaml")).unwrap(),
+            b"id: user-cp\n",
+            "existing user backups (checkpoints/) must stay in the migration backup"
+        );
         assert!(backup.join("combat/nested/state.txt").is_file());
         assert!(backup.join("Sessions/2030-06-01-session-00.md").is_file());
         drop(held);
@@ -2688,6 +2742,82 @@ mod tests {
         );
         assert_eq!(meta(&save).schema, 7);
         assert_eq!(fs::read(save.join("save-meta.yaml")).unwrap(), meta_before);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// ADV-P1-1e: `write_meta` itself requires SAVE on a protocol save. Without
+    /// the lock it fails closed, leaves existing `save-meta.yaml` bytes
+    /// unchanged, and does not create lock/state or write probes. The same
+    /// write succeeds while SAVE is already held. A save without the protocol
+    /// keeps writing and does not auto-init.
+    #[test]
+    fn write_meta_on_a_protocol_save_requires_save_and_does_not_rewrite() {
+        let root = root("write-meta-save");
+        let save = root.join("Saves/slot");
+        fs::create_dir_all(save.join("Sessions")).unwrap();
+        fs::write(save.join("Sessions/log.md"), "# log\n").unwrap();
+        init(&save).unwrap();
+        let meta_path = path(&save);
+        match ::advancement_lock::init(&root, &save, &::advancement_lock::InitOptions::new()) {
+            Ok(_) => {}
+            Err(err) if err.kind() == ::advancement_lock::ErrorKind::StatePublishedNotDurable => {}
+            Err(err) => panic!("init protocol: {err}"),
+        }
+        let lock_path = ::advancement_lock::lock_path(&save);
+        let state_path = ::advancement_lock::state_path(&save);
+        let before_meta = fs::read(&meta_path).unwrap();
+        let before_lock = fs::read(&lock_path).unwrap();
+        let before_state = fs::read(&state_path).unwrap();
+        let names_before: BTreeSet<_> = fs::read_dir(&save)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+
+        let mut changed = load(&save).unwrap().unwrap();
+        changed.settings.dice_display = !changed.settings.dice_display;
+        let err = write_meta(&save, &changed).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("协议违规") && text.contains("未写入任何目标文件"),
+            "{text}"
+        );
+        assert_eq!(fs::read(&meta_path).unwrap(), before_meta);
+        assert_eq!(fs::read(&lock_path).unwrap(), before_lock);
+        assert_eq!(fs::read(&state_path).unwrap(), before_state);
+        let names_after: BTreeSet<_> = fs::read_dir(&save)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names_after, names_before, "write_meta wrote a probe");
+
+        let held = ::advancement_lock::open(&root, &save, &::advancement_lock::OpenOptions::new())
+            .unwrap();
+        held.check_ordinary_write().unwrap();
+        let lock_meta = fs::symlink_metadata(&lock_path).unwrap();
+        assert!(lock_meta.is_file());
+        write_meta(&save, &changed).unwrap();
+        drop(held);
+
+        assert_ne!(fs::read(&meta_path).unwrap(), before_meta);
+        assert_eq!(
+            load(&save).unwrap().unwrap().settings.dice_display,
+            changed.settings.dice_display
+        );
+        assert_eq!(fs::read(&lock_path).unwrap(), before_lock);
+        assert_eq!(fs::read(&state_path).unwrap(), before_state);
+
+        let plain = root.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        init(&plain).unwrap();
+        assert!(path(&plain).is_file());
+        assert!(!plain.join(::advancement_lock::LOCK_FILE).exists());
+        assert!(!plain.join(::advancement_lock::STATE_FILE).exists());
+        let mut plain_meta = load(&plain).unwrap().unwrap();
+        plain_meta.settings.dice_display = false;
+        write_meta(&plain, &plain_meta).unwrap();
+        assert!(!load(&plain).unwrap().unwrap().settings.dice_display);
+        assert!(!plain.join(::advancement_lock::LOCK_FILE).exists());
+        assert!(!plain.join(::advancement_lock::STATE_FILE).exists());
         let _ = fs::remove_dir_all(&root);
     }
 

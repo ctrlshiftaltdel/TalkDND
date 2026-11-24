@@ -1,17 +1,17 @@
 # 新版本存档写者盘点（ADV-P1-1 第一步）
 
-> 状态：**静态盘点**，另见 §5.1 的接入状态。本文的 §2 行号仍以 §0 的基线为准，不改命令业务语义、不迁移存档、不读取真实存档、书籍或秘密。§5.1 记录跨 CLI 过渡门与写者注册表的当前状态（`ADV-P1-1pre` 交付过渡门，`ADV-P1-1a` 将组 A 接入 SAVE 锁），注册表以代码为准。
+> 状态：**静态盘点**，另见 §5.1 的接入状态。本文的 §2 行号仍以 §0 的基线为准，不改命令业务语义、不迁移存档、不读取真实存档、书籍或秘密。§5.1 记录跨 CLI 过渡门与写者注册表的当前状态（`ADV-P1-1pre` 交付过渡门，`ADV-P1-1a`–`ADV-P1-1e` 按组接入），注册表以代码为准。
 > 基线：`main` 的 `63cf4fe9317f1385317ab606f37a7a0c23550f76`（TASK-0148 派发时）；行号与行为以该提交的公开源码为准。
 > 依据：[首阶段计划](ADVANCEMENT-PHASE-1-PLAN.md)、[锁设计](ADVANCEMENT-LOCK-DESIGN.md) §1/§2、[安全审计](ADVANCEMENT-SAFETY-AUDIT.md)、[身份契约](ADVANCEMENT-IDENTITY-CONTRACT.md) §5、#279、#281、#285。
 > 标记约定：**事实** = 当前公开代码/测试可直接读出；**推断** = 由静态事实推出、未实测；**UNKNOWN** = 本次不能判定，不等于安全。现有测试通过**不是**锁安全证据；#264 未解决前，任何“现有锁已够用”的结论都不成立。
 
 ## 0. 结论摘要（只写事实与限制）
 
-1. **组 A 的 `talkdnd` 写入口已接入 SAVE 锁；其余写入口仍未接入。** `tools/talkdnd/src/advancement_lock.rs` 的 SAVE 锁 v1 已存在；自 `ADV-P1-1a` 起，盘点 §2.1、§2.2、§2.6 中会写存档的 `talkdnd` 入口（含 `start`；`new` 仍只创建新槽）在写目标前取得该锁，锁不可用时失败关闭且不写目标。`ADV-P1-1pre` 的过渡门仍然拒绝尚未接入的写入口（1b–1e 与 `combat-sim`，以及 `handout list --dm`/`build`/`mark`）。**没有提交/预览调用方，也未启用 D 协议或 schema 11**（事实）。见 §5.1。
+1. **组 A–D 的写入口与 `migrate::write_meta` 已接入 SAVE 锁；剩余未接入写入口仍走过渡门。** `tools/talkdnd/src/advancement_lock.rs` 的 SAVE 锁 v1 已存在；自 `ADV-P1-1a` 起，盘点 §2.1、§2.2、§2.6 中会写存档的 `talkdnd` 入口（含 `start`；`new` 仍只创建新槽）在写目标前取得该锁，锁不可用时失败关闭且不写目标。`ADV-P1-1e` 让协议存档上的 `save-meta.yaml` 只在已持有 SAVE 时由 `write_meta` 写入。`ADV-P1-1pre` 的过渡门仍然拒绝 `checkpoint <text>` 与 `handout list --dm`/`build`/`mark`。**没有提交/预览调用方，也未启用 D 协议或 schema 11**（事实）。见 §5.1。
 2. **现有两把锁都不保护角色/party/进度/日志内容。** checkpoint 的 `.talkdnd.lock` 只用于 `checkpoint snapshot` / `checkpoint restore`，且不是 OS 锁；完整性 `.talkdnd.integrity.lock` 只在 `integrity.yaml` 的读改写期间持有。它们**不能**阻止两个写者先后写同一 `sheets/*.yaml`、`Characters/*.md`、`combat/party-state.yaml`、`progress.yaml`、`rolls.log` 或 `Sessions/*.md`（事实；#264 未解决）。
 3. **写存档的入口远多于旧 `progress::level_up`。** 除结构化与 Markdown 两条升级路径外，角色卡 `char`、建卡/同伴、XP/钱袋、场景、识别/揭示/原创/实体/关系/世界时间/记忆/设置、checkpoint/migrate、日志与完整性、`start`/`new`、以及 `combat-sim` 的遭遇与 party 命令都会写存档内文件。本文按组逐项列出。
 4. **只读路径必须按命令而不是按模块判断。** `guard` 与 `secret list` 会写 `secret-terms.cache.json`，不得列为只读；`char show` 会走 `charsheet::run` 的 `commit()`，不是只读；`char <who> spells` 的普通视图才在 `commit()` 之前提前返回。`adventure index build` 可在存档内写 `structured.json`，也不是只读。
-5. **未来目标大多尚不存在。** schema 11、选择 sidecar、候选树、恢复工作证据与逐文件发布目标**未实现**；`admit` 操作前快照库代码已实现（`advancement_lock.rs:1787-1815`）并有合成子集，但**无 CLI/提交调用方**；当前只有 `save-meta.yaml`（`migrate::write_meta`）是既有的 schema 元数据写者。不得把本文的“建议接入”读成“已接入”。
+5. **未来目标大多尚不存在。** schema 11、选择 sidecar、候选树、恢复工作证据与逐文件发布目标**未实现**；`admit` 操作前快照库代码已实现（`advancement_lock.rs:1787-1815`）并有合成子集，但**无 CLI/提交调用方**；当前只有 `save-meta.yaml`（`migrate::write_meta`）是既有的 schema 元数据写者，协议存档上必须已持有 SAVE。选择 sidecar 与主 schema 元数据将由 `ADV-P1-6` 按 `ADV-P1-4` 注册为发布目标；本块只记录归属，不得声称 sidecar / schema 11 已覆盖。不得把本文的“建议接入”读成“已接入”。
 
 ## 1. 盘点字段与“并发”口径
 
@@ -121,17 +121,17 @@
 
 | 命令 / 代码定位 | 写入对象 | 现有锁 | 可与成长提交并发 | 建议接入 | 未接入时的行为 | 备注 |
 |---|---|---|---|---|---|---|
-| `talkdnd guard`：`secret::guard_terms`（`secret.rs:493`）→ `collect`（`secret.rs:458`）→ `store_cache`（`secret.rs:237`） | `secret-terms.cache.json` | 无 | 否（缓存不在 D 发布目标；但会读半提交状态） | **SAVE 锁**（保守）或改为不写缓存（`NEEDS_HUMAN_DECISION`） | 首次/失效时收集秘密词并写缓存；`guard` 本身不改角色/进度。 | **不得列为只读**；#285 已提醒 `guard` 会写缓存。 |
-| `talkdnd secret list`：`list_lines`（`secret.rs:145`）→ `collect` → `store_cache` | `secret-terms.cache.json` | 无 | 否（缓存） | **SAVE 锁**（保守）或改为不写缓存（`NEEDS_HUMAN_DECISION`） | 列词时可能写缓存。 | 与 `guard` 同一缓存路径；不得列为只读。 |
-| `talkdnd start` 的 `digest.md` / `.cache/`：`start.rs:798` / `start.rs:93` | `digest.md`、`.cache/` | 无 | 否（缓存/派生；不在 D 发布目标） | **SAVE 锁**（随 `start`）或声明为控制元数据 | 每次 `start` 重写 digest 与缓存。 | 设计上属于控制元数据；清理责任未定。 |
+| `talkdnd guard`：`secret::guard_terms`（`secret.rs:493`）→ `collect`（`secret.rs:458`）→ `store_cache`（`secret.rs:237`） | `secret-terms.cache.json` | 无 | 否（缓存不在 D 发布目标；但会读半提交状态） | **控制元数据**（#292 / `ADV-P1-1e`：不取 SAVE 锁、不进用户数据备份） | 首次/失效时收集秘密词并写缓存；`guard` 本身不改角色/进度。 | **不得列为只读**；#285 已提醒 `guard` 会写缓存。分类见 §5.1。 |
+| `talkdnd secret list`：`list_lines`（`secret.rs:145`）→ `collect` → `store_cache` | `secret-terms.cache.json` | 无 | 否（缓存） | **控制元数据**（#292 / `ADV-P1-1e`：不取 SAVE 锁、不进用户数据备份） | 列词时可能写缓存。 | 与 `guard` 同一缓存路径；不得列为只读。分类见 §5.1。 |
+| `talkdnd start` 的 `digest.md` / `.cache/`：`start.rs:798` / `start.rs:93` | `digest.md`、`.cache/` | 无 | 否（缓存/派生；不在 D 发布目标） | **控制元数据**（随 `talkdnd:start` 接入；不单独取 SAVE 锁） | 每次 `start` 重写 digest 与缓存。 | 用户数据/迁移取 SAVE 锁；锁不可用时整条命令拒绝，也不写 digest/缓存。清理责任未定。 |
 
 ### 2.9 未来目标（尚不存在）
 
 | 目标 | 当前事实 | 现有锁 | 可与成长提交并发 | 建议接入 | 未接入时的行为 | 备注 |
 |---|---|---|---|---|---|---|
-| `save-meta.yaml`（schema 元数据） | 当前写者 `migrate::write_meta`（`migrate.rs:623`），由 `init`/`ensure`/设置写入 | 无保存级锁 | **是**（D 未来主 schema 元数据目标） | **SAVE 锁** | 直接原子写；`ensure` 先备份再写。 | 既有文件；不是“未来才出现”，但未来会作为成长提交的发布目标。 |
-| 选择 sidecar（身份/选择） | **不存在**；无字段、路径、随机源或写入代码 | 无 | **是（设计目标）** | **SAVE 锁** + 由 `ADV-P1-4` 注册为发布目标 | 无写入路径；不得声称已保护。 | 具体方案未授权；由 `ADV-P1-6` 落地，`ADV-P1-10` 接线。 |
-| schema 11 元数据 | **未实现**；`CURRENT_SCHEMA` 为 10 | 无 | **是（设计目标）** | **SAVE 锁**（随迁移/提交） | 9/10→11 迁移未实现；未来/未知 schema 拒绝。 | 不得写成已完成。 |
+| `save-meta.yaml`（schema 元数据） | 当前写者 `migrate::write_meta`（`migrate.rs:623`），由 `init`/`ensure`/设置写入 | 协议存档上 `write_meta` 本身要求已持有 SAVE（`ADV-P1-1e`）；未初始化存档无保存级锁 | **是**（D 未来主 schema 元数据目标） | **SAVE 锁** | 协议存档上未持有 SAVE 则失败关闭且不改写既有字节；未初始化存档仍直接原子写；`ensure` 先备份再写。 | 既有文件；不是“未来才出现”。作为成长提交的发布目标，将由 `ADV-P1-6` 按 `ADV-P1-4` 注册；本块只给既有写者加守卫，不声称 D 协议已覆盖。 |
+| 选择 sidecar（身份/选择） | **不存在**；无字段、路径、随机源或写入代码 | 无 | **是（设计目标）** | **SAVE 锁** + 由 `ADV-P1-4` 注册为发布目标 | 无写入路径；不得声称已保护。 | 具体方案未授权；将由 `ADV-P1-6` 按 `ADV-P1-4` 注册并落地，`ADV-P1-10` 接线。本块只记录归属，不创建 sidecar、不新增字段或路径、不发明注册表键。 |
+| schema 11 元数据 | **未实现**；`CURRENT_SCHEMA` 为 10 | 无 | **是（设计目标）** | **SAVE 锁**（随迁移/提交） | 9/10→11 迁移未实现；未来/未知 schema 拒绝。 | 不得写成已完成。将由 `ADV-P1-6` 按 `ADV-P1-4` 注册；本块不新增 schema 11。 |
 | `admit` 操作前快照（prestate） | 库代码已实现（`advancement_lock.rs:1787-1815`），有合成子集；**无 CLI/提交调用方** | 无 | **是（设计目标）** | **SAVE 锁** + 控制元数据单独保留 | 无 CLI 写入路径；不得声称已接线或已保护。 | 控制元数据不并入用户数据完整备份（OD-7）；保留期未定。 |
 | 候选树 / 恢复工作证据 | **不存在**（锁设计 §2.9 仅为设计；恢复工作证据未实现） | 无 | **是（设计目标）** | **SAVE 锁** + 控制元数据单独保留 | 无写入路径。 | 控制元数据不并入用户数据完整备份（OD-7）；保留期未定。 |
 | D 完整备份目录 | 当前 `migrate::backup_save` / checkpoint restore 备份已存在；D 的“完整备份”未实现 | 无（名称非原子分配） | **是**（整树复制与 D 发布冲突） | **SAVE 锁** | 现有备份不是锁内快照；特殊文件报错中止。 | 不得把“备份目录存在”当成完整备份。 |
@@ -149,7 +149,7 @@
 | `talkdnd adventure search`（`adventure::search`） | #281 移出 `tracked`（`lib.rs:732`）；只读。 | `None`（#281） | 不写日志。 |
 | `talkdnd adventure index show/search`（`bookindex::run` Show/Search） | #281 移出 `tracked`（`lib.rs:729`）；只读。 | `None`（#281） | `index build` 不是只读（§2.6）。 |
 | `talkdnd adventure section --list` | `adventure::section` 的 `list` 分支只列标题；不写日志。 | `tracked`（`Section` 保留） | 非 `--list` 且超前/DM-only 带 `--reason` 会写日志（§2.6），不能整组声明只读。 |
-| `talkdnd log rolls`（`lib.rs:1220`） | `rolls::show` 只读 `rolls.log`。 | `tracked` | 不追加。 |
+| `talkdnd log rolls`（`lib.rs:1220`） | `rolls::show` 只读 `rolls.log`。 | `None`（ADV-P1-1d：整个 CLI 运行整树字节一致） | 不追加。 |
 | `talkdnd xp show`（`progress::xp_show`，`progress.rs:447`） | 仅 `check::sheets` + `Progress::load`。 | `tracked`（#285 未闭合） | 只读。 |
 | `talkdnd loot show`（`progress::loot_show`，`progress.rs:1246`） | 仅 `Progress::load`。 | `tracked` | 只读。 |
 | `talkdnd memory list`（`memory::run` List，`memory.rs:195`） | 仅 `load`。 | `tracked`（#285 未闭合） | 只读。 |
@@ -204,7 +204,7 @@
 | `progress.yaml` | `level-up --milestone`、`xp add`、`loot`、`scene`、`chargen confirm` | 无锁；与日志两步非事务。 |
 | 追加日志（`Sessions/*.md`、`rolls.log`） | 几乎所有写命令与 `combat-sim` | 追加可交错；重复请求重复追加；无操作 ID 去重。 |
 | `integrity.yaml` | 所有 `tracked` 命令的 `after_command`、`party/state save`、`migrate`、`restore_rebaseline`、`integrity accept` | 完整性锁只保护清单本身，不保护内容；clean 时可能重写 baseline 日期。 |
-| 未来 sidecar / `save-meta.yaml` | `save-meta.yaml` 由 `migrate::write_meta`；sidecar 不存在 | 未来目标必须由 `ADV-P1-4` 注册并纳入 D 协议；当前不得声称已保护。 |
+| 未来 sidecar / `save-meta.yaml` | `save-meta.yaml` 由 `migrate::write_meta`（协议存档上要求 SAVE）；sidecar 不存在 | 既有 `save-meta.yaml` 写者已加 SAVE 守卫。选择 sidecar 与主 schema 元数据将由 `ADV-P1-6` 按 `ADV-P1-4` 注册并纳入 D 协议；当前不得声称 sidecar / schema 11 已保护。 |
 | 存档内任意 `--out` 内容文件 | `combat-sim content import-srd-prose`、`content import-srd-pack`、`content import-srd`、`content pack build/release` | 可能写进 D 目标或未知路径；目标在存档内时必须 SAVE 或拒绝写入（`ADV-P1-1b` AC-6）。 |
 
 ## 5. 建议接入分组（对应计划子块）
@@ -220,16 +220,16 @@
 
 分组只表示接入顺序，不表示组内每个入口已经安全；每组必须逐条验收。
 
-### 5.1 过渡门与接入状态（`ADV-P1-1pre` / `ADV-P1-1a` / `ADV-P1-1b` / `ADV-P1-1c` / `ADV-P1-1d`）
+### 5.1 过渡门与接入状态（`ADV-P1-1pre` / `ADV-P1-1a` / `ADV-P1-1b` / `ADV-P1-1c` / `ADV-P1-1d` / `ADV-P1-1e`）
 
-`ADV-P1-1pre` 交付了一个共享的**过渡门**：存档存在 `.talkdnd.advancement.lock` 或 `.talkdnd.advancement.state` 时，尚未接入成长协议的写存档入口失败关闭（退出码 1、明确文案、不写目标），只读入口保持可用。`ADV-P1-1a` 将组 A（§2.1、§2.2、§2.6 的 `talkdnd` 写入口，含 `start`）从“过渡门拒绝”改为“已接入 SAVE 锁”。`ADV-P1-1b` 将组 B（§2.3 的 `combat-sim` 状态/`new`/`quick`/`party rest|set-hp|sync`/`roll`，以及 §2.7 中 `--out` 可能落入存档的 `content import-*` 与 `content pack build|release`）同样改为“已接入 SAVE 锁”，并把 SAVE 锁原语从 `talkdnd` 迁入共享 crate `tools/advancement-lock`（两套 CLI 共同依赖；`combat-sim` 不依赖 `talkdnd`）。这些入口在写目标前取得已有的 SAVE 锁 v1（`open` + `check_ordinary_write`），锁不可用（state 缺失、不可写、`active` 或 `in_doubt`）时失败关闭且不写目标。缺失 SAVE state 时的拒绝是接入期的保守处理，不自动 `init`。`--out` 在存档外时按存档外写入允许；`pack build|release --dry-run` 只读。`ADV-P1-1c` 将组 C 的 `checkpoint snapshot` / `checkpoint restore` / `migrate`（非 `--dry-run`）改为“已接入 SAVE 锁”，总序为 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`；`checkpoint list|show` 与 `migrate --dry-run` 保持只读，整个 CLI 运行前后整树字节一致，且不因接入而创建 lock/state 或写探针。`ADV-P1-1d` 将组 D 的 `log <text>`、`check`（含无参数）、`integrity status`、`integrity accept` 改为“已接入 SAVE 锁”。这些入口可能创建或改写 `integrity.yaml`，按写入处理。`run()` 持有 SAVE 直至 `audit::after_command` 结束；协议存档上 `audit` / `after_command` / `accept` 在取完整性锁之前要求 SAVE 已持有，否则不改写清单。`log rolls` 保持只读，整个 CLI 运行前后整树字节一致。日志追加（`save::append`、`rolls::append`、`player::append_*`）在协议存档上未持有 SAVE 时拒绝，既有行不截断。`checkpoint <text>` 仍走过渡门。**没有启用提交入口、没有新增 schema/sidecar、没有实现 D 提交。** 1e 与 §2.7 的 `handout list --dm`/`build`/`mark` 仍走过渡门拒绝。#264 结论不变：完整性锁仍只覆盖清单读改写，不约束非协作写者。
+`ADV-P1-1pre` 交付了一个共享的**过渡门**：存档存在 `.talkdnd.advancement.lock` 或 `.talkdnd.advancement.state` 时，尚未接入成长协议的写存档入口失败关闭（退出码 1、明确文案、不写目标），只读入口保持可用。`ADV-P1-1a` 将组 A（§2.1、§2.2、§2.6 的 `talkdnd` 写入口，含 `start`）从“过渡门拒绝”改为“已接入 SAVE 锁”。`ADV-P1-1b` 将组 B（§2.3 的 `combat-sim` 状态/`new`/`quick`/`party rest|set-hp|sync`/`roll`，以及 §2.7 中 `--out` 可能落入存档的 `content import-*` 与 `content pack build|release`）同样改为“已接入 SAVE 锁”，并把 SAVE 锁原语从 `talkdnd` 迁入共享 crate `tools/advancement-lock`（两套 CLI 共同依赖；`combat-sim` 不依赖 `talkdnd`）。这些入口在写目标前取得已有的 SAVE 锁 v1（`open` + `check_ordinary_write`），锁不可用（state 缺失、不可写、`active` 或 `in_doubt`）时失败关闭且不写目标。缺失 SAVE state 时的拒绝是接入期的保守处理，不自动 `init`。`--out` 在存档外时按存档外写入允许；`pack build|release --dry-run` 只读。`ADV-P1-1c` 将组 C 的 `checkpoint snapshot` / `checkpoint restore` / `migrate`（非 `--dry-run`）改为“已接入 SAVE 锁”，总序为 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`；`checkpoint list|show` 与 `migrate --dry-run` 保持只读，整个 CLI 运行前后整树字节一致，且不因接入而创建 lock/state 或写探针。`ADV-P1-1d` 将组 D 的 `log <text>`、`check`（含无参数）、`integrity status`、`integrity accept` 改为“已接入 SAVE 锁”。这些入口可能创建或改写 `integrity.yaml`，按写入处理。`run()` 持有 SAVE 直至 `audit::after_command` 结束；协议存档上 `audit` / `after_command` / `accept` 在取完整性锁之前要求 SAVE 已持有，否则不改写清单。`log rolls` 保持只读，整个 CLI 运行前后整树字节一致。日志追加（`save::append`、`rolls::append`、`player::append_*`）在协议存档上未持有 SAVE 时拒绝，既有行不截断。`checkpoint <text>` 仍走过渡门。**没有启用提交入口、没有新增 schema/sidecar、没有实现 D 提交。** `ADV-P1-1e` 给既有 `migrate::write_meta`（`save-meta.yaml`）加上 SAVE 守卫：协议存档上未持有 SAVE 时失败关闭且不改写既有字节；未初始化存档保持原写入。`write_meta` 是 helper，不是新的 Writer 键，注册表计数不变。`talkdnd:guard` / `talkdnd:secret-list` 与 `start` 的 `digest.md`/`.cache` 仍是 `ControlMetadata`（原子写、不进用户数据备份、不单独取 SAVE 锁；`start` 锁不可用时整条命令拒绝，也不写 digest/缓存）。选择 sidecar 与 schema 11 仍不存在，将由 `ADV-P1-6` 按 `ADV-P1-4` 的注册方式作为发布目标接入；本块只记录归属，不声称已覆盖。用户数据备份（`migrate::copy_tree` 与 checkpoint 整份恢复备份的 `copy_tree`）在存档根目录排除运行控制文件、`.cache`、`digest.md` 与 `secret-terms.cache.json`，仍包含普通用户文件、嵌套同名文件与既有用户备份（`checkpoints/`）。没有 D 备份条目。§2.7 的 `handout list --dm`/`build`/`mark` 仍走过渡门拒绝。#264 结论不变：完整性锁仍只覆盖清单读改写，不约束非协作写者。
 
 **实现位置（代码为准）：**
 
 - 共享 crate `tools/advancement-lock`：控制文件名 `LOCK_FILE`/`STATE_FILE`、`has_protocol`、`enclosing_protocol_dir`、写者注册表 `WRITERS`、分类 `Class`（含 `AdoptedWrite`）、统一拒绝错误 `Refused` 与 `--help` 文案，以及 SAVE 锁原语（`init`/`open`、`check_ordinary_write`、`check_writable`）。普通写入必须用 `check_ordinary_write`（不要求目录 sync，以免 Windows 上拒绝所有普通写入）；D 提交仍应使用 `check_writable`。依赖 `serde`/`serde_json`/`sha2`/`chrono`。
-- `talkdnd`：`tools/talkdnd/src/lib.rs` 的 `gate_entry`（对 `Cmd` 穷尽分类）、`run()` 中的门检查，以及对组 A / 组 C / 组 D `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（`open` + `check_ordinary_write`，持锁至命令后审计结束，不提前释放、不再开第二把）；组 C 在 SAVE 之后再取 checkpoint `.talkdnd.lock`（`checkpoint::hold_lock` / `Lock::acquire`），协议存档上反向获取判为协议违规；组 D 的 `audit` / `after_command` / `accept` 在取完整性锁之前要求 SAVE 已持有（`tools/talkdnd/src/audit.rs`），否则不改写清单；`lib.rs` 的 `tracked` 将 `checkpoint list|show` 与 `log rolls` 显式移出外层审计（`migrate --dry-run` 随 `Cmd::Migrate` 本就不跟踪；`Cmd::Integrity` 本就不跟踪，由 status/accept 自己取完整性锁）；`save::append` 与 `rolls::append` 在协议存档上未持有 SAVE 时拒绝追加；`tools/talkdnd/src/advancement_lock.rs` 再导出共享 crate 的 v1 原语，组 A 行为不变。
+- `talkdnd`：`tools/talkdnd/src/lib.rs` 的 `gate_entry`（对 `Cmd` 穷尽分类）、`run()` 中的门检查，以及对组 A / 组 C / 组 D `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（`open` + `check_ordinary_write`，持锁至命令后审计结束，不提前释放、不再开第二把）；组 C 在 SAVE 之后再取 checkpoint `.talkdnd.lock`（`checkpoint::hold_lock` / `Lock::acquire`），协议存档上反向获取判为协议违规；组 D 的 `audit` / `after_command` / `accept` 在取完整性锁之前要求 SAVE 已持有（`tools/talkdnd/src/audit.rs`），否则不改写清单；`lib.rs` 的 `tracked` 将 `checkpoint list|show` 与 `log rolls` 显式移出外层审计（`migrate --dry-run` 随 `Cmd::Migrate` 本就不跟踪；`Cmd::Integrity` 本就不跟踪，由 status/accept 自己取完整性锁）；`save::append` 与 `rolls::append` 在协议存档上未持有 SAVE 时拒绝追加；`migrate::write_meta` 在协议存档上未持有 SAVE 时拒绝改写 `save-meta.yaml`；`migrate::copy_tree` 与 `checkpoint::copy_tree` / `remove_extras` 仅在存档根目录排除运行控制文件与 `digest.md` / `secret-terms.cache.json`；`tools/talkdnd/src/advancement_lock.rs` 再导出共享 crate 的 v1 原语，组 A 行为不变。
 - `combat-sim`：`tools/combat-sim/src/cli.rs` 的 `gate_entry`、`write_targets`/`content_out_dirs`、`check_transition_gate` 与 `run_cli` 中对组 B `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（同样 `open` + `check_ordinary_write`，持锁至命令与完整性清单更新结束）。`PartyState::save` 与 `EncounterState::save` 仍在写后更新完整性清单，但完整性锁只序列化清单、不再被当作内容保护；内容写入受 SAVE 锁约束。单次状态命令的 `state.save` → `party.save` → 日志追加在 SAVE 内执行，失败时报告已写/未写阶段，不声称多文件原子性。`player::append_roll` / `append_combat_lines` 在协议存档上未持有 SAVE 时拒绝追加。`integrity::lock` 内没有全局 SAVE 检查（否则无协议的单元测试会失败）。`combat-sim` 不依赖 `talkdnd`。
-- 测试：`tools/advancement-lock` 单元测试与 `tests/save_lock.rs`、`tools/talkdnd/tests/transition_gate.rs`、`tools/talkdnd/tests/advancement_save_lock.rs`、`tools/talkdnd/tests/advancement_lock.rs`（经再导出回归原语）、`tools/combat-sim/tests/transition_gate.rs`、`tools/combat-sim/tests/advancement_save_lock.rs`（CLI 测试直接调用真实二进制，不是只测包装函数）。
+- 测试：`tools/advancement-lock` 单元测试与 `tests/save_lock.rs`、`tools/talkdnd/tests/transition_gate.rs`、`tools/talkdnd/tests/advancement_save_lock.rs`、`tools/talkdnd/tests/advancement_lock.rs`（经再导出回归原语）、`tools/talkdnd/src/migrate.rs` 的 `write_meta` / 迁移备份用例、`tools/talkdnd/tests/checkpoint.rs` 的整份恢复备份用例、`tools/combat-sim/tests/transition_gate.rs`、`tools/combat-sim/tests/advancement_save_lock.rs`（CLI 测试直接调用真实二进制，不是只测包装函数）。
 
 **门的语义（两套 CLI 相同）：**
 
@@ -313,13 +313,14 @@
 | §2.8 `guard` | `talkdnd:guard` | `ControlMetadata` | 不适用（只写缓存） |
 | §2.8 `secret list` | `talkdnd:secret-list` | `ControlMetadata` | 不适用（只写缓存） |
 | §2.8 `start` 的 `digest.md`/`.cache` | 归入 `talkdnd:start`（整条命令按写者处理，因为它还会迁移存档内容；控制元数据分类只说明这些文件不单独取 SAVE 锁、将来不并入备份） | — | 随 `talkdnd:start` 接入；锁不可用时不写 digest/缓存 |
-| §2.9 未来目标（sidecar、schema 11、候选树、D 备份） | 无条目 | — | 仍不存在，不声称已覆盖 |
+| §2.9 `save-meta.yaml`（`migrate::write_meta`） | 无独立条目（helper，随调用方） | — | 协议存档上 `write_meta` 本身要求已持有 SAVE；未初始化存档保持原写入 |
+| §2.9 选择 sidecar / schema 11 / 候选树 / D 备份 | 无条目 | — | 仍不存在；sidecar 与主 schema 元数据将由 `ADV-P1-6` 按 `ADV-P1-4` 注册。本块只记录归属，不声称已覆盖 |
 
 **只读条目（同样逐条列入注册表并由测试覆盖）：** `talkdnd:xp-show`、`talkdnd:loot-show`、`talkdnd:memory-list`、`talkdnd:entity-read`、`talkdnd:relation-read`、`talkdnd:time-read`、`talkdnd:settings-read`、`talkdnd:settings-style-read`、`talkdnd:checkpoint-read`、`talkdnd:snapshot-diff`、`talkdnd:migrate-dry-run`、`talkdnd:secret-scan`、`talkdnd:secret-import-dry-run`、`talkdnd:handout-list`（player 视图）、`talkdnd:original-read`、`talkdnd:reveal-read`、`talkdnd:chargen-status`、`talkdnd:chargen-validate`、`talkdnd:char-spells-read`、`talkdnd:adventure-search`、`talkdnd:adventure-index-read`、`talkdnd:adventure-section-read`、`talkdnd:known`、`talkdnd:knowledge`、`talkdnd:oracle`、`talkdnd:options`、`talkdnd:data-status`、`talkdnd:library`、`talkdnd:log-rolls`，以及 `combat-sim:status`、`combat-sim:scene`、`combat-sim:log`、`combat-sim:simulate`、`combat-sim:content-read`、`combat-sim:pack-read`、`combat-sim:party-show`。
 
 **证据与已知限制：**
 
-- 两套 CLI 的真实调用路径测试逐条覆盖上表：写入口在 lock/state 存在时退出 1、文案齐全、存档树逐字节不变；只读入口不被拒绝且整树不变；缓存入口只改缓存；无控制文件时既有写命令照常工作；`new` 在协议存在时仍可创建新槽；`start` 整条被拒绝（不跑 digest/缓存）。
+- 两套 CLI 的真实调用路径测试逐条覆盖上表：写入口在 lock/state 存在时退出 1、文案齐全、存档树逐字节不变；只读入口不被拒绝且整树不变；缓存入口只改缓存；无控制文件时既有写命令照常工作；`new` 在协议存在时仍可创建新槽；`start` 整条被拒绝（不跑 digest/缓存）。`migrate::write_meta` 的 SAVE 守卫证据在 `tools/talkdnd/src/migrate.rs`（`write_meta_on_a_protocol_save_requires_save_and_does_not_rewrite`）；用户数据备份排除根目录控制文件 / `.cache` / `digest.md` / `secret-terms.cache.json`、仍包含 `checkpoints/` 与嵌套同名文件的证据在 `the_migration_backup_excludes_runtime_control_files` 与 `tools/talkdnd/tests/checkpoint.rs::the_restore_backup_excludes_runtime_control_files`。
 - `handout list --dm` 是写者（registry 缺失时 build/store `handouts.yaml`），player 视图只读；`handout show` 与 `list --dm` 的 `--book` 书目录在查找失败前也纳入检查。
 - 最终符号链接用例：受保护存档内 `combat/e.state.json` 指向外部有效 state 时，用未受保护 `--save` 的写命令仍被拒绝；`<save>/rolls.log` 与 `pack release` 目标文件链接到受保护文件时同样拒绝，链接与受保护文件内容不变。
 - `new` 只审计实际创建的存档：更晚日期的旧存档（缺/有 `integrity.yaml`）在新存档创建前后逐字节不变。
