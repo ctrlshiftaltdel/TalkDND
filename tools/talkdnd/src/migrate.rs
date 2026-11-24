@@ -2553,24 +2553,68 @@ mod tests {
         for (rel, bytes) in nested {
             fs::write(save.join(rel), bytes).unwrap();
         }
-        let control = [
+        // Checkpoint and integrity locks can stay planted bytes. Advancement
+        // lock/state must be a real protocol: the migration log goes through
+        // `save::append`, which refuses a protocol save unless SAVE is held.
+        // Dummy advancement bytes cannot be opened.
+        let planted = [
             (".talkdnd.lock", "checkpoint\n"),
             (".talkdnd.integrity.lock", "integrity\n"),
-            (crate::advancement_lock::LOCK_FILE, "advancement lock\n"),
-            (crate::advancement_lock::STATE_FILE, "advancement state\n"),
         ];
-        for (name, bytes) in control {
+        for (name, bytes) in planted {
             fs::write(save.join(name), bytes).unwrap();
         }
         fs::create_dir_all(save.join(".cache")).unwrap();
         fs::write(save.join(".cache/digest.md"), "cache\n").unwrap();
+        match crate::advancement_lock::init(
+            &root,
+            &save,
+            &crate::advancement_lock::InitOptions::new(),
+        ) {
+            Ok(_) => {}
+            Err(err)
+                if err.kind() == crate::advancement_lock::ErrorKind::StatePublishedNotDurable => {}
+            Err(err) => panic!("init protocol: {err}"),
+        }
+        // Snapshot before `open`. Do not `fs::read` the advancement lock file
+        // while SAVE is held: Windows mandatory locks return ERROR_LOCK_VIOLATION.
+        let control = [
+            (
+                ".talkdnd.lock",
+                fs::read(save.join(".talkdnd.lock")).unwrap(),
+            ),
+            (
+                ".talkdnd.integrity.lock",
+                fs::read(save.join(".talkdnd.integrity.lock")).unwrap(),
+            ),
+            (
+                crate::advancement_lock::LOCK_FILE,
+                fs::read(save.join(crate::advancement_lock::LOCK_FILE)).unwrap(),
+            ),
+            (
+                crate::advancement_lock::STATE_FILE,
+                fs::read(save.join(crate::advancement_lock::STATE_FILE)).unwrap(),
+            ),
+        ];
+        let held = crate::advancement_lock::open(
+            &root,
+            &save,
+            &crate::advancement_lock::OpenOptions::new(),
+        )
+        .unwrap();
+        held.check_ordinary_write().unwrap();
+        for (name, _) in &control {
+            let meta = fs::symlink_metadata(save.join(name))
+                .unwrap_or_else(|err| panic!("{name} disappeared while SAVE was held: {err}"));
+            assert!(meta.is_file(), "{name} is no longer a regular file");
+        }
 
         ensure(&save, &root, false).unwrap();
 
         let dirs = backups(&root);
         assert_eq!(dirs.len(), 1, "{dirs:?}");
         let backup = &dirs[0];
-        for (name, _) in control {
+        for (name, _) in &control {
             assert!(
                 !backup.join(name).exists(),
                 "{name} leaked into the migration backup"
@@ -2586,13 +2630,10 @@ mod tests {
         }
         assert!(backup.join("combat/nested/state.txt").is_file());
         assert!(backup.join("Sessions/2030-06-01-session-00.md").is_file());
+        drop(held);
         // The live control files are untouched by the backup.
-        for (name, bytes) in control {
-            assert_eq!(
-                fs::read_to_string(save.join(name)).unwrap(),
-                bytes,
-                "{name} changed"
-            );
+        for (name, bytes) in &control {
+            assert_eq!(fs::read(save.join(name)).unwrap(), *bytes, "{name} changed");
         }
         let _ = fs::remove_dir_all(&root);
     }

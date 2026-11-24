@@ -137,7 +137,7 @@ enum Cmd {
     /// Ability/skill check or saving throw outside combat (modifier from the sheet; logged).
     /// Without arguments: save audit (integrity manifest + log reconciliation)
     ///
-    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。无参数的 `check` 也可能创建清单，不是只读。没有协议文件的存档保持既有行为，不自动初始化。
     Check {
         /// Character id or name (Characters/: PCs and companions; NPCs/: story NPCs)
         #[arg(requires = "what")]
@@ -181,7 +181,7 @@ enum Cmd {
     },
     /// Append one timestamped line to the newest session log
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令的写操作在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写目标文件；`log rolls` 只读仍可用。没有协议文件的存档保持既有行为，不自动初始化。
     Log {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         text: Vec<String>,
@@ -264,7 +264,7 @@ enum Cmd {
     },
     /// Save integrity manifest: status, or accept hand edits with a reason
     ///
-    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
+    /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。`integrity status` 与 `integrity accept` 都可能改写清单，不是只读。没有协议文件的存档保持既有行为，不自动初始化。
     Integrity {
         #[command(subcommand)]
         cmd: IntegrityCmd,
@@ -1110,9 +1110,11 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     }
     let protocol_present = gate_save.as_deref().is_some_and(gate::has_protocol);
     let gate_class = gate::class_of(gate_entry);
-    // ADV-P1-1a: adopted writers take the SAVE lock before any target write.
-    // The lock is held through dispatch and the post-command audit so those
-    // writes stay inside SAVE → checkpoint → integrity. No auto-init.
+    // ADV-P1-1a / 1c / 1d: adopted writers take the SAVE lock before any
+    // target write. The lock is held through dispatch and the post-command
+    // audit (`audit::after_command`) and dropped only after that returns.
+    // Group D (`log`, `check`, `integrity status` / `accept`) uses this same
+    // hold; do not drop it earlier and do not open a second time. No auto-init.
     let save_locks = if gate_class == gate::Class::AdoptedWrite {
         hold_adopted_save_locks(&root, &cli, gate_save.as_deref(), gate_entry)?
     } else {
@@ -1156,13 +1158,18 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         },
         // ADV-P1-1c / #285: list|show must not run the outer after_command
         // audit (whole-CLI tree-identical). `Cmd::Migrate` is already
-        // untracked above, including `--dry-run`. Snapshot, restore, and
-        // `checkpoint <text>` stay on the default arm (the last of those is
-        // still UnadoptedWrite).
+        // untracked above, including `--dry-run`. `Cmd::Integrity` is
+        // untracked above as well (status/accept take the integrity lock
+        // themselves, after SAVE). Snapshot, restore, and `checkpoint <text>`
+        // stay on the default arm (the last of those is still UnadoptedWrite).
         Cmd::Checkpoint {
             cmd: Some(checkpoint::Cmd::List { .. } | checkpoint::Cmd::Show { .. }),
             ..
         } => None,
+        // ADV-P1-1d / #285: `log rolls` is read-only for the whole CLI, not
+        // only inside `rolls::show`. It must not take SAVE, create lock/state
+        // or a write probe, or run the outer audit.
+        Cmd::Log { text } if text.first().is_some_and(|word| word == "rolls") => None,
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
     };
     // Under the protocol a read-only or control-metadata command must not run
@@ -1305,6 +1312,9 @@ fn save_lock_unavailable(
 }
 
 fn print_audit(s: &Path) -> Result<()> {
+    // `audit` requires SAVE already held on a protocol save, then takes the
+    // integrity lock. Callers (`check` with no arguments, `integrity status`)
+    // are AdoptedWrite, so `run` is still holding SAVE here.
     let r = audit::audit(s)?;
     if r.created {
         println!(

@@ -17,7 +17,15 @@ pub fn path(save_dir: &Path) -> PathBuf {
 }
 
 /// Append one roll. `who` and `what` are free text (`Tess`, `perception`).
+/// On a protocol-enabled save the caller must already hold SAVE.
 pub fn append(save_dir: &Path, who: &str, what: &str, text: &str, seeded: bool) -> Result<()> {
+    if ::advancement_lock::has_protocol(save_dir)
+        && !::advancement_lock::is_save_lock_held(save_dir)
+    {
+        anyhow::bail!(
+            "协议违规：在取得 SAVE 锁之前追加 rolls.log；总序必须是先持有 SAVE 再写日志。未写入任何目标文件"
+        );
+    }
     let tag = if seeded { "（测试种子）" } else { "" };
     save::append(
         &path(save_dir),
@@ -75,5 +83,53 @@ mod tests {
         assert_eq!(last(&d, Some(1)).len(), 1);
         assert!(show(&d, Some(5))[1].contains("Quill"));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_protocol_roll_append_requires_save_and_does_not_truncate() {
+        let root = std::env::temp_dir().join(format!(
+            "talkdnd-rolls-proto-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let save = root.join("Saves/slot");
+        fs::create_dir_all(&save).unwrap();
+        fs::write(save.join(FILE), "old-line\n").unwrap();
+        match ::advancement_lock::init(&root, &save, &::advancement_lock::InitOptions::new()) {
+            Ok(_) => {}
+            Err(err) if err.kind() == ::advancement_lock::ErrorKind::StatePublishedNotDurable => {}
+            Err(err) => panic!("init protocol: {err}"),
+        }
+        let before = fs::read(save.join(FILE)).unwrap();
+        let err = append(&save, "Tess", "perception", "1d20(14)+5=19", false).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("协议违规") && text.contains("未写入任何目标文件"),
+            "{text}"
+        );
+        assert_eq!(fs::read(save.join(FILE)).unwrap(), before);
+
+        let held = ::advancement_lock::open(&root, &save, &::advancement_lock::OpenOptions::new())
+            .unwrap();
+        held.check_ordinary_write().unwrap();
+        let _meta = fs::symlink_metadata(::advancement_lock::lock_path(&save)).unwrap();
+        append(&save, "Tess", "perception", "1d20(14)+5=19", false).unwrap();
+        drop(held);
+        let after = fs::read(save.join(FILE)).unwrap();
+        assert!(after.starts_with(&before));
+        assert!(String::from_utf8_lossy(&after).contains("Tess perception"));
+
+        let plain = root.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        append(&plain, "Quill", "attack", "1d20(3)+4=7", false).unwrap();
+        assert!(fs::read_to_string(plain.join(FILE))
+            .unwrap()
+            .contains("Quill"));
+        assert!(!plain.join(::advancement_lock::LOCK_FILE).exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }

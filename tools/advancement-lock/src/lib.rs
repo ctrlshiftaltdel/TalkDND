@@ -700,8 +700,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd check [<who> <what>]",
         "lib.rs::dispatch Cmd::Check; audit.rs::audit; check.rs::run",
         "integrity.yaml, rolls.log, Sessions/*.md",
-        UnadoptedWrite,
-        "audit may create the manifest for an old save; a real check also logs",
+        AdoptedWrite,
+        "adopted (SAVE lock): may create integrity.yaml and a baseline, and a real check also logs; takes SAVE before those writes, then the integrity lock; fails closed and writes nothing when the lock is unavailable",
         &["check"]
     ),
     writer!(
@@ -710,8 +710,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd integrity status",
         "lib.rs::dispatch Cmd::Integrity; lib.rs::print_audit; audit.rs::audit",
         "integrity.yaml",
-        UnadoptedWrite,
-        "first run on an old save creates the manifest and baseline",
+        AdoptedWrite,
+        "adopted (SAVE lock): may create the manifest and baseline (not read-only); takes SAVE before the integrity lock; fails closed and writes nothing when the lock is unavailable",
         &["integrity", "status"]
     ),
     writer!(
@@ -720,8 +720,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd integrity accept --reason",
         "lib.rs::dispatch Cmd::Integrity; audit.rs::accept",
         "integrity.yaml, Sessions/*.md",
-        UnadoptedWrite,
-        "rewrites the manifest baseline and logs the reason",
+        AdoptedWrite,
+        "adopted (SAVE lock): rewrites the manifest baseline and logs the reason; takes SAVE before the integrity lock; fails closed and writes nothing when the lock is unavailable",
         &["integrity", "accept", "--reason", "gate-probe"]
     ),
     writer!(
@@ -780,8 +780,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd log <text>",
         "lib.rs::dispatch Cmd::Log; save.rs::append",
         "Sessions/*.md",
-        UnadoptedWrite,
-        "appends one line to the newest session log",
+        AdoptedWrite,
+        "adopted (SAVE lock): appends one line to the newest session log while SAVE is held; fails closed and writes nothing when the lock is unavailable; does not truncate existing lines",
         &["log", "gate-probe"]
     ),
     writer!(
@@ -791,7 +791,7 @@ pub static WRITERS: &[Writer] = &[
         "lib.rs::dispatch Cmd::Log; rolls.rs::show",
         "none",
         ReadOnly,
-        "prints rolls.log without appending",
+        "prints rolls.log without appending; whole-CLI run is tree-identical under the protocol (tracked = None, no SAVE lock)",
         &["log", "rolls"]
     ),
     writer!(
@@ -1567,7 +1567,7 @@ mod tests {
     fn an_unadopted_writer_is_refused_with_the_shared_message() {
         let dir = temp("refuse");
         fs::write(lock_path(&dir), b"").unwrap();
-        let err = check_save(Some(&dir), "talkdnd:log").expect_err("must refuse");
+        let err = check_save(Some(&dir), "talkdnd:checkpoint-text").expect_err("must refuse");
         let text = err.to_string();
         assert!(text.contains("已启用成长协议"), "{text}");
         assert!(text.contains("尚未接入成长协议"), "{text}");
@@ -1683,7 +1683,7 @@ mod tests {
         assert_eq!(targets.followed, fs::canonicalize(&external).unwrap());
         assert!(check_target(&link, "combat-sim:state-write").is_ok());
         assert!(matches!(
-            check_target(&link, "talkdnd:log"),
+            check_target(&link, "talkdnd:checkpoint-text"),
             Err(GateError::Refused(_))
         ));
 
@@ -1693,7 +1693,7 @@ mod tests {
         std::os::unix::fs::symlink(save.join("combat/party-state.yaml"), &alias).unwrap();
         assert!(check_target(&alias, "combat-sim:party-write").is_ok());
         assert!(matches!(
-            check_target(&alias, "talkdnd:log"),
+            check_target(&alias, "talkdnd:checkpoint-text"),
             Err(GateError::Refused(_))
         ));
         fs::remove_dir_all(&root).unwrap();
@@ -1727,7 +1727,7 @@ mod tests {
             fs::canonicalize(&save).unwrap().join("new-file")
         );
         assert!(matches!(
-            check_target(&start, "talkdnd:log"),
+            check_target(&start, "talkdnd:checkpoint-text"),
             Err(GateError::Refused(_))
         ));
         fs::remove_dir_all(&root).unwrap();
@@ -1741,7 +1741,7 @@ mod tests {
         let b = root.join("b.link");
         std::os::unix::fs::symlink(&b, &a).unwrap();
         std::os::unix::fs::symlink(&a, &b).unwrap();
-        let err = check_target(&a, "talkdnd:log").expect_err("must fail closed");
+        let err = check_target(&a, "talkdnd:checkpoint-text").expect_err("must fail closed");
         assert!(matches!(err, GateError::Unresolved(_)), "{err}");
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1767,7 +1767,7 @@ mod tests {
         // lexically, so the case only exists here.
         let root = temp("unresolvable");
         let target = root.join("missing/../child");
-        let err = check_target(&target, "talkdnd:log").expect_err("must fail closed");
+        let err = check_target(&target, "talkdnd:checkpoint-text").expect_err("must fail closed");
         assert!(matches!(err, GateError::Unresolved(_)), "{err}");
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1785,7 +1785,7 @@ mod tests {
         let relative = Path::new("Saves/x/combat/e.state.json");
         assert!(check_target(relative, "combat-sim:state-write").is_ok());
         assert!(matches!(
-            check_target(relative, "talkdnd:log"),
+            check_target(relative, "talkdnd:checkpoint-text"),
             Err(GateError::Refused(_))
         ));
         std::env::set_current_dir(previous).unwrap();
@@ -1809,7 +1809,10 @@ mod tests {
         )
         .is_ok());
         assert!(matches!(
-            check_target(&save.join("combat/party-state.yaml"), "talkdnd:log"),
+            check_target(
+                &save.join("combat/party-state.yaml"),
+                "talkdnd:checkpoint-text"
+            ),
             Err(GateError::Refused(_))
         ));
         fs::remove_dir_all(&root).unwrap();
@@ -1862,8 +1865,13 @@ mod tests {
         assert!(check_save(Some(&dir), "talkdnd:xp-add").is_ok());
         assert!(check_save(Some(&dir), "talkdnd:start").is_ok());
         assert!(check_save(Some(&dir), "talkdnd:char").is_ok());
+        assert!(check_save(Some(&dir), "talkdnd:log").is_ok());
+        assert!(check_save(Some(&dir), "talkdnd:check").is_ok());
+        assert!(check_save(Some(&dir), "talkdnd:integrity-status").is_ok());
+        assert!(check_save(Some(&dir), "talkdnd:integrity-accept").is_ok());
+        assert!(check_save(Some(&dir), "talkdnd:log-rolls").is_ok());
         assert!(matches!(
-            check_save(Some(&dir), "talkdnd:log"),
+            check_save(Some(&dir), "talkdnd:checkpoint-text"),
             Err(GateError::Refused(_))
         ));
         assert!(check_save(Some(&dir), "combat-sim:state-write").is_ok());

@@ -199,6 +199,8 @@
   - [ ] `AC-5`: 合成测试覆盖锁不可用时的拒绝、日志不重复/不丢失的既有语义，以及清单更新失败不洗掉 dirty 标记。
   - [ ] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 与 `tools/combat-sim/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
 
+**交付记录（TASK-0153 / Issue #301）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。组 D 的 `log <text>`、`check`（含无参数）、`integrity status`、`integrity accept` 改为注册表 `AdoptedWrite`，在写目标前取得已有 SAVE 锁 v1（`open` + `check_ordinary_write`）。`run()` 原有持锁已经覆盖 `audit::after_command`，本块不提前释放、也不再开第二把 SAVE 锁。协议存档上 `audit` / `after_command` / `accept` 在取 integrity `.talkdnd.integrity.lock` 之前要求 SAVE 已持有，否则失败关闭且不改写清单；合成证据在 `tools/talkdnd/src/audit.rs` 与 `tools/talkdnd/tests/advancement_save_lock.rs`。`log rolls` 保持只读，`lib.rs` 的 `tracked` 显式为 `None`，整个 CLI 运行前后整树字节一致，不创建 lock/state 或写探针。`save::append`、`rolls::append` 与 `combat-sim` 的 `player::append_roll` / `append_combat_lines` 在协议存档上未持有 SAVE 时拒绝追加，既有行不截断、不改写；未初始化存档保持原行为。清单更新失败不清除已有 dirty 标记的合成证据在 `tools/combat-sim/src/integrity.rs`。`checkpoint <text>` 与 `handout build` / `handout mark` / `handout list --dm` 仍走过渡门。完整性锁仍只覆盖 `integrity.yaml` 读改写，`integrity::lock` 内没有全局 SAVE 检查。证据另见 `tools/talkdnd/tests/transition_gate.rs` 与既有 1a–1c 回归。任务状态与证据仍只在 Issue / PR / CI，本文件不设状态列。本块不启用提交入口、不实现 D 流程、不新增 schema/sidecar，也不把 1e 纳入接入。#264 结论不变。
+
 ### Task: `ADV-P1-1e` — sidecar / schema 元数据 / 缓存写者接入
 
 - **Goal:** 让既有 `save-meta.yaml` 写者与缓存/派生写入有明确归属：schema 元数据在 SAVE 内写；未来选择 sidecar 由 `ADV-P1-6` 注册到 `ADV-P1-4` 的发布协议；未实现前不得声称这些目标已受保护。
