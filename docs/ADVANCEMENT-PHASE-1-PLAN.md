@@ -246,6 +246,8 @@
   - [ ] `AC-6`: 本块不发布任何目标文件；真实存档、网络盘、掉电与 Windows 目录持久性结论按实际执行标 `NOT_RUN` / `UNKNOWN`。
 - **粒度说明：** `admit`/`backup`/`candidate` 是同一条状态机的连续阶段，单个可验收结果是“候选已验证、未发布”，因此不拆块；块内 AC 仍逐条独立取证。
 
+**交付记录（TASK-0155 / Issue #305）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。合成 fixture 上的 D 编排器 `tools/talkdnd/src/advancement_commit.rs`（`run_to_verified_candidate`）连续执行 `admit` → `backup` → `candidate`，停在「候选已验证、未发布」。`admit` 复用共享 crate 的 `AdvancementLock::begin_operation` / 预态快照，不另起语义；D 路径使用 `check_writable()`，不用 `check_ordinary_write()`。备份在存档外独占创建，覆盖用户数据并包含既有用户备份（`checkpoints/`），根目录控制文件、操作证据与 `#292` 缓存/派生文件不并入该备份；特殊文件或清单/同步失败保留不完整备份并报告阶段与恢复材料，不把「目录存在」当成完整备份。候选在已验证前像上构建，逐文件校验现有 schema / 身份 / 关系 / 目标摘要，跨设备比较函数可注入证明拒绝，未通过校验的候选不标记为已验证。失败注入（备份复制、清单、同步、候选构建与校验）后，目标角色、party、进度、日志与完整性字节与操作前一致。证据见 `tools/talkdnd/tests/advancement_commit.rs` 与 `tools/advancement-lock/tests/save_lock.rs` 的 `record_backup` / `record_candidate_verified`。矩阵：T4d 有 Linux 合成证据（既有 `begin_operation` 快照失败窗口 + 编排器 admit 失败不写 `active`/目标）；T2a 仅证明 admit 后 state 被替换时停止且不发布；T4a/T4e 仅证明留下 `active` 时拒绝普通写入且编排器不自动续跑——都不是分阶段 kill 或掉电。T4b/T5i、真实存档、网络盘、Windows 目录持久性（无目录 sync，`check_writable` 失败关闭）按实际执行保持 `NOT_RUN` / `UNKNOWN`，普通同步错误路径不冒充掉电结论。任务状态与证据仍只在 Issue / PR / CI，本文件 AC 勾选保持 `[ ]`、不新加状态列。本块不启用提交入口、不实现 `publish` / `logs` / `complete` / 显式 `recovery`、不自动续跑、不新增 schema 11 或 sidecar，不修改 #264 结论。
+
 ### Task: `ADV-P1-3` — 新路径内层锁的有界获取（OD-9）
 
 - **Goal:** 让新成长路径在获取内层完整性锁时按批准的默认 5 秒 deadline 有界获取、可显式覆盖、超时失败关闭，同时保留旧完整性锁的无限阻塞语义。
@@ -401,10 +403,10 @@
 |---|---|---|---|
 | 两个协作写者同时提交时恰有一方成功、失败方不写目标 | 多进程竞争（T1），三平台 | `ADV-P1-1a`–`ADV-P1-1e` | `NOT_RUN` |
 | 过渡拒绝门：未接入写者在 lock/state 存在时拒绝 | 过渡拒绝门合成测试（两套 CLI 直接调用） | `ADV-P1-1pre` | 已交付：两套 CLI 直接调用 PASS（Linux 本地，head 与证据见 Issue #293）；Windows/macOS 由该 head 的 CI 记录 |
-| 阶段边界能检出锁/state 被替换并中止 | 路径替换注入（T2a/T2c/T2f1/T2f2） | `ADV-P1-1c`、`ADV-P1-2` | `NOT_RUN` |
-| `admit` 快照失败时不写 `active`、不写目标（含首次操作） | 快照各窗口故障注入（T4d） | `ADV-P1-2` | `NOT_RUN` |
-| 崩溃后不自动续跑，`active`/`in_doubt` 拒绝普通写入 | 分阶段 kill（T4a/T4e） | `ADV-P1-2`、`ADV-P1-4` | `NOT_RUN` |
-| state 原子替换与目录持久窗口的真实行为 | 掉电/同步失败注入（T4b/T5i） | `ADV-P1-2` | `NOT_RUN` |
+| 阶段边界能检出锁/state 被替换并中止 | 路径替换注入（T2a/T2c/T2f1/T2f2） | `ADV-P1-1c`、`ADV-P1-2` | 本块部分交付：合成 fixture 上 admit 之后替换 state，`record_backup` 失败关闭且不发布目标（`state_replaced_after_admit_stops_before_publish`，Linux）。T2c/T2f1/T2f2 与其余路径替换窗口仍为 `NOT_RUN` |
+| `admit` 快照失败时不写 `active`、不写目标（含首次操作） | 快照各窗口故障注入（T4d） | `ADV-P1-2` | 已交付合成证据（Linux）：`tools/advancement-lock/tests/save_lock.rs` 的 `begin_operation` 快照失败窗口，以及 `tools/talkdnd/tests/advancement_commit.rs` 的 admit 失败不写 `active`/目标。Windows 目录持久性因无目录 sync 由 `check_writable` 失败关闭，标 `NOT_RUN`/`UNKNOWN`，不视为通过。真实存档未跑 |
+| 崩溃后不自动续跑，`active`/`in_doubt` 拒绝普通写入 | 分阶段 kill（T4a/T4e） | `ADV-P1-2`、`ADV-P1-4` | 本块部分交付：合成 fixture 证明留下 `active` 时 `check_ordinary_write` 拒绝，编排器不自动续跑且不写目标（`leftover_active_refuses_ordinary_writes_and_is_not_auto_resumed`，Linux）。不是分阶段 kill 或掉电；完整 T4a/T4e（含 `in_doubt`）仍为 `NOT_RUN`，由 `ADV-P1-4` 继续 |
+| state 原子替换与目录持久窗口的真实行为 | 掉电/同步失败注入（T4b/T5i） | `ADV-P1-2` | `NOT_RUN`（本块的 backup 同步注入只是普通错误路径，不作为掉电/目录持久性结论；Windows 目录持久性 `NOT_RUN`/`UNKNOWN`） |
 | 新路径内层锁的有界获取（默认 5 秒、可覆盖、超时失败关闭） | 另一进程长期持有（T6b） | `ADV-P1-3` | `NOT_RUN` |
 | 发布部分失败保留备份与阶段记录、不重复应用 | 每次发布前后 kill、满盘（T7a/T14） | `ADV-P1-4` | `NOT_RUN` |
 | 恢复工作证据与再次中断后的判定 | 恢复各窗口故障注入（T9a/T9b） | `ADV-P1-5` | `NOT_RUN` |

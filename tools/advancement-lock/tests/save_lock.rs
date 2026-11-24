@@ -1688,6 +1688,141 @@ fn run_child(role: &str, dir: &Path) -> String {
     wait_child(spawn_child(role, dir))
 }
 
+// ------------------------------------------------- backup / candidate stage
+
+#[cfg(unix)]
+fn begin_ok(tag: &str) -> (PathBuf, adv::AdvancementLock, PathBuf) {
+    let dir = root(tag);
+    init_ok(&dir);
+    let ev = evidence_root(tag);
+    let ops = ev.join("ops");
+    let mut lock = open_ok(&dir);
+    lock.begin_operation("op-1", &ev, &ops).unwrap();
+    (dir, lock, ev)
+}
+
+#[cfg(unix)]
+fn exclusive_dir(parent: &Path, name: &str) -> PathBuf {
+    let path = parent.join(name);
+    fs::create_dir(&path).unwrap();
+    path
+}
+
+#[cfg(unix)]
+#[test]
+fn record_backup_advances_to_backup_and_stores_forward_slashes() {
+    let (dir, mut lock, ev) = begin_ok("rec-backup");
+    let backup = exclusive_dir(&ev, "backup-1");
+    let as_str = backup.to_str().unwrap();
+    lock.record_backup(as_str).unwrap();
+    assert_eq!(lock.state().stage, adv::Stage::Backup);
+    assert_eq!(lock.state().state, adv::State::Active);
+    let stored = lock.state().backup_dir.clone().unwrap();
+    assert!(!stored.contains('\\'), "{stored}");
+    assert_eq!(stored, as_str.replace('\\', "/"));
+    drop(lock);
+    let on_disk = read_state(&dir);
+    assert_eq!(on_disk.stage, adv::Stage::Backup);
+    assert_eq!(on_disk.backup_dir.as_deref(), Some(stored.as_str()));
+}
+
+#[cfg(unix)]
+#[test]
+fn record_backup_refuses_the_same_directory_twice() {
+    let (_dir, mut lock, ev) = begin_ok("rec-backup-twice");
+    let backup = exclusive_dir(&ev, "backup-1");
+    lock.record_backup(backup.to_str().unwrap()).unwrap();
+    let err = lock
+        .record_backup(backup.to_str().unwrap())
+        .expect_err("same dir");
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(err.detail().contains("not proof"), "{}", err.detail());
+    assert_eq!(lock.state().stage, adv::Stage::Backup);
+}
+
+#[cfg(unix)]
+#[test]
+fn record_backup_redo_uses_a_new_directory_and_clears_a_candidate() {
+    let (_dir, mut lock, ev) = begin_ok("rec-backup-redo");
+    let backup1 = exclusive_dir(&ev, "backup-1");
+    let cand = exclusive_dir(&ev, "candidate-1");
+    lock.record_backup(backup1.to_str().unwrap()).unwrap();
+    lock.record_candidate_verified(cand.to_str().unwrap())
+        .unwrap();
+    assert_eq!(lock.state().stage, adv::Stage::Candidate);
+    let backup2 = exclusive_dir(&ev, "backup-2");
+    lock.record_backup(backup2.to_str().unwrap()).unwrap();
+    assert_eq!(lock.state().stage, adv::Stage::Backup);
+    assert!(lock.state().candidate_dir.is_none());
+    assert!(lock
+        .state()
+        .backup_dir
+        .as_ref()
+        .unwrap()
+        .ends_with("backup-2"));
+}
+
+#[cfg(unix)]
+#[test]
+fn record_candidate_requires_a_verified_backup() {
+    let (_dir, mut lock, ev) = begin_ok("rec-cand-nobak");
+    let cand = exclusive_dir(&ev, "candidate-1");
+    let err = lock
+        .record_candidate_verified(cand.to_str().unwrap())
+        .expect_err("no backup");
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(err.detail().contains("verified backup"), "{}", err.detail());
+    assert!(lock.state().candidate_dir.is_none());
+    assert_eq!(lock.state().stage, adv::Stage::Admit);
+}
+
+#[cfg(unix)]
+#[test]
+fn record_candidate_verified_advances_only_after_a_backup() {
+    let (dir, mut lock, ev) = begin_ok("rec-cand");
+    let backup = exclusive_dir(&ev, "backup-1");
+    let cand = exclusive_dir(&ev, "candidate-1");
+    lock.record_backup(backup.to_str().unwrap()).unwrap();
+    lock.record_candidate_verified(cand.to_str().unwrap())
+        .unwrap();
+    assert_eq!(lock.state().stage, adv::Stage::Candidate);
+    assert_eq!(lock.state().state, adv::State::Active);
+    assert!(lock.state().candidate_dir.is_some());
+    drop(lock);
+    let on_disk = read_state(&dir);
+    assert_eq!(on_disk.stage, adv::Stage::Candidate);
+    assert!(on_disk.published.is_empty());
+    assert!(on_disk.pending.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn record_backup_refuses_a_missing_or_symlinked_directory() {
+    let (_dir, mut lock, ev) = begin_ok("rec-backup-bad");
+    let missing = ev.join("no-such-backup");
+    let err = lock
+        .record_backup(missing.to_str().unwrap())
+        .expect_err("missing");
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    let file = ev.join("not-a-dir");
+    fs::write(&file, b"x").unwrap();
+    let err = lock
+        .record_backup(file.to_str().unwrap())
+        .expect_err("file");
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    let target = exclusive_dir(&ev, "real-backup");
+    let link = ev.join("link-backup");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let err = lock
+        .record_backup(link.to_str().unwrap())
+        .expect_err("symlink");
+    assert_eq!(err.kind(), adv::ErrorKind::InvalidRequest);
+    assert!(lock.state().backup_dir.is_none());
+    assert_eq!(lock.state().stage, adv::Stage::Admit);
+}
+
+// --------------------------------------------------------------- helpers ----
+
 fn wait_child(child: Child) -> String {
     let out = child.wait_with_output().unwrap();
     assert!(
