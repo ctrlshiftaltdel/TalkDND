@@ -495,8 +495,45 @@ fn new_save_id(save_path: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn is_separator(byte: u8) -> bool {
-    byte == b'/' || (cfg!(windows) && byte == b'\\')
+/// Absolute-path spelling used to find the prefix. Windows spellings are
+/// recognized from the encoded bytes so a Unix test host can exercise them:
+/// there `Path::is_absolute` is false for `\\?\C:\...` and `Component::Prefix`
+/// is never produced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AbsoluteSyntax {
+    Unix,
+    Windows,
+}
+
+const fn host_absolute_syntax() -> AbsoluteSyntax {
+    if cfg!(windows) {
+        AbsoluteSyntax::Windows
+    } else {
+        AbsoluteSyntax::Unix
+    }
+}
+
+/// Leading bytes that are the platform prefix plus one physical root separator.
+///
+/// `rooted_by_separator` is false only for a Windows prefix that is itself the
+/// root (`\\server\share`, `\\.\COM1`): nothing after the prefix, and no extra
+/// separator byte. An empty tail is then the root, not a trailing separator.
+struct AbsoluteHead {
+    len: usize,
+    rooted_by_separator: bool,
+}
+
+fn is_windows_sep(byte: u8) -> bool {
+    byte == b'/' || byte == b'\\'
+}
+
+fn tail_is_separator(byte: u8, syntax: AbsoluteSyntax) -> bool {
+    match syntax {
+        AbsoluteSyntax::Unix => byte == b'/',
+        // Verbatim tails keep both separators. The previous scan did too;
+        // only the prefix is special.
+        AbsoluteSyntax::Windows => is_windows_sep(byte),
+    }
 }
 
 /// Reject a path that is not already in one normalized absolute form, and
@@ -506,6 +543,17 @@ fn is_separator(byte: u8) -> bool {
 /// ([`std::ffi::OsStr::as_encoded_bytes`]), never on a lossy UTF-8 rendering: a
 /// name that is not valid UTF-8 must not be able to masquerade as the
 /// replacement-character spelling of another name.
+///
+/// A Windows absolute path starts with a prefix (`C:`, `\\server\share`,
+/// `\\?\C:`, `\\?\UNC\server\share`, `\\.\device`) and, when the separator is
+/// physically present, one root separator. Those leading bytes are skipped
+/// before the empty / `.` / `..` scan. `fs::canonicalize` on Windows returns
+/// `\\?\C:\...`; splitting that whole string treats the second backslash of
+/// `\\?\` as a repeated separator. [`std::path::Path::components`] is not used
+/// for the scan: it drops repeated and trailing separators, which are the
+/// ambiguous spellings this check refuses. The skip length is the same number
+/// of encoded bytes a `Component::Prefix` plus a physical `Component::RootDir`
+/// consume.
 fn check_absolute(path: &Path, what: &str) -> Result<()> {
     if !path.is_absolute() {
         return Err(err(
@@ -513,36 +561,213 @@ fn check_absolute(path: &Path, what: &str) -> Result<()> {
             format!("{what} {} must be an absolute path", path.display()),
         ));
     }
-    let raw = path.as_os_str().as_encoded_bytes();
-    let mut first = true;
-    for segment in raw.split(|byte| is_separator(*byte)) {
-        if first {
-            first = false;
-            // A leading empty segment is the root marker of an absolute path.
-            if segment.is_empty() {
-                continue;
-            }
+    check_absolute_bytes(
+        path.as_os_str().as_encoded_bytes(),
+        what,
+        &path.display(),
+        host_absolute_syntax(),
+    )
+}
+
+fn check_absolute_bytes(
+    raw: &[u8],
+    what: &str,
+    display: &dyn std::fmt::Display,
+    syntax: AbsoluteSyntax,
+) -> Result<()> {
+    let Some(head) = absolute_head(raw, syntax) else {
+        return Err(err(
+            ErrorKind::InvalidRequest,
+            format!("{what} {display} must be an absolute path"),
+        ));
+    };
+    let Some(tail) = raw.get(head.len..) else {
+        return Err(err(
+            ErrorKind::InvalidRequest,
+            format!("{what} {display} must be an absolute path"),
+        ));
+    };
+    if tail.is_empty() {
+        if head.rooted_by_separator {
+            return Err(repeated_or_trailing(what, display));
         }
+        return Ok(());
+    }
+    for segment in tail.split(|byte| tail_is_separator(*byte, syntax)) {
         if segment.is_empty() {
-            return Err(err(
-                ErrorKind::InvalidRequest,
-                format!(
-                    "{what} {} has a repeated or trailing separator; that is an ambiguous second spelling",
-                    path.display()
-                ),
-            ));
+            return Err(repeated_or_trailing(what, display));
         }
         if segment == b"." || segment == b".." {
             return Err(err(
                 ErrorKind::InvalidRequest,
                 format!(
-                    "{what} {} contains a relative segment; v1 refuses an ambiguous path instead of resolving it",
-                    path.display()
+                    "{what} {display} contains a relative segment; v1 refuses an ambiguous path instead of resolving it"
                 ),
             ));
         }
     }
     Ok(())
+}
+
+fn repeated_or_trailing(what: &str, display: &dyn std::fmt::Display) -> Error {
+    err(
+        ErrorKind::InvalidRequest,
+        format!(
+            "{what} {display} has a repeated or trailing separator; that is an ambiguous second spelling"
+        ),
+    )
+}
+
+/// `None` when `raw` is not absolute in `syntax`.
+fn absolute_head(raw: &[u8], syntax: AbsoluteSyntax) -> Option<AbsoluteHead> {
+    match syntax {
+        AbsoluteSyntax::Unix => {
+            if raw.first() == Some(&b'/') {
+                Some(AbsoluteHead {
+                    len: 1,
+                    rooted_by_separator: true,
+                })
+            } else {
+                None
+            }
+        }
+        AbsoluteSyntax::Windows => windows_absolute_head(raw),
+    }
+}
+
+struct WindowsPrefix {
+    len: usize,
+    /// `C:` is not a root by itself. Every other Windows prefix is.
+    implicit_root: bool,
+}
+
+fn windows_absolute_head(raw: &[u8]) -> Option<AbsoluteHead> {
+    let prefix = windows_prefix(raw)?;
+    if prefix.len > raw.len() {
+        return None;
+    }
+    let rest = &raw[prefix.len..];
+    if rest.first().copied().is_some_and(is_windows_sep) {
+        Some(AbsoluteHead {
+            len: prefix.len + 1,
+            rooted_by_separator: true,
+        })
+    } else if prefix.implicit_root {
+        Some(AbsoluteHead {
+            len: prefix.len,
+            rooted_by_separator: false,
+        })
+    } else {
+        None
+    }
+}
+
+/// Prefix length, matching `std::path::Prefix::len` for the forms Rust treats
+/// as prefixes. The match normalizes `/` to `\` the way the standard library
+/// does, but a verbatim prefix is refused when those first four bytes contain
+/// `/` (that spelling is not verbatim).
+fn windows_prefix(raw: &[u8]) -> Option<WindowsPrefix> {
+    if raw.len() >= 2 && is_windows_sep(raw[0]) && is_windows_sep(raw[1]) {
+        return windows_unc_like_prefix(raw);
+    }
+    if matches!(raw, [drive, b':', ..] if drive.is_ascii_alphabetic()) {
+        return Some(WindowsPrefix {
+            len: 2,
+            implicit_root: false,
+        });
+    }
+    None
+}
+
+fn windows_unc_like_prefix(raw: &[u8]) -> Option<WindowsPrefix> {
+    // `\\?\` (verbatim) only when the four marker bytes themselves use `\`.
+    if raw.len() >= 4 && raw[2] == b'?' && is_windows_sep(raw[3]) && !raw[..4].contains(&b'/') {
+        return Some(verbatim_prefix(raw));
+    }
+    if raw.len() >= 4 && raw[2] == b'.' && is_windows_sep(raw[3]) {
+        let (name, _) = split_component(&raw[4..], false);
+        return Some(WindowsPrefix {
+            len: 4 + name.len(),
+            implicit_root: true,
+        });
+    }
+    let (server, after_server) = split_component(&raw[2..], false);
+    let (share, _) = split_component(after_server, false);
+    if server.is_empty() || share.is_empty() {
+        return None;
+    }
+    Some(WindowsPrefix {
+        len: unc_style_len(2, server.len(), share.len()),
+        implicit_root: true,
+    })
+}
+
+fn verbatim_prefix(raw: &[u8]) -> WindowsPrefix {
+    let body = &raw[4..];
+    if let Some(after_unc) = strip_unc_marker(body) {
+        let (server, after_server) = split_component(after_unc, true);
+        let (share, _) = split_component(after_server, true);
+        return WindowsPrefix {
+            len: unc_style_len(8, server.len(), share.len()),
+            implicit_root: true,
+        };
+    }
+    if verbatim_disk(body) {
+        return WindowsPrefix {
+            len: 6,
+            implicit_root: true,
+        };
+    }
+    let (name, _) = split_component(body, true);
+    WindowsPrefix {
+        len: 4 + name.len(),
+        implicit_root: true,
+    }
+}
+
+/// `UNC` plus a separator. `/` counts here because prefix matching normalizes
+/// it; later verbatim components still split only on `\`.
+fn strip_unc_marker(body: &[u8]) -> Option<&[u8]> {
+    match body {
+        [b'U', b'N', b'C', sep, rest @ ..] if is_windows_sep(*sep) => Some(rest),
+        _ => None,
+    }
+}
+
+/// `\\?\C:` exactly, or `\\?\C:\...`. A slash after the colon is not a
+/// verbatim disk (`C:/...` is a general verbatim prefix instead).
+fn verbatim_disk(body: &[u8]) -> bool {
+    let third_is_backslash = match body.get(2) {
+        Some(&byte) => byte == b'\\',
+        None => true,
+    };
+    third_is_backslash && matches!(body, [drive, b':', ..] if drive.is_ascii_alphabetic())
+}
+
+/// Component and the bytes after it, including one separator when one was there.
+/// `verbatim` splits only on `\`.
+fn split_component(path: &[u8], verbatim: bool) -> (&[u8], &[u8]) {
+    let is_sep = |byte: u8| {
+        if verbatim {
+            byte == b'\\'
+        } else {
+            is_windows_sep(byte)
+        }
+    };
+    match path.iter().position(|&byte| is_sep(byte)) {
+        Some(at) => (&path[..at], &path[at + 1..]),
+        None => (path, &[]),
+    }
+}
+
+/// `base` is `2` for `\\` or `8` for `\\?\UNC\`. The separator between server
+/// and share counts only when the share is non-empty, matching `Prefix::len`.
+fn unc_style_len(base: usize, server_len: usize, share_len: usize) -> usize {
+    if share_len > 0 {
+        base + server_len + 1 + share_len
+    } else {
+        base + server_len
+    }
 }
 
 /// Derive the recorded save path from the trusted root and the actual save
@@ -1938,4 +2163,262 @@ struct PrestateDocument<'a> {
     prior_state: State,
     prior_stage: Stage,
     prior_operation_id: String,
+}
+
+#[cfg(test)]
+mod absolute_spelling_tests {
+    use super::{absolute_head, check_absolute, check_absolute_bytes, AbsoluteSyntax, ErrorKind};
+    #[cfg(windows)]
+    use std::path::Component;
+    use std::path::{Path, PathBuf};
+
+    fn judge(raw: &str, syntax: AbsoluteSyntax) -> super::Result<()> {
+        check_absolute_bytes(raw.as_bytes(), "path", &raw, syntax)
+    }
+
+    fn assert_accept(raw: &str, syntax: AbsoluteSyntax) {
+        let result = judge(raw, syntax);
+        assert!(
+            result.is_ok(),
+            "{raw:?} under {syntax:?} should be accepted: {result:?}"
+        );
+    }
+
+    fn assert_reject(raw: &str, syntax: AbsoluteSyntax, detail_needle: &str) {
+        let err = judge(raw, syntax).expect_err(&format!("{raw:?} should be rejected"));
+        assert_eq!(err.kind(), ErrorKind::InvalidRequest, "{raw:?}");
+        assert!(
+            err.detail().contains(detail_needle),
+            "{raw:?}: detail {:?} does not contain {detail_needle:?}",
+            err.detail()
+        );
+    }
+
+    fn assert_head(raw: &str, syntax: AbsoluteSyntax, skipped: &str) {
+        let head = absolute_head(raw.as_bytes(), syntax)
+            .unwrap_or_else(|| panic!("{raw:?} should have a measurable prefix"));
+        assert_eq!(&raw.as_bytes()[..head.len], skipped.as_bytes(), "{raw:?}");
+    }
+
+    #[test]
+    fn verbatim_disk_prefix_is_not_a_repeated_separator() {
+        // The Windows CI failure: canonicalize yields `\\?\C:\...`, and the
+        // second backslash of `\\?\` must not be an empty segment.
+        let root = r"\\?\C:\Users\runneradmin\AppData\Local\Temp\combat-sim-x";
+        let save = r"\\?\C:\Users\runneradmin\AppData\Local\Temp\combat-sim-x\Saves\slot";
+        assert_head(root, AbsoluteSyntax::Windows, r"\\?\C:\");
+        assert_accept(root, AbsoluteSyntax::Windows);
+        assert_accept(save, AbsoluteSyntax::Windows);
+
+        let root_bytes = root.as_bytes();
+        let save_bytes = save.as_bytes();
+        assert!(save_bytes.starts_with(root_bytes));
+        assert_eq!(save_bytes[root_bytes.len()], b'\\');
+        assert_eq!(&save_bytes[root_bytes.len() + 1..], br"Saves\slot");
+    }
+
+    #[test]
+    fn verbatim_disk_still_rejects_a_trailing_or_repeated_separator() {
+        let syntax = AbsoluteSyntax::Windows;
+        for raw in [
+            r"\\?\C:\Users\runneradmin\foo\",
+            r"\\?\C:\Users\runneradmin\AppData\Local\Temp\combat-sim-x\Saves\slot\",
+            r"\\?\C:\Users\foo\\bar",
+            r"\\?\C:\Users\runneradmin\AppData\Local\Temp\combat-sim-x\Saves\\slot",
+            r"\\?\C:\\Users",
+            r"\\?\C:\",
+        ] {
+            assert_reject(raw, syntax, "repeated or trailing separator");
+        }
+        assert_reject(r"\\?\C:\Users\.\foo", syntax, "relative segment");
+        assert_reject(r"\\?\C:\Users\..\foo", syntax, "relative segment");
+        assert_reject(
+            r"\\?\C:\Users\runneradmin\AppData\Local\Temp\combat-sim-x\..\slot",
+            syntax,
+            "relative segment",
+        );
+    }
+
+    #[test]
+    fn windows_prefixes_skip_the_marker_then_keep_the_tail_strict() {
+        let syntax = AbsoluteSyntax::Windows;
+        for raw in [
+            r"C:\Users\runneradmin\AppData\Local\Temp\combat-sim-x",
+            r"c:\Users\runneradmin\foo",
+            r"C:/Users/runneradmin/foo",
+            r"\\?\c:\Users\runneradmin\foo",
+            r"\\server\share\Users\runneradmin",
+            r"//server/share/Users/runneradmin",
+            r"\\server\share",
+            r"\\?\UNC\server\share\Users\runneradmin",
+            r"\\?\UNC\server\share",
+            r"\\.\device\Users\runneradmin",
+            r"\\.\COM1",
+            r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\Users\foo",
+            r"\\?\foo\bar",
+        ] {
+            assert_accept(raw, syntax);
+        }
+
+        assert_head(r"C:\Users\runneradmin", syntax, r"C:\");
+        assert_head(r"C:/Users/runneradmin", syntax, "C:/");
+        assert_head(r"\\server\share\foo", syntax, r"\\server\share\");
+        assert_head(r"\\server\share", syntax, r"\\server\share");
+        assert_head(
+            r"\\?\UNC\server\share\foo",
+            syntax,
+            r"\\?\UNC\server\share\",
+        );
+        assert_head(r"\\.\device\foo", syntax, r"\\.\device\");
+        assert_head(r"\\.\COM1", syntax, r"\\.\COM1");
+        assert_head(
+            r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\Users\foo",
+            syntax,
+            r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\",
+        );
+
+        for raw in [
+            r"C:\foo\",
+            r"C:\foo\\bar",
+            r"C:/foo/",
+            r"C:/foo//bar",
+            r"\\server\share\",
+            r"\\server\share\foo\",
+            r"\\server\share\foo\\bar",
+            r"\\?\UNC\server\share\",
+            r"\\?\UNC\server\share\foo\",
+            r"\\?\UNC\server\share\foo\\bar",
+            r"\\.\device\foo\",
+            r"\\.\device\foo\\bar",
+        ] {
+            assert_reject(raw, syntax, "repeated or trailing separator");
+        }
+        for raw in [
+            r"C:\foo\.\bar",
+            r"C:\foo\..\bar",
+            r"\\server\share\..\foo",
+            r"\\?\UNC\server\share\.\foo",
+            r"\\.\device\..\foo",
+        ] {
+            assert_reject(raw, syntax, "relative segment");
+        }
+        for raw in [
+            "",
+            r"Users\foo",
+            r"C:Users",
+            r"\Users\foo",
+            r"..\foo",
+            ".",
+            r"\\server",
+            r"\\server\",
+        ] {
+            assert_reject(raw, syntax, "must be an absolute path");
+        }
+    }
+
+    #[test]
+    fn unix_absolute_bytes_keep_the_existing_rules() {
+        let syntax = AbsoluteSyntax::Unix;
+        assert_head("/tmp/foo", syntax, "/");
+        assert_accept("/tmp/combat-sim-x", syntax);
+        assert_accept("/tmp/foo/bar", syntax);
+        // A backslash is a name character on Unix, not a second separator.
+        assert_accept(r"/tmp/foo\bar", syntax);
+        for raw in ["/", "/tmp/foo/", "/tmp//foo", "//tmp"] {
+            assert_reject(raw, syntax, "repeated or trailing separator");
+        }
+        for raw in ["/tmp/./foo", "/tmp/../foo", "/."] {
+            assert_reject(raw, syntax, "relative segment");
+        }
+        for raw in ["", "tmp/foo", r"\\?\C:\Users\foo", r"C:\Users\foo"] {
+            assert_reject(raw, syntax, "must be an absolute path");
+        }
+    }
+
+    #[test]
+    fn host_check_absolute_accepts_the_cwd_and_rejects_an_ambiguous_spelling() {
+        let cwd = std::env::current_dir().expect("current directory");
+        assert!(
+            check_absolute(&cwd, "root").is_ok(),
+            "cwd {} should be a normalized absolute path",
+            cwd.display()
+        );
+
+        let trailing = PathBuf::from(format!("{}/", cwd.display()));
+        let trailing_err = check_absolute(&trailing, "root").expect_err("trailing separator");
+        assert_eq!(trailing_err.kind(), ErrorKind::InvalidRequest);
+        assert!(
+            trailing_err
+                .detail()
+                .contains("repeated or trailing separator"),
+            "{}",
+            trailing_err.detail()
+        );
+
+        let parent = cwd.join("..").join("not-a-save");
+        let parent_err = check_absolute(&parent, "save_dir").expect_err("parent segment");
+        assert_eq!(parent_err.kind(), ErrorKind::InvalidRequest);
+        assert!(
+            parent_err.detail().contains("relative segment"),
+            "{}",
+            parent_err.detail()
+        );
+
+        let relative = check_absolute(Path::new("relative"), "root").expect_err("relative");
+        assert_eq!(relative.kind(), ErrorKind::InvalidRequest);
+        assert!(relative.detail().contains("must be an absolute path"));
+    }
+
+    /// On Windows the byte parser must agree with `Component::Prefix` plus a
+    /// physical `Component::RootDir`. Linux cannot produce those components
+    /// for a `\\?\` path, so this oracle runs only there.
+    #[cfg(windows)]
+    #[test]
+    fn windows_head_len_matches_std_components() {
+        let samples = [
+            r"C:\Users\runneradmin\AppData\Local\Temp\combat-sim-x",
+            r"C:\",
+            r"\\?\C:\Users\runneradmin\AppData\Local\Temp\combat-sim-x",
+            r"\\?\C:\Users\runneradmin\foo\",
+            r"\\?\C:\",
+            r"\\?\UNC\server\share\Saves\slot",
+            r"\\?\UNC\server\share",
+            r"\\server\share\Saves\slot",
+            r"\\server\share",
+            r"\\server\share\",
+            r"\\.\device\Saves\slot",
+            r"\\.\COM1",
+            r"C:relative",
+            r"relative\path",
+        ];
+        for sample in samples {
+            let path = Path::new(sample);
+            let from_bytes =
+                absolute_head(sample.as_bytes(), AbsoluteSyntax::Windows).map(|h| h.len);
+            assert_eq!(
+                from_bytes,
+                component_head_len(path),
+                "{sample} bytes {from_bytes:?} vs components"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    fn component_head_len(path: &Path) -> Option<usize> {
+        if !path.is_absolute() {
+            return None;
+        }
+        let raw = path.as_os_str().as_encoded_bytes();
+        let mut comps = path.components();
+        let mut len = 0;
+        if let Some(Component::Prefix(prefix)) = comps.next() {
+            len += prefix.as_os_str().as_encoded_bytes().len();
+        }
+        if matches!(comps.next(), Some(Component::RootDir))
+            && raw.get(len).copied().is_some_and(super::is_windows_sep)
+        {
+            len += 1;
+        }
+        Some(len)
+    }
 }
