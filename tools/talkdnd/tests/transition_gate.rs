@@ -203,8 +203,9 @@ fn unadopted_writers_exit_one_and_leave_the_save_untouched() {
         .iter()
         .filter(|row| row.cli == Cli::Talkdnd && row.class == Class::UnadoptedWrite)
         .collect();
-    // Groups A–D have moved to AdoptedWrite. Leftover writers still refused
-    // by the transition gate: checkpoint-text and the §2.7 handout writers.
+    // Groups A–E: write_meta is a helper, not a Writer key. Leftover writers
+    // still refused by the transition gate: checkpoint-text and the §2.7
+    // handout writers.
     let leftover: Vec<_> = rows.iter().map(|row| row.entry).collect();
     assert_eq!(
         leftover,

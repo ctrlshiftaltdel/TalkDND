@@ -268,6 +268,9 @@ fn snapshot_writes_manifest_and_covered_copies() {
 #[test]
 fn snapshot_excludes_sessions_integrity_and_dm_files() {
     let (root, save) = fixture("excludes");
+    fs::write(save.join("secret-terms.cache.json"), "{}\n").unwrap();
+    fs::create_dir_all(save.join(".cache")).unwrap();
+    fs::write(save.join(".cache/content-check.json"), "{}\n").unwrap();
     let id = snapshot(&save, None);
     let dir = checkpoint::checkpoint_dir(&save, &id);
     let m = checkpoint::manifest(&save, &id).unwrap();
@@ -278,12 +281,14 @@ fn snapshot_excludes_sessions_integrity_and_dm_files() {
         "dm-secrets.md",
         "dm-plan.md",
         "secret-terms.yaml",
+        "secret-terms.cache.json",
         "rolls.log",
         "digest.md",
         "chargen.json",
         "handouts",
         "npc-drafts",
         ".talkdnd.lock",
+        ".cache",
     ] {
         assert!(!dir.join(rel).exists(), "{rel} must not be copied");
         assert!(
@@ -1286,6 +1291,15 @@ fn the_restore_backup_excludes_runtime_control_files() {
     for (rel, bytes) in nested {
         fs::write(save.join(rel), bytes).unwrap();
     }
+    fs::write(save.join("secret-terms.cache.json"), "root cache\n").unwrap();
+    fs::write(save.join("combat/nested/digest.md"), "nested digest\n").unwrap();
+    fs::write(
+        save.join("combat/nested/secret-terms.cache.json"),
+        "nested cache\n",
+    )
+    .unwrap();
+    fs::create_dir_all(save.join(".cache")).unwrap();
+    fs::write(save.join(".cache/content-check.json"), "cache\n").unwrap();
     let id = snapshot(&save, None);
     // Integrity lock can stay as planted bytes; advancement lock/state must
     // be a real protocol so restore can hold SAVE and take the checkpoint
@@ -1315,6 +1329,18 @@ fn the_restore_backup_excludes_runtime_control_files() {
         !backup.join(".talkdnd.lock").exists(),
         "the checkpoint lock leaked into the whole-save backup"
     );
+    assert!(
+        !backup.join("digest.md").exists(),
+        "root digest.md leaked into the whole-save backup"
+    );
+    assert!(
+        !backup.join("secret-terms.cache.json").exists(),
+        "root secret-terms.cache.json leaked into the whole-save backup"
+    );
+    assert!(
+        !backup.join(".cache").exists(),
+        ".cache leaked into the whole-save backup"
+    );
     // A nested file with a control-file name is user data, not a control file.
     for (rel, bytes) in nested {
         assert_eq!(
@@ -1323,11 +1349,28 @@ fn the_restore_backup_excludes_runtime_control_files() {
             "{rel} is missing from the whole-save backup"
         );
     }
-    // Ordinary user data is still backed up, directories included.
+    assert_eq!(
+        fs::read(backup.join("combat/nested/digest.md")).unwrap(),
+        b"nested digest\n"
+    );
+    assert_eq!(
+        fs::read(backup.join("combat/nested/secret-terms.cache.json")).unwrap(),
+        b"nested cache\n"
+    );
+    // Ordinary user data is still backed up, directories included. Existing
+    // user backups (`checkpoints/`) are user data, not control metadata.
     assert!(backup.join("progress.yaml").is_file());
     assert!(backup
         .join("Sessions/2030-01-02-session-00-setup.md")
         .is_file());
+    assert!(
+        backup
+            .join("checkpoints")
+            .join(&id)
+            .join("manifest.yaml")
+            .is_file(),
+        "existing user backups (checkpoints/) must stay in the whole-save backup"
+    );
     // The live control files are untouched by the backup and the restore.
     // While SAVE is held, metadata only: `fs::read` of the advancement lock
     // file fails on Windows (mandatory lock, ERROR_LOCK_VIOLATION).
@@ -1503,18 +1546,22 @@ fn same_second_restore_rolls_back_to_this_operation_not_the_earlier_backup() {
         "A must already be gone before the second restore: {before:?}"
     );
     // The backup scope excludes runtime control files (locks, advancement
-    // state): they are not user data, and copying them would clone a lock
-    // identity. `the_restore_backup_excludes_runtime_control_files` asserts
-    // that exclusion directly; this test compares the user-data part.
-    const CONTROL: [&str; 4] = [
+    // state) and root cache/derived files: they are not user data.
+    // `the_restore_backup_excludes_runtime_control_files` asserts that
+    // exclusion directly; this test compares the user-data part.
+    const CONTROL: [&str; 6] = [
         ".talkdnd.lock",
         ".talkdnd.integrity.lock",
         ".talkdnd.advancement.lock",
         ".talkdnd.advancement.state",
+        "digest.md",
+        "secret-terms.cache.json",
     ];
     let before_user_data: Vec<(String, Vec<u8>)> = before
         .iter()
-        .filter(|(p, _)| !CONTROL.contains(&p.as_str()))
+        .filter(|(p, _)| {
+            !CONTROL.contains(&p.as_str()) && p != ".cache/" && !p.starts_with(".cache/")
+        })
         .cloned()
         .collect();
 

@@ -207,12 +207,14 @@
 - **建议允许路径：** `tools/talkdnd/src/migrate.rs`（`write_meta`）、`tools/talkdnd/src/secret.rs`（缓存）、`tools/talkdnd/src/start.rs`（`.cache`/`digest`）、`tools/talkdnd/tests/`、`docs/ADVANCEMENT-WRITER-INVENTORY.md` 与 `docs/ADVANCEMENT-LOCK-DESIGN.md`（只记录接入状态与证据位置）
 - **Depends on:** `ADV-P1-1pre`、`ADV-P1-1d`、`ADV-P1-1`
 - **Acceptance criteria:**
-  - [ ] `AC-1`: `migrate::write_meta` 的 `save-meta.yaml` 写入在 SAVE 内；合成测试证明锁不可用时 schema 元数据不被改写。
-  - [ ] `AC-2`: 当前不存在选择 sidecar 写入路径；本块不创建 sidecar、不新增 schema 11、不预设字段或路径。
-  - [ ] `AC-3`: 选择 sidecar 与主 schema 元数据作为未来发布目标，由 `ADV-P1-6` 按 `ADV-P1-4` 的注册方式接入；本块只记录归属，不声称已覆盖。
-  - [ ] `AC-4`: `guard`/`secret list` 的缓存与 `start` 的 `.cache`/`digest` 按本节末的「接入语义」表（#292 已决定：控制元数据放行）处理。
-  - [ ] `AC-5`: D 完整备份**包含既有用户备份**；lock、操作前快照、恢复工作记录等控制元数据**单独保留、不并入该备份**；缓存/派生文件按已批准分类处理，保留与清理责任未定。不得把“备份目录存在”当成完整备份，也不得把控制元数据混入用户数据备份。
-  - [ ] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等全部组完成。
+  - [x] `AC-1`: `migrate::write_meta` 的 `save-meta.yaml` 写入在 SAVE 内；合成测试证明锁不可用时 schema 元数据不被改写。
+  - [x] `AC-2`: 当前不存在选择 sidecar 写入路径；本块不创建 sidecar、不新增 schema 11、不预设字段或路径。
+  - [x] `AC-3`: 选择 sidecar 与主 schema 元数据作为未来发布目标，由 `ADV-P1-6` 按 `ADV-P1-4` 的注册方式接入；本块只记录归属，不声称已覆盖。
+  - [x] `AC-4`: `guard`/`secret list` 的缓存与 `start` 的 `.cache`/`digest` 按本节末的「接入语义」表（#292 已决定：控制元数据放行）处理。
+  - [x] `AC-5`: D 完整备份**包含既有用户备份**；lock、操作前快照、恢复工作记录等控制元数据**单独保留、不并入该备份**；缓存/派生文件按已批准分类处理，保留与清理责任未定。不得把“备份目录存在”当成完整备份，也不得把控制元数据混入用户数据备份。
+  - [x] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等全部组完成。
+
+**交付记录（TASK-0154 / Issue #303）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。既有 `migrate::write_meta` 在协议存档上未持有 SAVE 时失败关闭且不改写 `save-meta.yaml`；未初始化存档保持原写入。`write_meta` 是 helper，不是新的 Writer 键。`talkdnd:guard` / `talkdnd:secret-list` 与 `start` 的 `digest.md`/`.cache` 仍是 `ControlMetadata`：原子写、不进用户数据备份、不单独取 SAVE 锁；`start` 锁不可用时整条命令拒绝，也不写 digest/缓存。用户数据备份（`migrate::copy_tree` 与 checkpoint 整份恢复备份）在存档根目录排除运行控制文件、`.cache`、`digest.md` 与 `secret-terms.cache.json`，仍包含普通用户文件、嵌套同名文件与既有用户备份（`checkpoints/`）；符号链接/FIFO 仍使备份失败关闭。选择 sidecar 与 schema 11 仍不存在，将由 `ADV-P1-6` 按 `ADV-P1-4` 注册为发布目标；本块只记录归属，不声称已覆盖，也不实现 D 协议或 D 备份条目。`checkpoint <text>` 与 `handout build` / `handout mark` / `handout list --dm` 仍走过渡门。证据见 `tools/talkdnd/src/migrate.rs`、`tools/talkdnd/src/checkpoint.rs`、`tools/talkdnd/tests/checkpoint.rs`、`tools/talkdnd/tests/advancement_save_lock.rs` 与既有 `transition_gate` / 1a–1d 回归。任务状态与证据仍只在 Issue / PR / CI，本文件不设状态列。本块不启用提交入口、不新增 schema/sidecar。#264 结论不变。
 
 **接入语义（已由决定记录 #292 于 2026-11-17 确认，不再是未决项）：**
 

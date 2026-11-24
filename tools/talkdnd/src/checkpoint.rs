@@ -72,8 +72,18 @@ const CONTROL_FILES: [&str; 4] = [
     advancement_lock::STATE_FILE,
 ];
 
+/// Cache / derived files at the save root (decision #292): atomic-written
+/// control metadata, never part of a user-data backup, and a mirror rollback
+/// must never delete them. Nested files with the same name are ordinary user
+/// data.
+const CACHE_FILES: [&str; 2] = ["digest.md", "secret-terms.cache.json"];
+
 fn is_control_file(name: &std::ffi::OsStr) -> bool {
     name.to_str().is_some_and(|n| CONTROL_FILES.contains(&n))
+}
+
+fn is_cache_file(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|n| CACHE_FILES.contains(&n))
 }
 
 #[derive(Subcommand, Clone)]
@@ -1073,11 +1083,13 @@ fn allocate_restore_backup(parent: &Path, slot: &str, stamp: &str, id: &str) -> 
 }
 
 /// Recursive copy (backups and rollback); skips the runtime control files
-/// (see [`CONTROL_FILES`]) **at the save root only** — a nested file that
-/// merely shares one of those names is user data — and the cache. Refuses any
-/// other entry it cannot reproduce (symlink, socket, …) instead of silently
-/// producing an incomplete backup that a mirror rollback would later treat as
-/// the whole pre-restore tree. Callers that need a faithful backup must pass a
+/// (see [`CONTROL_FILES`]) and cache/derived files (see [`CACHE_FILES`])
+/// **at the save root only** — a nested file that merely shares one of those
+/// names is user data — and `.cache` directories. Existing user backups
+/// (`checkpoints/`) are user data and are copied. Refuses any other entry it
+/// cannot reproduce (symlink, socket, …) instead of silently producing an
+/// incomplete backup that a mirror rollback would later treat as the whole
+/// pre-restore tree. Callers that need a faithful backup must pass a
 /// destination this process just created empty: entries already under `dest`
 /// are left in place.
 fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
@@ -1089,7 +1101,7 @@ fn copy_tree_at(src: &Path, dest: &Path, at_root: bool) -> Result<()> {
     for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
         let name = entry.file_name();
-        if at_root && is_control_file(&name) {
+        if at_root && (is_control_file(&name) || is_cache_file(&name)) {
             continue;
         }
         let from = entry.path();
@@ -1116,11 +1128,12 @@ fn copy_tree_at(src: &Path, dest: &Path, at_root: bool) -> Result<()> {
 /// The removing half of a mirror rollback: delete every entry under `dest`
 /// that has no counterpart under `src`, so the tree matches `src` exactly
 /// after `copy_tree(src, dest)`. The runtime control files (see
-/// [`CONTROL_FILES`]) are skipped **at the save root only** (a nested file
-/// with the same name is user data) and `.cache` directories are deliberately
-/// outside the backup scope; neither is ever touched. Returns human-readable
-/// leftovers (`path（error）`) for entries that could not be removed — the
-/// caller must report them instead of claiming a verified rollback.
+/// [`CONTROL_FILES`]) and cache/derived files (see [`CACHE_FILES`]) are
+/// skipped **at the save root only** (a nested file with the same name is
+/// user data) and `.cache` directories are deliberately outside the backup
+/// scope; none of them is ever touched. Returns human-readable leftovers
+/// (`path（error）`) for entries that could not be removed — the caller must
+/// report them instead of claiming a verified rollback.
 fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
     fn walk(src: &Path, dest: &Path, root: &Path, at_root: bool, out: &mut Vec<String>) {
         let Ok(rd) = fs::read_dir(dest) else {
@@ -1140,7 +1153,7 @@ fn remove_extras(src: &Path, dest: &Path, root: &Path) -> Vec<String> {
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let name = entry.file_name();
-            if (at_root && is_control_file(&name)) || name == ".cache" {
+            if (at_root && (is_control_file(&name) || is_cache_file(&name))) || name == ".cache" {
                 continue;
             }
             let path = entry.path();

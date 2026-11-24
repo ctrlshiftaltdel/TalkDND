@@ -10,7 +10,9 @@
 //! snapshot/restore and migrate) and group D (`log`, `check`, `integrity
 //! status` / `accept`) are adopted in this file. `log rolls` stays read-only.
 //! Leftover `checkpoint <text>` still hits the transition gate here; handout
-//! writers stay on that gate in `transition_gate.rs`. 1e is not adopted.
+//! writers stay on that gate in `transition_gate.rs`. ADV-P1-1e guards
+//! `migrate::write_meta` (a helper, not a new Writer key) and keeps
+//! cache/digest as ControlMetadata; it does not adopt the leftover writers.
 
 use advancement_lock::{Class, Cli, WRITERS};
 use std::collections::BTreeMap;
@@ -601,6 +603,10 @@ fn guard_and_secret_list_do_not_take_the_save_lock() {
         );
         assert!(!text.contains("无法取得 SAVE 锁"), "{text}");
     }
+    assert!(
+        save.join("secret-terms.cache.json").is_file(),
+        "guard/secret list write the secret-term cache without taking SAVE"
+    );
 }
 
 #[test]
@@ -638,6 +644,10 @@ fn start_takes_the_save_lock_for_user_data_and_writes_nothing_when_unavailable()
         !save.join("digest.md").exists() || before.contains_key(&PathBuf::from("digest.md")),
         "start must not write digest.md when the SAVE lock is unavailable"
     );
+    assert!(
+        !save.join(".cache").exists() || before.contains_key(&PathBuf::from(".cache")),
+        "start must not write .cache when the SAVE lock is unavailable"
+    );
     fs::write(save.join(adv::STATE_FILE), state).unwrap();
 
     let ready = run_slot(&root, &["start", "--no-pdf2md"]);
@@ -654,8 +664,9 @@ fn leftover_unadopted_writers_are_still_refused_by_the_transition_gate() {
     let save = root.join(SAVE);
     init_protocol(&root, &save);
     let before = snapshot(&save);
-    // Group D left the gate. The only leftover writer exercised here is
-    // talkdnd:checkpoint-text. Handout writers are covered in transition_gate.rs.
+    // Groups A–E: write_meta is a helper, not a Writer key. The leftover
+    // writer exercised here is talkdnd:checkpoint-text. Handout writers are
+    // covered in transition_gate.rs.
     let entry = "talkdnd:checkpoint-text";
     let out = run_slot(&root, &["checkpoint", "p1d leftover"]);
     let text = output_text(&out);
