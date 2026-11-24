@@ -203,17 +203,13 @@ fn unadopted_writers_exit_one_and_leave_the_save_untouched() {
         .iter()
         .filter(|row| row.cli == Cli::Talkdnd && row.class == Class::UnadoptedWrite)
         .collect();
-    // Groups A–C have moved to AdoptedWrite; these leftover 1d–1e / handout
-    // / checkpoint-text writers must still be refused by the transition gate.
+    // Groups A–D have moved to AdoptedWrite. Leftover writers still refused
+    // by the transition gate: checkpoint-text and the §2.7 handout writers.
     let leftover: Vec<_> = rows.iter().map(|row| row.entry).collect();
     assert_eq!(
         leftover,
         vec![
-            "talkdnd:check",
-            "talkdnd:integrity-status",
-            "talkdnd:integrity-accept",
             "talkdnd:checkpoint-text",
-            "talkdnd:log",
             "talkdnd:handout-build",
             "talkdnd:handout-mark",
             "talkdnd:handout-list-dm",

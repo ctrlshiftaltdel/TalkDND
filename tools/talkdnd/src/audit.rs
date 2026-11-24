@@ -287,11 +287,26 @@ fn set_baseline(save: &Path, m: &mut integrity::Manifest) -> Result<()> {
     integrity::store(save, m)
 }
 
+/// On a protocol-enabled save, SAVE is already held before the integrity
+/// manifest lock. A caller that skipped SAVE fails closed here, before
+/// [`integrity::lock`] can create `.talkdnd.integrity.lock` or rewrite
+/// `integrity.yaml`. Saves without the protocol are unchanged.
+fn require_save_before_integrity(save: &Path) -> Result<()> {
+    if ::advancement_lock::has_protocol(save) && !::advancement_lock::is_save_lock_held(save) {
+        anyhow::bail!(
+            "协议违规：在取得 SAVE 锁之前获取了 integrity .talkdnd.integrity.lock；总序必须是 SAVE → integrity。未写入任何目标文件"
+        );
+    }
+    Ok(())
+}
+
 /// Full audit; creates manifest and baseline for saves that predate them.
 /// The whole audit — manifest creation, fingerprint comparison and the
 /// first baseline write — runs under the save's integrity manifest lock,
 /// so a concurrent tool process cannot interleave a manifest update.
+/// On a protocol-enabled save the caller already holds SAVE.
 pub fn audit(save: &Path) -> Result<Report> {
+    require_save_before_integrity(save)?;
     let _lock = integrity::lock(save)?;
     let (mut m, created) = integrity::ensure_locked(save)?;
     let mut r = Report {
@@ -352,7 +367,10 @@ fn cross_ref_warnings(save: &Path) -> Vec<String> {
 /// sequence — fingerprint record, manifest reload and the baseline
 /// write-back — runs under the save's integrity manifest lock, so the
 /// baseline store can never clobber a concurrent writer's fingerprints.
+/// On a protocol-enabled save the caller already holds SAVE (`run` keeps
+/// the adopted-writer lock until this returns).
 pub fn after_command(save: &Path, before: &BTreeMap<String, String>) -> Result<()> {
+    require_save_before_integrity(save)?;
     let _lock = integrity::lock(save)?;
     let now = integrity::snapshot(save);
     integrity::after_write_with_locked(save, before, &now)?;
@@ -369,7 +387,10 @@ pub fn after_command(save: &Path, before: &BTreeMap<String, String>) -> Result<(
 
 /// `talkdnd integrity accept`: take the current files and values as the new
 /// baseline, and log why. Runs under the save's integrity manifest lock.
+/// On a protocol-enabled save the caller already holds SAVE, so the session
+/// log line this appends is written only while that lock is held.
 pub fn accept(save: &Path, reason: &str) -> Result<Vec<String>> {
+    require_save_before_integrity(save)?;
     let _lock = integrity::lock(save)?;
     let (mut m, _) = integrity::ensure_locked(save)?;
     let changes = integrity::changes_against(&m, &integrity::snapshot(save));
@@ -524,5 +545,99 @@ mod tests {
         after_command(&d, &before).unwrap();
         let r = audit(&d).unwrap();
         assert!(r.clean(), "{:?}", r.lines());
+    }
+
+    /// Protocol saves take SAVE before the integrity lock. Without SAVE the
+    /// manifest and the integrity lock file stay absent. With SAVE held via
+    /// `open` + `check_ordinary_write`, the same calls may update the manifest.
+    /// The advancement lock file is not read while `open` holds it.
+    #[test]
+    fn protocol_audit_requires_save_before_the_integrity_lock() {
+        let save = save_dir("order");
+        let root = save.parent().unwrap().to_path_buf();
+        let log = save.join("Sessions/2030-01-01-session-01.md");
+        fs::write(&log, "# s1\nkept line\n").unwrap();
+        match crate::advancement_lock::init(
+            &root,
+            &save,
+            &crate::advancement_lock::InitOptions::new(),
+        ) {
+            Ok(_) => {}
+            Err(err)
+                if err.kind() == crate::advancement_lock::ErrorKind::StatePublishedNotDurable => {}
+            Err(err) => panic!("init protocol: {err}"),
+        }
+        let lock_path = crate::advancement_lock::lock_path(&save);
+        let state_path = crate::advancement_lock::state_path(&save);
+        let lock_bytes = fs::read(&lock_path).unwrap();
+        let state_bytes = fs::read(&state_path).unwrap();
+        let log_bytes = fs::read(&log).unwrap();
+        let before = integrity::snapshot(&save);
+
+        for (label, err) in [
+            (
+                "after_command",
+                after_command(&save, &before).unwrap_err().to_string(),
+            ),
+            ("audit", audit(&save).unwrap_err().to_string()),
+            (
+                "accept",
+                accept(&save, "must-not-write").unwrap_err().to_string(),
+            ),
+        ] {
+            assert!(err.contains("协议违规"), "{label}: {err}");
+            assert!(err.contains("SAVE"), "{label}: {err}");
+            assert!(err.contains("未写入任何目标文件"), "{label}: {err}");
+        }
+        assert!(
+            !save.join(integrity::FILE).exists(),
+            "refused audit rewrote the manifest"
+        );
+        assert!(
+            !save.join(integrity::LOCK).exists(),
+            "refused audit created the integrity lock"
+        );
+        assert_eq!(fs::read(&lock_path).unwrap(), lock_bytes);
+        assert_eq!(fs::read(&state_path).unwrap(), state_bytes);
+        assert_eq!(fs::read(&log).unwrap(), log_bytes);
+
+        let held = crate::advancement_lock::open(
+            &root,
+            &save,
+            &crate::advancement_lock::OpenOptions::new(),
+        )
+        .unwrap();
+        held.check_ordinary_write().unwrap();
+        // Metadata only. `fs::read` of the advancement lock while `open`
+        // holds it is ERROR_LOCK_VIOLATION on Windows.
+        let meta = fs::symlink_metadata(&lock_path).unwrap();
+        assert!(meta.is_file());
+        assert!(meta.len() > 0);
+
+        after_command(&save, &before).unwrap();
+        assert!(
+            save.join(integrity::FILE).is_file(),
+            "a held SAVE allows the manifest update"
+        );
+        audit(&save).unwrap();
+        let prefix = fs::read(&log).unwrap();
+        assert_eq!(prefix, log_bytes, "audit must not rewrite the session log");
+        let accepted = accept(&save, "order-reason").unwrap();
+        assert!(
+            accepted.iter().any(|line| line.contains("order-reason")),
+            "{accepted:?}"
+        );
+        let log_after = fs::read(&log).unwrap();
+        assert!(
+            log_after.starts_with(&prefix),
+            "accept truncated or rewrote existing log lines"
+        );
+        assert!(log_after.len() > prefix.len());
+        assert!(String::from_utf8_lossy(&log_after).contains("order-reason"));
+        drop(held);
+
+        assert_eq!(fs::read(&lock_path).unwrap(), lock_bytes);
+        assert_eq!(fs::read(&state_path).unwrap(), state_bytes);
+        let _ = fs::remove_dir_all(&save);
     }
 }

@@ -1522,8 +1522,9 @@ fn forget_held(save_dir: &Path) {
 
 /// Whether this process currently holds a v1 SAVE lock on `save_dir`.
 ///
-/// Used by checkpoint / migrate to refuse the reverse lock order
-/// (checkpoint `.talkdnd.lock` before SAVE) on a protocol-enabled save.
+/// Used by checkpoint / migrate, the integrity audit, and log appends to
+/// refuse the reverse lock order on a protocol-enabled save. This is an
+/// in-process guard, not a second lock and not content protection.
 pub fn is_save_lock_held(save_dir: &Path) -> bool {
     let key = hold_key(save_dir);
     HELD_SAVES.with(|held| held.borrow().iter().any(|path| path == &key))

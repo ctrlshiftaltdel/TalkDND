@@ -202,10 +202,36 @@ pub fn save_dir(explicit: Option<&Path>, campaign: Option<&Path>) -> Option<Path
         .map(Path::to_path_buf)
 }
 
+/// Refuse a rolls.log append on a protocol-enabled save unless this process
+/// already holds SAVE. Checked even when the line has no dice, so a refused
+/// call does not create or open the log. An uninitialized save is allowed.
+fn require_save_for_roll_append(save: Option<&Path>, path: &Path) -> anyhow::Result<()> {
+    if let Some(save) = save {
+        if advancement_lock::has_protocol(save) && !advancement_lock::is_save_lock_held(save) {
+            anyhow::bail!(
+                "协议违规：在取得 SAVE 锁之前追加 {}；总序必须是先持有 SAVE 再写日志。未写入任何目标文件",
+                path.display()
+            );
+        }
+    }
+    match advancement_lock::enclosing_protocol_dir(path) {
+        Ok(Some(dir)) if !advancement_lock::is_save_lock_held(&dir) => anyhow::bail!(
+            "协议违规：在取得 SAVE 锁之前追加 {}；总序必须是先持有 SAVE 再写日志。未写入任何目标文件",
+            path.display()
+        ),
+        Ok(_) => Ok(()),
+        Err(err) => anyhow::bail!("{err}"),
+    }
+}
+
 /// Append roll-bearing state-command lines to `<save>/rolls.log`. Only lines
 /// with dice notation are kept, so condition/status narration does not flood
-/// the roll log; the state log itself is unchanged.
+/// the roll log; the state log itself is unchanged. On a protocol-enabled
+/// save the caller must already hold SAVE, including when no line has dice.
 pub fn append_combat_lines(save: Option<&Path>, lines: &[String]) -> anyhow::Result<()> {
+    if let Some(save) = save {
+        require_save_for_roll_append(Some(save), &save.join("rolls.log"))?;
+    }
     for line in lines {
         if looks_like_dice(line) {
             append_roll(save, "combat", line)?;
@@ -223,16 +249,19 @@ fn looks_like_dice(line: &str) -> bool {
 }
 
 /// Append a roll to `<save>/rolls.log` (same line format as talkdnd).
+/// On a protocol-enabled save the caller must already hold SAVE. Existing
+/// lines are left unchanged when the append is refused.
 pub fn append_roll(save: Option<&Path>, what: &str, text: &str) -> anyhow::Result<()> {
     let Some(save) = save else {
         return Ok(());
     };
+    let path = save.join("rolls.log");
+    require_save_for_roll_append(Some(save), &path)?;
     let line = format!(
         "- [{}] combat-sim {what}：{}\n",
         chrono_like_now(),
         text.trim()
     );
-    let path = save.join("rolls.log");
     fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -368,5 +397,85 @@ mod tests {
         pc.kind = Some(CreatureKind::Pc);
         assert_eq!(mask.name_for_parts("Hero", &pc), None);
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn protocol_roll_appends_require_save_and_do_not_truncate() {
+        let root = std::env::temp_dir().join(format!(
+            "combat-sim-rolls-proto-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let save = root.join("Saves/slot");
+        fs::create_dir_all(&save).unwrap();
+        let log = save.join("rolls.log");
+        fs::write(&log, "old-line\n").unwrap();
+        match advancement_lock::init(&root, &save, &advancement_lock::InitOptions::new()) {
+            Ok(_) => {}
+            Err(err) if err.kind() == advancement_lock::ErrorKind::StatePublishedNotDurable => {}
+            Err(err) => panic!("init protocol: {err}"),
+        }
+        let lock_path = advancement_lock::lock_path(&save);
+        let before_lock = fs::read(&lock_path).unwrap();
+        let before_state = fs::read(advancement_lock::state_path(&save)).unwrap();
+        let before_log = fs::read(&log).unwrap();
+
+        let err = append_roll(Some(&save), "combat", "1d20(4)+1=5").unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("协议违规") && text.contains("未写入任何目标文件"),
+            "{text}"
+        );
+        let err = append_combat_lines(
+            Some(&save),
+            &["status only".into(), "hit 1d8(3)+2=5".into()],
+        )
+        .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("协议违规") && text.contains("未写入任何目标文件"),
+            "{text}"
+        );
+        assert_eq!(fs::read(&log).unwrap(), before_log);
+
+        let held =
+            advancement_lock::open(&root, &save, &advancement_lock::OpenOptions::new()).unwrap();
+        held.check_ordinary_write().unwrap();
+        let meta = fs::symlink_metadata(&lock_path).unwrap();
+        assert!(meta.is_file());
+        append_roll(Some(&save), "combat", "1d20(4)+1=5").unwrap();
+        append_combat_lines(
+            Some(&save),
+            &["status only".into(), "hit 1d8(3)+2=5".into()],
+        )
+        .unwrap();
+        drop(held);
+
+        let after = fs::read(&log).unwrap();
+        assert!(after.starts_with(&before_log));
+        let shown = String::from_utf8_lossy(&after);
+        assert!(shown.contains("old-line"));
+        assert!(shown.contains("1d20"));
+        assert!(shown.contains("1d8"));
+        assert!(!shown.contains("status only"));
+        assert_eq!(fs::read(&lock_path).unwrap(), before_lock);
+        assert_eq!(
+            fs::read(advancement_lock::state_path(&save)).unwrap(),
+            before_state
+        );
+
+        let plain = root.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        append_roll(Some(&plain), "combat", "1d4(1)=1").unwrap();
+        assert!(fs::read_to_string(plain.join("rolls.log"))
+            .unwrap()
+            .contains("1d4"));
+        assert!(!plain.join(advancement_lock::LOCK_FILE).exists());
+        append_roll(None, "combat", "1d4(1)=1").unwrap();
+        let _ = fs::remove_dir_all(&root);
     }
 }

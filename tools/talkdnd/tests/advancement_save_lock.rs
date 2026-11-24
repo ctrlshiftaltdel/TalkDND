@@ -7,9 +7,10 @@
 //! `active` or `in_doubt`, they fail closed and leave the tree unchanged.
 //! Missing SAVE state on a protocol-enabled save is the plan's conservative
 //! temporary handling, documented in the refusal text. Group C (checkpoint
-//! snapshot/restore and migrate) is adopted in this file's 1c tests. Leftover
-//! 1d–1e, `checkpoint <text>`, and `handout build|mark|list --dm` writers
-//! still hit the transition gate.
+//! snapshot/restore and migrate) and group D (`log`, `check`, `integrity
+//! status` / `accept`) are adopted in this file. `log rolls` stays read-only.
+//! Leftover `checkpoint <text>` still hits the transition gate here; handout
+//! writers stay on that gate in `transition_gate.rs`. 1e is not adopted.
 
 use advancement_lock::{Class, Cli, WRITERS};
 use std::collections::BTreeMap;
@@ -352,8 +353,8 @@ fn missing_state_or_lock_refuses_every_adopted_writer_and_writes_nothing() {
     let rows = adopted_rows();
     assert_eq!(
         rows.len(),
-        30,
-        "group A + group C adopted talkdnd registry size"
+        34,
+        "group A + group C + group D adopted talkdnd registry size"
     );
 
     // Lock exists, SAVE state is missing: conservative temporary handling.
@@ -653,21 +654,15 @@ fn leftover_unadopted_writers_are_still_refused_by_the_transition_gate() {
     let save = root.join(SAVE);
     init_protocol(&root, &save);
     let before = snapshot(&save);
-    for (entry, args) in [
-        ("talkdnd:log", ["log", "p1c leftover"].as_slice()),
-        (
-            "talkdnd:checkpoint-text",
-            ["checkpoint", "p1c leftover"].as_slice(),
-        ),
-        ("talkdnd:check", ["check"].as_slice()),
-    ] {
-        let out = run_slot(&root, args);
-        let text = output_text(&out);
-        assert_eq!(out.status.code(), Some(1), "{entry}\n{text}");
-        assert!(text.contains("尚未接入成长协议"), "{entry}\n{text}");
-        assert!(text.contains("未写入任何目标文件"), "{entry}\n{text}");
-        assert_eq!(snapshot(&save), before, "{entry} wrote the save");
-    }
+    // Group D left the gate. The only leftover writer exercised here is
+    // talkdnd:checkpoint-text. Handout writers are covered in transition_gate.rs.
+    let entry = "talkdnd:checkpoint-text";
+    let out = run_slot(&root, &["checkpoint", "p1d leftover"]);
+    let text = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "{entry}\n{text}");
+    assert!(text.contains("尚未接入成长协议"), "{entry}\n{text}");
+    assert!(text.contains("未写入任何目标文件"), "{entry}\n{text}");
+    assert_eq!(snapshot(&save), before, "{entry} wrote the save");
 }
 
 #[test]
@@ -956,4 +951,209 @@ fn t6a_checkpoint_snapshot_and_restore_time_out_against_a_held_save_lock() {
         "T6a waiter wrote the save; {scope}"
     );
     eprintln!("T6a snapshot: timeout/fail-closed; T6a restore: timeout/fail-closed; {scope}");
+}
+
+fn newest_session_log(save: &Path) -> PathBuf {
+    let mut logs: Vec<PathBuf> = fs::read_dir(save.join("Sessions"))
+        .unwrap_or_else(|err| panic!("read Sessions: {err}"))
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    logs.sort();
+    logs.pop()
+        .unwrap_or_else(|| panic!("no session log in {}", save.display()))
+}
+
+#[test]
+fn group_d_writers_succeed_under_an_initialized_protocol() {
+    let root = playable("p1d-ready");
+    let save = root.join(SAVE);
+    init_protocol(&root, &save);
+    let log = newest_session_log(&save);
+    let before_log = fs::read(&log).unwrap();
+
+    let logged = ok_slot(&root, &["log", "p1d protocol line"]);
+    assert!(
+        !logged.contains("尚未接入成长协议") && !logged.contains("无法取得 SAVE 锁"),
+        "{logged}"
+    );
+    let after_log = fs::read(&log).unwrap();
+    assert!(
+        after_log.starts_with(&before_log),
+        "log rewrote existing session lines"
+    );
+    assert!(String::from_utf8_lossy(&after_log).contains("p1d protocol line"));
+
+    let checked = ok_slot(&root, &["check"]);
+    assert!(
+        !checked.contains("尚未接入成长协议") && !checked.contains("无法取得 SAVE 锁"),
+        "{checked}"
+    );
+    assert!(
+        save.join("integrity.yaml").is_file(),
+        "check may create the manifest\n{checked}"
+    );
+
+    let rolled = ok(
+        &root,
+        &[
+            "--save",
+            SLOT,
+            "--seed",
+            "11",
+            "check",
+            "aria",
+            "perception",
+        ],
+    );
+    assert!(!rolled.contains("尚未接入成长协议"), "{rolled}");
+    let mid = fs::read(&log).unwrap();
+    assert!(
+        mid.starts_with(&after_log),
+        "check rewrote earlier session lines"
+    );
+
+    let status = ok_slot(&root, &["integrity", "status"]);
+    assert!(
+        !status.contains("尚未接入成长协议") && !status.contains("无法取得 SAVE 锁"),
+        "{status}"
+    );
+
+    let prefix = fs::read(&log).unwrap();
+    let accepted = ok_slot(&root, &["integrity", "accept", "--reason", "p1d accept"]);
+    assert!(
+        !accepted.contains("尚未接入成长协议") && !accepted.contains("无法取得 SAVE 锁"),
+        "{accepted}"
+    );
+    let final_log = fs::read(&log).unwrap();
+    assert!(
+        final_log.starts_with(&prefix),
+        "accept rewrote existing session lines"
+    );
+    assert!(String::from_utf8_lossy(&final_log).contains("p1d accept"));
+}
+
+#[test]
+fn group_d_writers_without_the_protocol_keep_working_and_do_not_init() {
+    let root = playable("p1d-noproto");
+    let save = root.join(SAVE);
+    assert!(!save.join(adv::LOCK_FILE).exists());
+    assert!(!save.join(adv::STATE_FILE).exists());
+    ok_slot(&root, &["log", "p1d no protocol"]);
+    ok_slot(&root, &["check"]);
+    ok(
+        &root,
+        &[
+            "--save",
+            SLOT,
+            "--seed",
+            "11",
+            "check",
+            "aria",
+            "perception",
+        ],
+    );
+    ok_slot(&root, &["integrity", "status"]);
+    ok_slot(
+        &root,
+        &["integrity", "accept", "--reason", "p1d no protocol"],
+    );
+    ok_slot(&root, &["log", "rolls"]);
+    assert!(!save.join(adv::LOCK_FILE).exists());
+    assert!(!save.join(adv::STATE_FILE).exists());
+}
+
+#[test]
+fn log_rolls_is_tree_identical_under_the_protocol() {
+    let root = playable("p1d-rolls");
+    let save = root.join(SAVE);
+    init_protocol(&root, &save);
+    let before = snapshot(&save);
+    let shown = ok_slot(&root, &["log", "rolls"]);
+    assert!(
+        !shown.contains("尚未接入成长协议") && !shown.contains("无法取得 SAVE 锁"),
+        "{shown}"
+    );
+    if !before.contains_key(&PathBuf::from("rolls.log")) {
+        assert!(shown.contains("还没有掷骰记录"), "{shown}");
+    }
+    assert_eq!(
+        snapshot(&save),
+        before,
+        "log rolls changed the save tree under the protocol"
+    );
+}
+
+#[test]
+fn after_command_requires_save_before_integrity_and_writes_nothing_until_held() {
+    let root = play_root("p1d-order");
+    let save = root.join("Saves/slot-order");
+    fs::create_dir_all(save.join("Characters")).unwrap();
+    fs::create_dir_all(save.join("Sessions")).unwrap();
+    fs::write(
+        save.join("Characters/Tess.md"),
+        "# Tess\n\n```combat yaml\nid: tess\nname: Tess\nhp: 10\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        save.join("progress.yaml"),
+        "xp: {tess: 0}\npurses:\n  tess: {cp: 500}\n  party: {cp: 0, items: [rope]}\n",
+    )
+    .unwrap();
+    let log = save.join("Sessions/2030-01-01-session-01.md");
+    fs::write(&log, "# s1\nkept line\n").unwrap();
+    init_protocol(&root, &save);
+
+    let lock_path = adv::lock_path(&save);
+    let state_path = adv::state_path(&save);
+    let lock_bytes = fs::read(&lock_path).unwrap();
+    let state_bytes = fs::read(&state_path).unwrap();
+    let log_bytes = fs::read(&log).unwrap();
+    let before = BTreeMap::new();
+
+    for (label, err) in [
+        (
+            "after_command",
+            talkdnd::audit::after_command(&save, &before)
+                .unwrap_err()
+                .to_string(),
+        ),
+        (
+            "audit",
+            talkdnd::audit::audit(&save).unwrap_err().to_string(),
+        ),
+        (
+            "accept",
+            talkdnd::audit::accept(&save, "must-not-write")
+                .unwrap_err()
+                .to_string(),
+        ),
+    ] {
+        assert!(err.contains("协议违规"), "{label}: {err}");
+        assert!(err.contains("未写入任何目标文件"), "{label}: {err}");
+    }
+    assert!(!save.join("integrity.yaml").exists());
+    assert!(!save.join(".talkdnd.integrity.lock").exists());
+    assert_eq!(fs::read(&log).unwrap(), log_bytes);
+    assert_eq!(fs::read(&lock_path).unwrap(), lock_bytes);
+    assert_eq!(fs::read(&state_path).unwrap(), state_bytes);
+
+    let held = adv::open(&root, &save, &adv::OpenOptions::new()).unwrap();
+    held.check_ordinary_write().unwrap();
+    let meta = fs::symlink_metadata(&lock_path).unwrap();
+    assert!(meta.is_file() && meta.len() > 0);
+
+    talkdnd::audit::after_command(&save, &before).unwrap();
+    assert!(save.join("integrity.yaml").is_file());
+    talkdnd::audit::audit(&save).unwrap();
+    let prefix = fs::read(&log).unwrap();
+    assert_eq!(prefix, log_bytes);
+    talkdnd::audit::accept(&save, "order-reason").unwrap();
+    let log_after = fs::read(&log).unwrap();
+    assert!(log_after.starts_with(&prefix));
+    assert!(String::from_utf8_lossy(&log_after).contains("order-reason"));
+    drop(held);
+
+    assert_eq!(fs::read(&lock_path).unwrap(), lock_bytes);
+    assert_eq!(fs::read(&state_path).unwrap(), state_bytes);
 }

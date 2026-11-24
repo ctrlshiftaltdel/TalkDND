@@ -220,15 +220,15 @@
 
 分组只表示接入顺序，不表示组内每个入口已经安全；每组必须逐条验收。
 
-### 5.1 过渡门与接入状态（`ADV-P1-1pre` / `ADV-P1-1a` / `ADV-P1-1b` / `ADV-P1-1c`）
+### 5.1 过渡门与接入状态（`ADV-P1-1pre` / `ADV-P1-1a` / `ADV-P1-1b` / `ADV-P1-1c` / `ADV-P1-1d`）
 
-`ADV-P1-1pre` 交付了一个共享的**过渡门**：存档存在 `.talkdnd.advancement.lock` 或 `.talkdnd.advancement.state` 时，尚未接入成长协议的写存档入口失败关闭（退出码 1、明确文案、不写目标），只读入口保持可用。`ADV-P1-1a` 将组 A（§2.1、§2.2、§2.6 的 `talkdnd` 写入口，含 `start`）从“过渡门拒绝”改为“已接入 SAVE 锁”。`ADV-P1-1b` 将组 B（§2.3 的 `combat-sim` 状态/`new`/`quick`/`party rest|set-hp|sync`/`roll`，以及 §2.7 中 `--out` 可能落入存档的 `content import-*` 与 `content pack build|release`）同样改为“已接入 SAVE 锁”，并把 SAVE 锁原语从 `talkdnd` 迁入共享 crate `tools/advancement-lock`（两套 CLI 共同依赖；`combat-sim` 不依赖 `talkdnd`）。这些入口在写目标前取得已有的 SAVE 锁 v1（`open` + `check_ordinary_write`），锁不可用（state 缺失、不可写、`active` 或 `in_doubt`）时失败关闭且不写目标。缺失 SAVE state 时的拒绝是接入期的保守处理，不自动 `init`。`--out` 在存档外时按存档外写入允许；`pack build|release --dry-run` 只读。`ADV-P1-1c` 将组 C 的 `checkpoint snapshot` / `checkpoint restore` / `migrate`（非 `--dry-run`）改为“已接入 SAVE 锁”，总序为 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`；`checkpoint list|show` 与 `migrate --dry-run` 保持只读，整个 CLI 运行前后整树字节一致，且不因接入而创建 lock/state 或写探针。`checkpoint <text>` 仍走过渡门（与 `log` 的并发语义一并留给 1d）。**没有启用提交入口、没有新增 schema/sidecar、没有实现 D 提交。** 1d–1e 与 §2.7 的 `handout list --dm`/`build`/`mark` 仍走过渡门拒绝。
+`ADV-P1-1pre` 交付了一个共享的**过渡门**：存档存在 `.talkdnd.advancement.lock` 或 `.talkdnd.advancement.state` 时，尚未接入成长协议的写存档入口失败关闭（退出码 1、明确文案、不写目标），只读入口保持可用。`ADV-P1-1a` 将组 A（§2.1、§2.2、§2.6 的 `talkdnd` 写入口，含 `start`）从“过渡门拒绝”改为“已接入 SAVE 锁”。`ADV-P1-1b` 将组 B（§2.3 的 `combat-sim` 状态/`new`/`quick`/`party rest|set-hp|sync`/`roll`，以及 §2.7 中 `--out` 可能落入存档的 `content import-*` 与 `content pack build|release`）同样改为“已接入 SAVE 锁”，并把 SAVE 锁原语从 `talkdnd` 迁入共享 crate `tools/advancement-lock`（两套 CLI 共同依赖；`combat-sim` 不依赖 `talkdnd`）。这些入口在写目标前取得已有的 SAVE 锁 v1（`open` + `check_ordinary_write`），锁不可用（state 缺失、不可写、`active` 或 `in_doubt`）时失败关闭且不写目标。缺失 SAVE state 时的拒绝是接入期的保守处理，不自动 `init`。`--out` 在存档外时按存档外写入允许；`pack build|release --dry-run` 只读。`ADV-P1-1c` 将组 C 的 `checkpoint snapshot` / `checkpoint restore` / `migrate`（非 `--dry-run`）改为“已接入 SAVE 锁”，总序为 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock`；`checkpoint list|show` 与 `migrate --dry-run` 保持只读，整个 CLI 运行前后整树字节一致，且不因接入而创建 lock/state 或写探针。`ADV-P1-1d` 将组 D 的 `log <text>`、`check`（含无参数）、`integrity status`、`integrity accept` 改为“已接入 SAVE 锁”。这些入口可能创建或改写 `integrity.yaml`，按写入处理。`run()` 持有 SAVE 直至 `audit::after_command` 结束；协议存档上 `audit` / `after_command` / `accept` 在取完整性锁之前要求 SAVE 已持有，否则不改写清单。`log rolls` 保持只读，整个 CLI 运行前后整树字节一致。日志追加（`save::append`、`rolls::append`、`player::append_*`）在协议存档上未持有 SAVE 时拒绝，既有行不截断。`checkpoint <text>` 仍走过渡门。**没有启用提交入口、没有新增 schema/sidecar、没有实现 D 提交。** 1e 与 §2.7 的 `handout list --dm`/`build`/`mark` 仍走过渡门拒绝。#264 结论不变：完整性锁仍只覆盖清单读改写，不约束非协作写者。
 
 **实现位置（代码为准）：**
 
 - 共享 crate `tools/advancement-lock`：控制文件名 `LOCK_FILE`/`STATE_FILE`、`has_protocol`、`enclosing_protocol_dir`、写者注册表 `WRITERS`、分类 `Class`（含 `AdoptedWrite`）、统一拒绝错误 `Refused` 与 `--help` 文案，以及 SAVE 锁原语（`init`/`open`、`check_ordinary_write`、`check_writable`）。普通写入必须用 `check_ordinary_write`（不要求目录 sync，以免 Windows 上拒绝所有普通写入）；D 提交仍应使用 `check_writable`。依赖 `serde`/`serde_json`/`sha2`/`chrono`。
-- `talkdnd`：`tools/talkdnd/src/lib.rs` 的 `gate_entry`（对 `Cmd` 穷尽分类）、`run()` 中的门检查，以及对组 A / 组 C `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（`open` + `check_ordinary_write`，持锁至命令后审计结束）；组 C 在 SAVE 之后再取 checkpoint `.talkdnd.lock`（`checkpoint::hold_lock` / `Lock::acquire`），协议存档上反向获取判为协议违规；`lib.rs` 的 `tracked` 将 `checkpoint list|show` 显式移出外层审计（`migrate --dry-run` 随 `Cmd::Migrate` 本就不跟踪）；`tools/talkdnd/src/advancement_lock.rs` 再导出共享 crate 的 v1 原语，组 A 行为不变。
-- `combat-sim`：`tools/combat-sim/src/cli.rs` 的 `gate_entry`、`write_targets`/`content_out_dirs`、`check_transition_gate` 与 `run_cli` 中对组 B `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（同样 `open` + `check_ordinary_write`，持锁至命令与完整性清单更新结束）。`PartyState::save` 与 `EncounterState::save` 仍在写后更新完整性清单，但完整性锁只序列化清单、不再被当作内容保护；内容写入受 SAVE 锁约束。单次状态命令的 `state.save` → `party.save` → 日志追加在 SAVE 内执行，失败时报告已写/未写阶段，不声称多文件原子性。`combat-sim` 不依赖 `talkdnd`。
+- `talkdnd`：`tools/talkdnd/src/lib.rs` 的 `gate_entry`（对 `Cmd` 穷尽分类）、`run()` 中的门检查，以及对组 A / 组 C / 组 D `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（`open` + `check_ordinary_write`，持锁至命令后审计结束，不提前释放、不再开第二把）；组 C 在 SAVE 之后再取 checkpoint `.talkdnd.lock`（`checkpoint::hold_lock` / `Lock::acquire`），协议存档上反向获取判为协议违规；组 D 的 `audit` / `after_command` / `accept` 在取完整性锁之前要求 SAVE 已持有（`tools/talkdnd/src/audit.rs`），否则不改写清单；`lib.rs` 的 `tracked` 将 `checkpoint list|show` 与 `log rolls` 显式移出外层审计（`migrate --dry-run` 随 `Cmd::Migrate` 本就不跟踪；`Cmd::Integrity` 本就不跟踪，由 status/accept 自己取完整性锁）；`save::append` 与 `rolls::append` 在协议存档上未持有 SAVE 时拒绝追加；`tools/talkdnd/src/advancement_lock.rs` 再导出共享 crate 的 v1 原语，组 A 行为不变。
+- `combat-sim`：`tools/combat-sim/src/cli.rs` 的 `gate_entry`、`write_targets`/`content_out_dirs`、`check_transition_gate` 与 `run_cli` 中对组 B `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（同样 `open` + `check_ordinary_write`，持锁至命令与完整性清单更新结束）。`PartyState::save` 与 `EncounterState::save` 仍在写后更新完整性清单，但完整性锁只序列化清单、不再被当作内容保护；内容写入受 SAVE 锁约束。单次状态命令的 `state.save` → `party.save` → 日志追加在 SAVE 内执行，失败时报告已写/未写阶段，不声称多文件原子性。`player::append_roll` / `append_combat_lines` 在协议存档上未持有 SAVE 时拒绝追加。`integrity::lock` 内没有全局 SAVE 检查（否则无协议的单元测试会失败）。`combat-sim` 不依赖 `talkdnd`。
 - 测试：`tools/advancement-lock` 单元测试与 `tests/save_lock.rs`、`tools/talkdnd/tests/transition_gate.rs`、`tools/talkdnd/tests/advancement_save_lock.rs`、`tools/talkdnd/tests/advancement_lock.rs`（经再导出回归原语）、`tools/combat-sim/tests/transition_gate.rs`、`tools/combat-sim/tests/advancement_save_lock.rs`（CLI 测试直接调用真实二进制，不是只测包装函数）。
 
 **门的语义（两套 CLI 相同）：**
@@ -279,12 +279,13 @@
 | §2.4 `checkpoint restore` | `talkdnd:checkpoint-restore` | `AdoptedWrite` | 是（SAVE 锁，然后 checkpoint `.talkdnd.lock`，然后完整性锁） |
 | §2.4 `migrate`（非 dry-run） | `talkdnd:migrate` | `AdoptedWrite` | 是（SAVE 锁，然后 checkpoint `.talkdnd.lock`，然后完整性锁） |
 | §2.4 `start` | `talkdnd:start` | `AdoptedWrite` | 是（已接入 SAVE 锁；digest/缓存不单独取锁，锁不可用时也不写） |
-| §2.5 `log <text>` | `talkdnd:log` | `UnadoptedWrite` | 否（过渡门拒绝） |
-| §2.5 `check`（含无参数） | `talkdnd:check` | `UnadoptedWrite` | 否（过渡门拒绝） |
-| §2.5 `integrity status` | `talkdnd:integrity-status` | `UnadoptedWrite` | 否（过渡门拒绝） |
-| §2.5 `integrity accept` | `talkdnd:integrity-accept` | `UnadoptedWrite` | 否（过渡门拒绝） |
-| §2.5 外层 `audit::after_command` | 随所属命令；协议存在时对只读/控制元数据命令关闭 | — | 见 §5.1 语义表 |
-| §2.5 日志追加（`save::append`、`rolls::append`、`player::append_*`） | 随调用方 | — | 随调用方 |
+| §2.5 `log <text>` | `talkdnd:log` | `AdoptedWrite` | 是（SAVE 锁；追加会话日志，不截断既有行） |
+| §2.5 `log rolls` | `talkdnd:log-rolls` | `ReadOnly` | 不适用（整个 CLI 运行整树字节一致，不取 SAVE 锁） |
+| §2.5 `check`（含无参数） | `talkdnd:check` | `AdoptedWrite` | 是（SAVE 锁；可能创建清单与 baseline，然后完整性锁） |
+| §2.5 `integrity status` | `talkdnd:integrity-status` | `AdoptedWrite` | 是（SAVE 锁；可能创建清单，不是只读） |
+| §2.5 `integrity accept` | `talkdnd:integrity-accept` | `AdoptedWrite` | 是（SAVE 锁，然后完整性锁；改写清单并记日志） |
+| §2.5 外层 `audit::after_command` | 随所属命令；协议存在时对只读/控制元数据命令关闭。协议存档上 `audit` / `after_command` / `accept` 必须已持有 SAVE 再取完整性锁 | — | 见 §5.1 语义表 |
+| §2.5 日志追加（`save::append`、`rolls::append`、`player::append_*`） | 随调用方 | — | 协议存档上未持有 SAVE 则拒绝且不追加；未初始化存档保持原行为 |
 | §2.6 `identify` | `talkdnd:identify` | `AdoptedWrite` | 是（已接入 SAVE 锁） |
 | §2.6 `reveal add` | `talkdnd:reveal-add` | `AdoptedWrite` | 是（已接入 SAVE 锁） |
 | §2.6 `original add` / `original plan` | `talkdnd:original-add` / `talkdnd:original-plan` | `AdoptedWrite` | 是（已接入 SAVE 锁） |

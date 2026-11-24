@@ -45,6 +45,11 @@ pub struct ManifestLock {
 /// holder releases it. Never nest acquisitions for the same save: a second
 /// `lock()` in the same process would wait on itself. While holding the
 /// lock, call the `*_locked` variants instead of the locking wrappers.
+///
+/// This function does not consult the SAVE protocol. `talkdnd`'s audit path
+/// requires SAVE to be held before calling it on a protocol-enabled save.
+/// A check here would reject combat-sim unit tests that update a manifest
+/// with no SAVE lock, and this crate does not depend on `talkdnd`.
 pub fn lock(save: &Path) -> Result<ManifestLock> {
     fs::create_dir_all(save).with_context(|| format!("create {}", save.display()))?;
     let p = save.join(LOCK);
@@ -217,7 +222,31 @@ pub fn load(save: &Path) -> Result<Option<Manifest>> {
     Ok(Some(manifest))
 }
 
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_STORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The next [`store`] fails before it writes. The flag is consumed by that
+/// call. Test-only: a chmod of the save directory does not fail as root.
+#[cfg(test)]
+fn fail_next_store() {
+    FAIL_NEXT_STORE.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn clear_store_failure() {
+    FAIL_NEXT_STORE.with(|flag| flag.set(false));
+}
+
 pub fn store(save: &Path, m: &Manifest) -> Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_STORE.with(|flag| flag.replace(false)) {
+        bail!(
+            "write {}: injected store failure before any manifest bytes changed",
+            path(save).display()
+        );
+    }
     let text = format!(
         "# TalkDND save integrity manifest (written by talkdnd/combat-sim; do not edit).\n# Accept hand edits with `talkdnd integrity accept --reason \"...\"`.\n{}",
         serde_norway::to_string(m)?
@@ -548,6 +577,55 @@ mod tests {
         fs::remove_dir(path(&d)).unwrap();
         after_write(&d, &before).unwrap();
         assert!(changes(&d).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A store that fails after a hand edit must leave the manifest bytes and
+    /// the dirty flag alone. A later successful tool write of a different file
+    /// still does not clear that flag.
+    #[test]
+    fn a_failed_manifest_update_keeps_the_dirty_flag() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                clear_store_failure();
+            }
+        }
+        let _reset = Reset;
+        let d = dir("dirty-keep");
+        fs::write(d.join("progress.yaml"), "xp: {a: 0}\n").unwrap();
+        fs::write(d.join("Characters/A.md"), "hp: 10\n").unwrap();
+        ensure(&d).unwrap();
+        fs::write(d.join("Characters/A.md"), "hp: 99\n").unwrap();
+        let manifest_before = fs::read(path(&d)).unwrap();
+        let before = snapshot(&d);
+        fs::write(d.join("progress.yaml"), "xp: {a: 100}\n").unwrap();
+        fail_next_store();
+        let err = after_write(&d, &before).unwrap_err();
+        assert!(err.to_string().contains("integrity.yaml"), "{err}");
+        assert_eq!(fs::read(path(&d)).unwrap(), manifest_before);
+        let dirty = changes(&d).unwrap();
+        assert!(
+            dirty.iter().any(|c| c.path() == "Characters/A.md"),
+            "{dirty:?}"
+        );
+        assert!(
+            dirty.iter().any(|c| c.path() == "progress.yaml"),
+            "{dirty:?}"
+        );
+
+        let before = snapshot(&d);
+        fs::write(d.join("combat/party-state.yaml"), "members: {}\n").unwrap();
+        after_write(&d, &before).unwrap();
+        let later = changes(&d).unwrap();
+        assert!(
+            later.iter().any(|c| c.path() == "Characters/A.md"),
+            "the hand-edit dirty flag was cleared: {later:?}"
+        );
+        assert!(
+            later.iter().any(|c| c.path() == "progress.yaml"),
+            "the failed progress update was recorded anyway: {later:?}"
+        );
         let _ = fs::remove_dir_all(&d);
     }
 

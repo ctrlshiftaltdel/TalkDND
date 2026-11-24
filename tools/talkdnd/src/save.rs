@@ -220,6 +220,24 @@ fn manifest_ruleset_value(text: &str) -> Option<String> {
     None
 }
 
+/// Refuse a log append on a protocol-enabled save unless this process already
+/// holds SAVE. `Ok(None)` from the enclosing-dir walk is an uninitialized
+/// save and is allowed. An unresolvable path fails closed.
+fn require_save_for_log_append(path: &Path) -> Result<()> {
+    match ::advancement_lock::enclosing_protocol_dir(path)? {
+        Some(save)
+            if ::advancement_lock::has_protocol(&save)
+                && !::advancement_lock::is_save_lock_held(&save) =>
+        {
+            bail!(
+                "协议违规：在取得 SAVE 锁之前追加日志 {}；总序必须是先持有 SAVE 再写日志。未写入任何目标文件",
+                path.display()
+            );
+        }
+        Some(_) | None => Ok(()),
+    }
+}
+
 /// Newest session log (by file name) in Sessions/.
 pub fn latest_log(save: &Path) -> Option<PathBuf> {
     let mut v: Vec<PathBuf> = fs::read_dir(save.join("Sessions"))
@@ -239,7 +257,14 @@ pub fn latest_log(save: &Path) -> Option<PathBuf> {
 /// Append `text` without reading the whole file: only the last byte is read to
 /// decide whether a separating newline is needed. Long campaign logs therefore
 /// cost O(1), not O(file size).
+///
+/// Session logs, `rolls.log`, checkpoint restore notes and migrate session
+/// lines all come through here. On a protocol-enabled save the caller must
+/// already hold SAVE. An uninitialized save (no control file on the path or
+/// its ancestors) appends as before. A refusal writes nothing and leaves
+/// existing lines unchanged.
 pub fn append(path: &Path, text: &str) -> Result<()> {
+    require_save_for_log_append(path)?;
     let mut f = fs::OpenOptions::new()
         .read(true)
         .append(true)
@@ -340,6 +365,65 @@ mod tests {
         assert!(text.starts_with(&body));
         assert!(text.ends_with("x\ntail\n"));
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_protocol_append_requires_save_and_does_not_truncate() {
+        let root = std::env::temp_dir().join(format!(
+            "talkdnd-append-proto-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let save = root.join("Saves/slot");
+        fs::create_dir_all(save.join("Sessions")).unwrap();
+        let log = save.join("Sessions/log.md");
+        fs::write(&log, "kept line\n").unwrap();
+        match ::advancement_lock::init(&root, &save, &::advancement_lock::InitOptions::new()) {
+            Ok(_) => {}
+            Err(err) if err.kind() == ::advancement_lock::ErrorKind::StatePublishedNotDurable => {}
+            Err(err) => panic!("init protocol: {err}"),
+        }
+        let lock_path = ::advancement_lock::lock_path(&save);
+        let before_lock = fs::read(&lock_path).unwrap();
+        let before_state = fs::read(::advancement_lock::state_path(&save)).unwrap();
+        let before_log = fs::read(&log).unwrap();
+
+        let err = append(&log, "must-not-land").unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("协议违规") && text.contains("未写入任何目标文件"),
+            "{text}"
+        );
+        assert_eq!(fs::read(&log).unwrap(), before_log);
+
+        let held = ::advancement_lock::open(&root, &save, &::advancement_lock::OpenOptions::new())
+            .unwrap();
+        held.check_ordinary_write().unwrap();
+        let meta = fs::symlink_metadata(&lock_path).unwrap();
+        assert!(meta.is_file());
+        append(&log, "added").unwrap();
+        drop(held);
+
+        let after = fs::read(&log).unwrap();
+        assert!(after.starts_with(&before_log));
+        assert!(String::from_utf8_lossy(&after).contains("added"));
+        assert_eq!(fs::read(&lock_path).unwrap(), before_lock);
+        assert_eq!(
+            fs::read(::advancement_lock::state_path(&save)).unwrap(),
+            before_state
+        );
+
+        let plain = root.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        let plain_log = plain.join("log.md");
+        append(&plain_log, "free").unwrap();
+        assert_eq!(fs::read_to_string(&plain_log).unwrap(), "free\n");
+        assert!(!plain.join(::advancement_lock::LOCK_FILE).exists());
         let _ = fs::remove_dir_all(&root);
     }
 }
