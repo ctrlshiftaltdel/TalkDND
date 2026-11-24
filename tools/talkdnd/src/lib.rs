@@ -52,7 +52,8 @@ use std::path::{Path, PathBuf};
 // The local `advancement_lock` module re-exports the shared SAVE lock
 // primitive. The shared crate of the same name also owns the control-file
 // names and the transition gate both CLIs consult. Alias the crate so the
-// two never get confused.
+// two never get confused. rustfmt must not drop the leading `::`.
+#[rustfmt::skip]
 use ::advancement_lock as gate;
 
 #[derive(Parser)]
@@ -1153,6 +1154,15 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             AdventureCmd::Search { .. } => None,
             AdventureCmd::Section { .. } => save::resolve_slot(&root, cli.save.as_deref()).ok(),
         },
+        // ADV-P1-1c / #285: list|show must not run the outer after_command
+        // audit (whole-CLI tree-identical). `Cmd::Migrate` is already
+        // untracked above, including `--dry-run`. Snapshot, restore, and
+        // `checkpoint <text>` stay on the default arm (the last of those is
+        // still UnadoptedWrite).
+        Cmd::Checkpoint {
+            cmd: Some(checkpoint::Cmd::List { .. } | checkpoint::Cmd::Show { .. }),
+            ..
+        } => None,
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
     };
     // Under the protocol a read-only or control-metadata command must not run
@@ -1581,6 +1591,13 @@ fn dispatch(
         }
         Cmd::Migrate { dry_run } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
+            // AC-1: non-dry-run migrate writes only after SAVE (held by
+            // `run` for AdoptedWrite) and checkpoint `.talkdnd.lock`.
+            let _checkpoint = if dry_run {
+                None
+            } else {
+                Some(checkpoint::hold_lock(&s)?)
+            };
             if !dry_run {
                 if let Some(line) = save::migrate_ruleset(&s)? {
                     println!("{line}");

@@ -6,14 +6,18 @@
 //! SAVE lock before writing; if the lock or state is missing, unwritable,
 //! `active` or `in_doubt`, they fail closed and leave the tree unchanged.
 //! Missing SAVE state on a protocol-enabled save is the plan's conservative
-//! temporary handling, documented in the refusal text. Leftover 1c–1e and
-//! `handout build|mark|list --dm` writers still hit the transition gate.
+//! temporary handling, documented in the refusal text. Group C (checkpoint
+//! snapshot/restore and migrate) is adopted in this file's 1c tests. Leftover
+//! 1d–1e, `checkpoint <text>`, and `handout build|mark|list --dm` writers
+//! still hit the transition gate.
 
 use advancement_lock::{Class, Cli, WRITERS};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 use talkdnd::advancement_lock as adv;
 
 const SAVE: &str = "Saves/2030-01-02-01";
@@ -346,7 +350,11 @@ fn missing_state_or_lock_refuses_every_adopted_writer_and_writes_nothing() {
     let lock_bytes = fs::read(save.join(adv::LOCK_FILE)).unwrap();
     let state_bytes = fs::read(save.join(adv::STATE_FILE)).unwrap();
     let rows = adopted_rows();
-    assert_eq!(rows.len(), 27, "group A registry size");
+    assert_eq!(
+        rows.len(),
+        30,
+        "group A + group C adopted talkdnd registry size"
+    );
 
     // Lock exists, SAVE state is missing: conservative temporary handling.
     fs::remove_file(save.join(adv::STATE_FILE)).unwrap();
@@ -646,11 +654,10 @@ fn leftover_unadopted_writers_are_still_refused_by_the_transition_gate() {
     init_protocol(&root, &save);
     let before = snapshot(&save);
     for (entry, args) in [
-        ("talkdnd:log", ["log", "p1a leftover"].as_slice()),
-        ("talkdnd:migrate", ["migrate"].as_slice()),
+        ("talkdnd:log", ["log", "p1c leftover"].as_slice()),
         (
             "talkdnd:checkpoint-text",
-            ["checkpoint", "p1a leftover"].as_slice(),
+            ["checkpoint", "p1c leftover"].as_slice(),
         ),
         ("talkdnd:check", ["check"].as_slice()),
     ] {
@@ -675,4 +682,278 @@ fn without_the_protocol_adopted_writers_keep_working_and_do_not_init() {
     ok_slot(&root, &["start", "--no-pdf2md"]);
     assert!(!save.join(adv::LOCK_FILE).exists());
     assert!(!save.join(adv::STATE_FILE).exists());
+}
+
+fn latest_checkpoint_id(save: &Path) -> String {
+    let dir = save.join("checkpoints");
+    let mut ids: Vec<String> = fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_type().unwrap().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    ids.sort();
+    ids.pop()
+        .unwrap_or_else(|| panic!("no checkpoint in {}", dir.display()))
+}
+
+fn downgrade_schema(save: &Path, from: &str, to: &str) {
+    let path = save.join("save-meta.yaml");
+    let text = fs::read_to_string(&path).unwrap();
+    let updated = text.replace(&format!("schema: {from}"), &format!("schema: {to}"));
+    assert_ne!(
+        updated, text,
+        "save-meta.yaml had no `schema: {from}`:\n{text}"
+    );
+    fs::write(&path, updated).unwrap();
+}
+
+fn git_head() -> String {
+    Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn t6a_scope() -> String {
+    format!(
+        "T6a evidence scope: synthetic held SAVE lock (not a live D commit); platform={} {}; head={}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        git_head()
+    )
+}
+
+fn wait_child_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+    label: &str,
+) -> Output {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    let _ = pipe.read_to_end(&mut stdout);
+                }
+                if let Some(mut pipe) = child.stderr.take() {
+                    let _ = pipe.read_to_end(&mut stderr);
+                }
+                return Output {
+                    status,
+                    stdout,
+                    stderr,
+                };
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "{label} hung (child still running after {timeout:?}); {}",
+                    t6a_scope()
+                );
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(err) => panic!("{label}: try_wait failed: {err}"),
+        }
+    }
+}
+
+fn run_slot_timed(root: &Path, args: &[&str], timeout: Duration, label: &str) -> Output {
+    let mut full = vec!["--root".to_string(), root.display().to_string()];
+    full.push("--save".into());
+    full.push(SLOT.into());
+    full.extend(args.iter().map(|s| (*s).to_string()));
+    let child = Command::new(env!("CARGO_BIN_EXE_talkdnd"))
+        .args(&full)
+        .env("TALKDND_NO_PDF2MD", "1")
+        .env("TALKDND_COMBAT_SIM", root.join("no-such-combat-sim"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn talkdnd");
+    wait_child_with_timeout(child, timeout, label)
+}
+
+#[test]
+fn group_c_writers_succeed_under_an_initialized_protocol() {
+    let root = playable("p1c-ready");
+    let save = root.join(SAVE);
+    init_protocol(&root, &save);
+
+    let snap = ok_slot(&root, &["checkpoint", "snapshot"]);
+    assert!(
+        !snap.contains("尚未接入成长协议") && !snap.contains("无法取得 SAVE 锁"),
+        "snapshot must be adopted\n{snap}"
+    );
+    let id = latest_checkpoint_id(&save);
+    assert!(
+        save.join("checkpoints").join(&id).is_dir(),
+        "snapshot must create checkpoints/{id}"
+    );
+
+    let listed = ok_slot(&root, &["checkpoint", "list"]);
+    assert!(
+        listed.contains(&id) || !listed.is_empty(),
+        "list:\n{listed}"
+    );
+
+    downgrade_schema(&save, "10", "8");
+    let migrated = ok_slot(&root, &["migrate"]);
+    assert!(
+        migrated.contains("schema") || migrated.contains("迁移") || migrated.contains("无需迁移"),
+        "migrate:\n{migrated}"
+    );
+    let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
+    assert!(
+        meta.contains("schema: 10"),
+        "migrate must write the current schema:\n{meta}"
+    );
+
+    let restored = ok_slot(&root, &["checkpoint", "restore", &id, "--yes"]);
+    assert!(
+        !restored.contains("尚未接入成长协议"),
+        "restore must be adopted\n{restored}"
+    );
+}
+
+#[test]
+fn checkpoint_list_show_and_migrate_dry_run_are_tree_identical_under_the_protocol() {
+    let root = playable("p1c-ro");
+    let save = root.join(SAVE);
+    init_protocol(&root, &save);
+    ok_slot(&root, &["checkpoint", "snapshot"]);
+    let id = latest_checkpoint_id(&save);
+    downgrade_schema(&save, "10", "8");
+    let before = snapshot(&save);
+    let protocol_lock = fs::read(save.join(adv::LOCK_FILE)).unwrap();
+    let protocol_state = fs::read(save.join(adv::STATE_FILE)).unwrap();
+
+    let list = ok_slot(&root, &["checkpoint", "list"]);
+    assert!(
+        !list.contains("尚未接入成长协议") && !list.contains("无法取得 SAVE 锁"),
+        "list must stay available\n{list}"
+    );
+    assert_eq!(
+        snapshot(&save),
+        before,
+        "checkpoint list changed the save tree"
+    );
+
+    let show = ok_slot(&root, &["checkpoint", "show", &id]);
+    assert!(
+        !show.contains("尚未接入成长协议") && !show.contains("无法取得 SAVE 锁"),
+        "show must stay available\n{show}"
+    );
+    assert_eq!(
+        snapshot(&save),
+        before,
+        "checkpoint show changed the save tree"
+    );
+
+    let dry = ok_slot(&root, &["migrate", "--dry-run"]);
+    assert!(
+        !dry.contains("尚未接入成长协议") && !dry.contains("无法取得 SAVE 锁"),
+        "migrate --dry-run must stay available\n{dry}"
+    );
+    assert_eq!(
+        snapshot(&save),
+        before,
+        "migrate --dry-run changed the save tree"
+    );
+    assert_eq!(
+        fs::read(save.join(adv::LOCK_FILE)).unwrap(),
+        protocol_lock,
+        "read-only commands must not rewrite the SAVE lock"
+    );
+    assert_eq!(
+        fs::read(save.join(adv::STATE_FILE)).unwrap(),
+        protocol_state,
+        "read-only commands must not rewrite SAVE state or auto-init"
+    );
+}
+
+#[test]
+fn group_c_writers_without_the_protocol_keep_working_and_do_not_init() {
+    let root = playable("p1c-noproto");
+    let save = root.join(SAVE);
+    assert!(!save.join(adv::LOCK_FILE).exists());
+    assert!(!save.join(adv::STATE_FILE).exists());
+    ok_slot(&root, &["checkpoint", "snapshot"]);
+    let id = latest_checkpoint_id(&save);
+    downgrade_schema(&save, "10", "8");
+    let dry_before = snapshot(&save);
+    ok_slot(&root, &["migrate", "--dry-run"]);
+    assert_eq!(
+        snapshot(&save),
+        dry_before,
+        "migrate --dry-run without the protocol must not write"
+    );
+    ok_slot(&root, &["migrate"]);
+    ok_slot(&root, &["checkpoint", "restore", &id, "--yes"]);
+    assert!(!save.join(adv::LOCK_FILE).exists());
+    assert!(!save.join(adv::STATE_FILE).exists());
+}
+
+#[test]
+fn t6a_checkpoint_snapshot_and_restore_time_out_against_a_held_save_lock() {
+    let root = playable("p1c-t6a");
+    let save = root.join(SAVE);
+    init_protocol(&root, &save);
+    ok_slot(&root, &["checkpoint", "snapshot"]);
+    let id = latest_checkpoint_id(&save);
+    let before = snapshot(&save);
+    let held = adv::open(&root, &save, &adv::OpenOptions::new()).unwrap();
+    let scope = t6a_scope();
+    let timeout = adv::DEFAULT_ACQUIRE_TIMEOUT + Duration::from_secs(7);
+
+    let snap = run_slot_timed(
+        &root,
+        &["checkpoint", "snapshot"],
+        timeout,
+        "T6a checkpoint snapshot",
+    );
+    let snap_text = output_text(&snap);
+    assert_eq!(
+        snap.status.code(),
+        Some(1),
+        "T6a snapshot must fail closed, not hang\n{scope}\n{snap_text}"
+    );
+    assert!(
+        snap_text.contains("未写入任何目标文件") && snap_text.contains("占用"),
+        "T6a snapshot: {scope}\n{snap_text}"
+    );
+
+    let restore = run_slot_timed(
+        &root,
+        &["checkpoint", "restore", &id, "--yes"],
+        timeout,
+        "T6a checkpoint restore",
+    );
+    let restore_text = output_text(&restore);
+    assert_eq!(
+        restore.status.code(),
+        Some(1),
+        "T6a restore must fail closed, not hang\n{scope}\n{restore_text}"
+    );
+    assert!(
+        restore_text.contains("未写入任何目标文件") && restore_text.contains("占用"),
+        "T6a restore: {scope}\n{restore_text}"
+    );
+
+    drop(held);
+    assert_eq!(
+        snapshot(&save),
+        before,
+        "T6a waiter wrote the save; {scope}"
+    );
+    eprintln!("T6a snapshot: timeout/fail-closed; T6a restore: timeout/fail-closed; {scope}");
 }

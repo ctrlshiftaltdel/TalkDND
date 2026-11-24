@@ -123,6 +123,36 @@ fn restore_backups(root: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// Initialise the SAVE protocol and return without holding it. Dummy
+/// lock/state bytes would still trip `has_protocol`, and `open` would fail
+/// closed on unusable state (AC-5). Capture control-file bytes after this
+/// returns and before [`hold_save`]: a real protocol plus a held SAVE lock
+/// lets restore take the checkpoint lock in order (AC-1) while still proving
+/// that root control files are excluded from the pre-restore backup and left
+/// alone by restore/rollback (AC-2).
+fn init_save(root: &Path, save: &Path) {
+    use talkdnd::advancement_lock as adv;
+    match adv::init(root, save, &adv::InitOptions::new()) {
+        Ok(_) => {}
+        Err(err) if err.kind() == adv::ErrorKind::StatePublishedNotDurable => {}
+        Err(err) => panic!("init protocol: {err}"),
+    }
+}
+
+/// Hold SAVE (`open` + `check_ordinary_write`) for the rest of the caller.
+///
+/// `open` exclusively locks `.talkdnd.advancement.lock` and does not rewrite
+/// it. On Windows that lock is mandatory, so `fs::read` / `fs::read_to_string`
+/// of the held advancement lock file fails with ERROR_LOCK_VIOLATION (os
+/// error 33). Snapshot the bytes before this, and while the guard is alive
+/// only check metadata / existence — never read that file.
+fn hold_save(root: &Path, save: &Path) -> talkdnd::advancement_lock::AdvancementLock {
+    use talkdnd::advancement_lock as adv;
+    let held = adv::open(root, save, &adv::OpenOptions::new()).unwrap();
+    held.check_ordinary_write().unwrap();
+    held
+}
+
 /// A post-commit failure must name the stage, the checkpoint id, the
 /// pre-restore whole-save backup and the fact that the save may already have
 /// changed — and must never claim the save is unchanged.
@@ -1137,13 +1167,16 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
 
     // Advancement control files are runtime data as well: the whole-save
     // backup excludes them, so the mirror rollback must leave them alone too.
-    let advancement = [
-        (".talkdnd.advancement.lock", "advancement lock\n"),
-        (".talkdnd.advancement.state", "advancement state\n"),
-    ];
-    for (name, bytes) in advancement {
-        fs::write(save.join(name), bytes).unwrap();
-    }
+    // Use a real protocol and hold SAVE: dummy lock/state bytes would still
+    // trip `has_protocol`, and open() would fail closed on unusable state.
+    // Snapshot before `open`. Do not `fs::read` the advancement lock file
+    // while SAVE is held: Windows mandatory locks return ERROR_LOCK_VIOLATION.
+    init_save(&root, &save);
+    let advancement = {
+        use talkdnd::advancement_lock as adv;
+        [adv::LOCK_FILE, adv::STATE_FILE].map(|name| (name, fs::read(save.join(name)).unwrap()))
+    };
+    let save_lock = hold_save(&root, &save);
 
     let held: std::sync::Mutex<Option<fs::File>> = std::sync::Mutex::new(None);
     let hook_save = save.clone();
@@ -1172,11 +1205,14 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
     assert!(err.to_string().contains("回滚到恢复前状态"), "{err}");
 
     // The mirror rollback must not delete control files the backup excludes.
-    for (name, bytes) in advancement {
-        assert_eq!(
-            fs::read_to_string(save.join(name)).unwrap(),
-            bytes,
-            "the rollback changed {name}"
+    // Metadata only while SAVE is held — `fs::read` of the advancement lock
+    // file fails on Windows (mandatory lock, ERROR_LOCK_VIOLATION).
+    for (name, _) in &advancement {
+        let meta = fs::metadata(save.join(name))
+            .unwrap_or_else(|err| panic!("the rollback removed {name} while SAVE was held: {err}"));
+        assert!(
+            meta.is_file(),
+            "the rollback replaced {name} with a non-file"
         );
     }
 
@@ -1207,6 +1243,17 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
         .try_lock()
         .expect("a released integrity lock must be acquirable again");
     drop(after);
+    // Bytes only after the SAVE lock is released. The advancement lock file
+    // is still exclusively locked until `save_lock` drops; reading it earlier
+    // is ERROR_LOCK_VIOLATION on Windows.
+    drop(save_lock);
+    for (name, bytes) in advancement {
+        assert_eq!(
+            fs::read(save.join(name)).unwrap(),
+            bytes,
+            "the rollback changed {name}"
+        );
+    }
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -1240,20 +1287,25 @@ fn the_restore_backup_excludes_runtime_control_files() {
         fs::write(save.join(rel), bytes).unwrap();
     }
     let id = snapshot(&save, None);
-    let control = [
-        (".talkdnd.integrity.lock", "integrity\n"),
-        (".talkdnd.advancement.lock", "advancement lock\n"),
-        (".talkdnd.advancement.state", "advancement state\n"),
-    ];
-    for (name, bytes) in control {
-        fs::write(save.join(name), bytes).unwrap();
-    }
+    // Integrity lock can stay as planted bytes; advancement lock/state must
+    // be a real protocol so restore can hold SAVE and take the checkpoint
+    // lock in order (AC-1) without failing closed on dummy state (AC-5).
+    // Snapshot before `open`. Do not `fs::read` the advancement lock file
+    // while SAVE is held: Windows mandatory locks return ERROR_LOCK_VIOLATION.
+    fs::write(save.join(".talkdnd.integrity.lock"), "integrity\n").unwrap();
+    init_save(&root, &save);
+    let control = {
+        use talkdnd::advancement_lock as adv;
+        let names = [".talkdnd.integrity.lock", adv::LOCK_FILE, adv::STATE_FILE];
+        names.map(|name| (name, fs::read_to_string(save.join(name)).unwrap()))
+    };
+    let save_lock = hold_save(&root, &save);
     restore(&save, &id, true).unwrap();
 
     let backups = restore_backups(&root);
     assert_eq!(backups.len(), 1, "{backups:?}");
     let backup = &backups[0];
-    for (name, _) in control {
+    for (name, _) in &control {
         assert!(
             !backup.join(name).exists(),
             "{name} leaked into the whole-save backup"
@@ -1277,10 +1329,18 @@ fn the_restore_backup_excludes_runtime_control_files() {
         .join("Sessions/2030-01-02-session-00-setup.md")
         .is_file());
     // The live control files are untouched by the backup and the restore.
-    for (name, bytes) in control {
+    // While SAVE is held, metadata only: `fs::read` of the advancement lock
+    // file fails on Windows (mandatory lock, ERROR_LOCK_VIOLATION).
+    for (name, _) in &control {
+        let meta = fs::metadata(save.join(name))
+            .unwrap_or_else(|err| panic!("{name} disappeared while SAVE was held: {err}"));
+        assert!(meta.is_file(), "{name} is no longer a regular file");
+    }
+    drop(save_lock);
+    for (name, bytes) in &control {
         assert_eq!(
             fs::read_to_string(save.join(name)).unwrap(),
-            bytes,
+            *bytes,
             "{name} changed"
         );
     }

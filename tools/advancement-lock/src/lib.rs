@@ -530,8 +530,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd migrate (without --dry-run)",
         "lib.rs::dispatch Cmd::Migrate; save.rs::migrate_ruleset; migrate.rs::ensure",
         "combat/campaign.yaml, save-meta.yaml, sheets/*.yaml, Characters/, Saves/_backups/, Sessions/*.md, integrity.yaml",
-        UnadoptedWrite,
-        "whole-tree migration plus backup",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing; then checkpoint .talkdnd.lock, then integrity; fails closed when the lock is unavailable",
         &["migrate"]
     ),
     writer!(
@@ -541,7 +541,7 @@ pub static WRITERS: &[Writer] = &[
         "lib.rs::dispatch Cmd::Migrate; migrate.rs::ensure(dry_run)",
         "none",
         ReadOnly,
-        "dry-run branch only reports; writes no backup and migrates nothing",
+        "dry-run branch only reports; writes no backup and migrates nothing; whole-CLI run is tree-identical under the protocol (no SAVE lock)",
         &["migrate", "--dry-run"]
     ),
     writer!(
@@ -740,8 +740,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd checkpoint snapshot",
         "lib.rs::dispatch Cmd::Checkpoint; checkpoint.rs::snapshot",
         "checkpoints/<id>/, integrity.yaml",
-        UnadoptedWrite,
-        "copies the whole save and writes the manifest",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing; then checkpoint .talkdnd.lock, then integrity; fails closed when the lock is unavailable",
         &["checkpoint", "snapshot"]
     ),
     writer!(
@@ -750,8 +750,8 @@ pub static WRITERS: &[Writer] = &[
         "talkdnd checkpoint restore",
         "lib.rs::dispatch Cmd::Checkpoint; checkpoint.rs::restore_inner",
         "whole save, Saves/_backups/, integrity.yaml",
-        UnadoptedWrite,
-        "replaces the save tree from a checkpoint after backing it up",
+        AdoptedWrite,
+        "adopted (SAVE lock): takes the SAVE lock before writing; then checkpoint .talkdnd.lock, then integrity; fails closed when the lock is unavailable",
         &["checkpoint", "restore", "probe", "--yes"]
     ),
     writer!(
@@ -761,7 +761,7 @@ pub static WRITERS: &[Writer] = &[
         "lib.rs::dispatch Cmd::Checkpoint; checkpoint.rs::run List/Show",
         "none",
         ReadOnly,
-        "reads the checkpoint directory and manifests only",
+        "reads the checkpoint directory and manifests only; whole-CLI run is tree-identical under the protocol (no SAVE lock)",
         &["checkpoint", "list"]
     ),
     writer!(
@@ -1506,9 +1506,10 @@ where
 /// [`AdvancementLock::check_writable`].
 pub mod save_lock;
 pub use save_lock::{
-    init, open, reseal, AcquireOptions, AdvancementLock, CompletionEvidence, Error, ErrorKind,
-    InitHooks, InitOptions, InitOutcome, LockHeader, LockIdentity, OpenOptions, Pending, Published,
-    Stage, State, StateRecord, COPY_LIMITATION, DEFAULT_ACQUIRE_TIMEOUT, SCHEMA,
+    init, is_save_lock_held, open, reseal, AcquireOptions, AdvancementLock, CompletionEvidence,
+    Error, ErrorKind, InitHooks, InitOptions, InitOutcome, LockHeader, LockIdentity, OpenOptions,
+    Pending, Published, Stage, State, StateRecord, COPY_LIMITATION, DEFAULT_ACQUIRE_TIMEOUT,
+    SCHEMA,
 };
 
 #[cfg(test)]
