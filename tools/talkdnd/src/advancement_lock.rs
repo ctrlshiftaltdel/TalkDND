@@ -112,10 +112,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Fixed lock file name inside one save slot.
-pub const LOCK_FILE: &str = ".talkdnd.advancement.lock";
-/// Fixed state file name inside one save slot.
-pub const STATE_FILE: &str = ".talkdnd.advancement.state";
+/// Fixed lock file name inside one save slot. Re-exported from the shared
+/// `advancement-lock` crate so both CLIs use one definition (ADV-P1-1pre).
+pub use ::advancement_lock::LOCK_FILE;
+/// Fixed state file name inside one save slot. Re-exported from the shared
+/// `advancement-lock` crate so both CLIs use one definition (ADV-P1-1pre).
+pub use ::advancement_lock::STATE_FILE;
 /// The only protocol schema this build understands. Anything else fails closed.
 pub const SCHEMA: u32 = 1;
 /// Default bound for acquiring the lock.
@@ -463,11 +465,11 @@ pub struct CompletionEvidence {
 // -------------------------------------------------------------- utilities ----
 
 pub fn lock_path(save_dir: &Path) -> PathBuf {
-    save_dir.join(LOCK_FILE)
+    ::advancement_lock::lock_path(save_dir)
 }
 
 pub fn state_path(save_dir: &Path) -> PathBuf {
-    save_dir.join(STATE_FILE)
+    ::advancement_lock::state_path(save_dir)
 }
 
 fn now() -> String {

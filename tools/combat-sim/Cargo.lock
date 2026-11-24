@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "advancement-lock"
+version = "1.6.0"
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -114,6 +118,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "combat-sim"
 version = "1.6.0"
 dependencies = [
+ "advancement-lock",
  "anyhow",
  "clap",
  "rand",

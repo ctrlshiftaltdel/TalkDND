@@ -49,11 +49,17 @@ use std::fs;
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
+// The local `advancement_lock` module owns the protocol implementation; the
+// shared crate of the same name owns the control-file names and the transition
+// gate both CLIs consult. Alias the crate so the two never get confused.
+use ::advancement_lock as gate;
+
 #[derive(Parser)]
 #[command(
     name = "talkdnd",
     version,
-    about = "TalkDND play helper (finds its play folder from bin/.., TALKDND_ROOT or --root)"
+    about = "TalkDND play helper (finds its play folder from bin/.., TALKDND_ROOT or --root)",
+    after_help = gate::REFUSAL_HELP
 )]
 struct Cli {
     /// Play folder (default: TALKDND_ROOT, else the folder above bin/, else found from the current directory)
@@ -72,6 +78,8 @@ struct Cli {
 #[derive(Subcommand, Clone)]
 enum Cmd {
     /// Resume: content check, background pdf2md, write and print Saves/<slot>/digest.md
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Start {
         #[arg(long)]
         no_pdf2md: bool,
@@ -96,28 +104,38 @@ enum Cmd {
         ratio: Option<u32>,
     },
     /// Migrate an old save's on-disk schema (backs the whole save up first)
+    ///
+    /// 存档启用成长协议后，非 --dry-run 的迁移以退出码 1 拒绝且不写目标文件。
     Migrate {
         /// Only report what would be migrated; write nothing
         #[arg(long)]
         dry_run: bool,
     },
     /// Character creation (player decides every step)
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Chargen {
         #[command(subcommand)]
         cmd: ChargenCmd,
     },
     /// Party companions run by the DM (written to Characters/, `controller: dm`)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Companion {
         #[command(subcommand)]
         cmd: NpcCmd,
     },
     /// Old name of `companion` (still works; companions now live in Characters/)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Npc {
         #[command(subcommand)]
         cmd: NpcCmd,
     },
     /// Ability/skill check or saving throw outside combat (modifier from the sheet; logged).
     /// Without arguments: save audit (integrity manifest + log reconciliation)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Check {
         /// Character id or name (Characters/: PCs and companions; NPCs/: story NPCs)
         #[arg(requires = "what")]
@@ -143,6 +161,8 @@ enum Cmd {
     /// `checkpoint snapshot|list|show|restore` manages checkpoint snapshots.
     /// Text whose first word is a subcommand name (snapshot/list/show/restore)
     /// must be separated with `--` or passed on stdin.
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Checkpoint {
         #[command(subcommand)]
         cmd: Option<checkpoint::Cmd>,
@@ -158,26 +178,36 @@ enum Cmd {
         cmd: diff::Cmd,
     },
     /// Append one timestamped line to the newest session log
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Log {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         text: Vec<String>,
     },
     /// Long-term memory: facts that survive session gaps (P03)
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Memory {
         #[command(subcommand)]
         cmd: memory::Cmd,
     },
     /// Story entities: NPCs, locations, factions, quests, items (P04)
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Entity {
         #[command(subcommand)]
         cmd: entity::Cmd,
     },
     /// Relations between entities (P04)
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Relation {
         #[command(subcommand)]
         cmd: graph::Cmd,
     },
     /// World time: calendar labels and due-dated events (P06)
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Time {
         #[command(subcommand)]
         cmd: worldtime::Cmd,
@@ -198,11 +228,15 @@ enum Cmd {
         cmd: DataCmd,
     },
     /// Experience points (ledger in Saves/<slot>/progress.yaml)
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Xp {
         #[command(subcommand)]
         cmd: XpCmd,
     },
     /// Level a character up: edits the sheet's combat block (level, HP, proficiency, hit dice)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     LevelUp {
         /// Character id or name
         who: String,
@@ -220,22 +254,30 @@ enum Cmd {
         reason: Option<String>,
     },
     /// Coins and items per character and the shared `party` pool
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Loot {
         #[command(subcommand)]
         cmd: LootCmd,
     },
     /// Save integrity manifest: status, or accept hand edits with a reason
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Integrity {
         #[command(subcommand)]
         cmd: IntegrityCmd,
     },
     /// Original content ledger for this save (DM only): register an original
     /// element before introducing it, list them, or show the budget
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Original {
         #[command(subcommand)]
         cmd: OriginalCmd,
     },
     /// Read one scene of the locally imported adventure (never the whole book)
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Adventure {
         #[command(subcommand)]
         cmd: AdventureCmd,
@@ -249,8 +291,12 @@ enum Cmd {
         cmd: knowledge::Cmd,
     },
     /// Record the current scene/location and print `known`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Scene { name: Vec<String> },
     /// Secret terms for the spoiler guard (DM only, stored in the save)
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Secret {
         #[command(subcommand)]
         cmd: SecretCmd,
@@ -263,6 +309,8 @@ enum Cmd {
     },
     /// Record that the players identified a monster/item, or set the
     /// player-facing appearance used until they do
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Identify {
         /// Creature/item name or id
         thing: Option<String>,
@@ -277,17 +325,23 @@ enum Cmd {
         appearance: Option<Vec<String>>,
     },
     /// Table settings (dice display) and `log rolls`
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Settings {
         #[command(subcommand)]
         cmd: Option<SettingsCmd>,
     },
     /// Revealed-knowledge ledger (what the party has actually learned)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Reveal {
         #[command(subcommand)]
         cmd: RevealCmd,
     },
     /// Book images shown to the players (maps, letters, items). Only
     /// player-safe entries are exported; DM-only maps never are
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Handout {
         /// Converted book folder or book/adventure name (default: the save's adventure)
         #[arg(long, global = true)]
@@ -298,6 +352,8 @@ enum Cmd {
     /// Character sheet changes (HP, resources, rests, conditions, items, gold,
     /// choices, notes). The sheet is rendered from Saves/<slot>/sheets/<id>.yaml;
     /// never hand-edit it. `talkdnd char Yier batch "damage 7; use slot1"`
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Char {
         /// Character id or name (`all` for `rest`)
         who: String,
@@ -350,8 +406,12 @@ enum LibraryCmd {
 #[derive(Subcommand, Clone)]
 enum IntegrityCmd {
     /// Files changed outside the tools and unexplained value changes
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Status,
     /// Accept the current files and values (logged with the reason)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Accept {
         #[arg(long)]
         reason: String,
@@ -362,6 +422,8 @@ enum IntegrityCmd {
 enum HandoutCmd {
     /// Export a player-safe handout to Saves/<slot>/handouts/, print its path
     /// and a Markdown image link, and record it (reveal ledger, session log)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Show {
         /// Handout id (p0012-00) or a caption / area search
         query: Vec<String>,
@@ -373,13 +435,19 @@ enum HandoutCmd {
         png: bool,
     },
     /// Handouts shown so far; --dm lists the whole registry with visibility
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     List {
         #[arg(long)]
         dm: bool,
     },
     /// Build or refresh the registry from the pdf2md index (keeps markings)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Build,
     /// Mark a handout player-safe (--player) or DM-only (--dm)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Mark {
         id: String,
         #[arg(long, conflicts_with = "dm")]
@@ -399,6 +467,8 @@ enum HandoutCmd {
 #[derive(Subcommand, Clone)]
 enum OriginalCmd {
     /// Register an original element before it appears in play (DM only)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         /// encounter | npc | item | location | sidequest
         #[arg(long = "type")]
@@ -423,12 +493,16 @@ enum OriginalCmd {
     /// Show the deviation settings, caps and the current chapter budget
     Status,
     /// Create Saves/<slot>/dm-plan.md (DM-only long-term plan template)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Plan,
 }
 
 #[derive(Subcommand, Clone)]
 enum AdventureCmd {
     /// Print one heading-delimited section; `--list` lists headings only
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Section {
         /// Heading, chapter or area search
         query: Vec<String>,
@@ -461,6 +535,8 @@ enum AdventureCmd {
 #[derive(Subcommand, Clone)]
 enum SecretCmd {
     /// Add a manual secret term (stored only in this save)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         term: Vec<String>,
         /// Chapter number this secret belongs to (optional)
@@ -472,6 +548,8 @@ enum SecretCmd {
     /// List every unrevealed secret term and its source
     List,
     /// Remove a manual secret term
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Remove { term: Vec<String> },
     /// Read-only scan of a DM notes file: explicit marker coverage, counts
     /// and line numbers only, never file content
@@ -482,6 +560,8 @@ enum SecretCmd {
     },
     /// Import DM-reviewed explicit terms from a file (one per line or the
     /// existing marker forms); the default is a dry-run preview
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Import {
         /// File to read terms from
         #[arg(long)]
@@ -498,13 +578,19 @@ enum SecretCmd {
 #[derive(Subcommand, Clone)]
 enum SettingsCmd {
     /// Show or change dice display: `settings dice on|off`
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Dice { value: Option<String> },
     /// Narration style: `settings style show`, `settings style set <字段> <值> --reason R`
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Style {
         #[command(subcommand)]
         cmd: memory::StyleCmd,
     },
     /// Automation switches: save defaults, scene/encounter overrides
+    ///
+    /// 存档启用成长协议后，本命令的写操作以退出码 1 拒绝且不写目标文件；只读用法仍可用。
     Automation {
         #[command(subcommand)]
         cmd: Option<settings::AutomationCmd>,
@@ -514,6 +600,8 @@ enum SettingsCmd {
 #[derive(Subcommand, Clone)]
 enum RevealCmd {
     /// Record a fact the party has learned (also logged)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         fact: Vec<String>,
         /// How they learned it (check, NPC, document, rumour)
@@ -541,6 +629,8 @@ enum XpCmd {
     /// Award XP for a small quest or event, split evenly:
     /// `xp add 450 --category combat --reason "museum guards"` or
     /// `xp add --difficulty hard --category noncombat --reason "baron talks"`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         /// Total XP (omit with --difficulty)
         amount: Option<i64>,
@@ -594,6 +684,8 @@ impl Coins {
 #[derive(Subcommand, Clone)]
 enum LootCmd {
     /// Add coins/items: `loot add --gp 50 "potion of healing" --to party`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         items: Vec<String>,
         #[command(flatten)]
@@ -605,6 +697,8 @@ enum LootCmd {
         reason: Option<String>,
     },
     /// Spend or lose coins/items
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Spend {
         items: Vec<String>,
         #[command(flatten)]
@@ -615,6 +709,8 @@ enum LootCmd {
         reason: Option<String>,
     },
     /// Move coins/items between purses
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Give {
         items: Vec<String>,
         #[command(flatten)]
@@ -625,6 +721,8 @@ enum LootCmd {
         to: String,
     },
     /// Split the party pool's coins evenly among the party
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Split,
     /// Show every purse
     Show,
@@ -635,25 +733,41 @@ enum ChargenCmd {
     /// Show choices so far and the next step
     Status,
     /// Roll 6 x 4d6dl1 (logged); the player then assigns them
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Roll,
     /// Use the standard array 15 14 13 12 10 8
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Array,
     /// Point buy: e.g. `str=15 dex=14 con=13 int=10 wis=10 cha=8` (27 points)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Pointbuy { scores: Vec<String> },
     /// Player assigns pool numbers: `str=15 dex=14 ...`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Assign { scores: Vec<String> },
     /// Player-chosen increases: `str=2 con=1`, or `none`
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Asi { values: Vec<String> },
     /// Record a choice: ruleset|adventure|species|class|level|subclass|fighting-style|masteries|background|background-equipment|skills|background-skills|languages|tools|feats|class-equipment|armor|shield|equipment|spells|name|traits|ideals|bonds|flaws|alignment
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Set { field: String, value: Vec<String> },
     /// Check the character against the ruleset
     Validate,
     /// Write Characters/<name>.md (sheet + combat yaml in sync)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Sheet {
         #[arg(long, default_value = "玩家")]
         player: String,
     },
     /// Player confirmed the sheet: mark creation complete
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Confirm,
 }
 
@@ -674,6 +788,8 @@ enum DataCmd {
 #[derive(Subcommand, Clone)]
 enum NpcCmd {
     /// Generate random SRD companions (rolls logged when a save exists); DM adds name/backstory
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Random {
         #[arg(long)]
         ruleset: Option<String>,
@@ -684,6 +800,8 @@ enum NpcCmd {
         count: usize,
     },
     /// Write Characters/<name>.md (controller: dm) from draft N (after the player confirms) and add to party
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Sheet {
         draft: usize,
         #[arg(long)]
@@ -693,9 +811,300 @@ enum NpcCmd {
     },
 }
 
+/// Transition gate (ADV-P1-1pre): the writer-registry row for this invocation.
+///
+/// The registry lives in the shared `advancement-lock` crate so both CLIs use
+/// one list; this match is exhaustive over `Cmd`, so a new command cannot be
+/// added without classifying it here.
+fn gate_entry(cli: &Cli) -> &'static str {
+    match &cli.cmd {
+        Cmd::Start { .. } => "talkdnd:start",
+        Cmd::New { .. } => "talkdnd:new",
+        Cmd::Migrate { dry_run } => {
+            if *dry_run {
+                "talkdnd:migrate-dry-run"
+            } else {
+                "talkdnd:migrate"
+            }
+        }
+        Cmd::Chargen { cmd } => match cmd {
+            ChargenCmd::Status => "talkdnd:chargen-status",
+            ChargenCmd::Validate => "talkdnd:chargen-validate",
+            ChargenCmd::Sheet { .. } => "talkdnd:chargen-sheet",
+            ChargenCmd::Confirm => "talkdnd:chargen-confirm",
+            ChargenCmd::Roll
+            | ChargenCmd::Array
+            | ChargenCmd::Pointbuy { .. }
+            | ChargenCmd::Assign { .. }
+            | ChargenCmd::Asi { .. }
+            | ChargenCmd::Set { .. } => "talkdnd:chargen-state",
+        },
+        Cmd::Companion { cmd } | Cmd::Npc { cmd } => match cmd {
+            NpcCmd::Random { .. } => "talkdnd:companion-random",
+            NpcCmd::Sheet { .. } => "talkdnd:companion-sheet",
+        },
+        Cmd::Check { .. } => "talkdnd:check",
+        Cmd::Checkpoint { cmd, .. } => match cmd {
+            None => "talkdnd:checkpoint-text",
+            Some(checkpoint::Cmd::Snapshot { .. }) => "talkdnd:checkpoint-snapshot",
+            Some(checkpoint::Cmd::Restore { .. }) => "talkdnd:checkpoint-restore",
+            Some(checkpoint::Cmd::List { .. } | checkpoint::Cmd::Show { .. }) => {
+                "talkdnd:checkpoint-read"
+            }
+        },
+        Cmd::Snapshot { .. } => "talkdnd:snapshot-diff",
+        Cmd::Log { text } => {
+            if text.first().is_some_and(|word| word == "rolls") {
+                "talkdnd:log-rolls"
+            } else {
+                "talkdnd:log"
+            }
+        }
+        Cmd::Memory { cmd } => match cmd {
+            memory::Cmd::List { .. } => "talkdnd:memory-list",
+            memory::Cmd::Add { .. } | memory::Cmd::Remove { .. } => "talkdnd:memory-write",
+        },
+        Cmd::Entity { cmd } => match cmd {
+            entity::Cmd::List { .. } | entity::Cmd::Show { .. } => "talkdnd:entity-read",
+            entity::Cmd::Add { .. } | entity::Cmd::Rename { .. } | entity::Cmd::Retire { .. } => {
+                "talkdnd:entity-write"
+            }
+        },
+        Cmd::Relation { cmd } => match cmd {
+            graph::Cmd::List { .. } | graph::Cmd::Show { .. } | graph::Cmd::Context { .. } => {
+                "talkdnd:relation-read"
+            }
+            graph::Cmd::Add { .. } | graph::Cmd::End { .. } => "talkdnd:relation-write",
+        },
+        Cmd::Time { cmd } => match cmd {
+            worldtime::Cmd::Show => "talkdnd:time-read",
+            worldtime::Cmd::Event { cmd } => match cmd {
+                worldtime::EventCmd::List { .. } => "talkdnd:time-read",
+                worldtime::EventCmd::Add { .. }
+                | worldtime::EventCmd::Done { .. }
+                | worldtime::EventCmd::Skip { .. } => "talkdnd:time-write",
+            },
+            worldtime::Cmd::Enable
+            | worldtime::Cmd::Disable
+            | worldtime::Cmd::Set { .. }
+            | worldtime::Cmd::Advance { .. } => "talkdnd:time-write",
+        },
+        Cmd::Oracle { .. } => "talkdnd:oracle",
+        Cmd::Library { .. } => "talkdnd:library",
+        Cmd::Data { cmd } => match cmd {
+            DataCmd::Status { .. } => "talkdnd:data-status",
+            DataCmd::Import { .. } => "talkdnd:data-import",
+        },
+        Cmd::Xp { cmd } => match cmd {
+            XpCmd::Add { .. } => "talkdnd:xp-add",
+            XpCmd::Show => "talkdnd:xp-show",
+        },
+        Cmd::LevelUp { .. } => "talkdnd:level-up",
+        Cmd::Loot { cmd } => match cmd {
+            LootCmd::Show => "talkdnd:loot-show",
+            LootCmd::Add { .. } | LootCmd::Spend { .. } | LootCmd::Give { .. } | LootCmd::Split => {
+                "talkdnd:loot"
+            }
+        },
+        Cmd::Integrity { cmd } => match cmd {
+            IntegrityCmd::Status => "talkdnd:integrity-status",
+            IntegrityCmd::Accept { .. } => "talkdnd:integrity-accept",
+        },
+        Cmd::Original { cmd } => match cmd {
+            OriginalCmd::Add { .. } => "talkdnd:original-add",
+            OriginalCmd::Plan => "talkdnd:original-plan",
+            OriginalCmd::List | OriginalCmd::Status => "talkdnd:original-read",
+        },
+        Cmd::Adventure { cmd } => match cmd {
+            AdventureCmd::Index { cmd } => match cmd {
+                bookindex::Cmd::Build { .. } => "talkdnd:adventure-index-build",
+                bookindex::Cmd::Show { .. } | bookindex::Cmd::Search { .. } => {
+                    "talkdnd:adventure-index-read"
+                }
+            },
+            AdventureCmd::Search { .. } => "talkdnd:adventure-search",
+            // `--list` only prints headings and returns before the log write,
+            // even when `--reason` is present; only a real section read that
+            // is ahead of progress or DM-only appends a log line.
+            AdventureCmd::Section { list, reason, .. } => {
+                if !*list && reason.is_some() {
+                    "talkdnd:adventure-section-write"
+                } else {
+                    "talkdnd:adventure-section-read"
+                }
+            }
+        },
+        Cmd::Known => "talkdnd:known",
+        Cmd::Knowledge { .. } => "talkdnd:knowledge",
+        Cmd::Scene { .. } => "talkdnd:scene",
+        Cmd::Secret { cmd } => match cmd {
+            SecretCmd::Add { .. } | SecretCmd::Remove { .. } => "talkdnd:secret-write",
+            SecretCmd::List => "talkdnd:secret-list",
+            SecretCmd::Scan { .. } => "talkdnd:secret-scan",
+            SecretCmd::Import { apply, .. } => {
+                if *apply {
+                    "talkdnd:secret-import-apply"
+                } else {
+                    "talkdnd:secret-import-dry-run"
+                }
+            }
+        },
+        Cmd::Guard { .. } => "talkdnd:guard",
+        Cmd::Identify { .. } => "talkdnd:identify",
+        Cmd::Settings { cmd } => match cmd {
+            None => "talkdnd:settings-read",
+            Some(SettingsCmd::Dice { value: None }) => "talkdnd:settings-read",
+            Some(SettingsCmd::Dice { value: Some(_) }) => "talkdnd:settings-dice",
+            Some(SettingsCmd::Style { cmd }) => match cmd {
+                memory::StyleCmd::Show => "talkdnd:settings-style-read",
+                memory::StyleCmd::Set { .. } => "talkdnd:settings-style-write",
+            },
+            Some(SettingsCmd::Automation { cmd }) => match cmd {
+                None => "talkdnd:settings-read",
+                Some(settings::AutomationCmd::Show { .. }) => "talkdnd:settings-read",
+                Some(
+                    settings::AutomationCmd::Set { .. } | settings::AutomationCmd::Reset { .. },
+                ) => "talkdnd:settings-automation-write",
+            },
+        },
+        Cmd::Reveal { cmd } => match cmd {
+            RevealCmd::Add { .. } => "talkdnd:reveal-add",
+            RevealCmd::List { .. } | RevealCmd::Check { .. } => "talkdnd:reveal-read",
+        },
+        Cmd::Handout { cmd, .. } => match cmd {
+            HandoutCmd::Show { .. } => "talkdnd:handout-show",
+            // `--dm` builds and writes the book registry when it is missing;
+            // the player view only reads the save's shown list.
+            HandoutCmd::List { dm: true } => "talkdnd:handout-list-dm",
+            HandoutCmd::List { dm: false } => "talkdnd:handout-list",
+            HandoutCmd::Build => "talkdnd:handout-build",
+            HandoutCmd::Mark { .. } => "talkdnd:handout-mark",
+        },
+        Cmd::Char { op, .. } => match op {
+            None => "talkdnd:char",
+            Some(charsheet::Op::Spells { cmd, .. }) => match cmd {
+                None | Some(charsheet::SpellsCmd::Show { .. }) => "talkdnd:char-spells-read",
+                Some(
+                    charsheet::SpellsCmd::Adopt { .. }
+                    | charsheet::SpellsCmd::Sync { .. }
+                    | charsheet::SpellsCmd::Terrain { .. },
+                ) => "talkdnd:char",
+            },
+            Some(_) => "talkdnd:char",
+        },
+        Cmd::Options { .. } => "talkdnd:options",
+    }
+}
+
+/// The `--book` folders `adventure index build` will write `structured.json`
+/// into. Mirrors `bookindex::index_dirs` (that function is private and its
+/// module is only cleared for help text this round), so the gate checks the
+/// same targets the command resolves.
+fn bookindex_targets(root: &Path, save: &Path, book: Option<&str>) -> Vec<PathBuf> {
+    let want = match book {
+        Some(book) => book.to_string(),
+        None => match start::adventure_slug(save) {
+            Some(slug) => slug,
+            None => return Vec::new(),
+        },
+    };
+    // A path to an index folder or to a book folder, tried exactly like the
+    // command: working-directory-relative first, then root-relative.
+    for candidate in [PathBuf::from(&want), root.join(&want)] {
+        if candidate.join("index.json").is_file() {
+            return vec![candidate];
+        }
+        let dirs = library::book_indexes(&candidate);
+        if !dirs.is_empty() {
+            return dirs;
+        }
+    }
+    // A book name: this save's Adventures first, then both rulesets.
+    let mut out = library::adventure_indexes(root, &want);
+    if book.is_some() {
+        let mut rules: Vec<(u8, usize, PathBuf)> = Vec::new();
+        for (edition, ruleset) in library::EDITIONS.iter().enumerate() {
+            for (key, dir) in library::category_indexes(&root.join("Rules").join(ruleset)) {
+                if let Some(rank) = library::key_rank(&key, &want) {
+                    rules.push((rank, edition, dir));
+                }
+            }
+        }
+        rules.sort();
+        out.extend(rules.into_iter().map(|(_, _, dir)| dir));
+    }
+    out
+}
+
+/// Write targets a command can reach **outside** the selected save, or
+/// through a symlink inside it.
+///
+/// `adventure index build --book` and `handout [--book] build|mark` write into
+/// a book folder that may belong to another save; the gate must check each of
+/// them, not only the selected save. A resolution error means the command
+/// cannot write at all (it reports its own error), so there is nothing to
+/// check.
+///
+/// Commands that append the latest session log or `rolls.log` must also
+/// check those concrete files: the selected save may have no control file,
+/// while a symlink there lands in another save that has adopted the protocol.
+/// The paths come from the same helpers the write path uses
+/// ([`save::latest_log`], [`rolls::FILE`]).
+fn extra_write_targets(root: &Path, cli: &Cli, save: &Path) -> Vec<PathBuf> {
+    let mut targets = match &cli.cmd {
+        Cmd::Adventure {
+            cmd:
+                AdventureCmd::Index {
+                    cmd: bookindex::Cmd::Build { book },
+                },
+        } => bookindex_targets(root, save, book.as_deref()),
+        Cmd::Handout {
+            book,
+            cmd:
+                HandoutCmd::Show { .. }
+                | HandoutCmd::List { dm: true }
+                | HandoutCmd::Build
+                | HandoutCmd::Mark { .. },
+        } => handout::book_dirs(root, save, book.as_deref()).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    if let Some(writer) = gate::writer(gate_entry(cli)) {
+        if writer.class == gate::Class::UnadoptedWrite {
+            if writer_lists(writer.targets, "Sessions/*.md") {
+                if let Some(log) = save::latest_log(save) {
+                    targets.push(log);
+                }
+            }
+            if writer_lists(writer.targets, "rolls.log") {
+                targets.push(save.join(rolls::FILE));
+            }
+        }
+    }
+    targets
+}
+
+fn writer_lists(targets: &str, name: &str) -> bool {
+    targets.split(',').any(|item| item.trim() == name)
+}
+
 pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     let cli = Cli::parse_from(args);
     let root = save::find_root(cli.root.as_deref())?;
+    // ADV-P1-1pre transition gate: a save that has adopted the advancement
+    // protocol refuses every writer that has not been wired to it. This runs
+    // before dispatch, so a refused command touches nothing.
+    let gate_entry = gate_entry(&cli);
+    let gate_save = save::resolve_slot(&root, cli.save.as_deref()).ok();
+    gate::check_save(gate_save.as_deref(), gate_entry)?;
+    // A command may also write outside the selected save: `--book` can point at
+    // a folder that belongs to another save, so every such target is checked.
+    if let Some(save) = gate_save.as_deref() {
+        for target in extra_write_targets(&root, &cli, save) {
+            gate::check_target(&target, gate_entry)?;
+        }
+    }
+    let protocol_present = gate_save.as_deref().is_some_and(gate::has_protocol);
+    let gate_class = gate::class_of(gate_entry);
     let mut os = step_rng();
     let mut seeded = cli.seed.map(seeded_rng);
     let rng: &mut dyn DiceRng = match seeded.as_mut() {
@@ -734,17 +1143,32 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         },
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
     };
+    // Under the protocol a read-only or control-metadata command must not run
+    // the post-command audit write either: #285 tracks that side effect for
+    // saves without the protocol, and the transition gate promises that a
+    // read-only run changes no save bytes.
+    let tracked = if protocol_present
+        && matches!(
+            gate_class,
+            gate::Class::ReadOnly | gate::Class::ControlMetadata
+        ) {
+        None
+    } else {
+        tracked
+    };
     let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
-    let is_new = matches!(cli.cmd, Cmd::New { .. });
-    let result = dispatch(&root, &cli, rng);
+    let mut created = None;
+    let result = dispatch(&root, &cli, rng, &mut created);
     if let (Some(s), Some(before)) = (tracked.as_deref(), before.as_ref()) {
         if s.is_dir() {
             audit::after_command(s, before)?;
         }
     }
-    if is_new && result.is_ok() {
-        if let Ok(s) = save::resolve_slot(&root, None) {
-            audit::audit(&s)?;
+    // Audit the save `new` actually created: inferring the newest slot would
+    // pick a later-dated save that was never touched by this command.
+    if result.is_ok() {
+        if let Some(dir) = created {
+            audit::audit(&dir)?;
         }
     }
     result
@@ -767,7 +1191,12 @@ fn print_audit(s: &Path) -> Result<()> {
     Ok(())
 }
 
-fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
+fn dispatch(
+    root: &Path,
+    cli: &Cli,
+    rng: &mut dyn DiceRng,
+    created: &mut Option<PathBuf>,
+) -> Result<()> {
     let root = root.to_path_buf();
     match cli.cmd.clone() {
         Cmd::Char { who, op } => {
@@ -1048,7 +1477,7 @@ fn dispatch(root: &Path, cli: &Cli, rng: &mut dyn DiceRng) -> Result<()> {
             date,
             scope,
             ratio,
-        } => new_save(&root, ruleset, adventure, date, scope, ratio)?,
+        } => *created = Some(new_save(&root, ruleset, adventure, date, scope, ratio)?),
         Cmd::Chargen { cmd } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             chargen_cmd(&s, cmd, rng, cli.seed.is_some())?
@@ -1458,7 +1887,7 @@ fn new_save(
     date: Option<String>,
     scope: Option<u32>,
     ratio: Option<u32>,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let chosen = ruleset.as_deref().map(check_ruleset).transpose()?;
     let manifest_ruleset = chosen.unwrap_or(Ruleset::FivePointFiveESrd);
     let deviation = deviation_input(scope, ratio)?;
@@ -1518,7 +1947,7 @@ fn new_save(
         println!("{line}");
     }
     print_next(&c);
-    Ok(())
+    Ok(dir)
 }
 
 fn print_next(c: &Creation) {

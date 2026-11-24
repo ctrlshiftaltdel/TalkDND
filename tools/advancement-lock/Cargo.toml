@@ -1,0 +1,9 @@
+[package]
+name = "advancement-lock"
+version = "1.6.0"
+edition = "2021"
+description = "Shared TalkDND advancement control files and the cross-CLI transition gate"
+license = "MIT"
+publish = false
+
+[dependencies]

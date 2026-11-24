@@ -26,6 +26,8 @@ const PDF_SEARCH_UP: usize = 2;
 #[derive(Subcommand, Clone)]
 pub enum Cmd {
     /// Build or refresh the index (unchanged sources are skipped)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Build {
         /// Book slug or title (default: this save's adventure)
         #[arg(long)]

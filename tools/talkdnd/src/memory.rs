@@ -26,6 +26,8 @@ use std::path::{Path, PathBuf};
 #[derive(Subcommand, Clone)]
 pub enum Cmd {
     /// Record a long-term fact (empty text is rejected)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         /// The fact to remember
         text: Vec<String>,
@@ -46,6 +48,8 @@ pub enum Cmd {
         all: bool,
     },
     /// Remove one memory by id (unknown id exits 1)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Remove { id: String },
 }
 
@@ -55,6 +59,8 @@ pub enum StyleCmd {
     /// Show the current narration/detail/pace/npc_voice/options
     Show,
     /// Set one style field; --reason is required and logged
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Set {
         /// narration | detail | pace | npc_voice | options
         field: String,

@@ -27,10 +27,16 @@ pub enum Cmd {
     /// event count (dm_only events are never counted)
     Show,
     /// Enable world time
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Enable,
     /// Disable world time (date/phase/events/elapsed_days are kept)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Disable,
     /// Set the date label (and optional phase); refused while disabled
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Set {
         /// New date label
         #[arg(long)]
@@ -40,6 +46,8 @@ pub enum Cmd {
         phase: Option<String>,
     },
     /// Advance the clock (pure addition; at least one of --days/--hours)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Advance {
         /// Days to add
         #[arg(long, value_name = "N")]
@@ -58,6 +66,8 @@ pub enum Cmd {
 #[derive(Subcommand, Clone)]
 pub enum EventCmd {
     /// Add a due-dated event
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         /// Due label (the date label it comes due on)
         #[arg(long)]
@@ -78,8 +88,12 @@ pub enum EventCmd {
         all: bool,
     },
     /// Mark an event done
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Done { id: String },
     /// Skip an event
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Skip { id: String },
 }
 

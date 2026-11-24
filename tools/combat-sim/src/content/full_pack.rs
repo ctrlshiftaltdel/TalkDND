@@ -384,6 +384,16 @@ pub fn build(
     Ok(report)
 }
 
+/// Destination file name used when [`release`] copies a pack into `--out`.
+///
+/// A non-UTF-8 input name falls back to `pack.json`. The transition gate
+/// must use this same rule so it checks the path the writer will open.
+pub fn release_file_name(path: &Path) -> &str {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("pack.json")
+}
+
 /// Validates a directory of full packs and optionally copies them plus a
 /// deterministic `full-packs-manifest.json` into `out`.
 ///
@@ -443,11 +453,7 @@ pub fn release(packs_dir: &Path, out: Option<&Path>) -> Result<ReleaseReport> {
         report.total_bytes += bytes;
         report.packs.push(ReleaseEntry {
             id: pack.pack.id.clone(),
-            file: path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("pack.json")
-                .to_string(),
+            file: release_file_name(path).to_string(),
             edition: pack.pack.edition.clone(),
             book: book_from_id(&pack.pack.id),
             bytes,
@@ -464,11 +470,7 @@ pub fn release(packs_dir: &Path, out: Option<&Path>) -> Result<ReleaseReport> {
         fs::create_dir_all(out)
             .with_context(|| format!("create release directory {}", out.display()))?;
         for (path, _) in &packs {
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("pack.json");
-            let destination = out.join(name);
+            let destination = out.join(release_file_name(path));
             if destination != *path {
                 fs::copy(path, &destination).with_context(|| {
                     format!(
@@ -972,4 +974,29 @@ fn tidy(text: &str) -> String {
         out.push('\n');
     }
     out.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::release_file_name;
+    use std::path::Path;
+
+    #[test]
+    fn release_file_name_preserves_a_utf8_name() {
+        assert_eq!(
+            release_file_name(Path::new("probe.pack.json")),
+            "probe.pack.json"
+        );
+    }
+
+    /// Constructed in memory only: APFS/HFS+ reject this name on disk (EILSEQ).
+    #[cfg(unix)]
+    #[test]
+    fn release_file_name_falls_back_to_pack_json_for_a_non_utf8_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = Path::new(OsStr::from_bytes(b"probe\xff.pack.json"));
+        assert_eq!(release_file_name(path), "pack.json");
+    }
 }

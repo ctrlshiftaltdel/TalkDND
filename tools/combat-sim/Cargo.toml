@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
+advancement-lock = { path = "../advancement-lock" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 rand = "0.9"

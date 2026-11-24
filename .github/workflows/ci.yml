@@ -32,12 +32,14 @@ jobs:
             tools/combat-sim
             tools/talkdnd-dev
             tools/talkdnd
+            tools/advancement-lock
 
       - name: Check formatting
         run: |
           cargo fmt --manifest-path tools/combat-sim/Cargo.toml --check
           cargo fmt --manifest-path tools/talkdnd-dev/Cargo.toml --check
           cargo fmt --manifest-path tools/talkdnd/Cargo.toml --check
+          cargo fmt --manifest-path tools/advancement-lock/Cargo.toml --check
 
       - name: Clippy combat-sim
         run: cargo clippy --manifest-path tools/combat-sim/Cargo.toml --all-targets -- -D warnings
@@ -47,6 +49,9 @@ jobs:
 
       - name: Clippy talkdnd
         run: cargo clippy --manifest-path tools/talkdnd/Cargo.toml --all-targets -- -D warnings
+
+      - name: Clippy advancement-lock
+        run: cargo clippy --manifest-path tools/advancement-lock/Cargo.toml --all-targets -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -69,6 +74,7 @@ jobs:
             tools/combat-sim
             tools/talkdnd-dev
             tools/talkdnd
+            tools/advancement-lock
 
       - name: Test combat-sim
         run: cargo test --manifest-path tools/combat-sim/Cargo.toml
@@ -78,6 +84,9 @@ jobs:
 
       - name: Test talkdnd
         run: cargo test --manifest-path tools/talkdnd/Cargo.toml
+
+      - name: Test advancement-lock
+        run: cargo test --manifest-path tools/advancement-lock/Cargo.toml
 
   deps:
     runs-on: ubuntu-latest

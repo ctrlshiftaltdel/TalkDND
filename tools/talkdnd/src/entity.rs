@@ -49,6 +49,8 @@ pub struct Ledger {
 #[derive(Subcommand, Clone)]
 pub enum Cmd {
     /// Register a new entity (name/alias conflicts are rejected)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Add {
         /// npc | location | faction | quest | item
         #[arg(long = "type")]
@@ -77,6 +79,8 @@ pub enum Cmd {
     /// Show every field of one entity and its relation count
     Show { id: String },
     /// Rename an entity (the old name becomes an alias)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Rename {
         /// Entity id or name
         id: String,
@@ -84,6 +88,8 @@ pub enum Cmd {
         name: String,
     },
     /// Retire an entity (the record is kept)
+    ///
+    /// 存档启用成长协议后，本命令以退出码 1 拒绝且不写任何目标文件。
     Retire { id: String },
 }
 
