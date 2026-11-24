@@ -183,6 +183,9 @@
   - [ ] `AC-6`: 本组过渡门（见上）：同一存档上其余未接入写入口必须拒绝写入，或经 `tools/talkdnd/tests/` 的合成测试证明整个 CLI 运行真正只读；覆盖清单引用盘点 §2/§5。该证据是发布本组接入的条件，不要求等 `ADV-P1-1e` 完成。
   - [ ] `AC-7`: T6a 独立取证：`checkpoint snapshot` / `restore` 与成长路径按总序 `SAVE → checkpoint → integrity` 竞争，使用两进程 + 测试级超时；挂起即判失败，不以“没死锁”代替证据。若正式提交尚未接线，使用等价合成持锁路径并限定证据范围；记录平台、head 与逐项结果。
 
+
+**交付记录（TASK-0152 / Issue #299）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。组 C 的 `checkpoint snapshot` / `checkpoint restore` / `migrate`（非 `--dry-run`）改为注册表 `AdoptedWrite`，在写目标前取得已有 SAVE 锁 v1（`open` + `check_ordinary_write`），再按 `SAVE → checkpoint .talkdnd.lock → integrity .talkdnd.integrity.lock` 取锁；锁不可用时失败关闭且不写目标；协议存档上反向获取 checkpoint 锁在合成用例中判为协议违规。`checkpoint list|show` 与 `migrate --dry-run` 保持只读，并调整 `lib.rs` 的 `tracked` 使整个 CLI 运行前后整树字节一致，不因接入而创建 lock/state 或写探针。`checkpoint <text>` 仍走过渡门。T6a 取证使用合成持锁路径（进程 A `open` 并持有 SAVE 锁，进程 B 运行真实 `talkdnd` 二进制的 `checkpoint snapshot` / `restore`，测试级超时；挂起即失败），证据范围不包括尚未接线的正式成长提交。证据见 `tools/talkdnd/tests/advancement_save_lock.rs`、`tools/talkdnd/src/checkpoint.rs` 的锁序测试与既有 `transition_gate` / 1a SAVE / `progress::level_up` 回归。任务状态与证据仍只在 Issue / PR / CI，本文件不设状态列。本块不启用提交入口、不实现 D 流程、不新增 schema/sidecar，也不把 1d–1e 或 §2.7 handout 写入口纳入接入。
+
 ### Task: `ADV-P1-1d` — 日志 / 完整性写者接入
 
 - **Goal:** 让所有会追加 `Sessions/*.md`/`rolls.log` 或改写 `integrity.yaml` 的入口在写前取得 SAVE 锁，同时保持完整性锁只覆盖清单读改写、不声称保护内容。

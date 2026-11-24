@@ -1492,6 +1492,43 @@ pub fn init(root: &Path, save_dir: &Path, opts: &InitOptions<'_>) -> Result<Init
 
 // ------------------------------------------------------------------- open ----
 
+thread_local! {
+    static HELD_SAVES: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Stable key for "does this process currently hold the SAVE lock on this save?"
+///
+/// Canonicalize when possible so a Windows `\\?\` path and its ordinary
+/// spelling compare as the same hold. This is only an in-process order
+/// guard, not a second lock.
+fn hold_key(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| crate::absolute_path(path))
+}
+
+fn remember_held(save_dir: &Path) {
+    let key = hold_key(save_dir);
+    HELD_SAVES.with(|held| held.borrow_mut().push(key));
+}
+
+fn forget_held(save_dir: &Path) {
+    let key = hold_key(save_dir);
+    HELD_SAVES.with(|held| {
+        let mut held = held.borrow_mut();
+        if let Some(index) = held.iter().rposition(|path| path == &key) {
+            held.remove(index);
+        }
+    });
+}
+
+/// Whether this process currently holds a v1 SAVE lock on `save_dir`.
+///
+/// Used by checkpoint / migrate to refuse the reverse lock order
+/// (checkpoint `.talkdnd.lock` before SAVE) on a protocol-enabled save.
+pub fn is_save_lock_held(save_dir: &Path) -> bool {
+    let key = hold_key(save_dir);
+    HELD_SAVES.with(|held| held.borrow().iter().any(|path| path == &key))
+}
+
 /// Take the lock for a normal operation and validate the protocol.
 ///
 /// Opens the lock without `create`, takes the OS lock on that same handle,
@@ -1546,6 +1583,7 @@ pub fn open(root: &Path, save_dir: &Path, opts: &OpenOptions) -> Result<Advancem
     verify_record(&record, &header, &identity, &save_path)?;
     enumerate(save_dir)?;
 
+    remember_held(save_dir);
     Ok(AdvancementLock {
         save_dir: save_dir.to_path_buf(),
         save_path,
@@ -1668,6 +1706,12 @@ pub struct AdvancementLock {
     /// content is visible while its durability is unknown, so this holder must
     /// not continue.
     poisoned: bool,
+}
+
+impl Drop for AdvancementLock {
+    fn drop(&mut self) {
+        forget_held(&self.save_dir);
+    }
 }
 
 impl AdvancementLock {

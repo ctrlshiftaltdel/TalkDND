@@ -178,6 +178,12 @@ pub fn append(root: &Path, save: &Path, text: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// Hold the per-slot checkpoint lock (`.talkdnd.lock`). The SAVE lock must
+/// already be held when the save has adopted the protocol (AC-1).
+pub(crate) fn hold_lock(save: &Path) -> Result<Lock> {
+    Lock::acquire(save)
+}
+
 // ---------------------------------------------------------------- snapshot
 
 fn snapshot(root: &Path, save: &Path, reason: Option<String>, json: bool) -> Result<()> {
@@ -1230,7 +1236,7 @@ fn instance_token() -> Vec<u8> {
 }
 
 #[derive(Debug)]
-struct Lock {
+pub(crate) struct Lock {
     path: PathBuf,
     /// Held for the whole hold, so the identity belongs to the file this
     /// process created rather than to a path that may have been re-bound.
@@ -1245,6 +1251,14 @@ struct Lock {
 
 impl Lock {
     fn acquire(save: &Path) -> Result<Lock> {
+        // AC-1: on a protocol-enabled save, SAVE must already be held. This
+        // is an in-process order guard, not a claim that `.talkdnd.lock` is
+        // an OS lock or content protection (#264 / AC-4).
+        if ::advancement_lock::has_protocol(save) && !::advancement_lock::is_save_lock_held(save) {
+            bail!(
+                "协议违规：在取得 SAVE 锁之前获取了 checkpoint .talkdnd.lock；总序必须是 SAVE → checkpoint → integrity。未写入任何目标文件"
+            );
+        }
         Self::acquire_with(
             save,
             |f| f.metadata().ok().as_ref().and_then(identity),
@@ -1540,5 +1554,47 @@ mod lock_tests {
             "the file is the one this acquire created"
         );
         let _ = fs::remove_dir_all(&save);
+    }
+
+    #[test]
+    fn acquiring_the_checkpoint_lock_before_save_on_a_protocol_save_is_a_violation() {
+        let root = std::env::temp_dir().join(format!(
+            "talkdnd-p1c-order-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let save = root.join("Saves").join("slot");
+        fs::create_dir_all(&save).unwrap();
+        match crate::advancement_lock::init(
+            &root,
+            &save,
+            &crate::advancement_lock::InitOptions::new(),
+        ) {
+            Ok(_) => {}
+            Err(err)
+                if err.kind() == crate::advancement_lock::ErrorKind::StatePublishedNotDurable => {}
+            Err(err) => panic!("init protocol: {err}"),
+        }
+        let err = Lock::acquire(&save).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("协议违规"), "{text}");
+        assert!(text.contains("SAVE"), "{text}");
+        assert!(text.contains("未写入任何目标文件"), "{text}");
+
+        let save_lock = crate::advancement_lock::open(
+            &root,
+            &save,
+            &crate::advancement_lock::OpenOptions::new(),
+        )
+        .unwrap();
+        save_lock.check_ordinary_write().unwrap();
+        let held = Lock::acquire(&save).unwrap();
+        drop(held);
+        drop(save_lock);
+        let _ = fs::remove_dir_all(&root);
     }
 }

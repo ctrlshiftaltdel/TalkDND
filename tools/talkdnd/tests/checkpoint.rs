@@ -123,6 +123,24 @@ fn restore_backups(root: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// Initialise the SAVE protocol and hold the lock for the rest of the
+/// caller. Dummy lock/state bytes would still trip `has_protocol`, and
+/// `open` would fail closed on unusable state (AC-5). A real protocol plus
+/// a held SAVE lock lets restore take the checkpoint lock in order (AC-1)
+/// while still proving that root control files are excluded from the
+/// pre-restore backup and left alone by restore/rollback (AC-2).
+fn init_and_hold_save(root: &Path, save: &Path) -> talkdnd::advancement_lock::AdvancementLock {
+    use talkdnd::advancement_lock as adv;
+    match adv::init(root, save, &adv::InitOptions::new()) {
+        Ok(_) => {}
+        Err(err) if err.kind() == adv::ErrorKind::StatePublishedNotDurable => {}
+        Err(err) => panic!("init protocol: {err}"),
+    }
+    let held = adv::open(root, save, &adv::OpenOptions::new()).unwrap();
+    held.check_ordinary_write().unwrap();
+    held
+}
+
 /// A post-commit failure must name the stage, the checkpoint id, the
 /// pre-restore whole-save backup and the fact that the save may already have
 /// changed — and must never claim the save is unchanged.
@@ -1137,13 +1155,13 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
 
     // Advancement control files are runtime data as well: the whole-save
     // backup excludes them, so the mirror rollback must leave them alone too.
-    let advancement = [
-        (".talkdnd.advancement.lock", "advancement lock\n"),
-        (".talkdnd.advancement.state", "advancement state\n"),
-    ];
-    for (name, bytes) in advancement {
-        fs::write(save.join(name), bytes).unwrap();
-    }
+    // Use a real protocol and hold SAVE: dummy lock/state bytes would still
+    // trip `has_protocol`, and open() would fail closed on unusable state.
+    let _save_lock = init_and_hold_save(&root, &save);
+    let advancement = {
+        use talkdnd::advancement_lock as adv;
+        [adv::LOCK_FILE, adv::STATE_FILE].map(|name| (name, fs::read(save.join(name)).unwrap()))
+    };
 
     let held: std::sync::Mutex<Option<fs::File>> = std::sync::Mutex::new(None);
     let hook_save = save.clone();
@@ -1174,7 +1192,7 @@ fn rollback_keeps_the_integrity_lock_a_concurrent_writer_holds() {
     // The mirror rollback must not delete control files the backup excludes.
     for (name, bytes) in advancement {
         assert_eq!(
-            fs::read_to_string(save.join(name)).unwrap(),
+            fs::read(save.join(name)).unwrap(),
             bytes,
             "the rollback changed {name}"
         );
@@ -1240,20 +1258,22 @@ fn the_restore_backup_excludes_runtime_control_files() {
         fs::write(save.join(rel), bytes).unwrap();
     }
     let id = snapshot(&save, None);
-    let control = [
-        (".talkdnd.integrity.lock", "integrity\n"),
-        (".talkdnd.advancement.lock", "advancement lock\n"),
-        (".talkdnd.advancement.state", "advancement state\n"),
-    ];
-    for (name, bytes) in control {
-        fs::write(save.join(name), bytes).unwrap();
-    }
+    // Integrity lock can stay as planted bytes; advancement lock/state must
+    // be a real protocol so restore can hold SAVE and take the checkpoint
+    // lock in order (AC-1) without failing closed on dummy state (AC-5).
+    fs::write(save.join(".talkdnd.integrity.lock"), "integrity\n").unwrap();
+    let _save_lock = init_and_hold_save(&root, &save);
+    let control = {
+        use talkdnd::advancement_lock as adv;
+        let names = [".talkdnd.integrity.lock", adv::LOCK_FILE, adv::STATE_FILE];
+        names.map(|name| (name, fs::read_to_string(save.join(name)).unwrap()))
+    };
     restore(&save, &id, true).unwrap();
 
     let backups = restore_backups(&root);
     assert_eq!(backups.len(), 1, "{backups:?}");
     let backup = &backups[0];
-    for (name, _) in control {
+    for (name, _) in &control {
         assert!(
             !backup.join(name).exists(),
             "{name} leaked into the whole-save backup"
@@ -1277,10 +1297,10 @@ fn the_restore_backup_excludes_runtime_control_files() {
         .join("Sessions/2030-01-02-session-00-setup.md")
         .is_file());
     // The live control files are untouched by the backup and the restore.
-    for (name, bytes) in control {
+    for (name, bytes) in &control {
         assert_eq!(
             fs::read_to_string(save.join(name)).unwrap(),
-            bytes,
+            *bytes,
             "{name} changed"
         );
     }
