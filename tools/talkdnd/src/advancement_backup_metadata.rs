@@ -7,17 +7,24 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(not(target_os = "linux"))]
 use anyhow::bail;
 use anyhow::{ensure, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::advancement_commit::{is_root_excluded, posix_rel};
+use crate::advancement_commit::{is_root_excluded, posix_rel, BACKUP_MANIFEST};
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub(crate) struct Inventory {
-    attribute_inspection: &'static str,
+    attribute_inspection: AttributeInspection,
     entries: Vec<Entry>,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AttributeInspection {
+    LinuxProcessVisible,
+    DarwinAclAndXattr,
+}
+
+#[derive(Deserialize, Serialize)]
 struct Entry {
     path: String,
     directory: bool,
@@ -27,7 +34,7 @@ struct Entry {
     posix: Posix,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 struct Timestamp {
     seconds: i64,
     nanoseconds: u32,
@@ -58,7 +65,7 @@ impl Timestamp {
     }
 }
 
-#[derive(PartialEq, Eq, Serialize)]
+#[derive(Deserialize, PartialEq, Eq, Serialize)]
 struct Posix {
     mode: u32,
     uid: u32,
@@ -167,17 +174,50 @@ impl Entry {
 
 impl Inventory {
     pub(crate) fn capture(root: &Path) -> Result<Self> {
+        Self::capture_tree(root, false)
+    }
+
+    fn capture_tree(root: &Path, backup: bool) -> Result<Self> {
         let mut entries = Vec::new();
         let dev = Posix::read(&fs::symlink_metadata(root)?)?.device;
-        collect(root, root, dev, &mut entries)?;
+        collect(root, root, dev, backup, &mut entries)?;
         Ok(Self {
             attribute_inspection: if cfg!(target_os = "linux") {
-                "linux_process_visible"
+                AttributeInspection::LinuxProcessVisible
             } else {
-                "darwin_acl_and_xattr"
+                AttributeInspection::DarwinAclAndXattr
             },
             entries,
         })
+    }
+
+    pub(crate) fn verify_backup(&self, root: &Path) -> Result<()> {
+        let current = Self::capture_tree(root, true)?;
+        ensure!(
+            self.attribute_inspection == current.attribute_inspection
+                && self.entries.len() == current.entries.len(),
+            "备份元数据范围或检查平台与清单不一致"
+        );
+        for (expected, actual) in self.entries.iter().zip(current.entries) {
+            // A copied inode has its own ctime, and ordinary reads can
+            // change its atime. Compare the stable, recoverable attributes.
+            ensure!(
+                expected.path == actual.path
+                    && expected.directory == actual.directory
+                    && expected.posix.mode == actual.posix.mode
+                    && expected.posix.uid == actual.posix.uid
+                    && expected.posix.gid == actual.posix.gid
+                    && expected.modified == actual.modified
+                    && (!cfg!(target_os = "macos") || expected.birth_time == actual.birth_time),
+                "备份条目元数据与清单不一致：{}",
+                if expected.path.is_empty() {
+                    "."
+                } else {
+                    &expected.path
+                }
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn verify_source(&self, root: &Path) -> Result<()> {
@@ -222,7 +262,13 @@ impl Inventory {
     }
 }
 
-fn collect(root: &Path, path: &Path, dev: u64, entries: &mut Vec<Entry>) -> Result<()> {
+fn collect(
+    root: &Path,
+    path: &Path,
+    dev: u64,
+    backup: bool,
+    entries: &mut Vec<Entry>,
+) -> Result<()> {
     let entry =
         Entry::read(root, path).with_context(|| format!("检查备份源元数据 {}", path.display()))?;
     ensure!(
@@ -236,9 +282,11 @@ fn collect(root: &Path, path: &Path, dev: u64, entries: &mut Vec<Entry>) -> Resu
         let mut children = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
         children.sort_by_key(fs::DirEntry::file_name);
         for child in children {
-            if path != root || !is_root_excluded(&child.file_name()) {
-                collect(root, &child.path(), dev, entries)?;
+            let name = child.file_name();
+            if path == root && (is_root_excluded(&name) || (backup && name == BACKUP_MANIFEST)) {
+                continue;
             }
+            collect(root, &child.path(), dev, backup, entries)?;
         }
     }
     Ok(())

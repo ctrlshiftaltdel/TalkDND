@@ -583,6 +583,78 @@ fn continue_to_target_finishes_partial_publish_including_extension() {
 
 #[cfg(unix)]
 #[test]
+fn recovery_rejects_changes_to_backup_contents_or_metadata() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for (tag, damage) in [
+        ("backup-content", "恢复备份条目与清单不一致"),
+        ("backup-mode", "备份条目元数据与清单不一致"),
+    ] {
+        let fx = leftover_with_publish_fault(tag, Fault::LogAppend);
+        let path = fx.backup.join("sheets/aria.yaml");
+        if tag == "backup-content" {
+            fs::write(path, b"changed backup bytes\n").unwrap();
+        } else {
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            fs::set_permissions(path, fs::Permissions::from_mode(mode ^ 0o040)).unwrap();
+        }
+        let before = snapshot_tree(&fx.save);
+        let evd = rec_dir(&fx.evr, tag);
+        let req = rec_req(
+            &fx.root,
+            &fx.save,
+            &fx.evr,
+            &evd,
+            tag,
+            Some(RecoveryChoice::RollbackToPreimage),
+            true,
+            None,
+        );
+        let failure = recover(&req).expect_err("changed backup evidence must stop recovery");
+        let error = failure.report.error.as_deref().unwrap();
+        assert!(
+            error.contains(damage) && error.contains("sheets/aria.yaml"),
+            "{error}"
+        );
+        assert!(!failure.report.evidence_established);
+        assert!(failure.report.written_paths.is_empty());
+        assert!(tree_unchanged(&fx.save, &before));
+        assert_leftover_intent_unchanged(&fx);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_accepts_the_legacy_backup_manifest() {
+    let fx = leftover_with_publish_fault("backup-v1", Fault::LogAppend);
+    let path = fx.backup.join("d-backup.manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    manifest["schema"] = serde_json::json!(1);
+    manifest.as_object_mut().unwrap().remove("source_metadata");
+    fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+    let evd = rec_dir(&fx.evr, "backup-v1");
+    let req = rec_req(
+        &fx.root,
+        &fx.save,
+        &fx.evr,
+        &evd,
+        "rec-backup-v1",
+        Some(RecoveryChoice::RollbackToPreimage),
+        true,
+        None,
+    );
+    let report = recover(&req).expect("version 1 backup still supplies the byte preimage");
+    assert_eq!(report.protocol_state, State::Failed);
+    assert_eq!(
+        bytes_at(&fx.save, "sheets/aria.yaml"),
+        fx.preimage["sheets/aria.yaml"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn rollback_to_preimage_restores_published_files_including_extension() {
     let fx = leftover_with_publish_fault("roll", Fault::LogAppend);
     assert_ne!(

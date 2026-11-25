@@ -18,6 +18,7 @@
 //! is still no player commit CLI and no schema 11 / sidecar. Explicit
 //! recovery is a separate library API in [`crate::advancement_recovery`].
 
+use crate::advancement_backup_metadata::Inventory;
 use crate::advancement_lock::{
     self, open, AdvancementLock, CompletionEvidence, Error as LockError, OpenOptions, Stage, State,
 };
@@ -45,6 +46,7 @@ const CONTROL_FILES: [&str; 4] = [
 /// Root-only cache / derived files (#292 / ADV-P1-1e). Nested same names are
 /// user data.
 const CACHE_FILES: [&str; 2] = ["digest.md", "secret-terms.cache.json"];
+pub(crate) const BACKUP_MANIFEST: &str = "d-backup.manifest.json";
 
 /// Injected failures for AC-5. Ordinary error paths are not power-loss tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -451,7 +453,8 @@ fn build_backup(lock: &mut AdvancementLock, req: &Request<'_>) -> Result<PathBuf
     let name = instance_dir_name(req, "d-backup");
     let dest = exclusive_create_dir(req.backup_parent, &name)
         .with_context(|| "独占创建用户数据备份目录")?;
-    let metadata = crate::advancement_backup_metadata::Inventory::capture(req.save_dir)?;
+    let metadata = Inventory::capture(req.save_dir)
+        .with_context(|| format!("检查原始元数据；不完整备份保留在 {}", dest.display()))?;
 
     if req.fault == Some(Fault::BackupCopy) {
         // Start the copy so an incomplete backup exists, then stop.
@@ -489,15 +492,15 @@ fn build_backup(lock: &mut AdvancementLock, req: &Request<'_>) -> Result<PathBuf
 
     // Reserve the manifest before restoring the root directory's timestamps.
     // Writing data to this same entry later leaves those timestamps intact.
-    let mut manifest = File::create_new(dest.join("d-backup.manifest.json"))?;
+    let mut manifest = File::create_new(dest.join(BACKUP_MANIFEST))?;
     metadata.restore_and_verify_copy(&dest)?;
     sync_dir(req.backup_parent)?;
     write_backup_manifest(
         &mut manifest,
         req.operation_id,
         req.save_dir,
-        &entries,
-        &metadata,
+        entries,
+        metadata,
     )?;
     lock.record_backup(
         dest.to_str()
@@ -807,7 +810,7 @@ fn copy_verified_preimage(backup: &Path, dest: &Path) -> Result<()> {
     copy_user_data(backup, dest)?;
     // The backup manifest lives in the backup dir; drop it from the candidate
     // if the copy included it (it is not a save file).
-    let manifest = dest.join("d-backup.manifest.json");
+    let manifest = dest.join(BACKUP_MANIFEST);
     if manifest.exists() {
         fs::remove_file(&manifest).with_context(|| format!("strip {}", manifest.display()))?;
     }
@@ -928,7 +931,7 @@ fn collect_backup_entries(
     for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
         let entry = entry?;
         let name = entry.file_name();
-        if at_root && name == "d-backup.manifest.json" {
+        if at_root && name == BACKUP_MANIFEST {
             continue;
         }
         let path = entry.path();
@@ -946,6 +949,7 @@ fn collect_backup_entries(
             );
             collect_backup_entries(&path, dest_root, false, out)?;
         } else if ft.is_file() {
+            refuse_special_file(&path, &fs::symlink_metadata(&path)?)?;
             let bytes = fs::read(&path)?;
             out.insert(
                 rel.clone(),
@@ -963,37 +967,79 @@ fn collect_backup_entries(
     Ok(())
 }
 
-#[derive(Serialize)]
-struct BackupManifestFile<'a> {
+#[derive(Deserialize, Serialize)]
+struct BackupManifestFile {
     schema: u32,
     operation_id: String,
     source: String,
     verified: bool,
-    entries: &'a [BackupEntry],
-    source_metadata: &'a crate::advancement_backup_metadata::Inventory,
+    entries: Vec<BackupEntry>,
+    source_metadata: Option<Inventory>,
 }
 
 fn write_backup_manifest(
     file: &mut File,
     operation_id: &str,
     source: &Path,
-    entries: &[BackupEntry],
-    source_metadata: &crate::advancement_backup_metadata::Inventory,
+    entries: Vec<BackupEntry>,
+    source_metadata: Inventory,
 ) -> Result<()> {
     let doc = BackupManifestFile {
         schema: 2,
         operation_id: operation_id.to_string(),
-        source: source
-            .to_str()
-            .ok_or_else(|| anyhow!("save path is not UTF-8"))?
-            .replace('\\', "/"),
+        source: backup_source_name(source)?,
         verified: true,
         entries,
-        source_metadata,
+        source_metadata: Some(source_metadata),
     };
     serde_json::to_writer_pretty(&mut *file, &doc).context("写入备份清单")?;
     file.sync_all().context("同步备份清单")?;
     Ok(())
+}
+
+fn backup_source_name(source: &Path) -> Result<String> {
+    Ok(source
+        .to_str()
+        .ok_or_else(|| anyhow!("save path is not UTF-8"))?
+        .replace('\\', "/"))
+}
+
+pub(crate) fn verify_recovery_backup(backup: &Path, source: &Path, operation: &str) -> Result<()> {
+    require_outside(source, backup, "恢复备份目录")?;
+    require_outside(backup, source, "存档目录")?;
+    if !fs::symlink_metadata(backup)?.is_dir() {
+        bail!("恢复备份必须是普通目录");
+    }
+    let path = backup.join(BACKUP_MANIFEST);
+    let manifest_metadata = fs::symlink_metadata(&path).context("检查恢复备份清单")?;
+    if !manifest_metadata.is_file() {
+        bail!("恢复备份清单必须是普通文件");
+    }
+    refuse_special_file(&path, &manifest_metadata)?;
+    let manifest: BackupManifestFile =
+        serde_json::from_reader(File::open(path)?).context("读取恢复备份清单")?;
+    if !manifest.verified
+        || manifest.operation_id != operation
+        || manifest.source != backup_source_name(source)?
+    {
+        bail!("备份清单与当前存档或未完成操作不匹配");
+    }
+
+    let mut found = BTreeMap::new();
+    collect_backup_entries(backup, backup, true, &mut found)?;
+    for entry in manifest.entries {
+        if found.remove(&entry.path).as_ref() != Some(&entry) {
+            bail!("恢复备份条目与清单不一致：{}", entry.path);
+        }
+    }
+    if !found.is_empty() {
+        bail!("恢复备份存在清单未列出的条目");
+    }
+    match (manifest.schema, manifest.source_metadata) {
+        (1, None) => Ok(()),
+        (2, Some(metadata)) => metadata.verify_backup(backup),
+        _ => bail!("恢复备份清单版本不受支持或元数据缺失"),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

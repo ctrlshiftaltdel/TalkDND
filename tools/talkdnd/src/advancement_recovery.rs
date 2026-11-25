@@ -836,9 +836,8 @@ fn recovery_plan(
     candidate: Option<&Path>,
 ) -> Result<RecoveryPlan> {
     let backup = backup.ok_or_else(|| anyhow!("缺少原操作备份位置，无法取得前像，停止"))?;
-    if !backup.is_dir() {
-        bail!("备份目录不存在或不是目录：{}", backup.display());
-    }
+    crate::advancement_commit::verify_recovery_backup(backup, req.save_dir, &leftover.operation_id)
+        .map_err(|err| anyhow!("重新验收原操作备份 {}：{err:#}", backup.display()))?;
 
     // Registered replace targets are defined from the candidate if present,
     // otherwise from the backup (rollback still has to cover every registered
