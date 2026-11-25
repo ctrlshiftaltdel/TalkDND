@@ -156,8 +156,8 @@ effect/removal reason. No save text or DM-only material is added to a log.
 - **Damaging abilities**: `use` / `cast` checks explicit creature targets; an
   ability is damaging when any reachable effect contains damage.
 - **Movement**: both the legacy zone/grid router and the spatial planner
-  preflight every step against visible frightened sources. Forced movement is
-  not willing movement and is not blocked.
+  preflight every willing step against the source while the condition is active,
+  even when that source is unseen. Forced movement remains allowed.
 - **Line of sight**: `source_in_line_of_sight` uses the existing spatial LOS
   kernel on grids, including wall and height blockers, and falls back to the
   zone cover flag when no metric geometry exists.

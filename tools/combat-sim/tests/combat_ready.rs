@@ -1376,6 +1376,45 @@ fn a_blocked_readied_move_stops_with_a_structured_log() {
 }
 
 #[test]
+fn reaction_recovers_on_its_own_turn_not_on_the_round_boundary() {
+    for edition in ["2014", "2024"] {
+        let mut state = make_state(edition);
+        let hero = index(&state, "Hero");
+        let source = index(&state, "Source");
+        state.round = 1;
+        state.initiative = vec![source, hero];
+        state.turn = 0;
+        state.combatants[hero].reaction_round = Some(1);
+
+        let mut log = Vec::new();
+        let mut rng = ScriptedRng::new(&[10]);
+        engine::next_turn(&mut state, &mut rng, &mut log).unwrap();
+        assert_eq!(state.round, 1);
+        assert!(
+            state.combatants[hero].has_reaction(state.round),
+            "{edition}"
+        );
+
+        state.combatants[hero].reaction_round = Some(1);
+        let scratch = Scratch::new("reaction-turn");
+        let path = scratch.dir.join("state.json");
+        state.save(&path).unwrap();
+        let mut state = EncounterState::load(&path).unwrap();
+        engine::next_turn(&mut state, &mut rng, &mut log).unwrap();
+        assert_eq!(state.round, 2);
+        assert!(
+            !state.combatants[hero].has_reaction(state.round),
+            "{edition}: a new round must not refresh Hero before their turn"
+        );
+        engine::next_turn(&mut state, &mut rng, &mut log).unwrap();
+        assert!(
+            state.combatants[hero].has_reaction(state.round),
+            "{edition}"
+        );
+    }
+}
+
+#[test]
 fn ready_expires_at_the_holders_next_turn_start() {
     let mut state = make_state("2024");
     state.round = 1;

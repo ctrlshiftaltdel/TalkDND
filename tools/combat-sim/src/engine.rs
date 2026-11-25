@@ -458,26 +458,6 @@ fn source_is_visible(state: &EncounterState, holder: usize, source_name: &str) -
     space.cover(from.as_ref(), to.as_ref()) != Cover::Total
 }
 
-fn frightened_source_names(state: &EncounterState, holder: usize) -> Vec<String> {
-    state.combatants[holder]
-        .conditions
-        .iter()
-        .filter_map(|active| {
-            if !condition_behavior(state, &active.condition)
-                .is_some_and(|behavior| behavior.cannot_move_closer_to_source)
-            {
-                return None;
-            }
-            let name = active
-                .source
-                .as_deref()
-                .or(active.linked.as_deref())?
-                .to_string();
-            source_is_visible(state, holder, &name).then_some(name)
-        })
-        .collect()
-}
-
 fn distance_from_source(state: &EncounterState, source: usize, position: &Position) -> Option<i32> {
     if spatial_query_enabled(state) {
         return spatial_distance_to_position(state, source, position);
@@ -493,10 +473,23 @@ fn ensure_frightened_move(
     from: &Position,
     to: &Position,
 ) -> Result<()> {
-    for name in frightened_source_names(state, holder) {
-        let Some(source) = exact_index(state, &name) else {
+    for active in &state.combatants[holder].conditions {
+        if !condition_behavior(state, &active.condition)
+            .is_some_and(|behavior| behavior.cannot_move_closer_to_source)
+        {
+            continue;
+        }
+        let Some(source) = active
+            .source
+            .as_deref()
+            .or(active.linked.as_deref())
+            .and_then(|name| exact_index(state, name))
+        else {
             continue;
         };
+        if state.combatants[source].is_dead() {
+            continue;
+        }
         let Some(from_ft) = distance_from_source(state, source, from) else {
             continue;
         };
@@ -505,9 +498,8 @@ fn ensure_frightened_move(
         };
         if to_ft < from_ft {
             bail!(
-                "`{}` can't willingly move closer to `{}` (source of fear)",
-                state.combatants[holder].name,
-                name
+                "`{}` can't willingly move closer to the source of fear",
+                state.combatants[holder].name
             );
         }
     }
@@ -1711,6 +1703,7 @@ fn start_turn(
         let combatant = &mut state.combatants[index];
         combatant.action_used = false;
         combatant.bonus_action_used = false;
+        combatant.reaction_round = None;
         combatant.speed_left = speed;
         combatant
             .once_used
@@ -3308,9 +3301,9 @@ fn spend_action(
 }
 
 fn spend_reaction(state: &mut EncounterState, index: usize, _log: &mut dyn LogSink) -> Result<()> {
-    if state.combatants[index].reaction_round == Some(state.round) {
+    if state.combatants[index].reaction_round.is_some() {
         bail!(
-            "`{}` has already used a reaction this round",
+            "`{}` has already used their reaction and must wait until the start of their next turn",
             state.combatants[index].name
         );
     }
@@ -5379,7 +5372,7 @@ fn try_hit_reactions(
             {
                 continue;
             }
-            if state.combatants[target].reaction_round == Some(state.round) {
+            if !state.combatants[target].has_reaction(state.round) {
                 continue;
             }
             if has_flag(state, target, ConditionFlag::NoReactions)
@@ -8462,10 +8455,10 @@ fn trigger_ready_at(
         clear_ready_if_any(state, index, "expired", log);
         return Ok(ReadyOutcome::Expired);
     }
-    if state.combatants[index].reaction_round == Some(state.round)
+    if !state.combatants[index].has_reaction(state.round)
         || has_flag(state, index, ConditionFlag::NoReactions)
     {
-        let reason = format!("`{name}` cannot use a reaction this round");
+        let reason = format!("`{name}` has no reaction available");
         log.log(format_args!("{name}'s readied action is refused: {reason}"));
         return Ok(ReadyOutcome::Refused(reason));
     }

@@ -1322,70 +1322,52 @@ fn frightened_blocks_willing_movement_closer_to_a_visible_source() {
 }
 
 #[test]
-fn frightened_source_hidden_dead_or_out_of_sight_lifts_the_movement_restriction() {
-    // Hidden source.
-    let mut state = make_state("2014", "grid-open-fight", &["hero"]);
-    add(&mut state, "Hero", "frightened", None, Some("Source")).unwrap();
-    let source = index(&state, "Source");
-    state.combatants[source]
-        .conditions
-        .push(combat_sim::state::ActiveCondition {
-            condition: "hidden".to_string(),
-            source: None,
-            linked: None,
-            duration: None,
-            save_ends: None,
-            ends_on: Vec::new(),
-            created_by: None,
-            concentration: false,
-            applied_round: 0,
-            notes: None,
-        });
-    engine::move_to(
-        &mut state,
-        "Hero",
-        &MoveTarget::Cell(2, 1),
-        true,
-        &mut ScriptedRng::new(&[]),
-        &mut Vec::new(),
-    )
-    .unwrap();
+fn frightened_willing_movement_stays_blocked_when_the_source_is_unseen() {
+    for edition in ["2014", "2024"] {
+        for (encounter, hidden) in [("grid-open-fight", true), ("grid-wall-fight", false)] {
+            let mut state = make_state(edition, encounter, &["hero"]);
+            add(&mut state, "Hero", "frightened", None, Some("Source")).unwrap();
+            if hidden {
+                let source = index(&state, "Source");
+                state.combatants[source]
+                    .conditions
+                    .push(combat_sim::state::ActiveCondition {
+                        condition: "hidden".to_string(),
+                        source: None,
+                        linked: None,
+                        duration: None,
+                        save_ends: None,
+                        ends_on: Vec::new(),
+                        created_by: None,
+                        concentration: false,
+                        applied_round: 0,
+                        notes: None,
+                    });
+            }
 
-    // Dead source.
-    let mut state = make_state("2014", "grid-open-fight", &["hero"]);
-    add(&mut state, "Hero", "frightened", None, Some("Source")).unwrap();
-    engine::damage(
-        &mut state,
-        "Source",
-        "999",
-        Some("slashing"),
-        false,
-        &mut ScriptedRng::new(&[]),
-        &mut Vec::new(),
-    )
-    .unwrap();
-    engine::move_to(
-        &mut state,
-        "Hero",
-        &MoveTarget::Cell(2, 1),
-        true,
-        &mut ScriptedRng::new(&[]),
-        &mut Vec::new(),
-    )
-    .unwrap();
+            let destination = MoveTarget::Cell(2, 1);
+            let mut rng = ScriptedRng::new(&[]);
+            let mut log = Vec::new();
+            let error = engine::move_to(&mut state, "Hero", &destination, true, &mut rng, &mut log)
+                .expect_err("fear still prevents willingly moving closer to an unseen source");
+            let message = error.to_string();
+            assert!(message.contains("source of fear"), "{edition}: {message}");
+            assert!(!message.contains("Source"), "{edition}: {message}");
 
-    // Source behind a wall (out of sight).
-    let mut state = make_state("2014", "grid-wall-fight", &["hero"]);
-    add(&mut state, "Hero", "frightened", None, Some("Source")).unwrap();
-    engine::move_to(
-        &mut state,
-        "Hero",
-        &MoveTarget::Cell(2, 1),
-        true,
-        &mut ScriptedRng::new(&[]),
-        &mut Vec::new(),
-    )
-    .unwrap();
+            engine::damage(
+                &mut state,
+                "Source",
+                "999",
+                Some("slashing"),
+                false,
+                &mut rng,
+                &mut log,
+            )
+            .unwrap();
+            engine::move_to(&mut state, "Hero", &destination, true, &mut rng, &mut log)
+                .expect("source-death cleanup removes the movement restriction");
+        }
+    }
 }
 
 #[test]

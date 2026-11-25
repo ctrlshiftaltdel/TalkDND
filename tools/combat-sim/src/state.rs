@@ -419,7 +419,8 @@ pub struct CombatantState {
     pub action_used: bool,
     #[serde(default)]
     pub bonus_action_used: bool,
-    /// Round in which the reaction was spent.
+    /// Round in which the reaction was spent. Cleared at the start of this
+    /// combatant's next turn, regardless of the current round number.
     #[serde(default)]
     pub reaction_round: Option<u32>,
     #[serde(default)]
@@ -664,8 +665,10 @@ impl CombatantState {
         walk.max(0)
     }
 
-    pub fn has_reaction(&self, round: u32) -> bool {
-        !self.is_dead() && self.reaction_round != Some(round)
+    /// The round argument is retained for existing callers. Availability
+    /// follows this combatant's turns rather than the global round.
+    pub fn has_reaction(&self, _round: u32) -> bool {
+        !self.is_dead() && self.reaction_round.is_none()
     }
 
     pub fn resource(&self, id: &str) -> Option<&ResourceState> {
