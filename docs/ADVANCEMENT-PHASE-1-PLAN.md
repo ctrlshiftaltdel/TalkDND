@@ -389,6 +389,8 @@
   - [ ] `AC-3`: 报告绑定环境（OS/内核/rustc/cargo）、运行次数与 head；未复现时写“本次未复现”，不写成“已解决”。
   - [ ] `AC-4`: 本块的任何结论都不得被用来把其他块的 AC 判为通过，也不得被表述为“#264 已解决”，除非有可复核的根因证据。
 
+**交付记录（TASK-0160 / Issue #315）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。现场采集报告见 [ADVANCEMENT-CHECKPOINT-LOCK-FIELD-CAPTURE.md](ADVANCEMENT-CHECKPOINT-LOCK-FIELD-CAPTURE.md)，并追加于 [CHECKPOINT-LOCK-INVESTIGATION.md](CHECKPOINT-LOCK-INVESTIGATION.md)；调查绑定基线 `328a857f7d8a976697e600962fb2ebbb2f5f73e0`（Linux Debian 13，内核 `6.12.113+`，rustc/cargo `1.100.0`，fixture 位于 `/tmp` 所用 ext4）。**本次已复现**同一 `after.try_lock()` `WouldBlock`（默认并行 checkpoint 套件 2/41），但失败瞬间持锁者未捕捉到，测试缺陷与产品影响仍为 `UNKNOWN`，**不得写成已解决**，不以本块关闭 #264。Windows / macOS 本工作区未跑，标 `NOT_RUN` / `UNKNOWN`。本文件 AC 勾选保持 `[ ]`、不新加状态列。本块不修改产品代码、测试或 CI，不开始 `ADV-P1-6`，不新增 schema 11 或 sidecar，不启用提交入口。
+
 ### Task: `ADV-P1-13` — 跨平台/网络文件系统调查（并行调查，`ADV-P1-6` 的前置门）
 
 - **Goal:** 单独记录各平台枚举、链接、备份与文件系统语义的事实，并明确哪些结论支持或阻塞迁移实现。
@@ -422,7 +424,7 @@
 | 整盘/同相对路径镜像与旧 state 重放是否可检测 | 镜像与重放实验（T5d3/T13b） | `ADV-P1-13` | `NOT_RUN`（设计只声称“不承诺检测”；ADV-P1-13 未做镜像或重放实验，不把该非承诺改写为已检测。证据见 [ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md](ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md)，基线 head `762313bc4d1498d3565974354076f31e5ea5b28f`） |
 | 真实存档上的 9/10→11 迁移与恢复 | 真实存档（当前禁止；只能合成 fixture） | `ADV-P1-6` | `NOT_RUN` |
 | 活动遭遇识别 | 遭遇发现算法与合成遭遇矩阵 | `ADV-P1-10` | `NOT_RUN`（算法未决） |
-| #264 根因 | 失败现场采集 | `ADV-P1-12` | `NOT_RUN` |
+| #264 根因 | 失败现场采集 | `ADV-P1-12` | 本次已复现（**非已解决**）。Linux Debian 13，内核 `6.12.113+`，rustc/cargo `1.100.0`，fixture 在 `/tmp` 所用 ext4；调查基线 `328a857f7d8a976697e600962fb2ebbb2f5f73e0`。默认并行 checkpoint 套件 41 次中 2 次在 `after.try_lock()` 得到 `WouldBlock`（与首次失败同一断言）；目标测试单独 160 次、`--test-threads=1` 套件 40 次未复现。现场已采集锁 inode / 进程树 / 描述符，但失败瞬间持锁者未捕捉到，测试缺陷与产品锁安全影响仍为 `UNKNOWN`。证据见 [ADVANCEMENT-CHECKPOINT-LOCK-FIELD-CAPTURE.md](ADVANCEMENT-CHECKPOINT-LOCK-FIELD-CAPTURE.md）。不得写成已解决，不以本块关闭 #264。 |
 
 ## 维护规则
 

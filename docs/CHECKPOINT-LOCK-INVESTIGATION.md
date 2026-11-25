@@ -1,6 +1,6 @@
 # Checkpoint 锁异常事实调查
 
-本报告只涉及合成 fixture；不修改恢复、锁或测试。调查基线 `46a2eda04c4bb3f35d9ab0d47c90587a34993653`。**首次失败的原因未知；后续通过不证明锁安全，也不证明真实存档不受影响。**
+本报告只涉及合成 fixture；不修改恢复、锁或测试。调查基线 `46a2eda04c4bb3f35d9ab0d47c90587a34993653`。**首次失败的原因未知；后续通过不证明锁安全，也不证明真实存档不受影响。** ADV-P1-12 在后续 head 上另做了一次更完整的采集，见 [ADVANCEMENT-CHECKPOINT-LOCK-FIELD-CAPTURE.md](ADVANCEMENT-CHECKPOINT-LOCK-FIELD-CAPTURE.md)；该次**已复现**同一 `WouldBlock`，但失败瞬间持锁者仍未捕捉到，根因仍为 `UNKNOWN`，不把首次失败或 #264 改写为已解决。本文件既有结论不删除。
 
 ## 首次失败和证据
 
@@ -62,3 +62,10 @@ use std::fs::OpenOptions;
 unsafe extern "C" { fn fork()->i32; fn pipe(fds:*mut i32)->i32; fn read(fd:i32,buf:*mut u8,n:usize)->isize; fn write(fd:i32,buf:*const u8,n:usize)->isize; fn close(fd:i32)->i32; fn waitpid(pid:i32,status:*mut i32,opt:i32)->i32; fn _exit(code:i32)->!; }
 fn main(){let p="checkpoint-lock-fork-file"; let open=||OpenOptions::new().create(true).truncate(false).write(true).open(p).unwrap(); let f=open(); f.lock().unwrap(); let mut fd=[0;2]; unsafe{assert_eq!(pipe(fd.as_mut_ptr()),0); let pid=fork(); assert!(pid>=0); if pid==0 {close(fd[1]); let mut b=0; read(fd[0],&mut b,1); _exit(0)} close(fd[0]); drop(f); let q=open(); println!("fork_child_retains_fd={} parent_closed=true",matches!(q.try_lock(),Err(std::fs::TryLockError::WouldBlock))); let b=1u8; assert_eq!(write(fd[1],&b,1),1); close(fd[1]); let mut status=0; assert_eq!(waitpid(pid,&mut status,0),pid); println!("child_wait_status={status} reacquire_after_child_exit={}",q.try_lock().is_ok()); }}
 ```
+
+
+## ADV-P1-12 补充（后续 head，不改写上文结论）
+
+在基线 `328a857f7d8a976697e600962fb2ebbb2f5f73e0`、Linux Debian 13、内核 `6.12.113+`、rustc/cargo `1.100.0` 上另做采集，详见 [ADVANCEMENT-CHECKPOINT-LOCK-FIELD-CAPTURE.md](ADVANCEMENT-CHECKPOINT-LOCK-FIELD-CAPTURE.md)。
+
+本次已复现：默认并行完整 checkpoint 套件 41 次中有 2 次在 `tests/checkpoint.rs:1249` 的 `after.try_lock()` 得到 `WouldBlock`（与首次失败同一断言；持有期间互斥检查在失败路径上通过）。单独跑目标测试 160 次、`--test-threads=1` 套件 40 次未复现。已采集锁 inode、进程树与描述符，但失败瞬间的持锁者未捕捉到；测试缺陷与产品锁安全影响保持 `UNKNOWN`。上文“首次失败的原因未知 / 后续通过不证明锁安全”仍然成立，不得用本次通过或本次现场反推 2026 年那一次的根因，也不得写成“#264 已解决”。
