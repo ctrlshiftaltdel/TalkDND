@@ -51,3 +51,5 @@ FULL 必须区分三个事实，不能互相替代：
 未来集成核对：用合成数据验证两版职业机会与 SRD/FULL 隔离、错误版本和缺包拒绝、候选身份及同名覆盖、已知非法优先于未知、DM 确认与手动效果不冒充自动实现，并检验角色、party、法术、进度、日志和完整性接口。具体规则表达与授权变更须交 Master 和所有者，不能从此盘点自行决定。
 
 未来授权接口测试另需分别构造：有效 FULL 包但无识别记录、识别成功但缺包、错误版、模糊记录、重复 ID/无效包、匹配记录与包解锁；检查 `require_full_packs` 和 `sync_campaign_packs` 对 FULL/SRD 的区别及非受管理项保留；分别验证直接 loader 输入、start 成功扫描、扫描或同步失败和 manifest 缺少可替换项的实际边界。仅用隔离的合成记录、包与目录，不读取玩家书籍；这些是待运行建议，不改变授权机制。
+
+`ADV-P1-13` 证据位置：[ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md](ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md)（基线 head `762313bc4d1498d3565974354076f31e5ea5b28f`）。本审计正文与已批准边界不被该调查改写。

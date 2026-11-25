@@ -332,6 +332,8 @@ D 流程（完整备份 → 候选构建 → 逐文件发布 → 日志/完整�
 
 ## 6. 证据与限制
 
+`ADV-P1-13` 的跨平台/网络文件系统调查记录见 [ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md](ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md)（基线 head `762313bc4d1498d3565974354076f31e5ea5b28f`）。该报告只登记实测与 `NOT_RUN` / `UNKNOWN`，**不改写**本文已批准的产品边界。
+
 TASK-0143 的九字段验收证据矩阵发布在 PR #283 的评论，`commit_sha` 绑定该 PR 的最终 head；本文件内不复制可能随 head 变化的运行结果。代码事实基线 `cc78760`（§1 的现有锁盘点）；实现基线 `30066e4`；ADV-P1-2 编排器在后续 head 交付（见 §5.4 第 4 项与 Issue #305 / 其 Draft PR），若源码变化，§1 的定位与 §4 的「实现状态」需重新核对。
 
 已知限制：设计部分只做静态阅读；实现部分只有合成测试，故障注入只覆盖可注入的窗口（路径替换、预置快照文件、只读目录/文件权限、超时）；未读取真实存档、书籍或秘密；未验证 Windows/macOS 文件锁、网络文件系统、目录/掉电持久性；预览未实现且一致性仍为 `unverified`；`init` 已实现且仍无玩家 CLI 入口；ADV-P1-2 / `ADV-P1-4` 把 `admit`/`backup`/`candidate`/`publish`/`logs`/`complete` 接到库编排器（非玩家提交命令），`ADV-P1-5` 把显式恢复接到库 API `recover` / `inspect_recovery`（非玩家恢复命令，证据 `tools/talkdnd/tests/advancement_recovery.rs`）；**Windows 本地提交不受支持**（无目录 sync：`init` 返回 `state_published_not_durable` 而非 `Ok`，`check_writable` 与 `begin_operation` 均拒绝）；**没有强制准入**：第二句柄自检只证明同一客户端的锁 API，网络盘/FUSE/同步目录既未识别也未拒绝；v1 无 `resume`/`abort`/`adopt`，失败后只能人工在协议外处理且必须先备份；v1 不保留永久历史，操作前 state 由受保护的操作证据保存（非永久），证据清理后的可恢复性不作保证、用户数据恢复依据是 D 备份；`revision` 只能在存在可验证先前值/可信锚时检出倒退，整体旧 state 重放可能不可检测（需独立锚，不在本任务）；`lock_identity` 不能识别保留标识的整盘镜像，Windows 上只是 `creation_time` 的尽力标识（size 与写时间会随写入头部变化，不能当标识）；未初始化副本与首次 init 不可区分；非 UTF-8 路径不能无损记录，因此这类存档不能初始化；`readdir` 迭代中途错误未注入（NOT_RUN）；Windows 上同长度改写保留 `creation_time`，`lock_identity` 无法发现；`publish_state` 删除 temp 失败只报告残留、不影响 state；每次更新前的复核与随后的 rename 之间仍有残余 TOCTOU；新路径内层锁已有有界获取（§2.6、OD-9，合成 T6b 见 `ADV-P1-3` / `ADV-P1-4`），旧完整性锁 `lock()` 仍无界，整条提交路径仍不承诺有界；#264 根因仍 UNKNOWN；现有测试通过不构成锁安全证明。
