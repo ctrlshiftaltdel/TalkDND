@@ -662,6 +662,28 @@ fn magic_missile_offers_one_shield_per_target_before_resolving_any_dart() {
         assert_eq!(result.combatants[bystander].hp, 20);
         assert_eq!(slot(&result, "Hero"), 0);
         assert!(result.combatants[hero].has_reaction(result.round));
+
+        if edition == "2024" {
+            state.combatants[hero]
+                .resources
+                .get_mut("spell-slot-1")
+                .unwrap()
+                .current = 2;
+            engine::spend_spell_slot(&mut state, "Hero", 1, &mut Vec::new()).unwrap();
+            state.save(&path).unwrap();
+            assert_success(
+                &run_cli(
+                    &path,
+                    &["cast", "Source", "magic-missile", "Hero", "--seed", "21"],
+                ),
+                "Shield cannot use a second slot on the same turn",
+            );
+            assert!(status_json(&path)["pending_reaction"].is_null());
+            let result = EncounterState::load(&path).unwrap();
+            assert!(result.combatants[hero].hp < 40);
+            assert!(result.combatants[hero].has_reaction(result.round));
+            assert_eq!(slot(&result, "Hero"), 1);
+        }
     }
 }
 

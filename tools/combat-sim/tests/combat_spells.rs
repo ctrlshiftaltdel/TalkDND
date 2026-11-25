@@ -1081,6 +1081,132 @@ fn minute_and_hour_casting_times_fail_closed_in_combat() {
 }
 
 #[test]
+fn spell_turn_limits_follow_the_edition_and_survive_reload() {
+    for (edition, rule) in [("2014", "one-action cantrip"), ("2024", "one spell slot")] {
+        for first in ["quick-word", "test-hold"] {
+            let mut state = encounter_state(&["caster-x"]);
+            std::sync::Arc::make_mut(&mut state.content).ruleset = edition.into();
+            let caster = index(&state, "Caster X");
+            let brute = index(&state, "Brute B");
+            let mut rng = ScriptedRng::default();
+            engine::init(
+                &mut state,
+                &[(caster, 20), (brute, 10)],
+                &mut rng,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            let options = cast_options("Caster X", None, None, false);
+            engine::use_ability(
+                &mut state,
+                "Caster X",
+                first,
+                &options,
+                &mut rng,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            let saved = serde_json::to_vec(&state).unwrap();
+            let mut reloaded: EncounterState = serde_json::from_slice(&saved).unwrap();
+            reloaded.rebuild_caches();
+            let other = if first == "quick-word" {
+                "test-hold"
+            } else {
+                "quick-word"
+            };
+            let error = engine::use_ability(
+                &mut reloaded,
+                "Caster X",
+                other,
+                &options,
+                &mut rng,
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(rule), "{error}");
+            assert_eq!(
+                serde_json::to_value(&reloaded).unwrap(),
+                serde_json::to_value(&state).unwrap()
+            );
+            assert_eq!(resource(&reloaded, "Caster X", "spell-slot-1"), 3);
+
+            if first == "quick-word" {
+                let error = engine::ready(
+                    &mut reloaded,
+                    "Caster X",
+                    &ReadyOptions {
+                        description: "When the fight moves".into(),
+                        trigger: ReadyTrigger::Manual,
+                        response: ReadyResponse::Ability {
+                            ability: "test-hold".into(),
+                            target: None,
+                        },
+                    },
+                    &mut Vec::new(),
+                )
+                .unwrap_err();
+                assert!(error.to_string().contains(rule), "{error}");
+                engine::use_ability(
+                    &mut reloaded,
+                    "Caster X",
+                    "no-meta-bolt",
+                    &cast_options("Brute B", None, None, false),
+                    &mut rng,
+                    &mut Vec::new(),
+                )
+                .expect_err("a legacy slotted spell still counts");
+                engine::use_ability(
+                    &mut reloaded,
+                    "Caster X",
+                    "test-spark",
+                    &cast_options("Brute B", None, None, false),
+                    &mut ScriptedRng::new(&[15, 2, 3]),
+                    &mut Vec::new(),
+                )
+                .unwrap();
+                assert_eq!(resource(&reloaded, "Caster X", "spell-slot-1"), 3);
+            }
+            engine::next_turn(&mut reloaded, &mut rng, &mut Vec::new()).unwrap();
+            engine::next_turn(&mut reloaded, &mut rng, &mut Vec::new()).unwrap();
+            engine::use_ability(
+                &mut reloaded,
+                "Caster X",
+                other,
+                &options,
+                &mut rng,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert_eq!(resource(&reloaded, "Caster X", "spell-slot-1"), 2);
+        }
+    }
+}
+
+#[test]
+fn using_a_slot_on_another_creatures_turn_resets_when_that_turn_ends() {
+    let mut state = encounter_state(&["caster-x", "ally-a"]);
+    let caster = index(&state, "Caster X");
+    let ally = index(&state, "Ally A");
+    let brute = index(&state, "Brute B");
+    let mut rng = ScriptedRng::default();
+    let mut log = Vec::new();
+    engine::init(
+        &mut state,
+        &[(caster, 10), (ally, 20), (brute, 30)],
+        &mut rng,
+        &mut log,
+    )
+    .unwrap();
+    engine::spend_spell_slot(&mut state, "Caster X", 1, &mut log).unwrap();
+    assert!(engine::spend_spell_slot(&mut state, "Caster X", 2, &mut log).is_err());
+    assert_eq!(resource(&state, "Caster X", "spell-slot-2"), 3);
+    engine::next_turn(&mut state, &mut rng, &mut log).unwrap();
+    assert_eq!(state.current_index(), Some(ally));
+    engine::spend_spell_slot(&mut state, "Caster X", 2, &mut log).unwrap();
+    assert_eq!(resource(&state, "Caster X", "spell-slot-2"), 2);
+}
+
+#[test]
 fn bonus_action_casting_time_is_unchanged() {
     let mut state = encounter_state(&["caster-x"]);
     engine::use_ability(

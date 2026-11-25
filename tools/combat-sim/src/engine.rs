@@ -15,12 +15,12 @@ use serde::{Deserialize, Serialize};
 use crate::content::expr::ExprContext;
 use crate::content::schema::{
     Ability, AbilityCost, AbilityEntry, AbilityName, ActionResolution, Activation, Attack,
-    AttackEffect, AttackKind, AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag,
-    Cover, CritMode, DamageEffect, DamagePart, DamageType, Direction, Duration, DurationUntil,
-    Effect, EndsOn, ExprValue, ForcedMoveEffect, GrappleRule, Light, Modifier, ModifierApplies,
-    ModifierEffect, ModifierFilter, Obscurement, OncePer, Predicate, Recharge, SaveEffect,
-    SaveEndsAt, SceneMode, ShoveRule, Size, TargetRef, TargetSide, TargetType, ToggleTriggerEffect,
-    Trigger, TriggerWhen, TwoWeaponRule, UnarmedStrikeRule,
+    AttackEffect, AttackKind, AttackProperty, BasicAction, CastingUnit, CheckEffect, CheckWho,
+    ConditionFlag, Cover, CritMode, DamageEffect, DamagePart, DamageType, Direction, Duration,
+    DurationUntil, Effect, EndsOn, ExprValue, ForcedMoveEffect, GrappleRule, Light, Modifier,
+    ModifierApplies, ModifierEffect, ModifierFilter, Obscurement, OncePer, Predicate, Recharge,
+    SaveEffect, SaveEndsAt, SceneMode, ShoveRule, Size, TargetRef, TargetSide, TargetType,
+    ToggleTriggerEffect, Trigger, TriggerWhen, TwoWeaponRule, UnarmedStrikeRule,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
@@ -171,6 +171,9 @@ pub struct ShoveOptions {
 /// Prefix for per-turn Attack action slots stored in `CombatantState::once_used`.
 /// The `turn:` prefix is cleared by the existing turn-start reset.
 const ATTACK_SLOT_PREFIX: &str = "turn:attack-action:slot:";
+const TURN_BONUS_SPELL: &str = "casting-turn:bonus-spell";
+const TURN_OTHER_SPELL: &str = "casting-turn:other-spell";
+const TURN_SLOT_SPELL: &str = "casting-turn:slot-spell";
 
 /// Ability/use command options.
 #[derive(Debug, Clone, Default)]
@@ -1708,6 +1711,11 @@ fn start_turn(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> bool {
+    for combatant in &mut state.combatants {
+        combatant.once_used.remove(TURN_BONUS_SPELL);
+        combatant.once_used.remove(TURN_OTHER_SPELL);
+        combatant.once_used.remove(TURN_SLOT_SPELL);
+    }
     let speed = effective_speed(state, index);
     {
         let combatant = &mut state.combatants[index];
@@ -5464,6 +5472,9 @@ fn try_defensive_reaction(
             if cost.is_some_and(|cost| !can_afford(state, target, cost)) {
                 continue;
             }
+            let Ok(cast_marker) = check_spell_turn(state, target, &resolved.ability, cost) else {
+                continue;
+            };
 
             let mut predicate = PredicateContext::for_owner(target);
             predicate.target = Some(target);
@@ -5512,6 +5523,7 @@ fn try_defensive_reaction(
                 }
             }
             spend_reaction(state, target, log)?;
+            record_spell_turn(state, target, cast_marker);
             mark_trigger_used(state, target, trigger, &key);
             let owner_name = &state.combatants[target].name;
             log.log(format_args!(
@@ -5586,12 +5598,14 @@ pub fn spend_spell_slot(
         resource: format!("spell-slot-{level}"),
         amount: 1,
     };
+    let cast_marker = check_slot_spell_turn(state, owner, Some(&cost))?;
     if !spend_cost(state, owner, &cost, log)? {
         bail!(
             "`{}` has no level {level} spell slot left",
             state.combatants[owner].name
         );
     }
+    record_spell_turn(state, owner, cast_marker);
     Ok(())
 }
 
@@ -7449,6 +7463,92 @@ fn cost_arcanum_level(resource: &str) -> Option<i32> {
     resource.strip_prefix("arcanum-")?.parse().ok()
 }
 
+/// Returns the current turn's marker to write after the cast is paid.
+fn check_spell_turn(
+    state: &EncounterState,
+    actor: usize,
+    ability: &Ability,
+    cost: Option<&AbilityCost>,
+) -> Result<Option<&'static str>> {
+    let has_tag = |name: &str| {
+        ability
+            .tags
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case(name))
+    };
+    if state.current_index().is_none()
+        || (ability.spell.is_none() && !has_tag("spell") && !uses_spell_slot(cost))
+    {
+        return Ok(None);
+    }
+    let used = &state.combatants[actor].once_used;
+    let edition = state.content.ruleset.as_str();
+    if edition == "2024" {
+        return check_slot_spell_turn(state, actor, cost);
+    }
+    if edition != "2014" {
+        return Ok(None);
+    }
+    let bonus = ability
+        .spell
+        .as_ref()
+        .map_or(ability.activation == Activation::Bonus, |spell| {
+            spell.casting_time.unit == CastingUnit::BonusAction
+        });
+    let action_cantrip = ability.spell.as_ref().map_or(
+        ability.activation == Activation::Action
+            && (ability.slot_level == Some(0) || has_tag("cantrip")),
+        |spell| {
+            spell.level == 0
+                && spell.casting_time.unit == CastingUnit::Action
+                && spell.casting_time.amount.unwrap_or(1) == 1
+        },
+    );
+    if action_cantrip {
+        return Ok(None);
+    }
+    if used.contains_key(TURN_BONUS_SPELL) || (bonus && used.contains_key(TURN_OTHER_SPELL)) {
+        bail!(
+            "2014 allows only a one-action cantrip alongside a bonus-action spell on the same turn"
+        );
+    }
+    Ok(Some(if bonus {
+        TURN_BONUS_SPELL
+    } else {
+        TURN_OTHER_SPELL
+    }))
+}
+
+fn check_slot_spell_turn(
+    state: &EncounterState,
+    actor: usize,
+    cost: Option<&AbilityCost>,
+) -> Result<Option<&'static str>> {
+    if !uses_spell_slot(cost) || state.content.ruleset != "2024" || state.current_index().is_none()
+    {
+        return Ok(None);
+    }
+    if state.combatants[actor]
+        .once_used
+        .contains_key(TURN_SLOT_SPELL)
+    {
+        bail!("2024 allows expending only one spell slot to cast a spell on the same turn");
+    }
+    Ok(Some(TURN_SLOT_SPELL))
+}
+
+fn uses_spell_slot(cost: Option<&AbilityCost>) -> bool {
+    cost.is_some_and(|cost| {
+        cost.amount > 0 && cost_slot_level(&cost.resource).is_some_and(|level| level > 0)
+    })
+}
+
+fn record_spell_turn(state: &mut EncounterState, actor: usize, marker: Option<&str>) {
+    if let Some(marker) = marker {
+        state.combatants[actor].once_used.insert(marker.into(), 1);
+    }
+}
+
 /// The settlement computed for one spell cast before any state mutation.
 ///
 /// Built only for abilities that carry spell metadata; everything here is
@@ -7870,6 +7970,11 @@ fn use_resolved_ability(
         .as_ref()
         .and_then(|plan| plan.cost.clone())
         .or_else(|| ability.cost.clone());
+    let cast_marker = if settlement.cost_paid {
+        None
+    } else {
+        check_spell_turn(state, actor, ability, effective_cost.as_ref())?
+    };
     if let Some(cost) = &effective_cost {
         if !settlement.cost_paid && !can_afford(state, actor, cost) {
             bail!(
@@ -7888,6 +7993,7 @@ fn use_resolved_ability(
             let _ = spend_cost(state, actor, cost, log)?;
         }
     }
+    record_spell_turn(state, actor, cast_marker);
     if ability.concentration && !settlement.concentration_started {
         begin_concentration(state, actor, ability, log);
     }
@@ -8199,29 +8305,33 @@ pub fn ready(
     let description = normalize_ready_description(&options.description)?;
     validate_ready_response(state, index, &options.response)?;
     let ready_ability = ready_ability(state, index, &options.response)?;
+    let ready_cost = ready_ability
+        .as_ref()
+        .and_then(|resolved| resolved.ability.cost.as_ref());
+    let cast_marker = match &ready_ability {
+        Some(resolved) => check_spell_turn(state, index, &resolved.ability, ready_cost)?,
+        None => None,
+    };
 
     // RAW: setting Ready casts/holds the spell. Pay its cost now, then spend
     // the action; a failed payment or action spend leaves no partial state.
-    if let Some(resolved) = &ready_ability {
-        if let Some(cost) = &resolved.ability.cost {
-            if !spend_cost(state, index, cost, log)? {
-                bail!(
-                    "`{}` cannot afford {} {}",
-                    state.combatants[index].name,
-                    cost.amount,
-                    cost.resource
-                );
-            }
+    if let Some(cost) = ready_cost {
+        if !spend_cost(state, index, cost, log)? {
+            bail!(
+                "`{}` cannot afford {} {}",
+                state.combatants[index].name,
+                cost.amount,
+                cost.resource
+            );
         }
     }
     if let Err(error) = spend_action(state, index, Activation::Action, log) {
-        if let Some(resolved) = &ready_ability {
-            if let Some(cost) = &resolved.ability.cost {
-                refund_cost(state, index, cost);
-            }
+        if let Some(cost) = ready_cost {
+            refund_cost(state, index, cost);
         }
         return Err(error);
     }
+    record_spell_turn(state, index, cast_marker);
     if let Some(resolved) = &ready_ability {
         if resolved.ability.concentration {
             begin_concentration(state, index, &resolved.ability, log);
