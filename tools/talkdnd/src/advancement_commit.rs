@@ -15,8 +15,8 @@
 //! The inner integrity lock is acquired only through
 //! [`acquire_inner_integrity_lock`]. This does not make the whole commit
 //! path bounded: the old `integrity::lock()` API remains unbounded. There
-//! is still no player commit CLI, no explicit recovery, and no schema 11
-//! / sidecar.
+//! is still no player commit CLI and no schema 11 / sidecar. Explicit
+//! recovery is a separate library API in [`crate::advancement_recovery`].
 
 use crate::advancement_lock::{
     self, open, AdvancementLock, CompletionEvidence, Error as LockError, OpenOptions, Stage, State,
@@ -559,7 +559,7 @@ fn instance_dir_name(req: &Request<'_>, kind: &str) -> String {
     }
 }
 
-fn exclusive_create_dir(parent: &Path, name: &str) -> Result<PathBuf> {
+pub fn exclusive_create_dir(parent: &Path, name: &str) -> Result<PathBuf> {
     let dest = parent.join(name);
     fs::create_dir(&dest).with_context(|| {
         format!(
@@ -622,13 +622,13 @@ fn require_same_device(a: &Path, b: &Path, what: &str) -> Result<()> {
     Ok(())
 }
 
-fn is_root_excluded(name: &std::ffi::OsStr) -> bool {
+pub fn is_root_excluded(name: &std::ffi::OsStr) -> bool {
     name.to_str().is_some_and(|n| {
         CONTROL_FILES.contains(&n) || CACHE_FILES.contains(&n) || n == ".cache" || n == ".talkdnd"
     })
 }
 
-fn posix_rel(root: &Path, path: &Path) -> Result<String> {
+pub fn posix_rel(root: &Path, path: &Path) -> Result<String> {
     let rel = path
         .strip_prefix(root)
         .with_context(|| format!("{} 不在 {} 下", path.display(), root.display()))?;
@@ -651,20 +651,20 @@ fn posix_rel(root: &Path, path: &Path) -> Result<String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct BackupEntry {
-    path: String,
-    kind: String,
+pub struct BackupEntry {
+    pub path: String,
+    pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    size: Option<u64>,
+    pub size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    digest: Option<String>,
+    pub digest: Option<String>,
 }
 
-fn digest_bytes(bytes: &[u8]) -> String {
+pub fn digest_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-fn copy_user_data(src: &Path, dest: &Path) -> Result<Vec<BackupEntry>> {
+pub fn copy_user_data(src: &Path, dest: &Path) -> Result<Vec<BackupEntry>> {
     let mut entries = Vec::new();
     copy_tree_at(src, dest, src, true, &mut entries)?;
     Ok(entries)
@@ -1168,7 +1168,7 @@ fn validate_save_meta(path: &Path, errors: &mut Vec<String>) -> Result<()> {
     }
 }
 
-fn write_synced(path: &Path, bytes: &[u8]) -> Result<()> {
+pub fn write_synced(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -1184,7 +1184,7 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn sync_tree(dir: &Path) -> Result<()> {
+pub fn sync_tree(dir: &Path) -> Result<()> {
     fn walk(dir: &Path) -> Result<()> {
         for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
             let entry = entry?;
@@ -1208,7 +1208,7 @@ fn sync_tree(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sync_dir(dir: &Path) -> Result<()> {
+pub fn sync_dir(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         let handle = File::open(dir).with_context(|| format!("open {}", dir.display()))?;
@@ -1258,7 +1258,11 @@ pub fn protected_target_bytes(save: &Path) -> Result<BTreeMap<String, Vec<u8>>> 
     Ok(out)
 }
 
-fn collect_all_files(dir: &Path, root: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<()> {
+pub fn collect_all_files(
+    dir: &Path,
+    root: &Path,
+    out: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -1286,7 +1290,7 @@ pub fn targets_unchanged(
 const OP_MARKER_PREFIX: &str = "<!-- talkdnd-op:";
 const OP_MARKER_SUFFIX: &str = " -->";
 
-fn op_marker(operation_id: &str) -> String {
+pub fn op_marker(operation_id: &str) -> String {
     format!("{OP_MARKER_PREFIX}{operation_id}{OP_MARKER_SUFFIX}")
 }
 
@@ -1546,7 +1550,7 @@ fn publish_registered_targets(
     Ok(())
 }
 
-fn registered_replace_targets(candidate: &Path, extra: &[String]) -> Result<Vec<String>> {
+pub fn registered_replace_targets(candidate: &Path, extra: &[String]) -> Result<Vec<String>> {
     let mut targets = Vec::new();
     targets.extend(list_dir_files(candidate, "sheets", "yaml")?);
     if candidate.join("combat").join("party-state.yaml").is_file() {
@@ -1567,7 +1571,7 @@ fn registered_replace_targets(candidate: &Path, extra: &[String]) -> Result<Vec<
     Ok(targets)
 }
 
-fn list_dir_files(root: &Path, dir: &str, ext: &str) -> Result<Vec<String>> {
+pub fn list_dir_files(root: &Path, dir: &str, ext: &str) -> Result<Vec<String>> {
     let folder = root.join(dir);
     if !folder.is_dir() {
         return Ok(Vec::new());
@@ -1669,7 +1673,7 @@ fn publish_replace(
     Ok(())
 }
 
-fn replace_file_atomically(path: &Path, bytes: &[u8], fault: Option<Fault>) -> Result<()> {
+pub fn replace_file_atomically(path: &Path, bytes: &[u8], fault: Option<Fault>) -> Result<()> {
     if fault == Some(Fault::PublishWrite) {
         bail!(
             "注入失败：目标文件写入失败，未完成 {} 的发布",
@@ -1720,7 +1724,7 @@ fn replace_file_atomically(path: &Path, bytes: &[u8], fault: Option<Fault>) -> R
     Ok(())
 }
 
-fn append_log_line(path: &Path, new_bytes: &[u8], fault: Option<Fault>) -> Result<()> {
+pub fn append_log_line(path: &Path, new_bytes: &[u8], fault: Option<Fault>) -> Result<()> {
     if fault == Some(Fault::LogAppend) {
         bail!("注入失败：日志追加失败 {}", path.display());
     }
@@ -1790,7 +1794,7 @@ fn publish_logs(req: &Request<'_>, lock: &mut AdvancementLock, ctx: &mut Publish
     Ok(())
 }
 
-fn log_contains_marker(bytes: &[u8], marker: &str) -> bool {
+pub fn log_contains_marker(bytes: &[u8], marker: &str) -> bool {
     let text = String::from_utf8_lossy(bytes);
     text.lines().any(|line| line.contains(marker))
 }
@@ -1854,7 +1858,7 @@ fn compare_candidate_and_complete(
     Ok(())
 }
 
-fn read_or_empty(path: &Path) -> Result<Vec<u8>> {
+pub fn read_or_empty(path: &Path) -> Result<Vec<u8>> {
     if path.is_file() {
         Ok(fs::read(path)?)
     } else {

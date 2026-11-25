@@ -5,6 +5,7 @@
 pub mod advancement_commit;
 pub mod advancement_inner_lock;
 pub mod advancement_lock;
+pub mod advancement_recovery;
 pub mod advancement_validation;
 pub mod adventure;
 pub mod audit;

@@ -8,8 +8,8 @@
 
 pub use advancement_lock::save_lock::Result;
 pub use advancement_lock::{
-    init, is_save_lock_held, lock_path, open, reseal, state_path, AcquireOptions, AdvancementLock,
-    CompletionEvidence, Error, ErrorKind, InitHooks, InitOptions, InitOutcome, LockHeader,
-    LockIdentity, OpenOptions, Pending, Published, Stage, State, StateRecord, COPY_LIMITATION,
-    DEFAULT_ACQUIRE_TIMEOUT, LOCK_FILE, SCHEMA, STATE_FILE,
+    dir_sync_supported, ensure_evidence_dir, init, is_save_lock_held, lock_path, open, reseal,
+    state_path, AcquireOptions, AdvancementLock, CompletionEvidence, Error, ErrorKind, InitHooks,
+    InitOptions, InitOutcome, LockHeader, LockIdentity, OpenOptions, Pending, Published, Stage,
+    State, StateRecord, COPY_LIMITATION, DEFAULT_ACQUIRE_TIMEOUT, LOCK_FILE, SCHEMA, STATE_FILE,
 };
