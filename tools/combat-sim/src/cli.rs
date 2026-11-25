@@ -2802,7 +2802,7 @@ where
 {
     let mut state = EncounterState::load(state_path)
         .with_context(|| format!("failed to load state {}", state_path.display()))?;
-    require_encounter_open(&state, state_path)?;
+    require_encounter_open(&state)?;
     import_campaign_casting(&mut state, state_path, save)?;
     let (seed, nonce, choices, rolls) = if let Some((pending, answer)) = &invocation.continuation {
         if state.pending_command.as_ref() != Some(pending) {
@@ -2874,7 +2874,7 @@ where
 {
     let mut state = EncounterState::load(state_path)
         .with_context(|| format!("failed to load state {}", state_path.display()))?;
-    require_encounter_open(&state, state_path)?;
+    require_encounter_open(&state)?;
     import_campaign_casting(&mut state, state_path, save)?;
     require_no_pending(&state)?;
     let mut lines = Vec::new();
@@ -2963,14 +2963,13 @@ fn write_party_state(state: &EncounterState) -> Result<()> {
     party.save(path)
 }
 
-fn require_encounter_open(state: &EncounterState, path: &Path) -> Result<()> {
-    if let Some(registration) = &state.registration {
-        if registration.is_closed() {
-            bail!("this encounter is closed; create a new encounter to continue combat");
-        }
-        let save = crate::encounter_lifecycle::owner(path)?
-            .context("the registered encounter is outside its campaign save")?;
-        crate::encounter_lifecycle::verify_party_link(&save, state)?;
+fn require_encounter_open(state: &EncounterState) -> Result<()> {
+    if state
+        .registration
+        .as_ref()
+        .is_some_and(|entry| entry.is_closed())
+    {
+        bail!("this encounter is closed; create a new encounter to continue combat");
     }
     Ok(())
 }
@@ -3160,7 +3159,7 @@ fn run_party(
             let state_file = state_path(sources, from_state.as_deref().or(requested));
             let state = EncounterState::load(&state_file)
                 .with_context(|| format!("failed to load state {}", state_file.display()))?;
-            require_encounter_open(&state, &state_file)?;
+            require_encounter_open(&state)?;
             require_no_pending(&state)?;
             if state.registration.is_some()
                 && !state.party_state.as_ref().is_some_and(|source| {
