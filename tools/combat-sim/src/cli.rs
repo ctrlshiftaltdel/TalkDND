@@ -445,6 +445,13 @@ pub enum Command {
         #[command(subcommand)]
         action: LongCastCmd,
     },
+    /// Inspect or explicitly close a saved campaign encounter.
+    ///
+    /// 存档启用成长协议后，登记与结束在写入前取得 SAVE 锁。
+    Encounter {
+        #[command(subcommand)]
+        action: EncounterCmd,
+    },
 
     /// Clear a prepared response without triggering it.
     ///
@@ -865,6 +872,22 @@ pub enum LongCastCmd {
     Interrupt { id: String },
 }
 
+#[derive(Debug, Subcommand, Serialize, Deserialize)]
+pub enum EncounterCmd {
+    /// Show the recorded status of the selected encounter.
+    Status,
+    /// Confirm that an unregistered encounter belongs to the current campaign and is open.
+    Register,
+    /// Close an encounter so its snapshot can no longer change the party.
+    Close {
+        #[arg(long)]
+        reason: String,
+        /// Confirm that an old encounter belongs to this campaign.
+        #[arg(long)]
+        confirm_legacy: bool,
+    },
+}
+
 impl From<RestKindArg> for RestKind {
     fn from(kind: RestKindArg) -> Self {
         match kind {
@@ -909,8 +932,11 @@ fn gate_entry(command: &Command) -> &'static str {
         | Command::Add { .. } => "combat-sim:state-write",
         Command::LongCast {
             action: LongCastCmd::Status,
+        }
+        | Command::Encounter {
+            action: EncounterCmd::Status,
         } => "combat-sim:status",
-        Command::LongCast { .. } => "combat-sim:state-write",
+        Command::LongCast { .. } | Command::Encounter { .. } => "combat-sim:state-write",
         Command::Roll { .. } => "combat-sim:roll",
         Command::Status { .. } => "combat-sim:status",
         Command::Scene => "combat-sim:scene",
@@ -1242,7 +1268,17 @@ fn run_cli() -> Result<()> {
         None
     };
     if replacing {
-        if let Ok(existing) = EncounterState::load(&path) {
+        if crate::encounter_lifecycle::owner(&path)?.is_some() && path.exists() {
+            let existing = EncounterState::load(&path)?;
+            require_no_pending(&existing)?;
+            if !existing
+                .registration
+                .as_ref()
+                .is_some_and(|entry| entry.is_closed())
+            {
+                bail!("close the previous encounter explicitly or choose a new --state name");
+            }
+        } else if let Ok(existing) = EncounterState::load(&path) {
             require_no_pending(&existing)?;
         }
     }
@@ -1840,6 +1876,9 @@ fn run_cli() -> Result<()> {
                 )
             }
         },
+        Command::Encounter { action } => {
+            run_encounter_lifecycle(&path, save.as_deref(), action, player)
+        }
         Command::LongCast { action } => {
             let path = state_path(&sources, state.as_deref());
             match action {
@@ -2763,6 +2802,7 @@ where
 {
     let mut state = EncounterState::load(state_path)
         .with_context(|| format!("failed to load state {}", state_path.display()))?;
+    require_encounter_open(&state, state_path)?;
     import_campaign_casting(&mut state, state_path, save)?;
     let (seed, nonce, choices, rolls) = if let Some((pending, answer)) = &invocation.continuation {
         if state.pending_command.as_ref() != Some(pending) {
@@ -2834,6 +2874,7 @@ where
 {
     let mut state = EncounterState::load(state_path)
         .with_context(|| format!("failed to load state {}", state_path.display()))?;
+    require_encounter_open(&state, state_path)?;
     import_campaign_casting(&mut state, state_path, save)?;
     require_no_pending(&state)?;
     let mut lines = Vec::new();
@@ -2920,6 +2961,87 @@ fn write_party_state(state: &EncounterState) -> Result<()> {
     let mut party = crate::party::PartyState::load(path)?;
     party.record(state);
     party.save(path)
+}
+
+fn require_encounter_open(state: &EncounterState, path: &Path) -> Result<()> {
+    if let Some(registration) = &state.registration {
+        if registration.is_closed() {
+            bail!("this encounter is closed; create a new encounter to continue combat");
+        }
+        let save = crate::encounter_lifecycle::owner(path)?
+            .context("the registered encounter is outside its campaign save")?;
+        crate::encounter_lifecycle::verify_party_link(&save, state)?;
+    }
+    Ok(())
+}
+
+fn run_encounter_lifecycle(
+    path: &Path,
+    requested_save: Option<&Path>,
+    action: EncounterCmd,
+    player: bool,
+) -> Result<()> {
+    use crate::encounter_lifecycle::{owner, verify_party_link, Registration};
+    let mut state = EncounterState::load(path)?;
+    if matches!(action, EncounterCmd::Status) {
+        if let Some(saved) = owner(path)? {
+            if verify_party_link(&saved, &state).is_err() {
+                println!("unverified");
+                return Ok(());
+            }
+        }
+        match state.registration {
+            Some(entry) if entry.is_closed() => {
+                println!("closed {}", entry.id);
+                if !player {
+                    println!("{}", entry.closed_reason.as_deref().unwrap_or_default());
+                }
+            }
+            Some(entry) => println!("open {}", entry.id),
+            None => println!("unregistered"),
+        }
+        return Ok(());
+    }
+    let save = owner(path)?.context("encounter registration needs a state in a campaign save")?;
+    if requested_save.is_some_and(|requested| !same_dir(requested, &save)) {
+        bail!("the encounter belongs to a different save");
+    }
+    verify_party_link(&save, &state)?;
+    require_no_pending(&state)?;
+    let world = crate::campaign_time::WorldTime::load(&save)?;
+    if let Some(handoff) = world
+        .clock
+        .as_ref()
+        .and_then(|clock| clock.casting.handoff.as_ref())
+    {
+        if crate::long_cast::Handoff::encounter_path(&save, &handoff.encounter_file)?
+            == fs::canonicalize(path)?
+        {
+            bail!("reconcile the campaign clock before changing this encounter's registration");
+        }
+    }
+    match action {
+        EncounterCmd::Register => {
+            if state.registration.is_some() {
+                bail!("this encounter is already registered");
+            }
+            state.registration = Some(Registration::open());
+        }
+        EncounterCmd::Close {
+            reason,
+            confirm_legacy,
+        } => {
+            if state.registration.is_none() && !confirm_legacy {
+                bail!("review this older encounter and pass --confirm-legacy to close it");
+            }
+            let entry = state.registration.get_or_insert_with(Registration::open);
+            entry.close(&reason)?;
+        }
+        EncounterCmd::Status => unreachable!("status returned above"),
+    }
+    state.refresh_schema_version();
+    state.save(path)?;
+    Ok(())
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
@@ -3038,6 +3160,19 @@ fn run_party(
             let state_file = state_path(sources, from_state.as_deref().or(requested));
             let state = EncounterState::load(&state_file)
                 .with_context(|| format!("failed to load state {}", state_file.display()))?;
+            require_encounter_open(&state, &state_file)?;
+            require_no_pending(&state)?;
+            if state.registration.is_some()
+                && !state.party_state.as_ref().is_some_and(|source| {
+                    source.file_name() == path.file_name()
+                        && source
+                            .parent()
+                            .zip(path.parent())
+                            .is_some_and(|(a, b)| same_dir(a, b))
+                })
+            {
+                bail!("the registered encounter belongs to a different party state");
+            }
             party.record(&state);
             lines.push(format!("party state updated from {}", state_file.display()));
         }
@@ -3183,6 +3318,13 @@ fn new_state(
                 .map(|dir| dir.join(crate::party::FILE_NAME))
                 .unwrap_or(party_path);
             state.party_state = Some(absolute);
+        }
+    }
+    if let Some(save) = crate::encounter_lifecycle::owner(&path)? {
+        if state.party_state.is_some() {
+            crate::encounter_lifecycle::verify_party_link(&save, &state)?;
+            state.registration = Some(crate::encounter_lifecycle::Registration::open());
+            state.refresh_schema_version();
         }
     }
     state.save(&path).map_err(|err| {

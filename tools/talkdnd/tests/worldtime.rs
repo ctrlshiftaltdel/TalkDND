@@ -194,6 +194,12 @@ fn one_cast_resumes_across_both_scene_changes_without_double_counting() {
     let (root, save, encounter) = casting_save("cross-scene", "2014");
     let id = begin_cast(&root, &save, "42");
     let before = fs::read(wt_path(&save)).unwrap();
+    assert!(
+        combat_sim::encounter_lifecycle::require_between_encounters(&save)
+            .unwrap_err()
+            .to_string()
+            .contains("clock is still attached")
+    );
     assert_eq!(code(&root, &["time", "advance", "--seconds", "6"]).0, 1);
     assert_eq!(fs::read(wt_path(&save)).unwrap(), before);
 

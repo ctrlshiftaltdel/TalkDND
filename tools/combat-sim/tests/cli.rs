@@ -1754,6 +1754,99 @@ impl Drop for TempCampaign {
     }
 }
 
+#[test]
+fn a_campaign_encounter_requires_explicit_closure_before_reuse() {
+    let game = TempCampaign::new("encounter-lifecycle");
+    let save = game.root.join("Saves/2030-01-02-01");
+    let directory = save.join("combat");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(game.root.join("AGENTS.md"), "Synthetic campaign\n").unwrap();
+    combat_sim::integrity::ensure(&save).unwrap();
+    let manifest = directory.join("campaign.yaml");
+    fs::write(
+        &manifest,
+        "name: Lifecycle\nlibrary: [../../../library]\nstate_dir: .\nparty: [caster-x]\n",
+    )
+    .unwrap();
+    let state = directory.join("fight.state.json");
+    let call = |args: &[&str]| run_with_campaign(&state, &manifest, args);
+    let create = ["new", "--encounter", "spell-fight"];
+    let created = call(&create);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let status_args = ["encounter", "status"];
+    let status = stdout(&call(&status_args));
+    assert!(status.starts_with("open "), "{status}");
+    let gate = || combat_sim::encounter_lifecycle::require_between_encounters(&save);
+    assert!(gate().unwrap_err().to_string().contains("still open"));
+
+    let before = fs::read(&state).unwrap();
+    let duplicate = call(&create);
+    assert!(!duplicate.status.success());
+    assert!(stderr(&duplicate).contains("close the previous encounter"));
+    assert_eq!(fs::read(&state).unwrap(), before);
+
+    let init = call(&["init", "--set", "Caster X=25", "--set", "Brute B=10"]);
+    assert!(init.status.success(), "{}", stderr(&init));
+    let close = ["encounter", "close", "--reason", "Fixture retreat"];
+    let closed = call(&close);
+    assert!(closed.status.success(), "{}", stderr(&closed));
+    assert!(stdout(&call(&status_args)).contains("Fixture retreat"));
+    gate().unwrap();
+    let duplicate_registration = directory.join("copy.state.json");
+    fs::copy(&state, &duplicate_registration).unwrap();
+    assert!(gate()
+        .unwrap_err()
+        .to_string()
+        .contains("duplicate encounter registration"));
+    fs::remove_file(duplicate_registration).unwrap();
+
+    let before = fs::read(&state).unwrap();
+    let party = directory.join("party-state.yaml");
+    let before_party = fs::read(&party).unwrap();
+    for args in [&["next"][..], &["party", "sync"]] {
+        let refused = call(args);
+        assert!(!refused.status.success(), "{args:?}");
+        assert!(stderr(&refused).contains("encounter is closed"));
+        assert_eq!(fs::read(&state).unwrap(), before);
+        assert_eq!(fs::read(&party).unwrap(), before_party);
+    }
+    let replacement = call(&create);
+    assert!(replacement.status.success(), "{}", stderr(&replacement));
+    let fresh = stdout(&call(&status_args));
+    assert!(fresh.starts_with("open "), "{fresh}");
+    assert_ne!(fresh, status);
+
+    // A pre-registration snapshot remains readable, but cannot be closed
+    // as historical until the DM explicitly confirms the legacy state.
+    let mut old: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    old["schema_version"] = Value::from(1);
+    old.as_object_mut().unwrap().remove("registration");
+    let legacy = serde_json::to_vec(&old).unwrap();
+    fs::write(&state, &legacy).unwrap();
+    assert_eq!(stdout(&call(&status_args)).trim(), "unregistered");
+    assert!(gate()
+        .unwrap_err()
+        .to_string()
+        .contains("review unregistered encounter"));
+    let refused = call(&close);
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("--confirm-legacy"));
+    assert_eq!(fs::read(&state).unwrap(), legacy);
+    let registered = call(&["encounter", "register"]);
+    assert!(registered.status.success(), "{}", stderr(&registered));
+    assert!(stdout(&call(&status_args)).starts_with("open "));
+    fs::write(&state, &legacy).unwrap();
+    let closed_legacy = call(&[
+        "encounter",
+        "close",
+        "--reason",
+        "Reviewed old encounter",
+        "--confirm-legacy",
+    ]);
+    assert!(closed_legacy.status.success(), "{}", stderr(&closed_legacy));
+    gate().unwrap();
+}
+
 fn spell_status(state: &Path, manifest: &Path) -> Value {
     let output = run_with_campaign(state, manifest, &["status", "--json"]);
     assert_success(&output, "status --json");

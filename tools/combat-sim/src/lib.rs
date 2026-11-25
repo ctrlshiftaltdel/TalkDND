@@ -10,6 +10,7 @@ pub mod campaign_time;
 pub mod cli;
 pub mod content;
 pub mod dice;
+pub mod encounter_lifecycle;
 pub mod engine;
 pub mod fsutil;
 pub mod integrity;

@@ -215,6 +215,8 @@ Validation is the kit check, the full kit test suite and the leak check in Succe
 
 The owner chose explicit encounter registration and closure as the basis for advancement. New encounters record their own lifecycle. The DM closes a retreat or an abandoned encounter and reviews legacy encounters whose status cannot be established. Active encounters, pending reactions, unsettled transfers of the campaign clock, and cases with ambiguous or corrupt ownership allow read-only preview and block submission. Submission checks the lifecycle again while holding the existing save lock. This decision defines the encounter gate for the first stage of single-class advancement.
 
+The implementation stores the registration in the encounter snapshot. The DM explicitly closes each open encounter and records the reason. A closed snapshot remains readable and cannot update party resources or resume combat. The advancement publisher checks the campaign clock, the ownership of each encounter and duplicate registration IDs under SAVE before preparing and again before publication. Schema 11 and the player-facing advancement flow remain pending.
+
 ### 2026-11-25 — Player reactions, senses and long rest
 
 The independent implementation applies the player-choice policy and edition-specific rules documented in [PLAN.md](PLAN.md). The Windows release-package smoke test covered character setup, battle and a pending reaction resumed in a new process. The later hosted dry run passed the packaged battle and Shield continuation for both editions on Linux, macOS and Windows. Linux and macOS also passed the integrity-lock regression covering both recovery choices. [Hosted dry run](https://github.com/ctrlshiftaltdel/TalkDND/actions/runs/45580891809)

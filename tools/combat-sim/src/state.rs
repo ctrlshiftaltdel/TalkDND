@@ -89,6 +89,8 @@ pub struct EncounterState {
     pub(crate) pending_command: Option<crate::reactions::PendingCommand>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub casting: Option<crate::long_cast::EncounterCasting>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<crate::encounter_lifecycle::Registration>,
     #[serde(skip)]
     pub(crate) reaction_replay: Option<crate::reactions::ReactionReplay>,
     /// Unknown top-level fields from compatible extensions, preserved on save
@@ -138,6 +140,7 @@ impl PartialEq for EncounterState {
             && self.spatial == other.spatial
             && self.pending_command == other.pending_command
             && self.casting == other.casting
+            && self.registration == other.registration
             && self.extra == other.extra
     }
 }
@@ -1239,6 +1242,7 @@ impl EncounterState {
             ready_in_progress: false,
             pending_command: None,
             casting: None,
+            registration: None,
             reaction_replay: None,
         };
         state.refresh_initial_conditions()?;
@@ -1689,17 +1693,24 @@ impl EncounterState {
         state
             .validate_spatial()
             .with_context(|| format!("invalid spatial data in state file {}", path.display()))?;
+        if let Some(registration) = &state.registration {
+            registration.validate()?;
+            if registration.is_closed() && state.awaiting_reaction() {
+                bail!("a closed encounter still contains a pending reaction");
+            }
+        }
         state.rebuild_caches();
         Ok(state)
     }
 
     fn expected_schema_version(&self) -> u32 {
-        match (self.casting.is_some(), self.pending_command.is_some()) {
+        let content = match (self.casting.is_some(), self.pending_command.is_some()) {
             (false, false) => STATE_SCHEMA_VERSION,
             (false, true) => crate::reactions::PENDING_SCHEMA_VERSION,
             (true, false) => 3,
             (true, true) => 4,
-        }
+        };
+        content + 4 * u32::from(self.registration.is_some())
     }
 
     pub(crate) fn refresh_schema_version(&mut self) {

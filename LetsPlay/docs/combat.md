@@ -70,6 +70,14 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 
 没有现成遭遇时不用写 YAML：`combat-sim --campaign <存档>/combat/campaign.yaml --state q quick --foe goblin:4 --foe wolf:2@near --distance 40 --light dim`。5 行网格，队伍在 `near`，敌人默认在 `far`。2014 存档可直接用 `Rules/combat/2014/srd/` 里的全部 SRD 5.1 怪物和法术（`content list --kind creature`）。
 
+## 登记与结束遭遇
+
+新建战役内的遭遇会登记为开放。用 `$CS --state <名字> encounter status` 查状态。战斗结束、队伍撤退或 DM 中止遭遇时，用 `$CS --state <名字> encounter close --reason "<原因>"` 记录结束。先处理待确认的反应，并结清这场遭遇接管的世界时间。
+
+结束后可以查看战况和日志，战斗动作与队伍同步会拒绝使用已结束的状态。可以用新名字建立下一场遭遇，或在确认原遭遇已结束后复用名字。
+
+旧遭遇显示 `unregistered`。DM 核对其所属存档后，可用 `encounter register` 登记为开放，或在 `encounter close` 上加 `--confirm-legacy` 直接记录为已结束。遇到 `unverified` 时先核对文件和队伍的归属。
+
 ## 玩家视图：未识别怪物的名称遮蔽
 
 `status`、`log`、`simulate` 默认是 DM 视图，显示真实名字。要给玩家看同一份内容时加 `--player`：

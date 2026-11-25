@@ -229,6 +229,20 @@ fn run_inner(req: &Request<'_>) -> std::result::Result<(AdvancementLock, Report)
         }
     };
 
+    if let Err(err) = combat_sim::encounter_lifecycle::require_between_encounters(req.save_dir) {
+        return Err(fail(Failure {
+            interrupt: InterruptStage::Admit,
+            protocol_state: lock.state().state,
+            stage: lock.state().stage,
+            backup_dir: None,
+            candidate_dir: None,
+            backup_verified: false,
+            candidate_verified: false,
+            error: format!("当前只允许预览：{err:#}。未写任何目标文件。"),
+            prestate: None,
+        }));
+    }
+
     if let Err(err) = lock.begin_operation(req.operation_id, req.evidence_root, req.evidence_dir) {
         let state = lock.state().state;
         let stage = lock.state().stage;
@@ -1420,6 +1434,14 @@ fn publish_verified_candidate(
 
     if let Some(hook) = req.hooks.before_any_publish {
         hook(req.save_dir);
+    }
+    if let Err(err) = combat_sim::encounter_lifecycle::require_between_encounters(req.save_dir) {
+        return Err(stop_before_publish_held(
+            &mut lock,
+            req,
+            &format!("当前只允许预览：{err:#}。未写任何目标文件。"),
+            &prepared,
+        ));
     }
 
     let mut ctx = PublishCtx {

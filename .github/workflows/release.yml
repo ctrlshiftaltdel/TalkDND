@@ -246,6 +246,9 @@ jobs:
               exit 1
             fi
             cmp "$base/resolved.json" "$state"
+            "$cs" "${fight[@]}" encounter status | grep -F 'open '
+            "$cs" "${fight[@]}" encounter close --reason 'Smoke test complete'
+            "$cs" "${fight[@]}" encounter status | grep -F 'closed '
             sed 's@^library: \[@library: [smoke-fixture.yaml, @' "$campaign" > "$base/casting-campaign.yaml"
             mv "$base/casting-campaign.yaml" "$campaign"
             casting_fight=(--campaign "$campaign" --state casting)
@@ -266,6 +269,7 @@ jobs:
             "$talk" time casting status | grep -F completed
             grep -F 'elapsed_seconds: 60' "$save/world-time.yaml"
             grep -F "$id" "$save/combat/party-state.yaml"
+            "$cs" "${casting_fight[@]}" encounter close --reason 'Smoke test complete'
             test -s "$save/rolls.log"
             test ! -e Saves
             echo "Packed $edition SRD smoke test passed"

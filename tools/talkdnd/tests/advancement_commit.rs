@@ -149,6 +149,41 @@ fn devices_match_rejects_injected_cross_volume_keys() {
     assert!(!devices_match(DeviceKey(1, 0), DeviceKey(2, 0)));
 }
 
+#[cfg(unix)]
+#[test]
+fn ambiguous_encounter_stops_advancement_before_creating_operation_evidence() {
+    let root = root("ambiguous-encounter");
+    fs::write(root.join("AGENTS.md"), "Synthetic play root\n").unwrap();
+    let save = save_of(&root);
+    write_synthetic_save(&save);
+    fs::write(save.join("combat/fight.state.json"), "[invalid").unwrap();
+    init_protocol(&root, &save);
+    let before = protected_target_bytes(&save).unwrap();
+    let (evidence_root, evidence_dir, backup_parent, candidate_parent) = parents(&root);
+    let error = run_to_verified_candidate(&request(
+        &root,
+        &save,
+        &evidence_root,
+        &evidence_dir,
+        &backup_parent,
+        &candidate_parent,
+        valid_overlay(),
+        None,
+    ))
+    .expect_err("an ambiguous encounter must prevent preparing to publish");
+    assert_eq!(error.report.recovery.interrupt_stage, InterruptStage::Admit);
+    let message = error.report.error.as_deref().unwrap();
+    assert!(
+        message.contains("当前只允许预览") && message.contains("fight.state.json"),
+        "{message}"
+    );
+    assert!(error.report.recovery.prestate.is_none());
+    assert!(error.report.backup_dir.is_none());
+    assert_eq!(protected_target_bytes(&save).unwrap(), before);
+    assert_eq!(open_fast(&root, &save).state().state, adv::State::Ready);
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[cfg(not(unix))]
 #[test]
 fn windows_d_commit_fails_closed_without_writing_targets() {

@@ -419,6 +419,13 @@ fn run_casting(save: &Path, cmd: CastingCmd) -> Result<()> {
             {
                 bail!("交接需要已掷先攻、进行中且没有待确认反应的遭遇");
             }
+            if state
+                .registration
+                .as_ref()
+                .is_some_and(|entry| entry.is_closed())
+            {
+                bail!("已结束的遭遇不能接管施法时钟");
+            }
             let saved_party = state
                 .party_state
                 .as_deref()
