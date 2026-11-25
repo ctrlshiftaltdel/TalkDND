@@ -8,6 +8,10 @@
 //! Admit reuses [`AdvancementLock::begin_operation`] (and its pre-state
 //! snapshot). The D path uses [`AdvancementLock::check_writable`], never
 //! [`AdvancementLock::check_ordinary_write`].
+//!
+//! ADV-P1-3 adds [`acquire_inner_integrity_lock`] as a call site for the new
+//! path's bounded inner-lock acquire. [`run_to_verified_candidate`] does not
+//! call it, and publish is still not wired.
 
 use crate::advancement_lock::{
     self, open, AdvancementLock, Error as LockError, OpenOptions, Stage, State,
@@ -122,6 +126,25 @@ pub struct Request<'a> {
 /// publishes, never auto-resumes an `active` operation.
 pub fn run_to_verified_candidate(req: &Request<'_>) -> std::result::Result<Report, Box<FailedRun>> {
     run_inner(req)
+}
+
+/// Bounded inner integrity-lock acquire for the new advancement path
+/// (ADV-P1-3 / OD-9). Future publish (ADV-P1-4) may use this call site;
+/// this block does not wire publish and [`run_to_verified_candidate`] does
+/// not call this function.
+///
+/// The acquire fails closed on timeout, writes no targets, and does not
+/// change SAVE or advancement state. A retry must call this again; each
+/// call recomputes a fresh budget from `opts`. This is not a bound on a
+/// whole commit path.
+pub fn acquire_inner_integrity_lock(
+    save_dir: &Path,
+    opts: &crate::advancement_inner_lock::InnerLockOptions,
+) -> std::result::Result<
+    crate::advancement_inner_lock::HeldInnerLock,
+    crate::advancement_inner_lock::InnerLockError,
+> {
+    crate::advancement_inner_lock::acquire_integrity(save_dir, opts)
 }
 
 fn run_inner(req: &Request<'_>) -> std::result::Result<Report, Box<FailedRun>> {
