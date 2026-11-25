@@ -294,6 +294,8 @@
   - [ ] `AC-6`: T9a/T9b 有实测结果；#264 未解决前不声称恢复安全，也不把通过用例当作真实存档证明。
   - [ ] `AC-7`: 用**合成注册目标**证明通用恢复机制不跳过扩展目标：恢复逐文件比较覆盖全部已注册发布目标，不因目标新增而跳过；本 AC **不要求** `ADV-P1-6` 的实际 sidecar 与主 schema 元数据目标已存在（那由 `ADV-P1-6` 验收）；遇到不在已注册目标内的存档文件时明确报告范围限制，不静默忽略。
 
+**交付记录（TASK-0158 / Issue #311）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。库 API `recover` / `inspect_recovery`（`tools/talkdnd/src/advancement_recovery.rs`）在合成 fixture 上实现显式恢复：任何目标写入前先 `create_new` `<recovery_id>-work.yaml` 与受保护当前树快照（原未完成 state 原始字节/revision/checksum/operation_id/stage/pending、备份位置、人工选择、新恢复 ID、原操作引用），写 + `sync_all` + 重读 + 目录同步失败即停止，不做任何目标写入，原未完成 state、备份位置与 intent 保持（T9a）。工作记录的每文件 intent/done 以 temp + sync + rename + 父目录 sync 更新，不改受保护快照。没有经确认的人工选择时只检查、不写目标（工作记录中的选择不是续跑授权）。确认后按文件回滚到前像或继续到目标，不整树覆盖、不自动重基。当前内容既非前像也非目标、日志已有后续追加、身份不明或无法判定原操作时停止，保留两份证据并要求人工合并，不删除后续日志。恢复中断后再进入凭工作记录与快照判定原操作与进度，不自动续跑或重放；工作记录损坏 → `in_doubt`，只允许人工处理。恢复重试与重复发起不重复应用（已 done 的文件不再写入，日志标记保持一次）。合成扩展目标纳入逐文件比较，不跳过；不在已注册目标内的存档文件在报告中列为范围限制，不静默忽略、不覆盖。成功回滚后协议状态为 `failed` + `stopped_before_write` 且允许普通写入；成功继续到目标后为 `complete`（经 `finish_recovered_*`，不弱化原 `finish_failed` / `finish_complete`）。T9a/T9b 的合成证据见 `tools/talkdnd/tests/advancement_recovery.rs`。本工作区在 Linux 上运行了这些合成测试；Windows/macOS 由该 head 的 CI 记录，本工作区未在这两台机器上跑。Windows 无目录 sync，工作证据创建失败关闭；本平台也无法经发布路径构造 leftover `active`/`in_doubt`（admit 同样失败关闭）。真实进程杀死、掉电、目录持久性、网络文件系统仍为 `NOT_RUN` / `UNKNOWN`。#264 未解决前不声称恢复安全，通过用例不是真实存档证明。证据被清理后的可恢复性不作保证。任务状态与证据仍只在 Issue / PR / CI，本文件 AC 勾选保持 `[ ]`、不新加状态列。本块不启用提交入口、不新增 schema 11 或 sidecar，不修改旧 `lock()` API，不修改 #264 结论。
+
 ### Task: `ADV-P1-6` — sidecar 入籍与 9/10→11 自动迁移
 
 - **Goal:** 让 schema 9/10 存档在合成 fixture 上自动迁移到 schema 11，并为每个角色建立与承载体双边绑定、可验证的选择 sidecar，同时保留手改与未知历史。
@@ -413,7 +415,7 @@
 | state 原子替换与目录持久窗口的真实行为 | 掉电/同步失败注入（T4b/T5i） | `ADV-P1-2` | `NOT_RUN`（本块的 backup 同步注入只是普通错误路径，不作为掉电/目录持久性结论；Windows 目录持久性 `NOT_RUN`/`UNKNOWN`） |
 | 新路径内层锁的有界获取（默认 5 秒、可覆盖、超时失败关闭） | 另一进程长期持有（T6b） | `ADV-P1-3` | 已交付合成证据（Linux，本 PR head）：另一进程长期持有 `.talkdnd.integrity.lock` 时，新路径有界获取在预算内失败并报告「内层锁」，诊断记录 `D_save` 与各 `D_inner`；超时不写目标、不改 SAVE/成长 state、不留半锁。证据见 `tools/talkdnd/tests/advancement_inner_lock.rs` 与 `tools/combat-sim/tests/integrity_lock.rs`。Windows/macOS 由该 head 的 CI 记录，本工作区未在这两台机器上跑。整条提交路径有界仍不承诺（旧 `lock()` 仍无限阻塞）。`ADV-P1-4` 已把发布的完整性阶段接到该有界获取（`t6b_inner_lock_contention_stops_at_integrity_and_is_in_doubt`），T6b 结果只覆盖新路径，不把 `D_save` 外推为整体有界。真实发布进程 kill、掉电、网络盘/同步目录仍为 `NOT_RUN` / `UNKNOWN`。 |
 | 发布部分失败保留备份与阶段记录、不重复应用 | 每次发布前后 kill、满盘（T7a/T14） | `ADV-P1-4` | 部分交付（Linux 合成 fixture，见 `tools/talkdnd/tests/advancement_publish.rs`）：T7a 在 intent 后的已知检查点检出复核不符并拒绝，产品错误不含注入字节；写失败/同步失败后保留 `in_doubt` 与阶段记录、不自动重试；重复提交不重复增加 XP/日志。终态与伪造 `complete` 见同一文件。T7b 只证明如实报告「无法排除覆盖」（已观察前像/目标摘要，不输出注入值、不宣称检测成功）。T8 在 `preview_id` 缺失或变化时拒绝，只报「绑定变化，原因未知」，未写目标。真实进程 kill、满盘、掉电仍为 `NOT_RUN` / `UNKNOWN` |
-| 恢复工作证据与再次中断后的判定 | 恢复各窗口故障注入（T9a/T9b） | `ADV-P1-5` | `NOT_RUN` |
+| 恢复工作证据与再次中断后的判定 | 恢复各窗口故障注入（T9a/T9b） | `ADV-P1-5` | 部分交付（Linux 合成 fixture，见 `tools/talkdnd/tests/advancement_recovery.rs`）：T9a 在 work 记录/受保护快照的独占创建、写、文件 sync、重读摘要或目录同步注入失败时停止，零目标写入，原未完成 state、备份位置与 intent 保持。T9b 在工作证据建立后于每文件 intent/done 用 hook 中断，再进入凭工作记录与快照判定原操作与进度，无确认选择时不写目标、不自动续跑或重放；工作记录损坏 → `in_doubt`。真实进程 kill、掉电、目录持久性、网络盘仍为 `NOT_RUN` / `UNKNOWN`。#264 未解决前不声称恢复安全。 |
 | 跨主机/网络文件系统互斥 | 网络挂载与同步目录（T11/T12），需项目权限 | `ADV-P1-13` | `NOT_RUN` / `UNKNOWN` |
 | 整盘/同相对路径镜像与旧 state 重放是否可检测 | 镜像与重放实验（T5d3/T13b） | `ADV-P1-13` | `NOT_RUN`（设计只声称“不承诺检测”） |
 | 真实存档上的 9/10→11 迁移与恢复 | 真实存档（当前禁止；只能合成 fixture） | `ADV-P1-6` | `NOT_RUN` |

@@ -1113,7 +1113,7 @@ fn publish_state(save_dir: &Path, tmp: &Path) -> Result<()> {
 /// Whether this platform can sync a directory at all. It is a capability fact,
 /// not a writable proof: even on a platform that can, the predicate still has
 /// to pass.
-fn dir_sync_supported() -> bool {
+pub fn dir_sync_supported() -> bool {
     cfg!(unix)
 }
 
@@ -1228,7 +1228,7 @@ fn relative_levels(
 /// itself must exist, be a real directory and be syncable; it is never created.
 /// Any failure is [`ErrorKind::EvidenceFailed`] and nothing is written to the
 /// state.
-fn ensure_evidence_dir(root: &Path, dir: &Path) -> Result<()> {
+pub fn ensure_evidence_dir(root: &Path, dir: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(root).map_err(|e| {
         ctx(
             ErrorKind::EvidenceFailed,
@@ -2124,6 +2124,77 @@ impl AdvancementLock {
         let mut next = self.state.clone();
         next.state = State::InDoubt;
         next.last_error = Some(reason.to_string());
+        self.store(next)
+    }
+
+    /// After explicit recovery has verified every registered target matches
+    /// the original preimage, clear the leftover operation so ordinary writes
+    /// may proceed. Valid only from `active` or `in_doubt`. This does not
+    /// weaken [`Self::finish_failed`], which still refuses a non-empty
+    /// published/pending list.
+    pub fn finish_recovered_rollback(&mut self, reason: &str) -> Result<()> {
+        self.recheck_lock()?;
+        self.verify_disk_state()?;
+        match self.state.state {
+            State::Active | State::InDoubt => {}
+            other => {
+                return Err(err(
+                    ErrorKind::InvalidRequest,
+                    format!(
+                        "cannot finish a recovered rollback from state {other:?}; the leftover must be active or in_doubt"
+                    ),
+                ))
+            }
+        }
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                "recovered rollback needs a non-blank reason",
+            ));
+        }
+        let mut next = self.state.clone();
+        next.state = State::Failed;
+        next.stage = Stage::StoppedBeforeWrite;
+        next.published.clear();
+        next.pending.clear();
+        next.last_error = Some(reason.to_string());
+        self.store(next)
+    }
+
+    /// After explicit recovery has verified the candidate, logs, and
+    /// integrity, record `complete`. Valid from `active` or `in_doubt`.
+    /// Leftover pending intents are treated as resolved by that verification
+    /// and are cleared. [`Self::finish_complete`] is unchanged and still
+    /// requires an active operation with an empty pending list.
+    pub fn finish_recovered_complete(&mut self, evidence: &CompletionEvidence) -> Result<()> {
+        self.recheck_lock()?;
+        self.verify_disk_state()?;
+        match self.state.state {
+            State::Active | State::InDoubt => {}
+            other => {
+                return Err(err(
+                    ErrorKind::InvalidRequest,
+                    format!(
+                        "cannot finish a recovered complete from state {other:?}; the leftover must be active or in_doubt"
+                    ),
+                ))
+            }
+        }
+        if !evidence.candidate_matches || !evidence.logs_recorded || !evidence.integrity_recorded {
+            return Err(err(
+                ErrorKind::InvalidRequest,
+                "recovered complete needs the candidate comparison, the log append and the integrity update verified; use in_doubt otherwise",
+            ));
+        }
+        let mut next = self.state.clone();
+        next.pending.clear();
+        for entry in &mut next.published {
+            entry.done = true;
+        }
+        next.state = State::Complete;
+        next.stage = Stage::Done;
+        next.last_error = None;
         self.store(next)
     }
 

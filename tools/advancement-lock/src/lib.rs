@@ -1506,10 +1506,10 @@ where
 /// [`AdvancementLock::check_writable`].
 pub mod save_lock;
 pub use save_lock::{
-    init, is_save_lock_held, open, reseal, AcquireOptions, AdvancementLock, CompletionEvidence,
-    Error, ErrorKind, InitHooks, InitOptions, InitOutcome, LockHeader, LockIdentity, OpenOptions,
-    Pending, Published, Stage, State, StateRecord, COPY_LIMITATION, DEFAULT_ACQUIRE_TIMEOUT,
-    SCHEMA,
+    dir_sync_supported, ensure_evidence_dir, init, is_save_lock_held, open, reseal, AcquireOptions,
+    AdvancementLock, CompletionEvidence, Error, ErrorKind, InitHooks, InitOptions, InitOutcome,
+    LockHeader, LockIdentity, OpenOptions, Pending, Published, Stage, State, StateRecord,
+    COPY_LIMITATION, DEFAULT_ACQUIRE_TIMEOUT, SCHEMA,
 };
 
 #[cfg(test)]
