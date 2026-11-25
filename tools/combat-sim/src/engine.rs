@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -1076,6 +1076,10 @@ fn eval_predicate(
                 .any(|tag| tag.eq_ignore_ascii_case("spell"));
             is_spell == flag.get()
         }
+        Predicate::SourceHasTag(tag) => context
+            .source_tags
+            .iter()
+            .any(|source| source.eq_ignore_ascii_case(tag)),
         Predicate::SlotLevelMin(minimum) => context.slot_level.unwrap_or(0) >= *minimum,
         Predicate::DamageDealt(flag) => (context.damage_dealt > 0) == flag.get(),
         Predicate::WouldMissWithAcBonus(bonus) => {
@@ -5201,31 +5205,31 @@ fn resolve_attack_inner(
         ));
     }
 
-    if hit && !options.no_reactions {
-        let converted = try_hit_reactions(
+    if hit
+        && !options.no_reactions
+        && try_defensive_reaction(
             state,
-            attacker,
             target,
-            profile,
-            &facts,
-            result.total,
-            current_ac,
-            source,
+            DefensiveReactionEvent::Hit {
+                attacker,
+                profile,
+                facts: &facts,
+                total: result.total,
+                ac: current_ac,
+            },
             rng,
             log,
-        )?;
-        if let Some((new_ac, new_terms)) = converted {
-            current_ac = new_ac;
-            current_terms = new_terms;
-            if !result.nat20 && result.total < current_ac {
-                hit = false;
-                log.log(format_args!(
-                    "{} now misses: {} vs {} MISS",
-                    attacker_name,
-                    result.total,
-                    ac_text(current_ac, &current_terms)
-                ));
-            }
+        )?
+    {
+        (current_ac, current_terms) = effective_ac(state, target, Some(attacker), &facts)?;
+        if !result.nat20 && result.total < current_ac {
+            hit = false;
+            log.log(format_args!(
+                "{} now misses: {} vs {} MISS",
+                attacker_name,
+                result.total,
+                ac_text(current_ac, &current_terms)
+            ));
         }
     }
 
@@ -5412,44 +5416,47 @@ fn trigger_abilities(
     resolved
 }
 
-fn try_hit_reactions(
+#[derive(Clone, Copy)]
+enum DefensiveReactionEvent<'a> {
+    Hit {
+        attacker: usize,
+        profile: &'a AttackProfile,
+        facts: &'a AttackFacts,
+        total: i32,
+        ac: i32,
+    },
+    TargetedSpell {
+        caster: usize,
+        source: &'a EffectSource,
+    },
+}
+
+fn try_defensive_reaction(
     state: &mut EncounterState,
-    attacker: usize,
     target: usize,
-    profile: &AttackProfile,
-    facts: &AttackFacts,
-    attack_total: i32,
-    current_ac: i32,
-    source: Option<&EffectSource>,
+    event: DefensiveReactionEvent<'_>,
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
-) -> Result<Option<(i32, Vec<(i32, String)>)>> {
-    let abilities = trigger_abilities(state, target, TriggerWhen::OnHitTaken);
-    if abilities.is_empty() {
-        return Ok(None);
+) -> Result<bool> {
+    if !state.combatants[target].has_reaction(state.round)
+        || has_flag(state, target, ConditionFlag::NoReactions)
+        || is_incapacitated(state, target)
+        || state.combatants[target].dormant
+    {
+        return Ok(false);
     }
-    let mut converted = None;
-    let mut new_ac = current_ac;
-    for resolved in abilities {
+    let when = match event {
+        DefensiveReactionEvent::Hit { .. } => TriggerWhen::OnHitTaken,
+        DefensiveReactionEvent::TargetedSpell { .. } => TriggerWhen::OnTargetedSpell,
+    };
+    for resolved in trigger_abilities(state, target, when) {
         for (trigger_index, trigger) in resolved.ability.triggers.iter().enumerate() {
-            if trigger.on != TriggerWhen::OnHitTaken
+            if trigger.on != when
                 || (!trigger.reaction && resolved.ability.activation != Activation::Reaction)
             {
                 continue;
             }
-            if !state.combatants[target].has_reaction(state.round) {
-                continue;
-            }
-            if has_flag(state, target, ConditionFlag::NoReactions)
-                || is_incapacitated(state, target)
-                || state.combatants[target].dormant
-            {
-                continue;
-            }
-            let key = format!(
-                "trigger:{}:{}:{}",
-                target, resolved.ability.id, trigger_index
-            );
+            let key = format!("trigger:{target}:{}:{trigger_index}", resolved.ability.id);
             if !trigger_available(state, target, trigger, &key) {
                 continue;
             }
@@ -5457,34 +5464,45 @@ fn try_hit_reactions(
             if cost.is_some_and(|cost| !can_afford(state, target, cost)) {
                 continue;
             }
-            let context = PredicateContext {
-                self_idx: target,
-                actor: target,
-                target: Some(target),
-                attacker: Some(attacker),
-                linked: None,
-                source: None,
-                attack: facts.clone(),
-                has_advantage: false,
-                has_disadvantage: false,
-                damage_dealt: 0,
-                slot_level: resolved.ability.slot_level,
-                current_attack_total: Some(attack_total),
-                current_ac: Some(new_ac),
-                ability: profile.ability,
-                damage_type: None,
-                source_tags: resolved.ability.tags.clone(),
+
+            let mut predicate = PredicateContext::for_owner(target);
+            predicate.target = Some(target);
+            let (attack, fingerprint) = match event {
+                DefensiveReactionEvent::Hit {
+                    attacker,
+                    profile,
+                    facts,
+                    total,
+                    ac,
+                } => {
+                    predicate.attacker = Some(attacker);
+                    predicate.attack = facts.clone();
+                    predicate.ability = profile.ability;
+                    predicate.current_attack_total = Some(total);
+                    predicate.current_ac = Some(ac);
+                    predicate.slot_level = resolved.ability.slot_level;
+                    predicate.source_tags = resolved.ability.tags.clone();
+                    (Some(profile), format!("hit:{attacker}:{key}:{total}:{ac}"))
+                }
+                DefensiveReactionEvent::TargetedSpell { caster, source } => {
+                    predicate.attacker = Some(caster);
+                    predicate.source = Some(state.combatants[caster].name.clone());
+                    predicate.slot_level = source.slot_level;
+                    predicate.source_tags = source.tags.clone();
+                    (None, format!("targeted:{caster}:{key}:{}", source.id))
+                }
             };
-            if let Some(when) = &trigger.when {
-                let tactical_ac_check = matches!(when, Predicate::WouldMissWithAcBonus(_))
+            if let Some(condition) = &trigger.when {
+                let tactical_ac_check = when == TriggerWhen::OnHitTaken
+                    && matches!(condition, Predicate::WouldMissWithAcBonus(_))
                     && state.reaction_replay.is_some()
                     && state.combatants[target].is_pc();
-                if !tactical_ac_check && !eval_predicate(state, when, &context) {
+                if !tactical_ac_check && !eval_predicate(state, condition, &predicate) {
                     continue;
                 }
             }
             if !confirm_player_reaction(state, target, resolved.ability.display_name(), || {
-                format!("hit:{attacker}:{key}:{attack_total}:{new_ac}")
+                fingerprint
             }) {
                 continue;
             }
@@ -5495,17 +5513,19 @@ fn try_hit_reactions(
             }
             spend_reaction(state, target, log)?;
             mark_trigger_used(state, target, trigger, &key);
-            let owner_name = state.combatants[target].name.clone();
+            let owner_name = &state.combatants[target].name;
             log.log(format_args!(
                 "{owner_name} uses {} (reaction)",
                 resolved.ability.display_name()
             ));
-            let effect_source = EffectSource::from_ability(&resolved.ability, &resolved.params);
             let effect_context = EffectContext {
                 actor: target,
                 target: Some(target),
-                source: Some(effect_source),
-                attack: Some(profile.clone()),
+                source: Some(EffectSource::from_ability(
+                    &resolved.ability,
+                    &resolved.params,
+                )),
+                attack: attack.cloned(),
                 option: None,
                 crit: false,
                 damage_dealt: 0,
@@ -5514,19 +5534,10 @@ fn try_hit_reactions(
                 has_disadvantage: false,
             };
             apply_effects(state, &effect_context, &trigger.effects, rng, log)?;
-            let (ac_after, terms_after) = effective_ac(state, target, Some(attacker), facts)?;
-            new_ac = ac_after;
-            converted = Some((ac_after, terms_after));
-            if attack_total < new_ac {
-                break;
-            }
-        }
-        if attack_total < new_ac {
-            break;
+            return Ok(true);
         }
     }
-    let _ = source;
-    Ok(converted)
+    Ok(false)
 }
 
 fn trigger_available(state: &EncounterState, owner: usize, trigger: &Trigger, key: &str) -> bool {
@@ -7734,6 +7745,7 @@ fn use_resolved_ability(
     let ability = &resolved.ability;
     ensure_can_act(state, actor)?;
     let target_spec = ability.target.clone().unwrap_or_default();
+    let split_damage = ability.split_damage().map_err(anyhow::Error::msg)?;
     let mut effective_targets: Vec<usize> = targets.to_vec();
     match target_spec.target_type {
         TargetType::Zone => {
@@ -7796,6 +7808,15 @@ fn use_resolved_ability(
                     "`{}` targets at most {max} creature(s)",
                     ability.display_name()
                 );
+            }
+            if let Some(damage) = split_damage {
+                if targets.len() > 1 && targets.len() != damage.repeat as usize {
+                    bail!(
+                        "`{}` needs one target or one target entry per damage repeat ({} entries)",
+                        ability.display_name(),
+                        damage.repeat
+                    );
+                }
             }
             for target in targets {
                 if !target_matches_side(state, actor, *target, target_spec.side) {
@@ -7919,6 +7940,24 @@ fn use_resolved_ability(
             },
             None => std::borrow::Cow::Borrowed(&ability.effects),
         };
+    if source_is_spell && !options.no_reactions && target_spec.target_type == TargetType::Creature {
+        let source = context_base.source.as_ref().expect("spell has a source");
+        let mut offered = BTreeSet::new();
+        for &target in &effective_targets {
+            if offered.insert(target) {
+                try_defensive_reaction(
+                    state,
+                    target,
+                    DefensiveReactionEvent::TargetedSpell {
+                        caster: actor,
+                        source,
+                    },
+                    rng,
+                    log,
+                )?;
+            }
+        }
+    }
     match target_spec.target_type {
         TargetType::SelfTarget => {
             let context = EffectContext {
@@ -7927,16 +7966,25 @@ fn use_resolved_ability(
             };
             apply_effects(state, &context, &effects, rng, log)?;
         }
-        TargetType::Creature => {
-            for target in &effective_targets {
+        TargetType::Creature if split_damage.is_some() && effective_targets.len() > 1 => {
+            let [Effect::Damage(damage)] = effects.as_ref() else {
+                unreachable!("split damage validated before spell settlement");
+            };
+            let mut resolved_targets = BTreeSet::new();
+            for &target in &effective_targets {
+                if !resolved_targets.insert(target) {
+                    continue;
+                }
+                let mut damage = damage.clone();
+                damage.repeat = effective_targets.iter().filter(|&&id| id == target).count() as u32;
                 let context = EffectContext {
-                    target: Some(*target),
+                    target: Some(target),
                     ..context_base.clone()
                 };
-                apply_effects(state, &context, &effects, rng, log)?;
+                apply_damage_effect(state, &context, &damage, rng, log)?;
             }
         }
-        TargetType::Zone => {
+        TargetType::Creature | TargetType::Zone => {
             for target in &effective_targets {
                 let context = EffectContext {
                     target: Some(*target),
@@ -7949,7 +7997,6 @@ fn use_resolved_ability(
     if source_is_spell {
         fire_ends_on(state, actor, EndsOn::OwnSpell, log);
     }
-    let _ = options;
     run_ready_triggers(state, ReadyTrigger::Ability, actor, rng, log);
     Ok(())
 }

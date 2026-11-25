@@ -522,6 +522,150 @@ fn cli_leaving_reach_can_pause_for_the_players_opportunity_attack() {
 }
 
 #[test]
+fn magic_missile_offers_one_shield_per_target_before_resolving_any_dart() {
+    for edition in ["2014", "2024"] {
+        let scratch = campaign(edition);
+        let fixture = content_yaml(edition, 1)
+            .replacen("    actions:\n", "    actions:\n      - {ref: shield}\n", 1)
+            .replace(
+                "    name: Source\n    kind: monster\n    side: enemy\n",
+                concat!(
+                    "    name: Source\n    kind: monster\n    side: enemy\n",
+                    "    resources: {spell-slot-1: {max: 2, recharge: long}}\n",
+                    "    features: [{ref: magic-missile}]\n",
+                ),
+            )
+            .replace(
+                "    name: Bystander\n    kind: monster\n    side: enemy\n",
+                concat!(
+                    "    name: Bystander\n    kind: pc\n    side: party\n",
+                    "    resources: {spell-slot-1: {max: 2, recharge: long}}\n",
+                    "    features: [{ref: shield}]\n",
+                ),
+            );
+        scratch.write("library/all.yaml", &fixture);
+        let rules = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../LetsPlay/Rules/combat");
+        let registry = ContentSources {
+            campaign: Some(scratch.manifest()),
+            libraries: vec![
+                rules.join("common"),
+                rules.join(edition).join("spells.yaml"),
+            ],
+            ..Default::default()
+        }
+        .load()
+        .unwrap();
+        let mut state = EncounterState::from_encounter(
+            registry,
+            &NewEncounter {
+                encounter: "zones-fight".into(),
+                party: vec!["hero".into()],
+                party_zone: None,
+                adds: Vec::new(),
+            },
+        )
+        .unwrap();
+        let hero = index(&state, "Hero");
+        let source = index(&state, "Source");
+        let bystander = index(&state, "Bystander");
+        state.round = 1;
+        state.initiative = vec![source, hero, bystander];
+
+        let path = scratch.dir.join("missiles.state.json");
+        state.save(&path).unwrap();
+        let initial_bytes = fs::read(&path).unwrap();
+        let invalid_cast = run_cli(
+            &path,
+            &["cast", "Source", "magic-missile", "Hero", "Bystander"],
+        );
+        assert!(!invalid_cast.status.success());
+        assert!(stderr(&invalid_cast).contains("one target entry per damage repeat"));
+        assert_eq!(fs::read(&path).unwrap(), initial_bytes);
+        assert_success(
+            &run_cli(
+                &path,
+                &[
+                    "cast",
+                    "Source",
+                    "magic-missile",
+                    "Hero",
+                    "Hero",
+                    "Bystander",
+                    "--seed",
+                    "21",
+                ],
+            ),
+            "two targets split the three darts",
+        );
+        let first = status_json(&path);
+        let first_id = first["pending_reaction"]["id"].as_str().unwrap();
+        assert_eq!(first["pending_reaction"]["who"], "Hero");
+        assert_eq!(first["pending_reaction"]["reaction"], "Shield");
+        let snapshot = EncounterState::load(&path).unwrap();
+        assert_eq!(slot(&snapshot, "Source"), 2);
+        assert_eq!(snapshot.combatants[hero].hp, 40);
+        assert_eq!(snapshot.combatants[bystander].hp, 20);
+
+        assert_success(
+            &run_cli(&path, &["reaction", first_id, "take"]),
+            "Hero blocks both of their darts",
+        );
+        let second = status_json(&path);
+        let second_id = second["pending_reaction"]["id"].as_str().unwrap();
+        assert_ne!(first_id, second_id);
+        assert_eq!(second["pending_reaction"]["who"], "Bystander");
+        let pending_bytes = fs::read(&path).unwrap();
+        let pending: Value = serde_json::from_slice(&pending_bytes).unwrap();
+        assert_eq!(pending["pending_command"]["rolls"], serde_json::json!([]));
+        let snapshot = EncounterState::load(&path).unwrap();
+        assert_eq!(slot(&snapshot, "Hero"), 2);
+        assert_eq!(slot(&snapshot, "Source"), 2);
+        assert!(!run_cli(&path, &["reaction", first_id, "take"])
+            .status
+            .success());
+        assert_eq!(fs::read(&path).unwrap(), pending_bytes);
+        assert_success(
+            &run_cli(&path, &["reaction", second_id, "pass"]),
+            "Bystander takes their own dart after reload",
+        );
+        let result = EncounterState::load(&path).unwrap();
+        assert_eq!(result.combatants[hero].hp, 40);
+        assert!((15..=18).contains(&result.combatants[bystander].hp));
+        assert_eq!(slot(&result, "Hero"), 1);
+        assert_eq!(slot(&result, "Bystander"), 2);
+        assert_eq!(slot(&result, "Source"), 1);
+        assert!(!result.combatants[hero].has_reaction(result.round));
+        assert!(result.combatants[bystander].has_reaction(result.round));
+        assert!(result.combatants[hero].has_condition(&result.content, "shielded"));
+        let resolved_bytes = fs::read(&path).unwrap();
+        assert!(!run_cli(&path, &["reaction", second_id, "take"])
+            .status
+            .success());
+        assert_eq!(fs::read(&path).unwrap(), resolved_bytes);
+
+        state.combatants[hero]
+            .resources
+            .get_mut("spell-slot-1")
+            .unwrap()
+            .current = 0;
+        state.save(&path).unwrap();
+        assert_success(
+            &run_cli(
+                &path,
+                &["cast", "Source", "magic-missile", "Hero", "--seed", "21"],
+            ),
+            "a sole target with no slot takes all three darts",
+        );
+        assert!(status_json(&path)["pending_reaction"].is_null());
+        let result = EncounterState::load(&path).unwrap();
+        assert!((25..=34).contains(&result.combatants[hero].hp));
+        assert_eq!(result.combatants[bystander].hp, 20);
+        assert_eq!(slot(&result, "Hero"), 0);
+        assert!(result.combatants[hero].has_reaction(result.round));
+    }
+}
+
+#[test]
 fn cli_hit_reaction_saves_the_hit_roll_and_commits_cost_and_damage_at_most_once() {
     let seed = (1..100u64)
         .find(|seed| (10..15).contains(&combat_sim::dice::seeded_rng(*seed).roll_die(20)))

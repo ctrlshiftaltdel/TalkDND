@@ -87,11 +87,11 @@ abilities:
     cost: {resource: spell-slot-1, amount: 1}
     slot_level: 1
     range: 120
-    target: {type: creature, side: enemy, count: 1}
+    target: {type: creature, side: enemy, count: 3, split_repeated_damage: true}
     effects:
       - damage: {dice: "1d4+1", type: force, repeat: 3}
     ai: {role: damage}
-    source: "PHB 2024: three darts, 1d4+1 force each, automatically hit (all darts on one target here)"
+    source: "PHB 2024: three darts, 1d4+1 force each, automatically hit"
     todo: ["Upcast creates one more dart per slot level above 1; dart count is not a dice table, so higher slots keep base effects (UPCAST NOT MODELED)"]
     spell:
       level: 1
@@ -114,6 +114,10 @@ abilities:
       - on: on_hit_taken
         reaction: true
         when: {would_miss_with_ac_bonus: 5}
+        effects: [{apply_condition: {condition: shielded, to: self, duration: {until: start_of_source_next_turn}}}]
+      - on: on_targeted_spell
+        reaction: true
+        when: {source_has_tag: magic-missile}
         effects: [{apply_condition: {condition: shielded, to: self, duration: {until: start_of_source_next_turn}}}]
     ai: {role: defense}
     source: "PHB 2024: +5 AC until start of your next turn incl. triggering attack; no damage from Magic Missile"
