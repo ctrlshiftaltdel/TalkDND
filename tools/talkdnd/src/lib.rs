@@ -3,6 +3,7 @@
 //! checkpoints and log entries. All dice go through combat-sim's engine.
 
 pub mod advancement_commit;
+mod advancement_identity;
 pub mod advancement_inner_lock;
 pub mod advancement_lock;
 pub mod advancement_recovery;
@@ -115,6 +116,11 @@ enum Cmd {
         /// Only report what would be migrated; write nothing
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Inspect future character advancement without editing the save.
+    Advancement {
+        #[command(subcommand)]
+        cmd: AdvancementCmd,
     },
     /// Character creation (player decides every step)
     ///
@@ -816,6 +822,15 @@ enum NpcCmd {
     },
 }
 
+#[derive(Subcommand, Clone)]
+enum AdvancementCmd {
+    /// Check legacy Markdown identity bindings and preview the append-only change.
+    IdentityPreview {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Transition gate (ADV-P1-1pre): the writer-registry row for this invocation.
 ///
 /// The registry lives in the shared `advancement-lock` crate so both CLIs use
@@ -832,6 +847,9 @@ fn gate_entry(cli: &Cli) -> &'static str {
                 "talkdnd:migrate"
             }
         }
+        Cmd::Advancement {
+            cmd: AdvancementCmd::IdentityPreview { .. },
+        } => "talkdnd:advancement-identity-preview",
         Cmd::Chargen { cmd } => match cmd {
             ChargenCmd::Status => "talkdnd:chargen-status",
             ChargenCmd::Validate => "talkdnd:chargen-validate",
@@ -1366,6 +1384,12 @@ fn dispatch(
 ) -> Result<()> {
     let root = root.to_path_buf();
     match cli.cmd.clone() {
+        Cmd::Advancement {
+            cmd: AdvancementCmd::IdentityPreview { json },
+        } => {
+            let save = save::resolve_slot(&root, cli.save.as_deref())?;
+            advancement_identity::run(&save, json)?;
+        }
         Cmd::Char { who, op } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             for l in charsheet::run(&s, &who, op.unwrap_or(charsheet::Op::Show), rng)? {

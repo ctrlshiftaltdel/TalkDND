@@ -876,6 +876,16 @@ pub static WRITERS: &[Writer] = &[
     ),
     writer!(
         Talkdnd,
+        "talkdnd:advancement-identity-preview",
+        "talkdnd advancement identity-preview",
+        "lib.rs::dispatch Cmd::Advancement; advancement_identity.rs::run",
+        "none",
+        ReadOnly,
+        "reports legacy card identity bindings and the proposed append",
+        &["advancement", "identity-preview"]
+    ),
+    writer!(
+        Talkdnd,
         "talkdnd:settings-dice",
         "talkdnd settings dice on|off",
         "lib.rs::dispatch Cmd::Settings; settings.rs::set_dice; migrate.rs::write_meta",

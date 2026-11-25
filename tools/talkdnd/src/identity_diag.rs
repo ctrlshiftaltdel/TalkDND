@@ -302,6 +302,10 @@ impl Character {
         &self.markdown_text
     }
 
+    pub(crate) fn markdown_path(&self) -> &Path {
+        &self.markdown
+    }
+
     /// Bound structured sheet path (`sheets/<id>.yaml`), when one exists.
     pub fn sheet(&self) -> Option<&str> {
         self.sheet_text.as_deref()

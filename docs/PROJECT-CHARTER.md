@@ -211,6 +211,10 @@ Validation is the kit check, the full kit test suite and the leak check in Succe
 
 ## Decision Log
 
+### 2026-11-25 — Append-only identity for legacy Markdown cards
+
+The owner approved adding one non-secret identity marker at the end of a Markdown-only character card after DM review. The existing bytes stay intact. The card and its advancement record must agree on the marker and its card reference, and previous advancement selections remain unknown. The first delivery previews the proposed append and checks existing pairs without writing. Migration requires a verified whole-save backup and an explicit DM review of the association.
+
 ### 2026-11-25 — Explicit encounter lifecycle for advancement
 
 The owner chose explicit encounter registration and closure as the basis for advancement. New encounters record their own lifecycle. The DM closes a retreat or an abandoned encounter and reviews legacy encounters whose status cannot be established. Active encounters, pending reactions, unsettled transfers of the campaign clock, and cases with ambiguous or corrupt ownership allow read-only preview and block submission. Submission checks the lifecycle again while holding the existing save lock. This decision defines the encounter gate for the first stage of single-class advancement.
