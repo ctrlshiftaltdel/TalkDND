@@ -164,8 +164,8 @@
 - 持有不是租约：不用 TTL 判定死亡，不删 lock、不改头、不接管。
 - 获取有 deadline（默认 5 秒，可显式覆盖）；等待方失败，不无限阻塞。
 - 总预算 = `D_save` + 各阶段内层锁 `D_inner` 之和；每次内层获取都必须有 deadline 与取消路径。
-- **事实**：完整性锁 `File::lock()` 阻塞且无超时；checkpoint 锁是 `create_new`、不等待。因此当前任何在 SAVE 内获取完整性锁的路径（`audit::after_command`、`PartyState::save`、`migrate::ensure`、`integrity::*`）都无法给出有界总等待。
-- **接入停止条件**：内层锁获得有界获取/取消能力之前，含完整性锁的提交路径**不得接入**；不得把 `D_save` 或并发测试结果外推为整条提交路径有界。OD-9 已决定按“新路径有界获取”执行（默认 5 秒 deadline，可显式覆盖），现有完整性锁**保持**无限阻塞语义，因此本条停止条件仍然有效；未接入前 T6b 按“未接入”记录。
+- **事实**：现有完整性锁 API `lock()` 仍通过 `File::lock()` 阻塞且无超时；checkpoint 锁是 `create_new`、不等待。因此任何仍调用 `lock()` 的路径（`audit::after_command`、`PartyState::save`、`migrate::ensure`、`integrity::ensure` / `after_write` / `changes` 等）都无法给出有界总等待。新成长路径另有有界获取 API（`integrity::lock_with_timeout` 与 `talkdnd` 的内层锁模块，默认 5 秒、可显式覆盖、超时失败关闭）；该 API 的存在不使整条提交路径有界。
+- **接入停止条件**：发布/含完整性更新的提交路径只允许经新路径的有界获取接入内层锁；在发布接线（`ADV-P1-4`）完成前，提交路径**不得接入**，也不得把 `D_save`、有界获取测试或并发测试结果外推为整条提交路径有界。OD-9：新路径按 §2.6 有界获取，现有完整性锁**保持**无限阻塞语义。T6b 对新路径有界获取已有合成证据（见计划 `ADV-P1-3` 交付记录）；该证据不覆盖已接线的发布路径（尚未接线）。
 - 心跳/时间仅用于诊断；不存在强制解锁或 abort 命令。
 - **平台边界**：目录 sync 不可用的平台（当前 Windows）**不能**建立提交，且**可写谓词本身**必须拒绝：`check_writable` 先检查平台目录持久能力，即使 `ready` 也返回 `unwritable_state`（该能力不是可写证明）；`init` 在 state 已发布后返回 `state_published_not_durable`，`begin_operation` 同样被拒；不得把“`init` 建了文件”当成“可提交”。本库也没有任何准入/拒绝网络盘或同步目录的强制门：第二句柄自检只证明同一客户端的锁 API。
 
@@ -261,7 +261,7 @@ D 流程（完整备份 → 候选构建 → 逐文件发布 → 日志/完整�
 | T5h | 目录不可读/枚举失败 | UNKNOWN 失败关闭 | 同左 | 同左 | CI | 不当作空 |
 | T5i | `init` state rename 成功、父目录 sync 失败或结果不明 | 本次报告失败、不得继续；**后续可能看到有效 `ready`（也可能崩溃后消失）**，存在持久化风险，不得断言必然拒绝或旧 state | 同左 | 同左 | 需实现后故障注入 | 与“state 未发布”分开判定 |
 | T6a | 顺序反转（checkpoint 快照/恢复 vs 成长提交） | 按总序串行，一方等待或失败，**不死锁**；测试级超时 | 同左 | 同左 | CI（两进程+超时） | 挂起即失败 |
-| T6b | 内层完整性锁被另一进程长期持有 | 提交必须在预算内失败并报告内层锁；或该路径标记“未接入” | 同左 | 同左 | CI（超时） | 不把 `D_save` 当整体有界 |
+| T6b | 内层完整性锁被另一进程长期持有 | 新路径必须在预算内失败并报告内层锁；已接线的发布/提交路径在接入前按“未接入”记录，且不得把该结果当成整条路径有界 | 同左 | 同左 | CI（超时）；新路径合成证据见 `ADV-P1-3` | 不把 `D_save` 当整体有界；publish 仍未接线 |
 | T7a | 非协作编辑，注入器已知值（预览后/发布前/intent 后） | 在定义检查点检出并拒绝；产品未覆盖注入字节 | 同左 | 同左 | 需实现后故障注入 | 注入值仅测试侧 |
 | T7b | 非协作编辑发生在最后复核后、rename 前 | 只能报“无法排除覆盖”，列出已观察前像与目标；不写“实际值” | 同左 | 同左 | 需实现后故障注入 | 不宣称检测成功 |
 | T8 | 预览过期（绑定变化） | 提交拒绝；单一 `preview_id` 时只报“绑定变化，原因未知” | 同左 | 同左 | CI | 无分项清单不得列类别 |
@@ -321,7 +321,7 @@ D 流程（完整备份 → 候选构建 → 逐文件发布 → 日志/完整�
 2. **旧锁行为修正**（独立任务，需行为变更审查）：checkpoint `Drop` 归属校验、取消 mtime 抢占、备份/回滚排除控制文件、`backup_save` 对特殊文件报错；不声称修复 #264。**已交付（TASK-0146，行为变更）**：`Lock` 保留打开句柄与文件标识（Unix `dev`+`ino`；Windows `creation_time`），`Drop` 只在路径仍指向同一文件时删除；取消 mtime 抢占，锁存在即失败关闭（崩溃后需人工确认无活写者再移除锁文件，**无自动恢复**）；`checkpoint::copy_tree`、`checkpoint::remove_extras` 与 `migrate::copy_tree` **仅在存档根目录**排除 `.talkdnd.lock`、`.talkdnd.integrity.lock`、`.talkdnd.advancement.lock`、`.talkdnd.advancement.state`；嵌套同名文件按普通用户数据备份与回滚；`migrate::copy_tree` 对符号链接/FIFO 报错中止。合成测试覆盖：替换后的锁不被旧持有者删除、陈旧 mtime 仍失败关闭且文件不变、两处备份不含根目录控制文件但保留嵌套同名文件、部分提交失败后回滚恢复嵌套同名文件原字节、回滚保留 integrity 与 advancement 控制文件、Unix 符号链接与 FIFO 下 `ensure` 在写入前失败。**未交付 / 仍未解决**：#264 的首次 `WouldBlock` 根因仍 UNKNOWN，本任务不解释也不修复；checkpoint 锁仍不是 OS 锁，不阻止非协作写者、旧二进制或外部编辑器；没有自动恢复、租约/TTL 或跨主机/网络盘互斥；Windows 的替换与同进程重获取场景由 CI 用真实的删除/重建覆盖（删除失败即测试失败，不静默通过）；Windows 身份 = 稳定的 `creation_time` + 每次 acquire 生成的唯一 token（PID + 纳秒 + 单调计数 + 随机键哈希；`volume_serial_number`/`file_index` 仍不稳定；tunneling 会沿用 `creation_time`），不依赖大小/写时间。**限制**：token 可被复制、`creation_time` 可能碰撞、复核→unlink 仍有窗口，因此不声称任意替换都不会误删。
 3. **接入所有新版本写者**（依赖 1、2 与 OD-2）：跑 T6a；不改变业务语义。
 4. **D 阶段机与备份验证**（依赖 3）：`admit`/`backup`/`candidate`，只到“候选已验证、未发布”；跑 T4a 发布前分支与 OD-7 确认的备份范围。**已交付（TASK-0155 / Issue #305，库编排器，仍无玩家提交 CLI）**：`tools/talkdnd/src/advancement_commit.rs` 在合成 fixture 上执行 admit（复用 `begin_operation`）→ 存档外独占用户数据备份（含 `checkpoints/`，排除控制元数据与根目录缓存/派生文件）→ 在已验证前像上构建并校验候选，停在已验证、未发布。证据见 `tools/talkdnd/tests/advancement_commit.rs` 与锁 crate 的 `record_backup` / `record_candidate_verified`。T4d 有 Linux 合成证据；T2a/T4a/T4e 只覆盖本块能在 fixture 上证明的部分（state 替换停止、不自动续跑、`active` 拒绝普通写入）。T4b/T5i 掉电窗口、真实存档、网络盘、Windows 目录持久性仍为 `NOT_RUN`/`UNKNOWN`。**未交付**：`publish` / `logs` / `complete` / 显式 `recovery`、自动续跑、提交入口、schema 11 / sidecar。
-5. **发布、日志/完整性与幂等**（依赖 4 与 OD-9）：跑 T2a/T7a/T7b/T8；T6b 未接入前按“未接入”记录。
+5. **发布、日志/完整性与幂等**（依赖 4 与 OD-9）：跑 T2a/T7a/T7b/T8。T6b 的新路径有界获取已有合成证据（`ADV-P1-3` / Issue #307）；发布路径仍未接线，整条提交路径仍不承诺有界，不得把 `D_save` 或该 T6b 结果外推为整体有界。发布块（`ADV-P1-4`）仍待交付。
 6. **显式恢复**（依赖 5）：跑 T9a/T9b；恢复任何目标写入前先建立工作证据（原 state/备份/intent/人工选择），再保护当前树、人工选择。
 7. **#264 与跨平台/网络文件系统调查**（可与 1–6 并行，不能替代）：按[锁调查](CHECKPOINT-LOCK-INVESTIGATION.md) 的现场采集要求做，禁止公开私有路径。
 8. **后续任务（不在 v1）**：复制/移动存档支持（`adopt`、副本独立分支、历史归档与恢复自动化）与 sidecar 入籍及 9/10→11 迁移；按[身份契约](ADVANCEMENT-IDENTITY-CONTRACT.md) §5 的顺序，不得以本设计代替身份验证。
@@ -332,6 +332,6 @@ D 流程（完整备份 → 候选构建 → 逐文件发布 → 日志/完整�
 
 TASK-0143 的九字段验收证据矩阵发布在 PR #283 的评论，`commit_sha` 绑定该 PR 的最终 head；本文件内不复制可能随 head 变化的运行结果。代码事实基线 `cc78760`（§1 的现有锁盘点）；实现基线 `30066e4`；ADV-P1-2 编排器在后续 head 交付（见 §5.4 第 4 项与 Issue #305 / 其 Draft PR），若源码变化，§1 的定位与 §4 的「实现状态」需重新核对。
 
-已知限制：设计部分只做静态阅读；实现部分只有合成测试，故障注入只覆盖可注入的窗口（路径替换、预置快照文件、只读目录/文件权限、超时）；未读取真实存档、书籍或秘密；未验证 Windows/macOS 文件锁、网络文件系统、目录/掉电持久性；预览未实现且一致性仍为 `unverified`；`init` 已实现且仍无玩家 CLI 入口；ADV-P1-2 把 `admit`/`backup`/`candidate` 接到库编排器（非玩家提交命令），`publish` 及之后阶段仍未接线；**Windows 本地提交不受支持**（无目录 sync：`init` 返回 `state_published_not_durable` 而非 `Ok`，`check_writable` 与 `begin_operation` 均拒绝）；**没有强制准入**：第二句柄自检只证明同一客户端的锁 API，网络盘/FUSE/同步目录既未识别也未拒绝；v1 无 `resume`/`abort`/`adopt`，失败后只能人工在协议外处理且必须先备份；v1 不保留永久历史，操作前 state 由受保护的操作证据保存（非永久），证据清理后的可恢复性不作保证、用户数据恢复依据是 D 备份；`revision` 只能在存在可验证先前值/可信锚时检出倒退，整体旧 state 重放可能不可检测（需独立锚，不在本任务）；`lock_identity` 不能识别保留标识的整盘镜像，Windows 上只是 `creation_time` 的尽力标识（size 与写时间会随写入头部变化，不能当标识）；未初始化副本与首次 init 不可区分；非 UTF-8 路径不能无损记录，因此这类存档不能初始化；`readdir` 迭代中途错误未注入（NOT_RUN）；Windows 上同长度改写保留 `creation_time`，`lock_identity` 无法发现；`publish_state` 删除 temp 失败只报告残留、不影响 state；每次更新前的复核与随后的 rename 之间仍有残余 TOCTOU；内层锁仍无界（§2.6、OD-9）；#264 根因仍 UNKNOWN；现有测试通过不构成锁安全证明。
+已知限制：设计部分只做静态阅读；实现部分只有合成测试，故障注入只覆盖可注入的窗口（路径替换、预置快照文件、只读目录/文件权限、超时）；未读取真实存档、书籍或秘密；未验证 Windows/macOS 文件锁、网络文件系统、目录/掉电持久性；预览未实现且一致性仍为 `unverified`；`init` 已实现且仍无玩家 CLI 入口；ADV-P1-2 把 `admit`/`backup`/`candidate` 接到库编排器（非玩家提交命令），`publish` 及之后阶段仍未接线；**Windows 本地提交不受支持**（无目录 sync：`init` 返回 `state_published_not_durable` 而非 `Ok`，`check_writable` 与 `begin_operation` 均拒绝）；**没有强制准入**：第二句柄自检只证明同一客户端的锁 API，网络盘/FUSE/同步目录既未识别也未拒绝；v1 无 `resume`/`abort`/`adopt`，失败后只能人工在协议外处理且必须先备份；v1 不保留永久历史，操作前 state 由受保护的操作证据保存（非永久），证据清理后的可恢复性不作保证、用户数据恢复依据是 D 备份；`revision` 只能在存在可验证先前值/可信锚时检出倒退，整体旧 state 重放可能不可检测（需独立锚，不在本任务）；`lock_identity` 不能识别保留标识的整盘镜像，Windows 上只是 `creation_time` 的尽力标识（size 与写时间会随写入头部变化，不能当标识）；未初始化副本与首次 init 不可区分；非 UTF-8 路径不能无损记录，因此这类存档不能初始化；`readdir` 迭代中途错误未注入（NOT_RUN）；Windows 上同长度改写保留 `creation_time`，`lock_identity` 无法发现；`publish_state` 删除 temp 失败只报告残留、不影响 state；每次更新前的复核与随后的 rename 之间仍有残余 TOCTOU；新路径内层锁已有有界获取（§2.6、OD-9，合成 T6b 见 `ADV-P1-3`），旧完整性锁 `lock()` 仍无界，整条提交路径仍不承诺有界，publish 仍未接线；#264 根因仍 UNKNOWN；现有测试通过不构成锁安全证明。
 
 回退：本文件为普通文档，可整体 revert；库的回退是 revert `tools/talkdnd/src/advancement_lock.rs`、其测试与 `lib.rs` 的模块注册，不触及存档、schema 或任何运行行为。

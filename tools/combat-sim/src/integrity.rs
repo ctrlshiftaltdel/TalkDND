@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 pub const FILE: &str = "integrity.yaml";
 
@@ -34,9 +35,10 @@ pub const FILE: &str = "integrity.yaml";
 /// files only.
 pub const LOCK: &str = ".talkdnd.integrity.lock";
 
-/// A held integrity manifest lock for one save ([`lock`]). Released when
-/// dropped — including through an error return or a panic — or when the
-/// process exits, so a crashed process never leaves a stale lock.
+/// A held integrity manifest lock for one save ([`lock`] or
+/// [`lock_with_timeout`]). Released when dropped — including through an
+/// error return or a panic — or when the process exits, so a crashed
+/// process never leaves a stale lock.
 pub struct ManifestLock {
     _file: File,
 }
@@ -51,17 +53,76 @@ pub struct ManifestLock {
 /// A check here would reject combat-sim unit tests that update a manifest
 /// with no SAVE lock, and this crate does not depend on `talkdnd`.
 pub fn lock(save: &Path) -> Result<ManifestLock> {
+    let file = open_lock_file(save)?;
+    file.lock()
+        .with_context(|| format!("lock integrity manifest of {}", save.display()))?;
+    Ok(ManifestLock { _file: file })
+}
+
+/// Default deadline for [`lock_with_timeout`]. The blocking [`lock`] API does
+/// not consult this value and still waits indefinitely.
+pub const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Bounded acquire of the integrity manifest lock, for the new advancement
+/// path only. [`lock`] remains unbounded: it still calls [`File::lock`] and
+/// has no timeout.
+///
+/// A timeout fails closed. The waiter does not hold the lock, does not
+/// delete the lock file, and does not write the manifest. The error message
+/// includes the phrase "内层锁". This function does not make a whole
+/// advancement commit path bounded.
+pub fn lock_with_timeout(save: &Path, timeout: Duration) -> Result<ManifestLock> {
+    let file = open_lock_file(save)?;
+    acquire_bounded(&file, timeout, save)?;
+    Ok(ManifestLock { _file: file })
+}
+
+fn open_lock_file(save: &Path) -> Result<File> {
     fs::create_dir_all(save).with_context(|| format!("create {}", save.display()))?;
     let p = save.join(LOCK);
-    let file = OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(&p)
-        .with_context(|| format!("open integrity lock {}", p.display()))?;
-    file.lock()
-        .with_context(|| format!("lock integrity manifest of {}", save.display()))?;
-    Ok(ManifestLock { _file: file })
+        .with_context(|| format!("open integrity lock {}", p.display()))
+}
+
+fn acquire_bounded(file: &File, timeout: Duration, save: &Path) -> Result<()> {
+    let deadline = Instant::now().checked_add(timeout);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                let expired = deadline.is_none_or(|deadline| Instant::now() >= deadline);
+                if expired {
+                    bail!(
+                        "内层锁获取超时：另一持有者占用完整性锁超过 {} ms；本操作不删除、不改写、不接管锁，也不写入目标或清单",
+                        timeout.as_millis()
+                    );
+                }
+                let remaining = deadline
+                    .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+                    .unwrap_or(Duration::ZERO);
+                let pause = if LOCK_RETRY_INTERVAL.is_zero() {
+                    Duration::from_millis(1)
+                } else {
+                    LOCK_RETRY_INTERVAL
+                };
+                std::thread::sleep(pause.min(remaining));
+            }
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "lock integrity manifest of {} (bounded acquire)",
+                        save.display()
+                    )
+                });
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -873,5 +934,65 @@ mod tests {
             changes(&d).unwrap()
         );
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn bounded_lock_default_timeout_is_five_seconds() {
+        assert_eq!(DEFAULT_LOCK_TIMEOUT, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn bounded_lock_succeeds_when_the_lock_is_free() {
+        let d = dir("bounded-free");
+        let held = lock_with_timeout(&d, Duration::from_millis(200)).unwrap();
+        drop(held);
+        // A second acquire after release must also succeed: the first drop
+        // left no half-held lock.
+        let held = lock_with_timeout(&d, DEFAULT_LOCK_TIMEOUT).unwrap();
+        drop(held);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    fn blocking_lock_source_body(src: &str) -> String {
+        // Windows CI checks out CRLF sources; normalize before scanning so
+        // "\n}\n" still finds the end of lock().
+        let src = src.replace("\r\n", "\n");
+        let start = src
+            .find("pub fn lock(save: &Path) -> Result<ManifestLock> {")
+            .expect("blocking lock() still exists");
+        let rest = &src[start..];
+        let end = rest.find("\n}\n").expect("end of lock()") + 3;
+        rest[..end].to_string()
+    }
+
+    fn assert_blocking_lock_body(body: &str) {
+        assert!(
+            !body.contains("timeout") && !body.contains("try_lock"),
+            "lock() must stay a blocking File::lock() call with no timeout: {body}"
+        );
+        assert!(
+            body.contains("file.lock()"),
+            "lock() must still call file.lock(): {body}"
+        );
+    }
+
+    #[test]
+    fn blocking_lock_api_still_has_no_timeout_parameter() {
+        // AC-2: inspect the source rather than calling lock() against a live
+        // holder, which would hang the test if the unbounded API is intact.
+        let src = include_str!("integrity.rs");
+        let body = blocking_lock_source_body(src);
+        assert_blocking_lock_body(&body);
+
+        // Recreate a Windows CRLF checkout and scan it the same way, so a
+        // regression of the un-normalized "\n}\n" find cannot slip through.
+        let crlf = src.replace("\r\n", "\n").replace('\n', "\r\n");
+        assert!(
+            crlf.contains("\r\n"),
+            "CRLF view must actually contain CRLF"
+        );
+        let body_crlf = blocking_lock_source_body(&crlf);
+        assert_eq!(body, body_crlf);
+        assert_blocking_lock_body(&body_crlf);
     }
 }

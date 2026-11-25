@@ -261,6 +261,8 @@
   - [ ] `AC-5`: 超时后重试重新计算预算，不沿用上次剩余时间，也不因为“曾经超时”而跳过校验。
   - [ ] `AC-6`: 本块的结论只覆盖新路径的有界获取；旧锁的跨平台阻塞行为按既有事实记录，不声称整条路径有界。
 
+**交付记录（TASK-0156 / Issue #307）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。新成长路径增加有界内层完整性锁获取：`combat_sim::integrity::lock_with_timeout`（以及 `talkdnd` 的 `advancement_inner_lock` 与 `advancement_commit::acquire_inner_integrity_lock` 调用点）。默认 deadline 5 秒、可显式覆盖，超时失败关闭：不写目标、不改 SAVE/成长 state、不留半持有的内层锁。每次尝试从选项重新计算预算，不沿用上次剩余时间，也不因为曾经超时而跳过校验。旧完整性锁 `lock()` 仍是无超时的 `File::lock()`，既有调用方与既有测试未改、未跳过、未弱化。`run_to_verified_candidate` 仍不调用该获取、仍不发布。证据见 `tools/talkdnd/tests/advancement_inner_lock.rs` 与 `tools/combat-sim/tests/integrity_lock.rs`（含另一进程长期持有锁的合成 T6b）。本工作区在 Linux 上运行了这些合成测试；Windows/macOS 由该 head 的 CI 记录，本工作区未在这两台机器上跑。整条提交路径有界仍不承诺（旧 `lock()` 仍无限阻塞，publish 未接线），不得把 `D_save` 外推为整体有界。真实发布进程 kill、掉电、网络盘/同步目录仍为 `NOT_RUN` / `UNKNOWN`。任务状态与证据仍只在 Issue / PR / CI，本文件 AC 勾选保持 `[ ]`、不新加状态列。本块不启用提交入口、不实现 `publish` / `logs` / `complete` / 显式 `recovery`、不新增 schema 11 或 sidecar，不修改 #264 结论。
+
 ### Task: `ADV-P1-4` — 发布、日志/完整性与幂等
 
 - **Goal:** 让一次成长提交的逐文件发布在合成故障注入下恰好应用一次（含日志与完整性更新），失败即停并留下可判定的阶段记录。
@@ -407,7 +409,7 @@
 | `admit` 快照失败时不写 `active`、不写目标（含首次操作） | 快照各窗口故障注入（T4d） | `ADV-P1-2` | 已交付合成证据（Linux）：`tools/advancement-lock/tests/save_lock.rs` 的 `begin_operation` 快照失败窗口，以及 `tools/talkdnd/tests/advancement_commit.rs` 的 admit 失败不写 `active`/目标。Windows 目录持久性因无目录 sync 由 `check_writable` 失败关闭，标 `NOT_RUN`/`UNKNOWN`，不视为通过。真实存档未跑 |
 | 崩溃后不自动续跑，`active`/`in_doubt` 拒绝普通写入 | 分阶段 kill（T4a/T4e） | `ADV-P1-2`、`ADV-P1-4` | 本块部分交付：合成 fixture 证明留下 `active` 时 `check_ordinary_write` 拒绝，编排器不自动续跑且不写目标（`leftover_active_refuses_ordinary_writes_and_is_not_auto_resumed`，Linux）。不是分阶段 kill 或掉电；完整 T4a/T4e（含 `in_doubt`）仍为 `NOT_RUN`，由 `ADV-P1-4` 继续 |
 | state 原子替换与目录持久窗口的真实行为 | 掉电/同步失败注入（T4b/T5i） | `ADV-P1-2` | `NOT_RUN`（本块的 backup 同步注入只是普通错误路径，不作为掉电/目录持久性结论；Windows 目录持久性 `NOT_RUN`/`UNKNOWN`） |
-| 新路径内层锁的有界获取（默认 5 秒、可覆盖、超时失败关闭） | 另一进程长期持有（T6b） | `ADV-P1-3` | `NOT_RUN` |
+| 新路径内层锁的有界获取（默认 5 秒、可覆盖、超时失败关闭） | 另一进程长期持有（T6b） | `ADV-P1-3` | 已交付合成证据（Linux，本 PR head）：另一进程长期持有 `.talkdnd.integrity.lock` 时，新路径有界获取在预算内失败并报告「内层锁」，诊断记录 `D_save` 与各 `D_inner`；超时不写目标、不改 SAVE/成长 state、不留半锁。证据见 `tools/talkdnd/tests/advancement_inner_lock.rs` 与 `tools/combat-sim/tests/integrity_lock.rs`。Windows/macOS 由该 head 的 CI 记录，本工作区未在这两台机器上跑。整条提交路径有界仍不承诺（旧 `lock()` 仍无限阻塞，publish 未接线），不把 `D_save` 外推为整体有界。真实发布进程 kill、掉电、网络盘/同步目录仍为 `NOT_RUN` / `UNKNOWN`。 |
 | 发布部分失败保留备份与阶段记录、不重复应用 | 每次发布前后 kill、满盘（T7a/T14） | `ADV-P1-4` | `NOT_RUN` |
 | 恢复工作证据与再次中断后的判定 | 恢复各窗口故障注入（T9a/T9b） | `ADV-P1-5` | `NOT_RUN` |
 | 跨主机/网络文件系统互斥 | 网络挂载与同步目录（T11/T12），需项目权限 | `ADV-P1-13` | `NOT_RUN` / `UNKNOWN` |
