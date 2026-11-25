@@ -193,6 +193,48 @@ fn markdown_identity_preview_requires_both_records_and_detects_duplicate_tokens(
     assert_eq!(report["unmatched_records"][0], "orphan.yaml");
 }
 
+#[test]
+fn structured_identity_preview_uses_yaml_and_validates_the_carrier_reference() {
+    let fixture = Fixture::new("structured-identity-preview");
+    let card_path = "Characters/Aria.md";
+    let sheet_path = "sheets/aria.yaml";
+    fixture.card(card_path, "aria", "Aria");
+    let original = sheet_yaml("aria", "Aria", card_path, 1);
+    fixture.write(sheet_path, &original);
+    let report = preview(&fixture);
+    assert_eq!(report["cards"][0]["carrier"], sheet_path);
+    assert_eq!(report["cards"][0]["status"], "review_required");
+    let closed_document = format!("{original}...\n");
+    fixture.write(sheet_path, &closed_document);
+    assert_eq!(
+        preview(&fixture)["cards"][0]["status"],
+        "format_review_required"
+    );
+
+    let token = "19c36d2fab09bc001c681acaeefa4567";
+    fixture.write(
+        sheet_path,
+        &format!("{original}talkdnd_identity: '{token}'\n"),
+    );
+    let record = format!("version: 1\ncard: {card_path}\ncarrier: {sheet_path}\ntoken: '{token}'\nhistory: unknown\n");
+    fixture.write("advancement/aria.yaml", &record);
+    assert_eq!(preview(&fixture)["cards"][0]["status"], "matched");
+    fixture.write(
+        "advancement/aria.yaml",
+        &record.replace(sheet_path, card_path),
+    );
+    assert_eq!(preview(&fixture)["cards"][0]["status"], "binding_mismatch");
+    fixture.write("advancement/aria.yaml", &record);
+    fixture.write(
+        card_path,
+        &format!(
+            "{}\n<!-- talkdnd-identity: {token} -->\n",
+            card("aria", "Aria")
+        ),
+    );
+    assert_eq!(preview(&fixture)["cards"][0]["status"], "carrier_conflict");
+}
+
 fn sheet_yaml(id: &str, name: &str, file: &str, version: u32) -> String {
     format!(
         "version: {version}\nid: {id}\nname: {name}\ncontroller: player\nfile: {file}\nruleset: 5.5e-srd\ncombat: {{}}\n"

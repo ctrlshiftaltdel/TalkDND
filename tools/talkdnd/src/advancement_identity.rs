@@ -1,4 +1,4 @@
-//! Read-only preview for binding old Markdown-only party cards to advancement.
+//! Read-only preview of lossless identity binding for existing party cards.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -12,12 +12,15 @@ use crate::identity_diag::{self, Status};
 const PREFIX: &str = "<!-- talkdnd-identity: ";
 const SUFFIX: &str = " -->";
 const PREVIEW_TOKEN: &str = "00000000000000000000000000000000";
+pub(crate) const SHEET_FIELD: &str = "talkdnd_identity";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
     version: u32,
     card: String,
+    #[serde(default)]
+    carrier: Option<String>,
     token: String,
     history: History,
 }
@@ -47,6 +50,7 @@ struct DiscoveryIssue {
 #[derive(Serialize)]
 struct Card {
     path: String,
+    carrier: String,
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     before_digest: Option<String>,
@@ -86,6 +90,14 @@ fn appended_card(original: &[u8], token: &str) -> Result<Vec<u8>> {
         card_token(original)?.is_none(),
         "card already carries an identity"
     );
+    Ok(append_line(
+        original,
+        &format!("{PREFIX}{token}{SUFFIX}"),
+        true,
+    ))
+}
+
+fn append_line(original: &[u8], line: &str, separate_paragraph: bool) -> Vec<u8> {
     let last_newline = original.iter().rposition(|byte| *byte == b'\n');
     let ending = if last_newline
         .and_then(|i| i.checked_sub(1))
@@ -99,7 +111,37 @@ fn appended_card(original: &[u8], token: &str) -> Result<Vec<u8>> {
     if !candidate.ends_with(b"\n") {
         candidate.extend_from_slice(ending.as_bytes());
     }
-    candidate.extend_from_slice(format!("{ending}{PREFIX}{token}{SUFFIX}{ending}").as_bytes());
+    if separate_paragraph {
+        candidate.extend_from_slice(ending.as_bytes());
+    }
+    candidate.extend_from_slice(line.as_bytes());
+    candidate.extend_from_slice(ending.as_bytes());
+    candidate
+}
+
+fn sheet_identity(original: &[u8]) -> Result<(serde_norway::Mapping, Option<String>)> {
+    let mut sheet: serde_norway::Mapping = serde_norway::from_slice(original)
+        .map_err(|_| anyhow::anyhow!("invalid structured character card"))?;
+    let Some(token) = sheet.remove(SHEET_FIELD) else {
+        return Ok((sheet, None));
+    };
+    let serde_norway::Value::String(token) = token else {
+        bail!("invalid structured identity field");
+    };
+    ensure!(valid_token(&token), "invalid identity token format");
+    Ok((sheet, Some(token)))
+}
+
+fn appended_sheet(original: &[u8], token: &str) -> Result<Vec<u8>> {
+    ensure!(valid_token(token), "invalid identity token format");
+    let (before, existing) = sheet_identity(original)?;
+    ensure!(existing.is_none(), "sheet already carries an identity");
+    let candidate = append_line(original, &format!("{SHEET_FIELD}: \"{token}\""), false);
+    let (after, inserted) = sheet_identity(&candidate)?;
+    ensure!(
+        before == after && inserted.as_deref() == Some(token),
+        "cannot attach an identity without changing existing YAML values"
+    );
     Ok(candidate)
 }
 
@@ -176,23 +218,16 @@ fn inspect(save: &Path) -> Result<Preview> {
     {
         let mut row = Card {
             path: character.markdown().to_string(),
-            status: "structured_card",
+            carrier: character
+                .sheet()
+                .unwrap_or_else(|| character.markdown())
+                .to_string(),
+            status: "unverified",
             before_digest: None,
             added_bytes: None,
         };
         let record_path = records.remove(&format!("{}.yaml", character.id()));
-        if character.sheet().is_some() {
-            if record_path.is_some() {
-                row.status = "structured_record_unverified";
-            }
-            preview.cards.push(row);
-            continue;
-        }
-        let (status, binding) = inspect_markdown(
-            &save.join(character.markdown_path()),
-            &mut row,
-            record_path.as_deref(),
-        )?;
+        let (status, binding) = inspect_carrier(save, character, &mut row, record_path.as_deref())?;
         row.status = status;
         for token in binding {
             tokens.entry(token).or_default().push(preview.cards.len());
@@ -208,19 +243,34 @@ fn inspect(save: &Path) -> Result<Preview> {
     Ok(preview)
 }
 
-fn inspect_markdown(
-    path: &Path,
+fn inspect_carrier(
+    save: &Path,
+    character: &identity_diag::Character,
     row: &mut Card,
     record_path: Option<&Path>,
 ) -> Result<(&'static str, BTreeSet<String>)> {
-    let original = read_regular(path)?;
+    let markdown = read_regular(&save.join(character.markdown_path()))?;
     let mut tokens = BTreeSet::new();
-    let token = match card_token(&original) {
-        Ok(token) => token,
+    let markdown_token = match card_token(&markdown) {
+        Ok(token) => token.map(str::to_owned),
         Err(_) => return Ok(("invalid_marker", tokens)),
     };
-    if let Some(token) = token {
-        tokens.insert(token.to_owned());
+    let structured = character.sheet_path();
+    let (original, token) = if let Some(path) = structured {
+        if let Some(token) = markdown_token {
+            tokens.insert(token);
+            return Ok(("carrier_conflict", tokens));
+        }
+        let sheet = read_regular(&save.join(path))?;
+        match sheet_identity(&sheet) {
+            Ok((_, token)) => (sheet, token),
+            Err(_) => return Ok(("invalid_marker", tokens)),
+        }
+    } else {
+        (markdown, markdown_token)
+    };
+    if let Some(token) = &token {
+        tokens.insert(token.clone());
     }
     let record = match record_path.map(load_record).transpose() {
         Ok(record) => record,
@@ -229,9 +279,16 @@ fn inspect_markdown(
     if let Some(record) = &record {
         tokens.insert(record.token.clone());
     }
-    let status = match (token, record) {
+    let status = match (token.as_deref(), record) {
         (None, None) => {
-            let proposed = appended_card(&original, PREVIEW_TOKEN)?;
+            let proposed = if structured.is_some() {
+                appended_sheet(&original, PREVIEW_TOKEN)
+            } else {
+                appended_card(&original, PREVIEW_TOKEN)
+            };
+            let Ok(proposed) = proposed else {
+                return Ok(("format_review_required", tokens));
+            };
             row.before_digest = Some(advancement_lock::save_lock::digest(&original));
             row.added_bytes = Some(proposed.len() - original.len());
             "review_required"
@@ -239,7 +296,13 @@ fn inspect_markdown(
         (Some(_), None) => "record_missing",
         (None, Some(_)) => "marker_missing",
         (Some(token), Some(record)) => match record.history {
-            History::Unknown if record.card == row.path && record.token == token => "matched",
+            History::Unknown
+                if record.card == row.path
+                    && record.token == token
+                    && record.carrier.as_deref().unwrap_or(&record.card) == row.carrier =>
+            {
+                "matched"
+            }
             History::Unknown => "binding_mismatch",
         },
     };
@@ -260,7 +323,7 @@ pub fn run(save: &Path, json: bool) -> Result<()> {
         println!("{} {}", issue.path, issue.kind);
     }
     for card in preview.cards {
-        println!("{} {}", card.path, card.status);
+        println!("{} {} {}", card.path, card.carrier, card.status);
     }
     for record in preview.unmatched_records {
         println!("未匹配的成长记录 {record}");
@@ -284,5 +347,25 @@ mod tests {
         );
         assert_eq!(card_token(&proposed).unwrap(), Some(PREVIEW_TOKEN));
         assert!(appended_card(&proposed, PREVIEW_TOKEN).is_err());
+    }
+
+    #[test]
+    fn structured_append_preserves_comments_unknown_values_and_original_bytes() {
+        let original =
+            b"\xef\xbb\xbf# user comment\r\nid: fixture\r\ncustom: {name: \"old\", enabled: true}";
+        let proposed = appended_sheet(original, PREVIEW_TOKEN).unwrap();
+        assert!(proposed.starts_with(original));
+        let (before, _) = sheet_identity(original).unwrap();
+        let (after, identity) = sheet_identity(&proposed).unwrap();
+        assert_eq!(before, after);
+        assert_eq!(identity.as_deref(), Some(PREVIEW_TOKEN));
+        assert!(appended_sheet(&proposed, PREVIEW_TOKEN).is_err());
+    }
+
+    #[test]
+    fn structured_append_refuses_a_second_document_or_changed_scalar() {
+        assert!(appended_sheet(b"id: fixture\n...\n", PREVIEW_TOKEN).is_err());
+        assert!(appended_sheet(b"id: fixture\ntext: |+\n  prose", PREVIEW_TOKEN).is_err());
+        assert!(appended_sheet(b"id: fixture\ntext: |+\n  prose\n", PREVIEW_TOKEN).is_ok());
     }
 }

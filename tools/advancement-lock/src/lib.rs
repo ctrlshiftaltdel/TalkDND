@@ -881,7 +881,7 @@ pub static WRITERS: &[Writer] = &[
         "lib.rs::dispatch Cmd::Advancement; advancement_identity.rs::run",
         "none",
         ReadOnly,
-        "reports legacy card identity bindings and the proposed append",
+        "reports card identity bindings and the proposed append",
         &["advancement", "identity-preview"]
     ),
     writer!(

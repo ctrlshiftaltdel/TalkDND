@@ -824,7 +824,7 @@ enum NpcCmd {
 
 #[derive(Subcommand, Clone)]
 enum AdvancementCmd {
-    /// Check legacy Markdown identity bindings and preview the append-only change.
+    /// Check character identity bindings and preview the append-only change.
     IdentityPreview {
         #[arg(long)]
         json: bool,
