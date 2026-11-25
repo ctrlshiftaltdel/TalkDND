@@ -953,17 +953,19 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
-    #[test]
-    fn blocking_lock_api_still_has_no_timeout_parameter() {
-        // AC-2: inspect the source rather than calling lock() against a live
-        // holder, which would hang the test if the unbounded API is intact.
-        let src = include_str!("integrity.rs");
+    fn blocking_lock_source_body(src: &str) -> String {
+        // Windows CI checks out CRLF sources; normalize before scanning so
+        // "\n}\n" still finds the end of lock().
+        let src = src.replace("\r\n", "\n");
         let start = src
             .find("pub fn lock(save: &Path) -> Result<ManifestLock> {")
             .expect("blocking lock() still exists");
         let rest = &src[start..];
         let end = rest.find("\n}\n").expect("end of lock()") + 3;
-        let body = &rest[..end];
+        rest[..end].to_string()
+    }
+
+    fn assert_blocking_lock_body(body: &str) {
         assert!(
             !body.contains("timeout") && !body.contains("try_lock"),
             "lock() must stay a blocking File::lock() call with no timeout: {body}"
@@ -972,5 +974,25 @@ mod tests {
             body.contains("file.lock()"),
             "lock() must still call file.lock(): {body}"
         );
+    }
+
+    #[test]
+    fn blocking_lock_api_still_has_no_timeout_parameter() {
+        // AC-2: inspect the source rather than calling lock() against a live
+        // holder, which would hang the test if the unbounded API is intact.
+        let src = include_str!("integrity.rs");
+        let body = blocking_lock_source_body(src);
+        assert_blocking_lock_body(&body);
+
+        // Recreate a Windows CRLF checkout and scan it the same way, so a
+        // regression of the un-normalized "\n}\n" find cannot slip through.
+        let crlf = src.replace("\r\n", "\n").replace('\n', "\r\n");
+        assert!(
+            crlf.contains("\r\n"),
+            "CRLF view must actually contain CRLF"
+        );
+        let body_crlf = blocking_lock_source_body(&crlf);
+        assert_eq!(body, body_crlf);
+        assert_blocking_lock_body(&body_crlf);
     }
 }

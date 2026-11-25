@@ -326,11 +326,10 @@ fn retry_after_timeout_uses_a_fresh_budget_and_still_validates() {
     let _ = fs::remove_dir_all(&root);
 }
 
-#[test]
-fn run_to_verified_candidate_does_not_wire_inner_lock_or_publish() {
-    // AC-4: this block exposes a call site but does not hook it into the
-    // D orchestrator, and does not implement publish.
-    let src = include_str!("../src/advancement_commit.rs");
+fn run_inner_source_body(src: &str) -> String {
+    // Normalize CRLF checkouts (Windows CI) before scanning, matching the
+    // integrity lock() source-scan.
+    let src = src.replace("\r\n", "\n");
     assert!(
         src.contains("pub fn acquire_inner_integrity_lock"),
         "the new-path call site must exist"
@@ -341,7 +340,10 @@ fn run_to_verified_candidate_does_not_wire_inner_lock_or_publish() {
         .find("\nfn ")
         .or_else(|| rest.find("\npub fn "))
         .expect("function after run_inner");
-    let body = &rest[..end];
+    rest[..end].to_string()
+}
+
+fn assert_run_inner_is_not_wired(body: &str) {
     assert!(
         !body.contains("acquire_inner_integrity_lock")
             && !body.contains("lock_with_timeout")
@@ -352,6 +354,25 @@ fn run_to_verified_candidate_does_not_wire_inner_lock_or_publish() {
         body.contains("published: false"),
         "run_inner must still stop unpublished: {body}"
     );
+}
+
+#[test]
+fn run_to_verified_candidate_does_not_wire_inner_lock_or_publish() {
+    // AC-4: this block exposes a call site but does not hook it into the
+    // D orchestrator, and does not implement publish.
+    let src = include_str!("../src/advancement_commit.rs");
+    let body = run_inner_source_body(src);
+    assert_run_inner_is_not_wired(&body);
+
+    let crlf = src.replace("\r\n", "\n").replace('\n', "\r\n");
+    assert!(
+        crlf.contains("\r\n"),
+        "CRLF view must actually contain CRLF"
+    );
+    let body_crlf = run_inner_source_body(&crlf);
+    assert_eq!(body, body_crlf);
+    assert_run_inner_is_not_wired(&body_crlf);
+
     // Keep the type in the file so a later accidental hook is easier to see.
     let _ = run_to_verified_candidate;
 }
