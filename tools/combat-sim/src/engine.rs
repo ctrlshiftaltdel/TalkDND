@@ -5453,7 +5453,8 @@ fn try_hit_reactions(
             if !trigger_available(state, target, trigger, &key) {
                 continue;
             }
-            if !trigger_affordable(state, target, trigger) {
+            let cost = trigger.cost.as_ref().or(resolved.ability.cost.as_ref());
+            if cost.is_some_and(|cost| !can_afford(state, target, cost)) {
                 continue;
             }
             let context = PredicateContext {
@@ -5487,12 +5488,8 @@ fn try_hit_reactions(
             }) {
                 continue;
             }
-            if let Some(cost) = trigger
-                .cost
-                .clone()
-                .or_else(|| resolved.ability.cost.clone())
-            {
-                if !spend_cost(state, target, &cost, log)? {
+            if let Some(cost) = cost {
+                if !spend_cost(state, target, cost, log)? {
                     continue;
                 }
             }

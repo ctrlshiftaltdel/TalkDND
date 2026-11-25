@@ -623,6 +623,34 @@ fn cli_hit_reaction_saves_the_hit_roll_and_commits_cost_and_damage_at_most_once(
             assert_eq!(fs::read(&path).unwrap(), resolved);
         }
 
+        let path = scratch.dir.join("no-reaction-resource.state.json");
+        let mut without_slot = state.clone();
+        without_slot.combatants[hero]
+            .resources
+            .get_mut("spell-slot-1")
+            .unwrap()
+            .current = 0;
+        without_slot.save(&path).unwrap();
+        assert_success(
+            &run_cli(
+                &path,
+                &[
+                    "attack",
+                    "Source",
+                    "Hero",
+                    "claw",
+                    "--seed",
+                    &seed.to_string(),
+                ],
+            ),
+            "attack resolves when the reaction cost is unavailable",
+        );
+        assert!(status_json(&path)["pending_reaction"].is_null());
+        let resolved = EncounterState::load(&path).unwrap();
+        assert!(resolved.combatants[hero].hp < 40);
+        assert!(resolved.combatants[hero].has_reaction(resolved.round));
+        assert_eq!(slot(&resolved, "Hero"), 0);
+
         let path = scratch.dir.join("two-reactions.state.json");
         set_ready(
             &mut state,
