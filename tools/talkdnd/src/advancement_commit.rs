@@ -1,20 +1,25 @@
-//! D-protocol orchestrator for ADV-P1-2: `admit` → `backup` → `candidate`.
+//! D-protocol orchestrator: `admit` → `backup` → `candidate` → `publish`
+//! → `logs` → `complete`.
 //!
-//! This module takes a protocol-initialized save through a verified, unpublished
-//! candidate and then **stops**. It does not publish target files, append logs,
-//! update integrity, enable a player-facing commit command, auto-resume, or
-//! add schema 11 / a choice sidecar.
+//! [`run_to_verified_candidate`] still stops at a verified unpublished
+//! candidate and does not publish. [`run_to_complete`] publishes registered
+//! targets (intent, preimage recheck, temp + rename + sync, done), appends
+//! logs, updates the integrity manifest under the ADV-P1-3 bounded inner
+//! lock, and writes `complete` only after candidate comparison, logs, and
+//! integrity are done with no pending intent.
 //!
 //! Admit reuses [`AdvancementLock::begin_operation`] (and its pre-state
 //! snapshot). The D path uses [`AdvancementLock::check_writable`], never
 //! [`AdvancementLock::check_ordinary_write`].
 //!
-//! ADV-P1-3 adds [`acquire_inner_integrity_lock`] as a call site for the new
-//! path's bounded inner-lock acquire. [`run_to_verified_candidate`] does not
-//! call it, and publish is still not wired.
+//! The inner integrity lock is acquired only through
+//! [`acquire_inner_integrity_lock`]. This does not make the whole commit
+//! path bounded: the old `integrity::lock()` API remains unbounded. There
+//! is still no player commit CLI, no explicit recovery, and no schema 11
+//! / sidecar.
 
 use crate::advancement_lock::{
-    self, open, AdvancementLock, Error as LockError, OpenOptions, Stage, State,
+    self, open, AdvancementLock, CompletionEvidence, Error as LockError, OpenOptions, Stage, State,
 };
 use crate::charsheet::CharFile;
 use crate::migrate::CURRENT_SCHEMA;
@@ -49,6 +54,11 @@ pub enum Fault {
     BackupSync,
     CandidateBuild,
     CandidateValidate,
+    IntentWrite,
+    PublishWrite,
+    PublishSync,
+    LogAppend,
+    IntegrityUpdate,
 }
 
 /// Where the orchestrator stopped.
@@ -57,6 +67,9 @@ pub enum InterruptStage {
     Admit,
     Backup,
     Candidate,
+    Publish,
+    Logs,
+    Complete,
 }
 
 /// Materials a human needs after a stop. This block does not implement
@@ -83,6 +96,17 @@ pub struct Report {
     pub candidate_dir: Option<PathBuf>,
     pub recovery: RecoveryMaterials,
     pub error: Option<String>,
+    pub published_paths: Vec<String>,
+    pub pending_paths: Vec<String>,
+    pub logs_recorded: bool,
+    pub integrity_recorded: bool,
+    /// After a rename, a non-cooperative write in the recheck→rename window
+    /// cannot be ruled out. This is a report, not a claim that one was
+    /// detected. Digests are in [`Report::observed_preimage`] and
+    /// [`Report::observed_target`]; injected bytes are never included.
+    pub overwrite_cannot_be_ruled_out: bool,
+    pub observed_preimage: Vec<(String, String)>,
+    pub observed_target: Vec<(String, String)>,
 }
 
 impl Report {
@@ -120,18 +144,51 @@ pub struct Request<'a> {
     pub candidate_parent: &'a Path,
     pub overlays: BTreeMap<String, Vec<u8>>,
     pub fault: Option<Fault>,
+    /// Registered synthetic or future extension targets (POSIX relative
+    /// paths). They follow the same intent / preimage / publish / done
+    /// protocol. This block does not invent sidecar fields or paths.
+    pub extra_targets: Vec<String>,
+    /// Required by [`run_to_complete`]. A mismatch is reported only as
+    /// "绑定变化，原因未知" with no category list. [`run_to_verified_candidate`]
+    /// ignores this field.
+    pub preview_id: Option<String>,
+    /// When non-empty, included in backup/candidate directory names so a
+    /// repeated submit with the same `operation_id` can use a new exclusive
+    /// directory. Empty keeps the ADV-P1-2 names.
+    pub instance_tag: &'a str,
+    pub hooks: PublishHooks<'a>,
+    pub inner_lock: crate::advancement_inner_lock::InnerLockOptions,
+}
+
+/// Hook after a specific target's intent or recheck.
+pub type PublishTargetHook<'a> = dyn Fn(&str, &Path) + 'a;
+/// Hook before any target is published.
+pub type PublishStartHook<'a> = dyn Fn(&Path) + 'a;
+
+/// Test and fault-injection hooks for publish. Production callers leave
+/// every field `None`.
+#[derive(Default)]
+pub struct PublishHooks<'a> {
+    /// After preview_id has been accepted, before the first intent.
+    pub before_any_publish: Option<&'a PublishStartHook<'a>>,
+    /// After `record_intent` succeeds for this POSIX relative path.
+    pub after_intent: Option<&'a PublishTargetHook<'a>>,
+    /// After the preimage recheck, immediately before temp write / append.
+    /// T7b injects here; the product must not print injected bytes.
+    pub after_recheck_before_publish: Option<&'a PublishTargetHook<'a>>,
 }
 
 /// Run the D state machine through a verified candidate and stop. Never
 /// publishes, never auto-resumes an `active` operation.
 pub fn run_to_verified_candidate(req: &Request<'_>) -> std::result::Result<Report, Box<FailedRun>> {
-    run_inner(req)
+    run_inner(req).map(|(_, report)| report)
 }
 
 /// Bounded inner integrity-lock acquire for the new advancement path
-/// (ADV-P1-3 / OD-9). Future publish (ADV-P1-4) may use this call site;
-/// this block does not wire publish and [`run_to_verified_candidate`] does
-/// not call this function.
+/// (ADV-P1-3 / OD-9). [`run_to_complete`] uses this at the integrity
+/// stage. [`run_to_verified_candidate`] does not call this function.
+/// After this wiring, the whole commit path is still not promised bounded
+/// (the old integrity `lock()` remains unbounded).
 ///
 /// The acquire fails closed on timeout, writes no targets, and does not
 /// change SAVE or advancement state. A retry must call this again; each
@@ -147,7 +204,7 @@ pub fn acquire_inner_integrity_lock(
     crate::advancement_inner_lock::acquire_integrity(save_dir, opts)
 }
 
-fn run_inner(req: &Request<'_>) -> std::result::Result<Report, Box<FailedRun>> {
+fn run_inner(req: &Request<'_>) -> std::result::Result<(AdvancementLock, Report), Box<FailedRun>> {
     let prestate = req
         .evidence_dir
         .join(format!("{}-prestate.json", req.operation_id));
@@ -238,8 +295,15 @@ fn run_inner(req: &Request<'_>) -> std::result::Result<Report, Box<FailedRun>> {
             note: "候选已验证、未发布。本块不发布任何目标文件，也不自动续跑。".to_string(),
         },
         error: None,
+        published_paths: Vec::new(),
+        pending_paths: Vec::new(),
+        logs_recorded: false,
+        integrity_recorded: false,
+        overwrite_cannot_be_ruled_out: false,
+        observed_preimage: Vec::new(),
+        observed_target: Vec::new(),
     };
-    Ok(report)
+    Ok((lock, report))
 }
 
 fn open_writable(req: &Request<'_>) -> Result<AdvancementLock> {
@@ -292,6 +356,13 @@ fn fail(failure: Failure) -> Box<FailedRun> {
                 note: failure.error.clone(),
             },
             error: Some(failure.error),
+            published_paths: Vec::new(),
+            pending_paths: Vec::new(),
+            logs_recorded: false,
+            integrity_recorded: false,
+            overwrite_cannot_be_ruled_out: false,
+            observed_preimage: Vec::new(),
+            observed_target: Vec::new(),
         },
     })
 }
@@ -322,6 +393,9 @@ fn stop_failed(
             InterruptStage::Admit => "admit",
             InterruptStage::Backup => "backup",
             InterruptStage::Candidate => "candidate",
+            InterruptStage::Publish => "publish",
+            InterruptStage::Logs => "logs",
+            InterruptStage::Complete => "complete",
         },
         format_error(&err),
         prestate
@@ -359,7 +433,7 @@ fn stop_failed(
 fn build_backup(lock: &mut AdvancementLock, req: &Request<'_>) -> Result<PathBuf> {
     require_existing_parent(req.backup_parent, "backup_parent")?;
     require_same_device(req.save_dir, req.backup_parent, "备份目录")?;
-    let name = format!("{}-{}-d-backup", dir_name(req.save_dir), req.operation_id);
+    let name = instance_dir_name(req, "d-backup");
     let dest = exclusive_create_dir(req.backup_parent, &name)
         .with_context(|| "独占创建用户数据备份目录")?;
 
@@ -414,11 +488,7 @@ fn build_candidate(
     require_existing_parent(req.candidate_parent, "candidate_parent")?;
     require_same_device(req.save_dir, req.candidate_parent, "候选目录")?;
     require_same_device(backup, req.candidate_parent, "候选目录")?;
-    let name = format!(
-        "{}-{}-d-candidate",
-        dir_name(req.save_dir),
-        req.operation_id
-    );
+    let name = instance_dir_name(req, "d-candidate");
     let dest =
         exclusive_create_dir(req.candidate_parent, &name).with_context(|| "独占创建候选目录")?;
 
@@ -474,6 +544,19 @@ fn dir_name(path: &Path) -> String {
         .and_then(|n| n.to_str())
         .unwrap_or("save")
         .to_string()
+}
+
+fn instance_dir_name(req: &Request<'_>, kind: &str) -> String {
+    if req.instance_tag.is_empty() {
+        format!("{}-{}-{kind}", dir_name(req.save_dir), req.operation_id)
+    } else {
+        format!(
+            "{}-{}-{}-{kind}",
+            dir_name(req.save_dir),
+            req.operation_id,
+            req.instance_tag
+        )
+    }
 }
 
 fn exclusive_create_dir(parent: &Path, name: &str) -> Result<PathBuf> {
@@ -1196,4 +1279,694 @@ pub fn targets_unchanged(
     after: &BTreeMap<String, Vec<u8>>,
 ) -> bool {
     before == after
+}
+
+// ---------------------------------------------------------------- publish ----
+
+const OP_MARKER_PREFIX: &str = "<!-- talkdnd-op:";
+const OP_MARKER_SUFFIX: &str = " -->";
+
+fn op_marker(operation_id: &str) -> String {
+    format!("{OP_MARKER_PREFIX}{operation_id}{OP_MARKER_SUFFIX}")
+}
+
+/// Compute the v1 binding digest used as `preview_id` for this block.
+/// This is not a full preview implementation (ADV-P1-7). A mismatch may
+/// only be reported as "绑定变化，原因未知".
+pub fn binding_preview_id(save: &Path, extra_targets: &[String]) -> Result<String> {
+    let mut listing = protected_target_bytes(save)?;
+    for rel in extra_targets {
+        if listing.contains_key(rel) {
+            continue;
+        }
+        let path = save.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if path.is_file() {
+            listing.insert(rel.clone(), fs::read(&path)?);
+        } else {
+            listing.insert(rel.clone(), Vec::new());
+        }
+    }
+    let mut acc = Vec::new();
+    for (path, bytes) in listing {
+        acc.extend_from_slice(path.as_bytes());
+        acc.push(0);
+        acc.extend_from_slice(digest_bytes(&bytes).as_bytes());
+        acc.push(0);
+    }
+    Ok(digest_bytes(&acc))
+}
+
+/// Run admit → backup → candidate → publish → logs → integrity → complete.
+///
+/// Publish acquires the inner integrity lock only through
+/// [`acquire_inner_integrity_lock`]. The whole commit path is still not
+/// promised bounded. This function does not auto-resume an `active` or
+/// `in_doubt` leftover, and it is not a player CLI.
+pub fn run_to_complete(req: &Request<'_>) -> std::result::Result<Report, Box<FailedRun>> {
+    // Reject before admit when the caller omitted or cannot compute a
+    // binding id, so a missing preview does not leave an active operation.
+    match req.preview_id.as_deref() {
+        None => {
+            return Err(reject_before_admit(
+                "未提供 preview_id，拒绝提交。未写任何目标文件。",
+            ));
+        }
+        Some(given) => match binding_preview_id(req.save_dir, &req.extra_targets) {
+            Ok(expected) if given == expected => {}
+            Ok(_) => {
+                return Err(reject_before_admit(
+                    "绑定变化，原因未知。未写任何目标文件。",
+                ));
+            }
+            Err(err) => {
+                return Err(reject_before_admit(&format!(
+                    "无法计算绑定摘要：{err}。未写任何目标文件。"
+                )));
+            }
+        },
+    }
+
+    let (lock, prepared) = run_inner(req)?;
+    // Recheck after candidate build. A change here is still before any
+    // target write; the report may only say "绑定变化，原因未知".
+    publish_verified_candidate(req, lock, prepared)
+}
+
+fn reject_before_admit(message: &str) -> Box<FailedRun> {
+    fail(Failure {
+        interrupt: InterruptStage::Publish,
+        protocol_state: State::Ready,
+        stage: Stage::Init,
+        backup_dir: None,
+        candidate_dir: None,
+        backup_verified: false,
+        candidate_verified: false,
+        error: message.to_string(),
+        prestate: None,
+    })
+}
+
+fn publish_verified_candidate(
+    req: &Request<'_>,
+    mut lock: AdvancementLock,
+    prepared: Report,
+) -> std::result::Result<Report, Box<FailedRun>> {
+    let prestate = prepared.recovery.prestate.clone();
+    let backup = prepared.backup_dir.clone();
+    let candidate = match prepared.candidate_dir.clone() {
+        Some(path) => path,
+        None => {
+            let err = "候选目录缺失，无法发布".to_string();
+            return Err(stop_before_publish_held(&mut lock, req, &err, &prepared));
+        }
+    };
+
+    let preview = req
+        .preview_id
+        .as_deref()
+        .expect("run_to_complete already required preview_id");
+    match binding_preview_id(req.save_dir, &req.extra_targets) {
+        Ok(expected) if preview == expected => {}
+        Ok(_) => {
+            return Err(stop_before_publish_held(
+                &mut lock,
+                req,
+                "绑定变化，原因未知。未写任何目标文件。",
+                &prepared,
+            ));
+        }
+        Err(err) => {
+            return Err(stop_before_publish_held(
+                &mut lock,
+                req,
+                &format!("无法计算绑定摘要：{err}。未写任何目标文件。"),
+                &prepared,
+            ));
+        }
+    }
+
+    if lock.state().state != State::Active || lock.state().candidate_dir.is_none() {
+        let err = format!(
+            "发布拒绝：当前状态不是已验证候选（state={:?} stage={:?}）。不自动续跑。",
+            lock.state().state,
+            lock.state().stage
+        );
+        return Err(stop_before_publish_held(&mut lock, req, &err, &prepared));
+    }
+
+    if let Some(hook) = req.hooks.before_any_publish {
+        hook(req.save_dir);
+    }
+
+    let mut ctx = PublishCtx {
+        published: Vec::new(),
+        pending: Vec::new(),
+        observed_preimage: Vec::new(),
+        observed_target: Vec::new(),
+        overwrite_cannot_be_ruled_out: false,
+        logs_recorded: false,
+        integrity_recorded: false,
+    };
+
+    let snapshot_before = combat_sim::integrity::snapshot(req.save_dir);
+
+    if let Err(err) = publish_registered_targets(req, &mut lock, &candidate, &mut ctx) {
+        return Err(stop_after_publish_started(
+            &mut lock,
+            req,
+            InterruptStage::Publish,
+            err,
+            &prepared,
+            &ctx,
+        ));
+    }
+
+    if let Err(err) = publish_logs(req, &mut lock, &mut ctx) {
+        return Err(stop_after_publish_started(
+            &mut lock,
+            req,
+            InterruptStage::Logs,
+            err,
+            &prepared,
+            &ctx,
+        ));
+    }
+    ctx.logs_recorded = true;
+
+    if let Err(err) = publish_integrity(req, &mut lock, &snapshot_before, &mut ctx) {
+        return Err(stop_after_publish_started(
+            &mut lock,
+            req,
+            InterruptStage::Logs,
+            err,
+            &prepared,
+            &ctx,
+        ));
+    }
+    ctx.integrity_recorded = true;
+
+    if let Err(err) = compare_candidate_and_complete(&mut lock, req, &candidate, &ctx) {
+        return Err(stop_after_publish_started(
+            &mut lock,
+            req,
+            InterruptStage::Complete,
+            err,
+            &prepared,
+            &ctx,
+        ));
+    }
+
+    Ok(Report {
+        protocol_state: lock.state().state,
+        stage: lock.state().stage,
+        candidate_verified: true,
+        published: true,
+        backup_dir: backup,
+        candidate_dir: Some(candidate.clone()),
+        recovery: RecoveryMaterials {
+            interrupt_stage: InterruptStage::Complete,
+            prestate,
+            backup_dir: prepared.backup_dir.clone(),
+            backup_verified: true,
+            candidate_dir: Some(candidate),
+            candidate_verified: true,
+            note: complete_note(&ctx),
+        },
+        error: None,
+        published_paths: ctx.published,
+        pending_paths: lock
+            .state()
+            .pending
+            .iter()
+            .map(|p| p.path.clone())
+            .collect(),
+        logs_recorded: ctx.logs_recorded,
+        integrity_recorded: ctx.integrity_recorded,
+        overwrite_cannot_be_ruled_out: ctx.overwrite_cannot_be_ruled_out,
+        observed_preimage: ctx.observed_preimage,
+        observed_target: ctx.observed_target,
+    })
+}
+
+struct PublishCtx {
+    published: Vec<String>,
+    pending: Vec<String>,
+    observed_preimage: Vec<(String, String)>,
+    observed_target: Vec<(String, String)>,
+    overwrite_cannot_be_ruled_out: bool,
+    logs_recorded: bool,
+    integrity_recorded: bool,
+}
+
+fn complete_note(ctx: &PublishCtx) -> String {
+    if ctx.overwrite_cannot_be_ruled_out {
+        format!(
+            "发布完成，但无法排除复核与 rename 之间的覆盖。已观察前像：{:?}；目标：{:?}。不宣称检测成功。",
+            ctx.observed_preimage, ctx.observed_target
+        )
+    } else {
+        "发布、日志与完整性已完成。整条提交路径的总等待仍不承诺有界。".to_string()
+    }
+}
+
+fn publish_registered_targets(
+    req: &Request<'_>,
+    lock: &mut AdvancementLock,
+    candidate: &Path,
+    ctx: &mut PublishCtx,
+) -> Result<()> {
+    for rel in registered_replace_targets(candidate, &req.extra_targets)? {
+        let dest = candidate.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if !dest.is_file() {
+            bail!("候选缺少发布目标 {rel}，停止且不跳过");
+        }
+        let after = fs::read(&dest)?;
+        publish_replace(req, lock, &rel, &after, ctx, TargetKind::Replace)?;
+    }
+    Ok(())
+}
+
+fn registered_replace_targets(candidate: &Path, extra: &[String]) -> Result<Vec<String>> {
+    let mut targets = Vec::new();
+    targets.extend(list_dir_files(candidate, "sheets", "yaml")?);
+    if candidate.join("combat").join("party-state.yaml").is_file() {
+        targets.push("combat/party-state.yaml".to_string());
+    }
+    targets.extend(list_dir_files(candidate, "Characters", "md")?);
+    if candidate.join("progress.yaml").is_file() {
+        targets.push("progress.yaml".to_string());
+    }
+    for rel in extra {
+        if rel.contains('\\') || rel.is_empty() {
+            bail!("扩展目标路径必须是 POSIX 相对路径：{rel}");
+        }
+        if !targets.iter().any(|t| t == rel) {
+            targets.push(rel.clone());
+        }
+    }
+    Ok(targets)
+}
+
+fn list_dir_files(root: &Path, dir: &str, ext: &str) -> Result<Vec<String>> {
+    let folder = root.join(dir);
+    if !folder.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for entry in fs::read_dir(&folder)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(text) = name.to_str() else {
+            bail!("{} 含有非 UTF-8 文件名，拒绝", entry.path().display());
+        };
+        if text.ends_with(&format!(".{ext}")) && !text.starts_with('.') {
+            names.push(format!("{dir}/{text}"));
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+#[derive(Clone, Copy)]
+enum TargetKind {
+    Replace,
+    Log,
+    Integrity,
+}
+
+fn publish_replace(
+    req: &Request<'_>,
+    lock: &mut AdvancementLock,
+    rel: &str,
+    after: &[u8],
+    ctx: &mut PublishCtx,
+    kind: TargetKind,
+) -> Result<()> {
+    let path = req
+        .save_dir
+        .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let before = if path.is_file() {
+        fs::read(&path)?
+    } else {
+        Vec::new()
+    };
+    let before_d = digest_bytes(&before);
+    let after_d = digest_bytes(after);
+    ctx.observed_preimage
+        .push((rel.to_string(), before_d.clone()));
+    ctx.observed_target.push((rel.to_string(), after_d.clone()));
+
+    if req.fault == Some(Fault::IntentWrite) {
+        bail!("注入失败：intent 写入失败，未发布 {rel}");
+    }
+    lock.record_intent(rel, &before_d, &after_d)
+        .map_err(lock_err)?;
+    ctx.pending.push(rel.to_string());
+
+    if let Some(hook) = req.hooks.after_intent {
+        hook(rel, req.save_dir);
+    }
+
+    let current = if path.is_file() {
+        fs::read(&path)?
+    } else {
+        Vec::new()
+    };
+    if current != before {
+        bail!(
+            "发布复核不符：{rel} 的当前内容与前像不一致（已观察前像 {before_d}，目标 {after_d}）"
+        );
+    }
+
+    if let Some(hook) = req.hooks.after_recheck_before_publish {
+        hook(rel, req.save_dir);
+    }
+
+    match kind {
+        TargetKind::Log => {
+            if !after.starts_with(&before) {
+                bail!("日志目标字节不是现有内容的后缀，拒绝改写既有行");
+            }
+            append_log_line(&path, &after[before.len()..], req.fault)?;
+        }
+        TargetKind::Replace | TargetKind::Integrity => {
+            replace_file_atomically(&path, after, req.fault)?;
+        }
+    }
+    if req.hooks.after_recheck_before_publish.is_some() {
+        // A hook ran in the recheck→rename window. We can observe our
+        // preimage and target digests, but we cannot rule out an overwrite.
+        // This is a report, not a claim that one was detected.
+        ctx.overwrite_cannot_be_ruled_out = true;
+    }
+
+    lock.record_published(rel).map_err(lock_err)?;
+    ctx.pending.retain(|p| p != rel);
+    ctx.published.push(rel.to_string());
+    Ok(())
+}
+
+fn replace_file_atomically(path: &Path, bytes: &[u8], fault: Option<Fault>) -> Result<()> {
+    if fault == Some(Fault::PublishWrite) {
+        bail!(
+            "注入失败：目标文件写入失败，未完成 {} 的发布",
+            path.display()
+        );
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    let tmp_name = format!(
+        ".{}.adv-pub-tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("target")
+    );
+    let tmp = path
+        .parent()
+        .map(|p| p.join(&tmp_name))
+        .unwrap_or_else(|| PathBuf::from(&tmp_name));
+    let write = (|| -> Result<()> {
+        let mut file = File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("write {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("sync {}", tmp.display()))?;
+        Ok(())
+    })();
+    if let Err(err) = write {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
+    if fault == Some(Fault::PublishSync) {
+        let _ = fs::remove_file(&tmp);
+        bail!(
+            "注入失败：文件或父目录同步失败，停止发布 {}",
+            path.display()
+        );
+    }
+    fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+    let published = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    published
+        .sync_all()
+        .with_context(|| format!("sync {}", path.display()))?;
+    if let Some(parent) = path.parent() {
+        sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+fn append_log_line(path: &Path, new_bytes: &[u8], fault: Option<Fault>) -> Result<()> {
+    if fault == Some(Fault::LogAppend) {
+        bail!("注入失败：日志追加失败 {}", path.display());
+    }
+    if fault == Some(Fault::PublishWrite) {
+        bail!("注入失败：日志写入失败 {}", path.display());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("open {}", path.display()))?;
+    file.write_all(new_bytes)
+        .with_context(|| format!("append {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("sync {}", path.display()))?;
+    if let Some(parent) = path.parent() {
+        if fault == Some(Fault::PublishSync) {
+            bail!("注入失败：日志父目录同步失败 {}", path.display());
+        }
+        sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+fn publish_logs(req: &Request<'_>, lock: &mut AdvancementLock, ctx: &mut PublishCtx) -> Result<()> {
+    let mut logs = vec!["rolls.log".to_string()];
+    logs.extend(list_dir_files(req.save_dir, "Sessions", "md")?);
+
+    let marker = op_marker(req.operation_id);
+    let line = format!("{marker} advancement applied\n");
+
+    for rel in logs {
+        let path = req
+            .save_dir
+            .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let existing = if path.is_file() {
+            fs::read(&path)?
+        } else {
+            Vec::new()
+        };
+        if !existing.is_empty() && !existing.ends_with(b"\n") {
+            bail!(
+                "日志尾部异常，无法证明 {rel} 是否已追加操作 {}；停止而不是重放。日志可能已追加、清单可能未更新",
+                req.operation_id
+            );
+        }
+        if log_contains_marker(&existing, &marker) {
+            // Already applied for this operation id: record as done without
+            // appending (do not rewrite existing lines).
+            let digest = digest_bytes(&existing);
+            lock.record_intent(&rel, &digest, &digest)
+                .map_err(lock_err)?;
+            lock.record_published(&rel).map_err(lock_err)?;
+            ctx.published.push(rel);
+            continue;
+        }
+        let mut after = existing;
+        after.extend_from_slice(line.as_bytes());
+        publish_replace(req, lock, &rel, &after, ctx, TargetKind::Log)?;
+        // For logs we pass the full desired file bytes so intent after-digest
+        // is correct, but TargetKind::Log appends only the new line (the
+        // function writes `after` as if it were the new line...).
+    }
+    Ok(())
+}
+
+fn log_contains_marker(bytes: &[u8], marker: &str) -> bool {
+    let text = String::from_utf8_lossy(bytes);
+    text.lines().any(|line| line.contains(marker))
+}
+
+fn publish_integrity(
+    req: &Request<'_>,
+    lock: &mut AdvancementLock,
+    snapshot_before: &BTreeMap<String, String>,
+    ctx: &mut PublishCtx,
+) -> Result<()> {
+    if req.fault == Some(Fault::IntegrityUpdate) {
+        bail!("注入失败：完整性更新失败");
+    }
+    let _held = acquire_inner_integrity_lock(req.save_dir, &req.inner_lock)
+        .map_err(|err| anyhow!("{err}。发布已停止；整条提交路径仍不承诺有界"))?;
+    let now = combat_sim::integrity::snapshot(req.save_dir);
+    let planned = combat_sim::integrity::planned_after_write(req.save_dir, snapshot_before, &now)?;
+    let after = combat_sim::integrity::render(&planned)?;
+    publish_replace(
+        req,
+        lock,
+        "integrity.yaml",
+        &after,
+        ctx,
+        TargetKind::Integrity,
+    )?;
+    Ok(())
+}
+
+fn compare_candidate_and_complete(
+    lock: &mut AdvancementLock,
+    req: &Request<'_>,
+    candidate: &Path,
+    ctx: &PublishCtx,
+) -> Result<()> {
+    if !lock.state().pending.is_empty() {
+        bail!("完成拒绝：仍有未决 intent，只能 in_doubt");
+    }
+    for rel in registered_replace_targets(candidate, &req.extra_targets)? {
+        let live = read_or_empty(
+            &req.save_dir
+                .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR)),
+        )?;
+        let want = read_or_empty(&candidate.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR)))?;
+        if live != want {
+            bail!("完成比对失败：{rel} 与候选不一致，只能 in_doubt");
+        }
+        if !ctx.published.iter().any(|p| p == &rel) {
+            bail!("完成比对失败：{rel} 未出现在 published[] 中，只能 in_doubt");
+        }
+    }
+    if !ctx.logs_recorded || !ctx.integrity_recorded {
+        bail!("完成拒绝：日志或完整性尚未完成，只能 in_doubt");
+    }
+    lock.finish_complete(&CompletionEvidence {
+        candidate_matches: true,
+        logs_recorded: true,
+        integrity_recorded: true,
+    })
+    .map_err(lock_err)?;
+    Ok(())
+}
+
+fn read_or_empty(path: &Path) -> Result<Vec<u8>> {
+    if path.is_file() {
+        Ok(fs::read(path)?)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn stop_before_publish_held(
+    lock: &mut AdvancementLock,
+    _req: &Request<'_>,
+    message: &str,
+    prepared: &Report,
+) -> Box<FailedRun> {
+    let mut error = message.to_string();
+    if lock.state().state == State::Active
+        && lock.state().published.is_empty()
+        && lock.state().pending.is_empty()
+    {
+        if let Err(err) = lock.finish_failed(&error) {
+            error = format!("{error}（写入 failed 失败：{err}）");
+        }
+    }
+    fail(Failure {
+        interrupt: InterruptStage::Publish,
+        protocol_state: lock.state().state,
+        stage: lock.state().stage,
+        backup_dir: prepared.backup_dir.clone(),
+        candidate_dir: prepared.candidate_dir.clone(),
+        backup_verified: true,
+        candidate_verified: true,
+        error,
+        prestate: prepared.recovery.prestate.clone(),
+    })
+}
+
+fn stop_after_publish_started(
+    lock: &mut AdvancementLock,
+    _req: &Request<'_>,
+    interrupt: InterruptStage,
+    err: anyhow::Error,
+    prepared: &Report,
+    ctx: &PublishCtx,
+) -> Box<FailedRun> {
+    let published_now = !lock.state().published.is_empty() || !lock.state().pending.is_empty();
+    let reason = format!(
+        "{} 阶段停止：{}。已发布：{:?}；未决 intent：{:?}。{}整条提交路径仍不承诺有界。本块不自动重试发布，也不自动续跑。",
+        match interrupt {
+            InterruptStage::Admit => "admit",
+            InterruptStage::Backup => "backup",
+            InterruptStage::Candidate => "candidate",
+            InterruptStage::Publish => "publish",
+            InterruptStage::Logs => "logs",
+            InterruptStage::Complete => "complete",
+        },
+        format_error(&err),
+        lock.state()
+            .published
+            .iter()
+            .map(|p| p.path.as_str())
+            .collect::<Vec<_>>(),
+        lock.state()
+            .pending
+            .iter()
+            .map(|p| p.path.as_str())
+            .collect::<Vec<_>>(),
+        if ctx.overwrite_cannot_be_ruled_out {
+            "无法排除覆盖；已观察前像与目标已记录（不含实际注入值）。"
+        } else {
+            ""
+        }
+    );
+    let finish = if published_now || !ctx.published.is_empty() || !ctx.pending.is_empty() {
+        lock.finish_in_doubt(&reason)
+    } else {
+        lock.finish_failed(&reason)
+    };
+    let protocol_state = lock.state().state;
+    let stage = lock.state().stage;
+    let pending_paths: Vec<String> = lock
+        .state()
+        .pending
+        .iter()
+        .map(|p| p.path.clone())
+        .collect();
+    let published_paths: Vec<String> = lock
+        .state()
+        .published
+        .iter()
+        .map(|p| p.path.clone())
+        .collect();
+    let error = match finish {
+        Ok(()) => reason,
+        Err(finish_err) => format!("{reason}（另外，写入终态失败：{finish_err}）"),
+    };
+    let mut boxed = fail(Failure {
+        interrupt,
+        protocol_state,
+        stage,
+        backup_dir: prepared.backup_dir.clone(),
+        candidate_dir: prepared.candidate_dir.clone(),
+        backup_verified: true,
+        candidate_verified: true,
+        error,
+        prestate: prepared.recovery.prestate.clone(),
+    });
+    boxed.report.published = !published_paths.is_empty();
+    boxed.report.published_paths = published_paths;
+    boxed.report.pending_paths = pending_paths;
+    boxed.report.logs_recorded = ctx.logs_recorded;
+    boxed.report.integrity_recorded = ctx.integrity_recorded;
+    boxed.report.overwrite_cannot_be_ruled_out = ctx.overwrite_cannot_be_ruled_out;
+    boxed.report.observed_preimage = ctx.observed_preimage.clone();
+    boxed.report.observed_target = ctx.observed_target.clone();
+    boxed
 }
