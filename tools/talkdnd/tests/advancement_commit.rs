@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use talkdnd::advancement_commit::{
-    devices_match, protected_target_bytes, run_to_verified_candidate, targets_unchanged, DeviceKey,
-    Fault, InterruptStage, Request,
+    copy_user_data, devices_match, protected_target_bytes, run_to_verified_candidate,
+    targets_unchanged, DeviceKey, Fault, InterruptStage, Request,
 };
 use talkdnd::advancement_lock as adv;
 
@@ -147,6 +147,59 @@ fn devices_match_rejects_injected_cross_volume_keys() {
     // is proven with injected keys so a mismatch cannot be silent.
     assert!(devices_match(DeviceKey(1, 0), DeviceKey(1, 0)));
     assert!(!devices_match(DeviceKey(1, 0), DeviceKey(2, 0)));
+}
+
+#[test]
+fn a_copy_cannot_use_a_nested_or_ancestor_destination() {
+    let root = root("nested-copy-target");
+    let save = save_of(&root);
+    write_synthetic_save(&save);
+    let nested = save.join(".cache");
+    assert!(copy_user_data(&save, &nested)
+        .unwrap_err()
+        .to_string()
+        .contains("受保护目录之外"));
+    assert!(copy_user_data(&nested, &save)
+        .unwrap_err()
+        .to_string()
+        .contains("受保护目录之外"));
+    assert!(!nested.join("progress.yaml").exists());
+    assert_eq!(fs::read(nested.join("digest.md")).unwrap(), b"cache\n");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_candidate_cannot_be_created_inside_the_verified_backup() {
+    let (root, save, evidence_root, evidence_dir, backup_parent, _, before) =
+        setup("nested-candidate-parent");
+    let backup = backup_parent.join("2030-01-02-01-op-p2-1-d-backup");
+    let error = run_to_verified_candidate(&request(
+        &root,
+        &save,
+        &evidence_root,
+        &evidence_dir,
+        &backup_parent,
+        &backup,
+        valid_overlay(),
+        None,
+    ))
+    .expect_err("candidate would copy its own output");
+    assert_eq!(
+        error.report.recovery.interrupt_stage,
+        InterruptStage::Candidate
+    );
+    assert!(error.report.recovery.backup_verified);
+    assert!(error
+        .report
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("受保护目录之外"));
+    assert!(backup.join("d-backup.manifest.json").is_file());
+    assert!(!backup.join("2030-01-02-01-op-p2-1-d-candidate").exists());
+    assert_eq!(protected_target_bytes(&save).unwrap(), before);
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]

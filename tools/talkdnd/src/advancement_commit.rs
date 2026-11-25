@@ -446,6 +446,7 @@ fn stop_failed(
 
 fn build_backup(lock: &mut AdvancementLock, req: &Request<'_>) -> Result<PathBuf> {
     require_existing_parent(req.backup_parent, "backup_parent")?;
+    require_outside(req.save_dir, req.backup_parent, "备份目录")?;
     require_same_device(req.save_dir, req.backup_parent, "备份目录")?;
     let name = instance_dir_name(req, "d-backup");
     let dest = exclusive_create_dir(req.backup_parent, &name)
@@ -500,6 +501,8 @@ fn build_candidate(
     backup: &Path,
 ) -> Result<PathBuf> {
     require_existing_parent(req.candidate_parent, "candidate_parent")?;
+    require_outside(req.save_dir, req.candidate_parent, "候选目录")?;
+    require_outside(backup, req.candidate_parent, "候选目录")?;
     require_same_device(req.save_dir, req.candidate_parent, "候选目录")?;
     require_same_device(backup, req.candidate_parent, "候选目录")?;
     let name = instance_dir_name(req, "d-candidate");
@@ -549,6 +552,15 @@ fn require_existing_parent(path: &Path, what: &str) -> Result<()> {
     }
     if !meta.is_dir() {
         bail!("{what} {} 不是目录", path.display());
+    }
+    Ok(())
+}
+
+fn require_outside(source: &Path, proposed: &Path, label: &str) -> Result<()> {
+    let source = fs::canonicalize(source)?;
+    let proposed = fs::canonicalize(proposed)?;
+    if proposed.starts_with(source) {
+        bail!("{label}必须位于受保护目录之外");
     }
     Ok(())
 }
@@ -679,6 +691,8 @@ pub fn digest_bytes(bytes: &[u8]) -> String {
 }
 
 pub fn copy_user_data(src: &Path, dest: &Path) -> Result<Vec<BackupEntry>> {
+    require_outside(src, dest, "复制目标")?;
+    require_outside(dest, src, "复制来源")?;
     let mut entries = Vec::new();
     copy_tree_at(src, dest, src, true, &mut entries)?;
     Ok(entries)
@@ -778,8 +792,7 @@ fn refuse_special_file(path: &Path, meta: &fs::Metadata) -> Result<()> {
 /// Copy the verified backup into a candidate, skipping the backup manifest
 /// (it is a backup record, not user data to publish).
 fn copy_verified_preimage(backup: &Path, dest: &Path) -> Result<()> {
-    let mut entries = Vec::new();
-    copy_tree_at(backup, dest, backup, true, &mut entries)?;
+    copy_user_data(backup, dest)?;
     // The backup manifest lives in the backup dir; drop it from the candidate
     // if the copy included it (it is not a save file).
     let manifest = dest.join("d-backup.manifest.json");
