@@ -87,6 +87,8 @@ pub struct EncounterState {
     pub spatial: Option<SpatialState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pending_command: Option<crate::reactions::PendingCommand>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub casting: Option<crate::long_cast::EncounterCasting>,
     #[serde(skip)]
     pub(crate) reaction_replay: Option<crate::reactions::ReactionReplay>,
     /// Unknown top-level fields from compatible extensions, preserved on save
@@ -135,6 +137,7 @@ impl PartialEq for EncounterState {
             && self.schema_version == other.schema_version
             && self.spatial == other.spatial
             && self.pending_command == other.pending_command
+            && self.casting == other.casting
             && self.extra == other.extra
     }
 }
@@ -690,36 +693,7 @@ impl CombatantState {
         content: &ContentRegistry,
         query: &str,
     ) -> Result<ResolvedAbility> {
-        let mut entries = Vec::new();
-        if let Some(actions) = &self.creature.actions {
-            entries.extend(actions.iter());
-        }
-        if let Some(features) = &self.creature.features {
-            entries.extend(features.iter());
-        }
-        let mut matches = Vec::new();
-        for entry in entries {
-            let resolved = content.resolve_ability(entry)?;
-            if ability_matches(&resolved, query) {
-                matches.push(resolved);
-            }
-        }
-        match matches.len() {
-            1 => Ok(matches.remove(0)),
-            0 => bail!(
-                "creature `{}` has no ability matching `{query}`",
-                self.creature.display_name()
-            ),
-            _ => bail!(
-                "ability `{query}` is ambiguous on `{}`; matches: {}",
-                self.creature.display_name(),
-                matches
-                    .iter()
-                    .map(|resolved| resolved.ability.id.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        }
+        find_creature_ability(&self.creature, content, query)
     }
 
     /// All owned abilities, resolved with their entry params.
@@ -789,6 +763,41 @@ fn name_matches(lower_name: &str, needle: &str, prefix: bool) -> bool {
         } else {
             lower_name == needle
         }
+    }
+}
+
+pub fn find_creature_ability(
+    creature: &Creature,
+    content: &ContentRegistry,
+    query: &str,
+) -> Result<ResolvedAbility> {
+    let entries = creature
+        .actions
+        .iter()
+        .flatten()
+        .chain(creature.features.iter().flatten());
+    let mut matches = Vec::new();
+    for entry in entries {
+        let resolved = content.resolve_ability(entry)?;
+        if ability_matches(&resolved, query) {
+            matches.push(resolved);
+        }
+    }
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => bail!(
+            "creature `{}` has no ability matching `{query}`",
+            creature.display_name()
+        ),
+        _ => bail!(
+            "ability `{query}` is ambiguous on `{}`; matches: {}",
+            creature.display_name(),
+            matches
+                .iter()
+                .map(|resolved| resolved.ability.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -1229,6 +1238,7 @@ impl EncounterState {
             nonlethal_request: false,
             ready_in_progress: false,
             pending_command: None,
+            casting: None,
             reaction_replay: None,
         };
         state.refresh_initial_conditions()?;
@@ -1667,11 +1677,7 @@ impl EncounterState {
             .with_context(|| format!("failed to read state file {}", path.display()))?;
         let mut state: Self = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse state file {}", path.display()))?;
-        let expected_schema = if state.pending_command.is_some() {
-            crate::reactions::PENDING_SCHEMA_VERSION
-        } else {
-            STATE_SCHEMA_VERSION
-        };
+        let expected_schema = state.expected_schema_version();
         if state.schema_version != expected_schema {
             bail!(
                 "state file {} uses schema version {}. This combat-sim supports version {} for this encounter status",
@@ -1685,6 +1691,23 @@ impl EncounterState {
             .with_context(|| format!("invalid spatial data in state file {}", path.display()))?;
         state.rebuild_caches();
         Ok(state)
+    }
+
+    fn expected_schema_version(&self) -> u32 {
+        match (self.casting.is_some(), self.pending_command.is_some()) {
+            (false, false) => STATE_SCHEMA_VERSION,
+            (false, true) => crate::reactions::PENDING_SCHEMA_VERSION,
+            (true, false) => 3,
+            (true, true) => 4,
+        }
+    }
+
+    pub(crate) fn refresh_schema_version(&mut self) {
+        self.schema_version = self.expected_schema_version();
+    }
+
+    pub fn awaiting_reaction(&self) -> bool {
+        self.pending_command.is_some()
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {

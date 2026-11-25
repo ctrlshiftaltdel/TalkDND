@@ -1051,7 +1051,7 @@ fn cheap_material_needs_no_declaration() {
 }
 
 #[test]
-fn minute_and_hour_casting_times_fail_closed_in_combat() {
+fn minute_and_hour_casting_times_require_the_long_casting_flow() {
     for ability in ["slow-ritual", "hour-ward"] {
         let mut state = encounter_state(&["caster-x"]);
         let error = engine::use_ability(
@@ -1069,8 +1069,8 @@ fn minute_and_hour_casting_times_fail_closed_in_combat() {
             "{message}"
         );
         assert!(
-            message.contains("outside combat"),
-            "the error points at the manual or ritual path: {message}"
+            message.contains("use talkdnd time casting"),
+            "the error points to the long casting flow: {message}"
         );
         assert_eq!(
             resource(&state, "Caster X", "spell-slot-1"),

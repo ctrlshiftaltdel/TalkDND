@@ -211,6 +211,10 @@ Validation is the kit check, the full kit test suite and the leak check in Succe
 
 ## Decision Log
 
+### 2026-11-25 — Explicit encounter lifecycle for advancement
+
+The owner chose explicit encounter registration and closure as the basis for advancement. New encounters record their own lifecycle. The DM closes a retreat or an abandoned encounter and reviews legacy encounters whose status cannot be established. Active encounters, pending reactions, unsettled transfers of the campaign clock, and cases with ambiguous or corrupt ownership allow read-only preview and block submission. Submission checks the lifecycle again while holding the existing save lock. This decision defines the encounter gate for the first stage of single-class advancement.
+
 ### 2026-11-25 — Player reactions, senses and long rest
 
 The independent implementation applies the player-choice policy and edition-specific rules documented in [PLAN.md](PLAN.md). The Windows release-package smoke test covered character setup, battle and a pending reaction resumed in a new process. The later hosted dry run passed the packaged battle and Shield continuation for both editions on Linux, macOS and Windows. Linux and macOS also passed the integrity-lock regression covering both recovery choices. [Hosted dry run](https://github.com/ctrlshiftaltdel/TalkDND/actions/runs/45580891809)
@@ -222,6 +226,10 @@ Combat casts now enforce each edition's same-turn rules. Normal casts, Ready, an
 The combat CLI asks the DM to confirm manual spell effects before spending an action or resource. The confirmation covers note-only spells, spells with explicitly manual effects, and upcasts the engine resolves at base strength. Ready records the confirmation when preparing the spell. Replaying a command saved before this check preserves its original settlement.
 
 Combat log and status views can independently hide difficulty classes. Dice, outcomes and the underlying encounter data remain available to the DM.
+
+The owner selected continuous long casting across exploration and combat for the first version of the feature. A campaign records one casting identity throughout a handoff. Its exploration time and encounter turns must reconcile without counting the same time twice. Completion spends its spell slot once. Interrupted casting preserves the slot. This decision extends D-11's earlier manual boundary.
+
+The first implementation advances the campaign in whole seconds and gives the encounter authority over attached casts until the DM returns to exploration. It checks the saved encounter and party resource state, then spends one action per caster turn under concentration. The party records completed casts alongside the resource balance and the checkpoint captures both the ledger and the party. The v1.7.0 formats import legacy world time on first use and continue to read legacy encounter and party files. It includes Mending in both editions. The DM resolves object effects, exploration interruptions and ritual casting.
 
 ### 2026-11-18 — Advancement transition gate and shared lock crate (TASK-0149)
 

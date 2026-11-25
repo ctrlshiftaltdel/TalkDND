@@ -22,14 +22,12 @@ use crate::engine::{
     self, AddConditionOptions, AttackOptions, FallOptions, GrappleOptions, ReadyOptions, RestKind,
     ShoveMode, ShoveOptions, UnarmedOptions, UseOptions,
 };
-use crate::reactions::{
-    AnsweredReaction, PendingCommand, ReactionNotice, ReactionReplay, PENDING_SCHEMA_VERSION,
-};
+use crate::reactions::{AnsweredReaction, PendingCommand, ReactionNotice, ReactionReplay};
 use crate::sim::{self, SimulationConfig};
 use crate::space::FallAbility;
 use crate::state::{
     resolve_state_path, AddSpec, CombatantState, EncounterState, LookupError, NewEncounter,
-    ReadyResponse, ReadyState, ReadyTrigger, STATE_SCHEMA_VERSION,
+    ReadyResponse, ReadyState, ReadyTrigger,
 };
 
 // The shared transition gate and control-file names (ADV-P1-1pre). `combat-sim`
@@ -442,6 +440,12 @@ pub enum Command {
     /// 存档启用成长协议后，处理前取得 SAVE 锁。
     Reaction { id: String, answer: ReactionAnswer },
 
+    /// Continue a long casting handed off from the campaign clock.
+    LongCast {
+        #[command(subcommand)]
+        action: LongCastCmd,
+    },
+
     /// Clear a prepared response without triggering it.
     ///
     /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
@@ -845,6 +849,22 @@ pub enum ReactionAnswer {
     Pass,
 }
 
+#[derive(Debug, Subcommand, Serialize, Deserialize)]
+pub enum LongCastCmd {
+    /// Show the encounter's attached long castings.
+    Status,
+    /// Spend the caster's action to continue for this round.
+    Continue { id: String },
+    /// Pay the recorded spell cost and confirm its manual effects.
+    Finish {
+        id: String,
+        #[arg(long)]
+        confirm_manual: bool,
+    },
+    /// Release concentration without paying the spell cost.
+    Interrupt { id: String },
+}
+
 impl From<RestKindArg> for RestKind {
     fn from(kind: RestKindArg) -> Self {
         match kind {
@@ -887,6 +907,10 @@ fn gate_entry(command: &Command) -> &'static str {
         | Command::Rest { .. }
         | Command::Activate { .. }
         | Command::Add { .. } => "combat-sim:state-write",
+        Command::LongCast {
+            action: LongCastCmd::Status,
+        } => "combat-sim:status",
+        Command::LongCast { .. } => "combat-sim:state-write",
         Command::Roll { .. } => "combat-sim:roll",
         Command::Status { .. } => "combat-sim:status",
         Command::Scene => "combat-sim:scene",
@@ -1160,7 +1184,14 @@ fn run_cli() -> Result<()> {
         characters: chars,
         campaign,
     };
-    let save = crate::player::save_dir(save.as_deref(), sources.campaign_path().as_deref());
+    let path = state_path(&sources, state.as_deref());
+    let local_clock = path
+        .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "combat"))
+        .and_then(Path::parent)
+        .filter(|root| root.join(crate::campaign_time::FILE).is_file());
+    let save = crate::player::save_dir(save.as_deref(), sources.campaign_path().as_deref())
+        .or_else(|| local_clock.map(Path::to_path_buf));
     let mask = crate::player::PlayerMask::load(save.as_deref());
     check_transition_gate(&command, save.as_deref(), state.as_deref(), &sources)?;
     let entry = gate_entry(&command);
@@ -1170,8 +1201,38 @@ fn run_cli() -> Result<()> {
         Vec::new()
     };
 
-    let path = state_path(&sources, state.as_deref());
     let replacing = matches!(command, Command::New { .. } | Command::Quick { .. });
+    let clock_used =
+        replacing || entry == "combat-sim:state-write" || entry == "combat-sim:party-write";
+    if clock_used {
+        if let (Some(owner), Some(requested)) = (local_clock, save.as_deref()) {
+            if !same_dir(owner, requested) {
+                bail!("the encounter and the campaign clock must belong to the same save");
+            }
+        }
+    }
+    let clock_lock = if clock_used {
+        save.as_deref()
+            .map(crate::campaign_time::lock_if_present)
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    if clock_lock.is_some() {
+        let world =
+            crate::campaign_time::WorldTime::load(save.as_deref().expect("clock has a save"))?;
+        if world
+            .clock
+            .as_ref()
+            .is_some_and(|clock| clock.casting.handoff.is_some())
+            && (replacing
+                || matches!(command, Command::Init { .. })
+                || entry == "combat-sim:party-write")
+        {
+            bail!("reconcile the active campaign clock before resetting the encounter or writing party state");
+        }
+    }
     let _encounter_lock = if replacing
         || entry == "combat-sim:state-write"
         || (matches!(command, Command::Roll { .. }) && state.is_some())
@@ -1779,6 +1840,51 @@ fn run_cli() -> Result<()> {
                 )
             }
         },
+        Command::LongCast { action } => {
+            let path = state_path(&sources, state.as_deref());
+            match action {
+                LongCastCmd::Status => {
+                    let mut state = EncounterState::load(&path)?;
+                    if state.casting.is_none() {
+                        import_campaign_casting(&mut state, &path, save.as_deref())?;
+                    }
+                    if let Some(casting) = &state.casting {
+                        for (id, entry) in &casting.casts {
+                            let cast = &entry.progress;
+                            println!(
+                                "{id} {} {} {}/{} seconds {}",
+                                cast.recipe.caster_id,
+                                cast.recipe.spell_id,
+                                cast.elapsed_seconds,
+                                cast.recipe.required_seconds,
+                                cast.phase_name(),
+                            );
+                        }
+                    } else {
+                        println!("No long castings are attached to this encounter.");
+                    }
+                    Ok(())
+                }
+                action => run_state_command(
+                    &path,
+                    save.as_deref(),
+                    seed,
+                    &invocation,
+                    |state, _rng, lines| match action {
+                        LongCastCmd::Continue { id } => {
+                            engine::continue_long_cast(state, &id, lines)
+                        }
+                        LongCastCmd::Finish { id, confirm_manual } => {
+                            engine::finish_long_cast(state, &id, confirm_manual, lines)
+                        }
+                        LongCastCmd::Interrupt { id } => {
+                            engine::interrupt_long_cast(state, &id, lines)
+                        }
+                        LongCastCmd::Status => unreachable!("status is read-only"),
+                    },
+                ),
+            }
+        }
         Command::Move {
             who,
             zone,
@@ -2657,6 +2763,7 @@ where
 {
     let mut state = EncounterState::load(state_path)
         .with_context(|| format!("failed to load state {}", state_path.display()))?;
+    import_campaign_casting(&mut state, state_path, save)?;
     let (seed, nonce, choices, rolls) = if let Some((pending, answer)) = &invocation.continuation {
         if state.pending_command.as_ref() != Some(pending) {
             bail!("pending reaction changed; read status and try again");
@@ -2681,7 +2788,7 @@ where
     };
     let mut trial = state.clone();
     trial.pending_command = None;
-    trial.schema_version = STATE_SCHEMA_VERSION;
+    trial.refresh_schema_version();
     let replay = ReactionReplay::new(nonce, choices.clone());
     let mut rng = replay.dice(make_rng(seed), rolls, seed.is_some());
     trial.reaction_replay = Some(replay);
@@ -2693,7 +2800,6 @@ where
         .expect("combat command preserves replay context");
     if let Some((window, rolls)) = replay.finish(rng)? {
         let prompt = window.prompt();
-        state.schema_version = PENDING_SCHEMA_VERSION;
         state.pending_command = Some(PendingCommand {
             command: invocation.command.clone(),
             save: save.map(Path::to_path_buf),
@@ -2703,6 +2809,7 @@ where
             rolls,
             window,
         });
+        state.refresh_schema_version();
         state.save(state_path)?;
         println!("{prompt}");
         return Ok(());
@@ -2727,6 +2834,7 @@ where
 {
     let mut state = EncounterState::load(state_path)
         .with_context(|| format!("failed to load state {}", state_path.display()))?;
+    import_campaign_casting(&mut state, state_path, save)?;
     require_no_pending(&state)?;
     let mut lines = Vec::new();
     let mut rng = make_rng(seed);
@@ -2756,6 +2864,52 @@ fn persist_state_party_log(
     })?;
     crate::player::append_combat_lines(save, lines)
         .map_err(|err| err.context("已写入遭遇状态和 party，尚未追加日志（多文件写入不是事务）"))?;
+    Ok(())
+}
+
+fn import_campaign_casting(
+    state: &mut EncounterState,
+    path: &Path,
+    save: Option<&Path>,
+) -> Result<()> {
+    let world = save
+        .map(crate::campaign_time::WorldTime::load)
+        .transpose()?;
+    let casting = world
+        .as_ref()
+        .and_then(|world| world.clock.as_ref())
+        .map(|clock| &clock.casting);
+    let Some(ledger) = casting.filter(|ledger| ledger.handoff.is_some()) else {
+        if state.casting.is_some() {
+            bail!("this encounter's long casting handoff is no longer active");
+        }
+        return Ok(());
+    };
+    let handoff = ledger.handoff.as_ref().expect("handoff was checked");
+    let expected = crate::long_cast::Handoff::encounter_path(
+        save.expect("ledger has a save"),
+        &handoff.encounter_file,
+    )?;
+    if fs::canonicalize(path)? != fs::canonicalize(&expected)? {
+        bail!("another encounter is attached to this campaign clock");
+    }
+    if let Some(casting) = state
+        .casting
+        .as_ref()
+        .filter(|casting| casting.handoff_id == handoff.id)
+    {
+        ledger.validate_encounter(casting, state.round)?;
+        return Ok(());
+    }
+    if state.awaiting_reaction()
+        || state.round != handoff.start_round
+        || crate::long_cast::Handoff::fingerprint(&expected)? != handoff.before_digest
+    {
+        bail!("the encounter changed before accepting its long casting handoff");
+    }
+    let mut log = Vec::new();
+    engine::attach_long_casts(state, ledger.encounter_progress()?, &mut log)?;
+    state.log.extend(log);
     Ok(())
 }
 

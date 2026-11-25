@@ -1,7 +1,7 @@
 //! TASK-0127 (v1.6 T5): data-level tests for the handwritten `spells.yaml`
 //! files.
 //!
-//! Covers the 17 (2014) / 18 (2024) `spell` metadata blocks, the upcast and
+//! Covers the handwritten `spell` metadata blocks, the upcast and
 //! cantrip dice tables, the effect coverage-matrix structured samples and the
 //! 2014/2024 edition differences. The engine has no edition branch: every
 //! difference asserted here lives in the data files (docs/SPELLCASTING.md
@@ -383,6 +383,19 @@ const EXPECTED_2014: &[Expectation] = &[
 ];
 
 const EXPECTED_2024: &[Expectation] = &[
+    Expectation {
+        id: "mending",
+        level: 0,
+        school: TRANSMUTATION,
+        unit: MINUTE,
+        verbal: true,
+        somatic: true,
+        material: Some(("two lodestones", None, false)),
+        ritual: false,
+        classes: BARD_CLERIC_DRUID_SORCERER_WIZARD,
+        range_text: "Touch",
+        duration_text: "Instantaneous",
+    },
     Expectation {
         id: "fire-bolt",
         level: 0,

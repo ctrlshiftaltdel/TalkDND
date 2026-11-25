@@ -73,7 +73,7 @@
 
 - 权威游戏内时钟只有一处：world-time.yaml，且仅在 enabled: true 时存在（默认 false，见第 4.5 节）。
 - 未启用时，存档没有任何游戏内日历；日志和存档点里的游戏内时间文字只是自由文本，不是权威值，程序不解析、不比较。
-- 启用后：date/phase 是自由文本标签（DM 用 time set 维护），elapsed_days 是唯一天数计数（time advance 累加）。没有任何命令从叙述或场景切换推断时间。
+- 启用后，date 和 phase 仍是 DM 维护的文本标签。新版整秒时钟可与遭遇交接，elapsed_days 随时钟换算。叙述本身不会推进时间。
 
 ### 2.5 权威与派生
 
@@ -93,7 +93,7 @@
 
 ### 3.2 版本化 sidecar
 
-- 每个新文件自带 version 字段，从 1 开始：memory.yaml、entities.yaml、relations.yaml、world-time.yaml 为 version: 1；checkpoints/<id>/manifest.yaml 为 version: 1；index/structured.json 为 "version": 1。
+- 每个存档旁路文件有自己的版本号。世界时间与检查点支持 v1 和 v2，见第 4.1、4.5 节。memory.yaml、entities.yaml、relations.yaml 与 index/structured.json 使用 v1。
 - 缺失 = 功能未启用 / 内容为空：读取时按默认值处理（见第 4 节），首次写入时创建。
 - 高版本 = 拒绝：报错点名文件和版本，提示更新 talkdnd（与 reveals.yaml/identified.yaml/original.yaml/party-state.yaml 的现有拒绝行为一致）。
 - sidecar 的字段演进遵循与主 schema 相同的纪律：加字段必须给默认值、可自动迁移、有测试；删字段或改语义按新任务处理，不在实现任务里顺手改。
@@ -127,7 +127,7 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
 
   | 字段 | 类型 | 说明 |
   |---|---|---|
-  | version | int | 固定 1 |
+  | version | int | v1 为旧范围，v2 含精确世界时钟 |
   | id | string | 同目录名 |
   | created | string | YYYY-MM-DD HH:MM（本机时间） |
   | reason | string | 可空；snapshot --reason 传入 |
@@ -137,11 +137,12 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
   | files | map | 相对路径 → sha256:<hex>；覆盖下列数据副本的每个文件 |
 
 - 数据副本覆盖范围（冻结，来自任务包）：progress.yaml、reveals.yaml、save-meta.yaml、original.yaml、identified.yaml、canon.md、house-rules.md（存在时）、Characters/、NPCs/、sheets/、combat/。不含 Sessions/、checkpoints/、dm-secrets.md、dm-plan.md、secret-terms.yaml、rolls.log、digest.md、chargen.json、handouts/、npc-drafts/、integrity.yaml。
+- 使用精确计时时，v2 检查点也保存 world-time.yaml，使施法进度和 combat/party-state.yaml 的扣费凭据一起恢复。遭遇接管计时期间暂停快照和恢复。存档已有长施法记录时，只接受含精确时钟的检查点。
 - 回退语义（冻结）：检查点回退机械状态与已揭示/已识别知识——覆盖范围内的文件恢复到快照时状态；identified.yaml 文件小且必须与 reveals.yaml 保持一致，故纳入覆盖范围（其 integrity 按第 1.1 节维持不纳入，P00b 不改变）。检查点不回退 append-only 日志（Sessions/、rolls.log）、DM 工作文件（dm-secrets.md、dm-plan.md、secret-terms.yaml、digest.md、chargen.json、npc-drafts/）、派生文件（digest.md、checkpoints/ 自身）或二进制资料图导出（handouts/）。
 - 写入命令：talkdnd checkpoint snapshot [--reason R] [--json]；读取命令：checkpoint list、checkpoint show <id>、snapshot diff。
 - 可见性：检查点是 DM 本地恢复数据，不是玩家视图——清单与数据副本只供 DM 与恢复流程使用；对玩家只暴露第 6 节过滤后的 snapshot diff 输出。
 - integrity：仅 checkpoints/*/manifest.yaml 存在时纳入。
-- 失败/损坏行为：manifest 缺失、YAML 解析失败、version > 1、files 指纹与实际副本不符 → 该检查点标记为不可用（list/show 明确标注，restore 拒绝）；不影响其他检查点。
+- 失败/损坏行为：清单缺失、YAML 解析失败、版本高于 2、时钟与版本不匹配，或副本指纹不符，都会把该检查点标记为不可用。
 - 保留策略：每次成功 snapshot 后只保留最新 10 份，更早的在输出里报告后删除。
 - 并发：同一 slot 同时只允许一个 snapshot/restore，用 Saves/<slot>/.talkdnd.lock 文件锁；第二个并发调用以退出码 1 失败并说明锁被占用。
 - 迁移/回退：旧存档没有 checkpoints/ 时 snapshot 直接可用（无迁移）；restore 前先把整份当前存档备份到 Saves/_backups/<slot>-<stamp>-restore-<id>（该目录已存在时改用 -2、-3… 后缀，只往刚创建的空目录复制；已有或部分完成的目录不会被当成这次的完整备份），再原子替换检查点覆盖范围内的文件，并删除快照之后新增的、属于覆盖范围的文件；范围外文件原样保留。提交中断（部分替换后失败）进入回滚时，把恢复前整份备份镜像回存档：复制备份内容，并删除备份中不存在的残留文件与目录（`.talkdnd.lock`、`.talkdnd.integrity.lock` 与 `.cache` 等被排除的运行时数据除外）；只有确认整个存档树回到操作前状态，才报告「已回滚到恢复前状态」，否则如实报告回滚失败、当前存档可能不完整并给出备份位置。schema 不匹配（冻结）：manifest.schema 小于当前主 schema 时，先完成恢复，再按第 3.1 节正常迁移（整档备份 + 会话日志行，与既有迁移同一套规则）；manifest.schema 大于当前主 schema 时拒绝恢复，报错点名检查点与 schema 并提示更新 talkdnd。恢复是受控工具操作：完成后按工具写入语义更新 integrity 清单与对账基线，使恢复后 talkdnd check 无未解释变化，并在当前会话日志追加一行恢复记录（检查点 id、备份路径、时间）；日志只追加、不截断，既有历史一律不改写。提交完成后若 schema 迁移、恢复日志追加或完整性清单重定基失败，不自动反向回滚；报错点名失败阶段、检查点 id、恢复前整份备份路径，并说明当前存档可能已被替换或改变。没有 --yes 拒绝执行（退出码 1）。整档备份必须完整：存档里若存在符号链接、套接字等无法作为普通文件或目录复制的条目，restore 在改动任何文件之前拒绝执行并说明原因（退出码 1），不会带着不完整的备份继续。
@@ -211,7 +212,7 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
 
 ### 4.5 world-time.yaml（P06）
 
-- 位置：Saves/<slot>/world-time.yaml；version: 1。
+- 位置为 Saves/<slot>/world-time.yaml。v1 保存天数，v2 保存整秒与长施法台账。
 - 顶层字段：
 
   | 字段 | 类型 | 默认 | 说明 |
@@ -220,18 +221,19 @@ talkdnd check（不带参数）保持「只读审计」定位，不成为第二�
   | calendar | string | "" | 自由文本历法标签 |
   | date | string | "" | 自由文本当前日期标签 |
   | phase | string | "" | 自由文本时段标签 |
-  | elapsed_days | number | 0 | 唯一的天数计数，advance 累加 |
+  | elapsed_days | number | 0 | v1 的计数。v2 从 clock.elapsed_seconds 换算 |
+  | clock | object | v2 | elapsed_seconds、施法进度和当前交接 |
   | events | list | [] | 预定事件，每条 {id, due, title, status, dm_only, notes} |
 
   事件字段：id（EV-001 起）、due（自由文本标签）、title、status（pending \| done \| skipped）、dm_only（bool，默认 false）、notes（string，默认 ""）。
 
 - 到期判定（P00 冻结的简化规则）：只按标签相等——due 与当前 date 标签相同且 status = pending 即「今天到期」，由 time event list 标注、start 在启用时提示。程序不做历法算术（月长、闰年、跨标签先后一律不推断）；elapsed_days 只回答「过了多少天」。
 - 可见性（2026-10-25 项目所有者决定，澄清 dm_only 与「列出全部事件」的冲突）：time event list 默认只列非 dm_only 事件（玩家视图），--all 为 DM 视图（全部事件，dm_only 行首标 [DM]，不得进入玩家可看材料）；start 只提示玩家可见的到期事件。
-- 写入命令：time enable/disable/set/advance/event add/done/skip；读取命令：time show、time event list、start（启用时的时间与到期事件节）。
+- 世界时间、事件及施法由 time 命令维护。交接期间，战斗动作更新遭遇里的进度。流程见 [施法](spellcasting.md#跨探索与战斗的长施法)。
 - integrity：存在时纳入。
-- 失败/损坏行为：文件缺失 = 未启用（默认）；YAML 非法或 version > 1 = 拒绝并提示；enabled: false 时 set/advance/event add/done/skip 一律退出码 1（show/event list/enable 可用）；advance 必须带 --days 或 --hours 至少一个；重复 advance 不累计错误（纯加法）。
-- 迁移/回退：无独立迁移；disable 保留文件内容，删除文件等于回到未启用。事件可引用 P04 实体 id 写在 notes 里（纯文本引用，不做外键校验——外键校验只覆盖 relations，见第 3.4 节）。
-- 推进纪律：只有显式命令改时间；叙述、场景切换、休息结算都不自动推进。
+- 文件缺失视为未启用。损坏或高于 v2 的数据会报错。启用后可按天、小时、分钟或秒推进。
+- 首次按分钟或秒推进，或首次登记长施法时，旧天数四舍五入成整秒并随该操作一起保存。关闭功能保留内容，有活动施法时先完成或中止。
+- 探索按明确的时间推进命令计时。遭遇接管后按六秒一轮计算，离场时合并一次。叙述和休息结算本身不会推进时钟。
 
 ### 4.6 index/structured.json（P07）
 

@@ -857,9 +857,9 @@ pub static WRITERS: &[Writer] = &[
     writer!(
         Talkdnd,
         "talkdnd:time-write",
-        "talkdnd time enable|disable|set|advance|event add|done|skip",
-        "lib.rs::dispatch Cmd::Time; worldtime.rs::run; worldtime.rs::store; worldtime.rs::log_line",
-        "world-time.yaml, Sessions/*.md",
+        "talkdnd time enable|disable|set|advance|event add|done|skip|casting start|enter|leave|finish|interrupt",
+        "lib.rs::dispatch Cmd::Time; worldtime.rs::run; worldtime.rs::run_casting; worldtime.rs::store",
+        "world-time.yaml, combat/party-state.yaml (casting receipt), Sessions/*.md",
         AdoptedWrite,
         "adopted (SAVE lock): takes the SAVE lock before writing targets; fails closed and writes nothing when the lock is unavailable",
         &["time", "enable"]
@@ -867,11 +867,11 @@ pub static WRITERS: &[Writer] = &[
     writer!(
         Talkdnd,
         "talkdnd:time-read",
-        "talkdnd time show / talkdnd time event list",
-        "lib.rs::dispatch Cmd::Time; worldtime.rs::run Show/EventList",
+        "talkdnd time show / talkdnd time event list / talkdnd time casting status",
+        "lib.rs::dispatch Cmd::Time; worldtime.rs::run Show/EventList/CastingStatus",
         "none",
         ReadOnly,
-        "loads world-time.yaml only",
+        "loads world-time.yaml and the attached encounter, when present",
         &["time", "show"]
     ),
     writer!(

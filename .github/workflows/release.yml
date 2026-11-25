@@ -205,7 +205,7 @@ jobs:
               side: party
               hp: 40
               resources: {spell-slot-1: {max: 2, recharge: long}}
-              actions: [{ref: shield}]
+              actions: [{ref: shield}, {ref: mending}]
             - id: smoke-ally
               name: Smoke Ally
               kind: pc
@@ -246,6 +246,26 @@ jobs:
               exit 1
             fi
             cmp "$base/resolved.json" "$state"
+            sed 's@^library: \[@library: [smoke-fixture.yaml, @' "$campaign" > "$base/casting-campaign.yaml"
+            mv "$base/casting-campaign.yaml" "$campaign"
+            casting_fight=(--campaign "$campaign" --state casting)
+            "$cs" "${casting_fight[@]}" quick --foe smoke-caster --party smoke-hero,smoke-ally >/dev/null
+            "$cs" "${casting_fight[@]}" init --set 'Smoke Hero=25' --set 'Smoke Caster=10' \
+              --set 'Smoke Ally=5' >/dev/null
+            "$talk" time enable >/dev/null
+            "$talk" time casting start smoke-hero mending >/dev/null
+            id=$("$talk" time casting status | awk '$2 == "smoke-hero" && $3 == "mending" { print $1 }')
+            test -n "$id"
+            "$talk" time advance --seconds 48 >/dev/null
+            "$talk" time casting enter casting >/dev/null
+            "$cs" "${casting_fight[@]}" long-cast continue "$id" >/dev/null
+            "$talk" time casting leave >/dev/null
+            grep -F 'elapsed_seconds: 54' "$save/world-time.yaml"
+            "$talk" time advance --seconds 6 >/dev/null
+            "$talk" time casting finish "$id" --confirm-manual >/dev/null
+            "$talk" time casting status | grep -F completed
+            grep -F 'elapsed_seconds: 60' "$save/world-time.yaml"
+            grep -F "$id" "$save/combat/party-state.yaml"
             test -s "$save/rolls.log"
             test ! -e Saves
             echo "Packed $edition SRD smoke test passed"

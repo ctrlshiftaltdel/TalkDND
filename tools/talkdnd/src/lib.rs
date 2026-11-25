@@ -883,6 +883,10 @@ fn gate_entry(cli: &Cli) -> &'static str {
         },
         Cmd::Time { cmd } => match cmd {
             worldtime::Cmd::Show => "talkdnd:time-read",
+            worldtime::Cmd::Casting {
+                cmd: worldtime::CastingCmd::Status,
+            } => "talkdnd:time-read",
+            worldtime::Cmd::Casting { .. } => "talkdnd:time-write",
             worldtime::Cmd::Event { cmd } => match cmd {
                 worldtime::EventCmd::List { .. } => "talkdnd:time-read",
                 worldtime::EventCmd::Add { .. }
@@ -1123,6 +1127,69 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     } else {
         Vec::new()
     };
+    let clock_lock = if matches!(
+        gate_class,
+        gate::Class::AdoptedWrite | gate::Class::UnadoptedWrite
+    ) && matches!(
+        cli.cmd,
+        Cmd::Time { .. }
+            | Cmd::Char { .. }
+            | Cmd::Chargen { .. }
+            | Cmd::Companion { .. }
+            | Cmd::Npc { .. }
+            | Cmd::LevelUp { .. }
+            | Cmd::Checkpoint {
+                cmd: Some(checkpoint::Cmd::Snapshot { .. } | checkpoint::Cmd::Restore { .. }),
+                ..
+            }
+            | Cmd::Migrate { dry_run: false }
+    ) {
+        gate_save
+            .as_deref()
+            .map(combat_sim::campaign_time::lock_if_present)
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    if clock_lock.is_some() {
+        let world = worldtime::load(gate_save.as_deref().expect("clock has a save"))?;
+        if let Some(clock) = &world.clock {
+            let restores = matches!(
+                cli.cmd,
+                Cmd::Checkpoint {
+                    cmd: Some(checkpoint::Cmd::Restore { .. }),
+                    ..
+                } | Cmd::Migrate { dry_run: false }
+            );
+            if restores
+                && clock
+                    .casting
+                    .casts
+                    .values()
+                    .any(|cast| cast.status == combat_sim::long_cast::CastStatus::Casting)
+            {
+                bail!("finish or interrupt active long castings before restoring or migrating the save");
+            }
+            if clock.casting.handoff.is_some()
+                && matches!(
+                    cli.cmd,
+                    Cmd::Char { .. }
+                        | Cmd::Chargen { .. }
+                        | Cmd::Companion { .. }
+                        | Cmd::Npc { .. }
+                        | Cmd::LevelUp { .. }
+                        | Cmd::Checkpoint {
+                            cmd: Some(checkpoint::Cmd::Restore { .. }),
+                            ..
+                        }
+                        | Cmd::Migrate { dry_run: false }
+                )
+            {
+                bail!("reconcile the encounter clock before changing party or save data outside combat");
+            }
+        }
+    }
     let mut os = step_rng();
     let mut seeded = cli.seed.map(seeded_rng);
     let rng: &mut dyn DiceRng = match seeded.as_mut() {
@@ -1145,6 +1212,16 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         // `known` and `snapshot diff` only read the save (TASK-0142): the same
         // audit-after-read would rewrite the baseline date for no reason.
         Cmd::Known | Cmd::Snapshot { .. } => None,
+        Cmd::Time {
+            cmd:
+                worldtime::Cmd::Show
+                | worldtime::Cmd::Casting {
+                    cmd: worldtime::CastingCmd::Status,
+                }
+                | worldtime::Cmd::Event {
+                    cmd: worldtime::EventCmd::List { .. },
+                },
+        } => None,
         // `adventure index show|search` and `adventure search` only read the
         // save. `adventure index build` is not read-only: `--book` may name a
         // folder inside the save and `build_one` writes `structured.json`

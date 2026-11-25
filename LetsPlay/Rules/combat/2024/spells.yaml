@@ -9,6 +9,28 @@
 # Upcast that is not a main-damage/heal dice table (extra darts/targets) and the
 # persistent areas (moonbeam, spirit guardians) stay manual (D-6).
 abilities:
+  - id: mending
+    name: Mending
+    tags: [spell, cantrip]
+    activation: action
+    range: 5
+    target: {type: self}
+    effects:
+      - note: "The DM adjudicates the repair of a single small break or tear in a touched object. The repair cannot restore an object's magic."
+    ai: {role: none}
+    source: "SRD 5.2.1 Mending (transmutation cantrip)"
+    spell:
+      level: 0
+      school: transmutation
+      casting_time: {amount: 1, unit: minute}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "two lodestones"}
+      ritual: false
+      classes: [bard, cleric, druid, sorcerer, wizard]
+      range_text: Touch
+      duration_text: Instantaneous
   - id: fire-bolt
     name: Fire Bolt
     tags: [spell, cantrip]

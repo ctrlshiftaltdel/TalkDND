@@ -1765,6 +1765,17 @@ fn end_turn(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    let missed = state.casting.as_ref().is_some_and(|casting| {
+        casting.casts.values().any(|cast| {
+            cast.progress.status == crate::long_cast::CastStatus::Casting
+                && cast.progress.recipe.caster_id == state.combatants[index].creature_id()
+                && (cast.last_action_round != Some(state.round)
+                    || cast.progress.ready_to_complete())
+        })
+    });
+    if missed {
+        break_concentration(state, index, log);
+    }
     run_owned_triggers(state, index, TriggerWhen::EndOfTurn, None, rng, log);
     expire_conditions(state, index, rng, log)?;
     expire_subject_conditions(state, index, UntilPhase::End, log);
@@ -7619,7 +7630,7 @@ fn plan_spell_cast(
         .expect("plan_spell_cast is only called for spell abilities");
     let base_level = i32::from(spell.level);
 
-    // D-11: minute/hour casting times cannot complete inside a combat round.
+    // Minute/hour casting uses the campaign handoff and its own action path.
     let unit_name = match spell.casting_time.unit {
         crate::content::schema::CastingUnit::Minute => Some("minute"),
         crate::content::schema::CastingUnit::Hour => Some("hour"),
@@ -7633,7 +7644,7 @@ fn plan_spell_cast(
             .unwrap_or_default();
         bail!(
             "`{}` has a casting time of {amount}{unit_name}s and cannot be completed within a \
-             combat round; resolve it outside combat (DM narration or talkdnd ritual)",
+             combat round; use talkdnd time casting for a long spell",
             ability.display_name()
         );
     }
@@ -9333,10 +9344,190 @@ fn on_death(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
     }
 }
 
+fn casting_actor(state: &EncounterState, caster_id: &str) -> Result<usize> {
+    let mut matches =
+        state.combatants.iter().enumerate().filter(|(_, actor)| {
+            actor.side.as_str() == "party" && actor.creature_id() == caster_id
+        });
+    match (matches.next(), matches.next()) {
+        (Some((actor, _)), None) => Ok(actor),
+        _ => bail!("the encounter does not have a unique party member with ID `{caster_id}`"),
+    }
+}
+
+/// Imports the campaign's active casts into a trial encounter. The same
+/// concentration and action paths handle damage, other spells and missed turns.
+pub fn attach_long_casts(
+    state: &mut EncounterState,
+    casting: crate::long_cast::EncounterCasting,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    use crate::long_cast::{CastRecipe, CONCENTRATION_PREFIX};
+    let mut prepared = Vec::new();
+    for (id, cast) in &casting.casts {
+        let recipe = &cast.progress.recipe;
+        let actor = casting_actor(state, &recipe.caster_id)?;
+        ensure_can_act(state, actor)?;
+        let resolved =
+            state.combatants[actor].find_owned_ability(&state.content, &recipe.spell_id)?;
+        let mut ability = resolved.ability;
+        let current = CastRecipe::from_ability(
+            &recipe.caster_id,
+            &state.content.ruleset,
+            &ability,
+            recipe.material.clone(),
+        )?;
+        if &current != recipe {
+            bail!("the encounter's spell, edition or cost differs from the campaign casting");
+        }
+        ability.id = format!("{CONCENTRATION_PREFIX}{id}");
+        prepared.push((actor, ability));
+    }
+    for index in 0..state.combatants.len() {
+        let name = &state.combatants[index].name;
+        if state
+            .concentration
+            .get(name)
+            .and_then(|focus| focus.ability.as_deref())
+            .is_some_and(|ability| ability.starts_with(CONCENTRATION_PREFIX))
+        {
+            break_concentration(state, index, log);
+        }
+    }
+    state.casting = Some(casting);
+    for (actor, ability) in prepared {
+        begin_concentration(state, actor, &ability, log);
+    }
+    state.refresh_schema_version();
+    Ok(())
+}
+
+fn active_long_cast(
+    state: &EncounterState,
+    id: &str,
+) -> Result<(usize, crate::long_cast::EncounterCast)> {
+    use crate::long_cast::{CastStatus, CONCENTRATION_PREFIX};
+    let cast = state
+        .casting
+        .as_ref()
+        .and_then(|casting| casting.casts.get(id))
+        .with_context(|| format!("no attached long casting with ID `{id}`"))?;
+    if cast.progress.status != CastStatus::Casting {
+        bail!("this long casting is no longer active");
+    }
+    let actor = casting_actor(state, &cast.progress.recipe.caster_id)?;
+    let marker = format!("{CONCENTRATION_PREFIX}{id}");
+    let focus = state.concentration.get(&state.combatants[actor].name);
+    if focus.and_then(|focus| focus.ability.as_deref()) != Some(marker.as_str()) {
+        bail!("the caster no longer has concentration for this casting");
+    }
+    Ok((actor, cast.clone()))
+}
+
+pub fn continue_long_cast(
+    state: &mut EncounterState,
+    id: &str,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let (actor, mut cast) = active_long_cast(state, id)?;
+    ensure_can_act(state, actor)?;
+    if state.current_index() != Some(actor) {
+        bail!("long casting continues during the caster's turn");
+    }
+    cast.spend_turn(state.round)?;
+    let spell = state.combatants[actor]
+        .find_owned_ability(&state.content, &cast.progress.recipe.spell_id)?;
+    let marker = check_spell_turn(state, actor, &spell.ability, None)?;
+    spend_action(state, actor, Activation::Action, log)?;
+    record_spell_turn(state, actor, marker);
+    log.log(format_args!(
+        "{} continues `{id}` ({} of {} seconds)",
+        state.combatants[actor].name,
+        cast.progress.elapsed_seconds,
+        cast.progress.recipe.required_seconds,
+    ));
+    state
+        .casting
+        .as_mut()
+        .expect("cast is attached")
+        .casts
+        .insert(id.into(), cast);
+    Ok(())
+}
+
+pub fn finish_long_cast(
+    state: &mut EncounterState,
+    id: &str,
+    confirm_manual: bool,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let (actor, mut cast) = active_long_cast(state, id)?;
+    ensure_can_act(state, actor)?;
+    if state.current_index() != Some(actor) || !cast.progress.ready_to_complete() {
+        bail!("finish the long casting on the caster's turn once its full duration has elapsed");
+    }
+    if !confirm_manual {
+        bail!("confirm the long spell's manual effects with --confirm-manual");
+    }
+    let recipe = &cast.progress.recipe;
+    let resolved = state.combatants[actor].find_owned_ability(&state.content, &recipe.spell_id)?;
+    let marker = check_spell_turn(state, actor, &resolved.ability, recipe.cost.as_ref())?;
+    if let Some(cost) = &recipe.cost {
+        if !spend_cost(state, actor, cost, log)? {
+            bail!("the spell's resource is no longer available");
+        }
+    }
+    record_spell_turn(state, actor, marker);
+    cast.progress.status = crate::long_cast::CastStatus::Completed;
+    state
+        .casting
+        .as_mut()
+        .expect("cast is attached")
+        .casts
+        .insert(id.into(), cast);
+    if resolved.ability.concentration {
+        begin_concentration(state, actor, &resolved.ability, log);
+    } else {
+        break_concentration(state, actor, log);
+    }
+    log.log(format_args!(
+        "MANUAL CONFIRMED: completed long casting `{id}`"
+    ));
+    Ok(())
+}
+
+pub(crate) fn interrupt_long_cast(
+    state: &mut EncounterState,
+    id: &str,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let (actor, _) = active_long_cast(state, id)?;
+    break_concentration(state, actor, log);
+    Ok(())
+}
+
 fn break_concentration(state: &mut EncounterState, actor: usize, log: &mut dyn LogSink) {
     let name = state.combatants[actor].name.clone();
-    if state.concentration.remove(&name).is_none() {
+    let Some(previous) = state.concentration.remove(&name) else {
         return;
+    };
+    if let Some(id) = previous
+        .ability
+        .as_deref()
+        .and_then(|id| id.strip_prefix(crate::long_cast::CONCENTRATION_PREFIX))
+    {
+        if let Some(cast) = state
+            .casting
+            .as_mut()
+            .and_then(|casting| casting.casts.get_mut(id))
+        {
+            if cast.progress.status == crate::long_cast::CastStatus::Casting {
+                cast.progress.status = crate::long_cast::CastStatus::Interrupted;
+                log.log(format_args!(
+                    "{name}'s long casting is interrupted without spending its slot"
+                ));
+            }
+        }
     }
     log.log(format_args!("{name}'s concentration ends"));
     for combatant in &mut state.combatants {
@@ -9485,6 +9676,7 @@ fn apply_damage_rolls(
     }
     if state.combatants[target].hp <= 0 {
         clear_ready_if_any(state, target, "0 HP", log);
+        break_concentration(state, target, log);
     }
 
     // Massive damage.

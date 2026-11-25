@@ -25,6 +25,8 @@
 
 角色卡的结构化数据 `sheets/<id>.yaml` 在 `save-meta.yaml` 的 `schema: 10` 起多一个 `spells` 块：职业施法模式（`mode: known|prepared|spellbook`）、施法属性与 `cantrips` / `prepared` / `known` / `book` / `always_prepared` / `arcanum` / `legacy` 列表（全部存法术 id）。它是法术列表的唯一数据源，角色卡 Markdown 的 `## 法术` 段只是展示。旧存档迁移（schema 9→10）先整份备份到 `Saves/_backups/`，再从 `chargen.json` 或正文精确对号入座，对不上的进 `legacy`；手改过的角色卡不会被重写。字段与校验规则见 `docs/character-data.md`「法术列表」。
 
+采用整秒计时的存档将长施法进度写入 `world-time.yaml` v2。战斗接管时，遭遇使用 v3，含待确认反应时使用 v4。`combat/party-state.yaml` v2 将扣费凭据与资源余额保存在同一文件。使用精确计时的检查点也保存世界时间。见 [战役连续性](campaign-continuity.md)。
+
 ## 成长协议过渡期（存档根目录的控制文件）
 
 存档根目录出现 `.talkdnd.advancement.lock` 或 `.talkdnd.advancement.state` 时，说明这份存档已启用**成长协议**（角色成长提交使用的协作锁）。
