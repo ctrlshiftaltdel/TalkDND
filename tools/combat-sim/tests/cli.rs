@@ -100,6 +100,50 @@ fn create(state: &TempState, extra: &[&str]) {
 }
 
 #[test]
+fn player_can_hide_dc_without_altering_the_original_roll_or_condition() {
+    let temp = TempState::new("hidden-dc");
+    create(&temp, &["--party", "striker-a"]);
+    assert_success(
+        &run(
+            temp.path(),
+            &[
+                "condition",
+                "add",
+                "Striker",
+                "hindered",
+                "--save-ends",
+                "wis:19",
+            ],
+        ),
+        "condition with a save DC",
+    );
+    assert_success(
+        &run(
+            temp.path(),
+            &["save", "Striker", "wis", "19", "--seed", "1"],
+        ),
+        "save",
+    );
+    let original = fs::read(temp.path()).unwrap();
+
+    let visible = run(temp.path(), &["--player", "log"]);
+    assert_success(&visible, "player log with DC");
+    assert!(stdout(&visible).contains("vs DC 19"));
+    let masked = run(temp.path(), &["--player", "log", "--hide-dc"]);
+    assert_success(&masked, "player log with hidden DC");
+    assert!(stdout(&masked).contains("1d20("));
+    assert_eq!(stdout(&masked), stdout(&visible).replace("DC 19", "DC ?"));
+
+    let visible = run(temp.path(), &["--player", "status", "--json"]);
+    assert_success(&visible, "player status with DC");
+    let masked = run(temp.path(), &["--player", "status", "--json", "--hide-dc"]);
+    assert_success(&masked, "player status with hidden DC");
+    assert!(stdout(&visible).contains("wis:19"));
+    assert_eq!(stdout(&masked), stdout(&visible).replace("wis:19", "wis:?"));
+    assert_eq!(fs::read(temp.path()).unwrap(), original);
+}
+
+#[test]
 fn full_cli_flow() {
     let temp = TempState::new("flow");
     create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
@@ -1593,6 +1637,22 @@ abilities:
       level: 1
       casting_time: {amount: 1, unit: minute}
       components: {verbal: true}
+  - id: manual-trick
+    name: Manual Trick
+    tags: [spell, cantrip]
+    activation: action
+    target: {type: self}
+    effects: [{note: "DM resolves where an illusion appears"}]
+    spell: {level: 0, casting_time: {amount: 1, unit: action}}
+  - id: base-only-bolt
+    name: Base Only Bolt
+    tags: [spell]
+    activation: action
+    target: {type: creature, side: enemy, count: 1}
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    effects: [{damage: {dice: 1, type: force}}]
+    spell: {level: 1, casting_time: {amount: 1, unit: action}}
   - id: no-meta-bolt
     name: No Meta Bolt
     activation: action
@@ -1624,6 +1684,8 @@ creatures:
       - {ref: test-bolt}
       - {ref: gem-cast}
       - {ref: slow-ritual}
+      - {ref: manual-trick}
+      - {ref: base-only-bolt}
       - {ref: no-meta-bolt}
   - id: brute-b
     name: Brute B
@@ -1823,7 +1885,7 @@ fn cast_material_rejection_leaves_the_state_unsaved() {
         "failed casts are not saved"
     );
 
-    // With the declaration the cast succeeds and the log records it.
+    let before_confirmation = fs::read(temp.path()).unwrap();
     let output = run_with_campaign(
         temp.path(),
         &campaign.manifest(),
@@ -1833,11 +1895,29 @@ fn cast_material_rejection_leaves_the_state_unsaved() {
             "gem-cast",
             "--material",
             "a diamond worth 50 gp",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("--confirm-manual"));
+    assert_eq!(fs::read(temp.path()).unwrap(), before_confirmation);
+
+    // Confirm the manual effect in addition to declaring the material.
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &[
+            "cast",
+            "Caster",
+            "gem-cast",
+            "--material",
+            "a diamond worth 50 gp",
+            "--confirm-manual",
             "--seed",
             "1",
         ],
     );
     assert_success(&output, "cast with material");
+    assert!(stdout(&output).contains("MANUAL CONFIRMED: Gem Cast"));
     assert!(
         stdout(&output).contains("MATERIAL DECLARED: a diamond worth 50 gp"),
         "{}",
@@ -1860,6 +1940,7 @@ fn cast_material_rejection_leaves_the_state_unsaved() {
             "Caster",
             "gem-cast",
             "--ignore-components",
+            "--confirm-manual",
             "--seed",
             "1",
         ],
@@ -1870,6 +1951,62 @@ fn cast_material_rejection_leaves_the_state_unsaved() {
         "{}",
         stdout(&output)
     );
+}
+
+#[test]
+fn ready_and_unmodeled_upcasting_require_manual_confirmation_before_writing() {
+    for (label, arguments) in [
+        (
+            "ready",
+            vec![
+                "ready",
+                "Caster",
+                "--trigger",
+                "The door opens",
+                "--ability",
+                "manual-trick",
+            ],
+        ),
+        (
+            "upcast",
+            vec!["use", "Caster", "base-only-bolt", "Brute B", "--slot", "2"],
+        ),
+    ] {
+        let temp = TempState::new(label);
+        let campaign = TempCampaign::new(label);
+        let run = |args: &[&str]| run_with_campaign(temp.path(), &campaign.manifest(), args);
+        assert_success(
+            &run(&["new", "--encounter", "spell-fight", "--party", "caster-x"]),
+            "new",
+        );
+        assert_success(
+            &run(&["init", "--set", "Caster X=20", "--set", "Brute B=10"]),
+            "init",
+        );
+        let before = fs::read(temp.path()).unwrap();
+        let refused = run(&arguments);
+        assert!(!refused.status.success());
+        assert!(
+            stderr(&refused).contains("--confirm-manual"),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(fs::read(temp.path()).unwrap(), before);
+        let mut confirmed_args = arguments;
+        confirmed_args.push("--confirm-manual");
+        let confirmed = run(&confirmed_args);
+        assert_success(&confirmed, "confirmed manual spell");
+        assert_eq!(stdout(&confirmed).matches("MANUAL CONFIRMED:").count(), 1);
+        if label == "ready" {
+            let triggered = run(&["trigger", "Caster"]);
+            assert_success(&triggered, "release a previously confirmed readied spell");
+            assert!(!stdout(&triggered).contains("MANUAL CONFIRMED:"));
+        } else {
+            assert!(stdout(&confirmed).contains("UPCAST NOT MODELED"));
+            let status = spell_status(temp.path(), &campaign.manifest());
+            assert_eq!(resource_of(&status, "Caster X", "spell-slot-2"), 2);
+        }
+    }
 }
 
 #[test]

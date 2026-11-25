@@ -146,7 +146,11 @@ pub enum Command {
     },
 
     /// Show the current encounter.
-    Status,
+    Status {
+        /// Hide save DCs in the displayed status.
+        #[arg(long)]
+        hide_dc: bool,
+    },
 
     /// Resolve one attack or multiattack. Extra Attack data resolves every
     /// attack in the Attack action; use `--unarmed` or `--offhand` for the
@@ -310,6 +314,10 @@ pub enum Command {
         /// DM override: skip component declarations (logged as COMPONENTS IGNORED).
         #[arg(long)]
         ignore_components: bool,
+        /// Confirm that the DM will settle effects that the engine cannot apply.
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[serde(default)]
+        confirm_manual: Option<bool>,
         #[arg(long)]
         adv: bool,
         #[arg(long)]
@@ -342,6 +350,10 @@ pub enum Command {
         /// DM override: skip component declarations (logged as COMPONENTS IGNORED).
         #[arg(long)]
         ignore_components: bool,
+        /// Confirm that the DM will settle effects that the engine cannot apply.
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[serde(default)]
+        confirm_manual: Option<bool>,
         #[arg(long)]
         adv: bool,
         #[arg(long)]
@@ -400,6 +412,10 @@ pub enum Command {
         /// Owned action ability for the response.
         #[arg(long, conflicts_with_all = ["zone", "to"])]
         ability: Option<String>,
+        /// Confirm manual settlement when preparing a spell with manual effects.
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        #[serde(default)]
+        confirm_manual: Option<bool>,
         /// Response target; targeted responses default to the triggering creature.
         #[arg(long, conflicts_with_all = ["zone", "to"])]
         target: Option<String>,
@@ -486,6 +502,9 @@ pub enum Command {
         /// Print only the last N lines.
         #[arg(long)]
         tail: Option<usize>,
+        /// Hide DCs and their formulas from the displayed log.
+        #[arg(long)]
+        hide_dc: bool,
     },
 
     /// Apply a short or long rest.
@@ -869,7 +888,7 @@ fn gate_entry(command: &Command) -> &'static str {
         | Command::Activate { .. }
         | Command::Add { .. } => "combat-sim:state-write",
         Command::Roll { .. } => "combat-sim:roll",
-        Command::Status => "combat-sim:status",
+        Command::Status { .. } => "combat-sim:status",
         Command::Scene => "combat-sim:scene",
         Command::Log { .. } => "combat-sim:log",
         Command::Simulate { .. } => "combat-sim:simulate",
@@ -1300,9 +1319,13 @@ fn run_cli() -> Result<()> {
                 },
             )
         }
-        Command::Status => {
-            print_status(&state_path(&sources, state.as_deref()), json, player, &mask)
-        }
+        Command::Status { hide_dc } => print_status(
+            &state_path(&sources, state.as_deref()),
+            json,
+            player,
+            hide_dc,
+            &mask,
+        ),
         Command::Attack {
             attacker,
             target,
@@ -1593,6 +1616,7 @@ fn run_cli() -> Result<()> {
             slot,
             material,
             ignore_components,
+            confirm_manual,
             adv,
             dis,
             no_reactions,
@@ -1620,7 +1644,15 @@ fn run_cli() -> Result<()> {
                         nonlethal,
                     };
                     state.nonlethal_request = nonlethal;
-                    engine::use_ability(state, &who, &ability, &options, rng, lines)
+                    engine::use_ability_with_manual_confirmation(
+                        state,
+                        &who,
+                        &ability,
+                        &options,
+                        confirm_manual,
+                        rng,
+                        lines,
+                    )
                 },
             )
         }
@@ -1632,6 +1664,7 @@ fn run_cli() -> Result<()> {
             slot,
             material,
             ignore_components,
+            confirm_manual,
             adv,
             dis,
             no_reactions,
@@ -1659,7 +1692,16 @@ fn run_cli() -> Result<()> {
                         nonlethal,
                     };
                     state.nonlethal_request = nonlethal;
-                    engine::use_entry(state, &who, &ability, &targets, &options, rng, lines)
+                    engine::use_entry_with_manual_confirmation(
+                        state,
+                        &who,
+                        &ability,
+                        &targets,
+                        &options,
+                        confirm_manual,
+                        rng,
+                        lines,
+                    )
                 },
             )
         }
@@ -1782,6 +1824,7 @@ fn run_cli() -> Result<()> {
             attack,
             unarmed,
             ability,
+            confirm_manual,
             target,
             zone,
             to,
@@ -1835,7 +1878,13 @@ fn run_cli() -> Result<()> {
                         description: trigger,
                         response,
                     };
-                    engine::ready(state, &who, &options, lines)
+                    engine::ready_with_manual_confirmation(
+                        state,
+                        &who,
+                        &options,
+                        confirm_manual,
+                        lines,
+                    )
                 },
             )
         }
@@ -1959,9 +2008,13 @@ fn run_cli() -> Result<()> {
                 |state, rng, lines| engine::next_turn(state, rng, lines),
             )
         }
-        Command::Log { tail } => {
-            print_log(&state_path(&sources, state.as_deref()), tail, player, &mask)
-        }
+        Command::Log { tail, hide_dc } => print_log(
+            &state_path(&sources, state.as_deref()),
+            tail,
+            player,
+            hide_dc,
+            &mask,
+        ),
         Command::Rest {
             kind,
             who,
@@ -3305,12 +3358,13 @@ fn print_status(
     state_path: &Path,
     json: bool,
     player: bool,
+    hide_dc: bool,
     mask: &crate::player::PlayerMask,
 ) -> Result<()> {
     let state = EncounterState::load(state_path)
         .with_context(|| format!("failed to load state {}", state_path.display()))?;
     if json {
-        let output = StatusOutput::from_state(&state);
+        let output = StatusOutput::from_state(&state, hide_dc);
         let mut value = serde_json::to_value(&output).context("failed to serialize status JSON")?;
         if player {
             crate::player::mask_status_json(&mut value, &state, mask);
@@ -3326,7 +3380,15 @@ fn print_status(
             Vec::new()
         };
         for line in engine::status_lines(&state) {
-            println!("{}", mask.line(&line, &replacements));
+            let line = mask.line(&line, &replacements);
+            println!(
+                "{}",
+                if hide_dc {
+                    crate::player::hide_dcs(&line)
+                } else {
+                    line
+                }
+            );
         }
         if let Some(pending) = &state.pending_command {
             println!("{}", pending.window.prompt());
@@ -3339,6 +3401,7 @@ fn print_log(
     state_path: &Path,
     tail: Option<usize>,
     player: bool,
+    hide_dc: bool,
     mask: &crate::player::PlayerMask,
 ) -> Result<()> {
     let state = EncounterState::load(state_path)
@@ -3353,7 +3416,15 @@ fn print_log(
         Vec::new()
     };
     for line in &state.log[start..] {
-        println!("{}", mask.line(line, &replacements));
+        let line = mask.line(line, &replacements);
+        println!(
+            "{}",
+            if hide_dc {
+                crate::player::hide_dcs(&line)
+            } else {
+                line
+            }
+        );
     }
     Ok(())
 }
@@ -3448,7 +3519,7 @@ struct ResourceStatus {
 }
 
 impl StatusOutput {
-    fn from_state(state: &EncounterState) -> Self {
+    fn from_state(state: &EncounterState, hide_dc: bool) -> Self {
         let current = state.current_index();
         let combatants = engine::status_order(state)
             .into_iter()
@@ -3487,7 +3558,11 @@ impl StatusOutput {
                                     .as_ref()
                                     .map(crate::state::ActiveDuration::describe),
                                 save_ends: condition.save_ends.as_ref().map(|save_ends| {
-                                    format!("{}:{}", save_ends.ability.as_str(), save_ends.dc)
+                                    if hide_dc {
+                                        format!("{}:?", save_ends.ability.as_str())
+                                    } else {
+                                        format!("{}:{}", save_ends.ability.as_str(), save_ends.dc)
+                                    }
                                 }),
                                 concentration: condition.concentration,
                             })

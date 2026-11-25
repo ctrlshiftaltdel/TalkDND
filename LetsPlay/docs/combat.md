@@ -80,6 +80,7 @@ $CS --campaign "$COMBAT_SIM_CAMPAIGN" --player status
 ```
 
 - 未识别的怪物显示 `appearance`（creature 数据里的字段），或 `$T identify --appearance <东西> "<描述>"` 写的覆盖值，否则用「一只大型野兽」这样的体型+类型描述。
+- 玩家查看 `log` 或 `status` 时，可以加 `--hide-dc` 单独隐藏检定 DC。日志仍显示骰值和成败，JSON 中的持续状态仍显示豁免属性。原始数值保留在本地存档。
 - 识别后用 `$T identify <东西>` 记录，`identified.yaml` 里 `identified: true` 的条目恢复真名；PC 和同伴永远显示真名。
 - `identified.yaml` 默认从 `--campaign` 指向的存档（`<存档>/combat/campaign.yaml` 的上一级）读取；也可以加 `--save Saves/<存档>` 或设 `TALKDND_SAVE`。
 - `combat-sim roll` 的每次掷骰也会追加到 `<存档>/rolls.log`（同上定位存档），`$T log rolls` 可查。

@@ -213,11 +213,15 @@ Validation is the kit check, the full kit test suite and the leak check in Succe
 
 ### 2026-11-25 — Player reactions, senses and long rest
 
-The independent implementation applies the player-choice policy and edition-specific rules documented in [PLAN.md](PLAN.md). The Windows release-package smoke test covered character setup, battle and a pending reaction resumed in a new process. It verified the player-facing name mask and rejection of a reused choice ID. Unix recovery-lock contention and the Linux and macOS package runs still require their platform tests.
+The independent implementation applies the player-choice policy and edition-specific rules documented in [PLAN.md](PLAN.md). The Windows release-package smoke test covered character setup, battle and a pending reaction resumed in a new process. The later hosted dry run passed the packaged battle and Shield continuation for both editions on Linux, macOS and Windows. Linux and macOS also passed the integrity-lock regression covering both recovery choices. [Hosted dry run](https://github.com/ctrlshiftaltdel/TalkDND/actions/runs/45580891809)
 
 Both editions now offer Shield to targets of Magic Missile before any dart resolves. A single target receives all three base darts. The caster can also assign each base dart by listing its target, including repeats. Existing encounters retain their saved rule snapshots. Higher-slot extra darts still use DM adjudication.
 
 Combat casts now enforce each edition's same-turn rules. Normal casts, Ready, and supported automatically offered reactions share the same check. The 2024 slot limit includes the explicit slot spent by manual combat healing. Existing turns retain the records made by this build from the first cast it handles.
+
+The combat CLI asks the DM to confirm manual spell effects before spending an action or resource. The confirmation covers note-only spells, spells with explicitly manual effects, and upcasts the engine resolves at base strength. Ready records the confirmation when preparing the spell. Replaying a command saved before this check preserves its original settlement.
+
+Combat log and status views can independently hide difficulty classes. Dice, outcomes and the underlying encounter data remain available to the DM.
 
 ### 2026-11-18 — Advancement transition gate and shared lock crate (TASK-0149)
 

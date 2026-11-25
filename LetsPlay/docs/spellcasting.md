@@ -18,7 +18,7 @@ $CS use  <谁> <法术> [目标...]            # 同参数；reaction/触发类�
 - 有环法术默认按基础环结算并扣 `spell-slot-基础环`；`--slot N` 升环扣 `spell-slot-N`（N ≥ 基础环且 ≤ 9）。
 - 魔法飞弹给一个目标时，三枚都射向该目标。分配给多个目标时，按飞弹逐一列出三个名字，可以重复同一名字。比如把两枚分给甲、一枚分给乙，就依次填甲、甲、乙。升环新增的飞弹仍由 DM 手动处理。
 - 两版护盾术都可在角色被攻击命中或被魔法飞弹选为目标时使用。飞弹触发时，在结算任何一枚之前逐个询问可反应的玩家。同一角色确认一次即可挡下该次施法射向自己的全部飞弹，其他目标照常结算。已有遭遇沿用创建时保存的规则内容，新建遭遇加载更新后的法术数据。
-- 升环只替换**主伤害/治疗骰**（按数据里的逐级骰表）；没有骰表的升环效果（多一发魔矢、多一个目标、睡眠池 +2d8）不会自动发生，DM 按文本手动补。
+- 有逐级骰表时，升环替换主伤害骰或治疗骰。没有骰表时，DM 用 `--confirm-manual` 确认自己处理额外飞弹、多目标或睡眠池等升环效果，程序按所选环级扣槽并结算基础效果。
 - 戏法不能 `--slot`；伤害戏法（Fire Bolt、Shocking Grasp、Sacred Flame）按角色等级 5/11/17 自动换骰。
 - 契约施法者（Warlock）的 ref 已被 `spells sync` 覆盖为契约环，`--slot` 会被拒绝；Mystic Arcanum 消耗 `arcanum-N`，同样拒绝 `--slot`。
 - 施法时间带分/小时的法术（如 Mending 的 1 分钟）**在战斗内直接拒绝**：跨回合长施法由 DM 手动跑（见下）。
@@ -38,7 +38,8 @@ $CS use  <谁> <法术> [目标...]            # 同参数；reaction/触发类�
 | `is a cantrip and cannot be cast with a spell slot` | 戏法不占槽 |
 | `is a Mystic Arcanum spell … --slot is not accepted` | 奥术不占法术位 |
 | `has no upcast entry for slot level N; refusing to guess` | 数据没有该环骰表；按基础环施放或 DM 手动 |
-| `UPCAST NOT MODELED`（日志行，非失败） | 该法术未建模升环，高环只产生基础效果，DM 手动补 |
+| `UPCAST NOT MODELED`（日志行） | 已确认手动处理，高环消耗所选法术位，程序结算基础效果 |
+| `needs manual settlement` | DM 用 `--confirm-manual` 确认手动处理后重新提交，本次动作和资源未消耗 |
 | `needs a material component that …` | 昂贵/消耗材料未声明；给 `--material` 或 DM `--ignore-components` |
 | `casting time of N minute(s)/hour(s) … resolve it outside combat` | 战斗内无法完成；走战斗外流程 |
 | `UPCAST NOT MODELED` 之外的 `…no main damage or heal effect to scale` | 骰表找不到可替换的主效果（数据问题，报给开发） |
@@ -63,7 +64,7 @@ $CS use  <谁> <法术> [目标...]            # 同参数；reaction/触发类�
 | 强制移动 | Thunderwave 推 10 尺（豁免失败时） | — |
 | 其余 | — | Sleep 2014（HP 池）、Detect Magic、Mage Hand、Minor Illusion、Mending、Moonbeam、Spirit Guardians（持续区域） |
 
-手动类别的法术仍然可以在战斗里施放（扣槽、成分检查照常），只是效果要 DM 自己落地。
+普通 `cast`、`use` 或 `ready --ability` 遇到需手动处理的法术时，会要求 `--confirm-manual`。手动确认与成分、动作和资源检查全部通过才结算，日志记录 `MANUAL CONFIRMED`，DM 再处理引擎未实现的效果。准备法术时在准备阶段确认，触发时沿用这次确认。
 
 ## 同回合限制与长施法
 

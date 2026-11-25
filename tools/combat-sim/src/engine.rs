@@ -204,6 +204,7 @@ pub struct CastParams {
     pub slot_level: Option<i32>,
     pub material: Option<String>,
     pub ignore_components: bool,
+    pub manual_confirmation: Option<bool>,
 }
 
 /// A character's condition-duration override supplied by the CLI.
@@ -7564,6 +7565,37 @@ struct SpellCastPlan {
     main_dice: Option<String>,
     /// Component declaration lines logged after the cast is committed.
     notes: Vec<String>,
+    manual_followup: bool,
+}
+
+fn check_manual_spell_cast(
+    ability: &Ability,
+    plan_has_manual_followup: bool,
+    confirmation: Option<bool>,
+) -> Result<bool> {
+    let Some(confirmed) = confirmation else {
+        // Library callers and already-pending commands use their original behavior.
+        return Ok(false);
+    };
+    let spell = ability.spell.is_some()
+        || ability
+            .tags
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case("spell"));
+    let notes_only = !ability.effects.is_empty()
+        && ability
+            .effects
+            .iter()
+            .all(|effect| matches!(effect, Effect::Note(_)));
+    let requires_confirmation =
+        plan_has_manual_followup || (spell && (ability.manual.is_some() || notes_only));
+    if requires_confirmation && !confirmed {
+        bail!(
+            "`{}` needs manual settlement. Confirm with --confirm-manual before spending actions or resources",
+            ability.display_name()
+        );
+    }
+    Ok(requires_confirmation)
 }
 
 /// Validates one spell cast against its spell metadata and computes the
@@ -7697,11 +7729,14 @@ fn plan_spell_cast(
                         ability.display_name()
                     ),
                     // Allowed, but the cast only produces base effects.
-                    None => log.log(format_args!(
-                        "UPCAST NOT MODELED: `{}` has no upcast table; casting at slot \
-                         level {slot} produces base effects",
-                        ability.display_name()
-                    )),
+                    None => {
+                        plan.manual_followup = true;
+                        log.log(format_args!(
+                            "UPCAST NOT MODELED: `{}` has no upcast table; casting at slot \
+                             level {slot} produces base effects",
+                            ability.display_name()
+                        ));
+                    }
                 },
                 None => {}
             }
@@ -7966,6 +8001,11 @@ fn use_resolved_ability(
     } else {
         None
     };
+    let manual_confirmed = check_manual_spell_cast(
+        ability,
+        plan.as_ref().is_some_and(|plan| plan.manual_followup),
+        cast.manual_confirmation,
+    )?;
     let effective_cost = plan
         .as_ref()
         .and_then(|plan| plan.cost.clone())
@@ -7994,6 +8034,9 @@ fn use_resolved_ability(
         }
     }
     record_spell_turn(state, actor, cast_marker);
+    if manual_confirmed {
+        log.log(format_args!("MANUAL CONFIRMED: {}", ability.display_name()));
+    }
     if ability.concentration && !settlement.concentration_started {
         begin_concentration(state, actor, ability, log);
     }
@@ -8201,6 +8244,18 @@ pub fn use_ability(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    use_ability_with_manual_confirmation(state, actor_name, ability_name, options, None, rng, log)
+}
+
+pub(crate) fn use_ability_with_manual_confirmation(
+    state: &mut EncounterState,
+    actor_name: &str,
+    ability_name: &str,
+    options: &UseOptions,
+    manual_confirmation: Option<bool>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
     let actor = state
         .find_index(actor_name)
         .map_err(|error| anyhow!(error.to_string()))?;
@@ -8253,6 +8308,7 @@ pub fn use_ability(
             slot_level: options.slot_level,
             material: options.material.clone(),
             ignore_components: options.ignore_components,
+            manual_confirmation,
         },
         AbilitySettlement {
             action_spent: false,
@@ -8276,6 +8332,16 @@ pub fn ready(
     state: &mut EncounterState,
     who: &str,
     options: &ReadyOptions,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    ready_with_manual_confirmation(state, who, options, None, log)
+}
+
+pub(crate) fn ready_with_manual_confirmation(
+    state: &mut EncounterState,
+    who: &str,
+    options: &ReadyOptions,
+    manual_confirmation: Option<bool>,
     log: &mut dyn LogSink,
 ) -> Result<()> {
     let index = state
@@ -8305,6 +8371,10 @@ pub fn ready(
     let description = normalize_ready_description(&options.description)?;
     validate_ready_response(state, index, &options.response)?;
     let ready_ability = ready_ability(state, index, &options.response)?;
+    let manual_confirmed = match &ready_ability {
+        Some(resolved) => check_manual_spell_cast(&resolved.ability, false, manual_confirmation)?,
+        None => false,
+    };
     let ready_cost = ready_ability
         .as_ref()
         .and_then(|resolved| resolved.ability.cost.as_ref());
@@ -8333,6 +8403,12 @@ pub fn ready(
     }
     record_spell_turn(state, index, cast_marker);
     if let Some(resolved) = &ready_ability {
+        if manual_confirmed {
+            log.log(format_args!(
+                "MANUAL CONFIRMED: {}",
+                resolved.ability.display_name()
+            ));
+        }
         if resolved.ability.concentration {
             begin_concentration(state, index, &resolved.ability, log);
         }
@@ -9070,6 +9146,19 @@ pub fn use_entry(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    use_entry_with_manual_confirmation(state, actor_name, name, targets, options, None, rng, log)
+}
+
+pub(crate) fn use_entry_with_manual_confirmation(
+    state: &mut EncounterState,
+    actor_name: &str,
+    name: &str,
+    targets: &[String],
+    options: &UseOptions,
+    manual_confirmation: Option<bool>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
     let actor = state
         .find_index(actor_name)
         .map_err(|error| anyhow!(error.to_string()))?;
@@ -9099,7 +9188,15 @@ pub fn use_entry(
         log_outcome(state, log);
         return Ok(());
     }
-    use_ability(state, actor_name, name, options, rng, log)
+    use_ability_with_manual_confirmation(
+        state,
+        actor_name,
+        name,
+        options,
+        manual_confirmation,
+        rng,
+        log,
+    )
 }
 
 // ---------------------------------------------------------------------------
