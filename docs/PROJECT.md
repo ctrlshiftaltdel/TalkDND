@@ -17,7 +17,7 @@
 
 ## 范围与安全
 
-- 允许改动路径：`tools/combat-sim/`、`tools/talkdnd/`、`tools/talkdnd-dev/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、`LetsPlay/docs/`、根目录与各目录 `README.md`、`docs/PROJECT-CHARTER.md`、`docs/PROJECT.md`、`docs/PLAN.md`、`AGENTS.md`、`kit/`、`editions/`、`templates/`、`scripts/`、`tests/`、`VERSION.md`、`LICENSE.md`、`NOTICE`、`MANIFEST.json`、`.github/`。具体任务可以再收窄。套件文件（含 `scripts/` 与 `tests/` 下的 Python）已并入本项目，可按任务修改；修改后要在同一 PR 说明本地差异。
+- 允许改动路径：`tools/combat-sim/`、`tools/talkdnd/`、`tools/talkdnd-dev/`、`LetsPlay/Rules/combat/`、`LetsPlay/Rules/rulings*.md`、`LetsPlay/AGENTS.md`、`LetsPlay/docs/`、根目录与各目录 `README.md`、`CHANGELOG.md`、`docs/PROJECT-CHARTER.md`、`docs/PROJECT.md`、`docs/PLAN.md`、`docs/ADVANCEMENT-*.md`、`AGENTS.md`、`kit/`、`editions/`、`templates/`、`scripts/`、`tests/`、`VERSION.md`、`LICENSE.md`、`NOTICE`、`MANIFEST.json`、`.github/`。具体任务可以再收窄。套件文件（含 `scripts/` 与 `tests/` 下的 Python）已并入本项目，可按任务修改；修改后要在同一 PR 说明本地差异。
 - 永远禁止改动路径 / 文件：受版权保护的规则书与冒险书（`LetsPlay/Rules/2014/` 与 `LetsPlay/Rules/2024/` 除 `README.md` 外，`LetsPlay/Adventures/` 除 `README.md` 外，以及任何版权文本或其改编数据）；`LetsPlay/Saves/` 除 `README.md` 外；`**/dm-secrets.md`；`LetsPlay/Rules/combat/local/`；`LetsPlay/Rules/combat/2024/monsters/scarecrow.yaml`。
 - 秘密与隐私文件模式：`.local/`（除 `README.md`）、`**/dm-secrets.md`、`LetsPlay/Saves/`（除 `README.md`）、GitHub 凭据、玩家规则书与冒险书文本。
 - 破坏性操作和迁移政策：禁止改写 Git 历史、禁止强推。已有检出里的未跟踪本地书和存档用 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout`（默认 dry-run；真正移动时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout --apply`），不得覆盖已有文件。主持游戏写入 `LetsPlay/Saves/` 豁免开发流程，但那些文件仍然不得提交。
