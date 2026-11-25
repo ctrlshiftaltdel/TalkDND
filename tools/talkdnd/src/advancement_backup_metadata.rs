@@ -4,7 +4,9 @@ use std::fs::{self, File, FileTimes, Metadata};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, ensure, Context, Result};
+#[cfg(not(target_os = "linux"))]
+use anyhow::bail;
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 use crate::advancement_commit::{is_root_excluded, posix_rel};
