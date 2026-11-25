@@ -774,6 +774,7 @@ dependencies = [
  "clap",
  "combat-sim",
  "image",
+ "libc",
  "serde",
  "serde_json",
  "serde_norway",

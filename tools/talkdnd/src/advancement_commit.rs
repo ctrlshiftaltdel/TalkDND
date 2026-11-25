@@ -451,6 +451,7 @@ fn build_backup(lock: &mut AdvancementLock, req: &Request<'_>) -> Result<PathBuf
     let name = instance_dir_name(req, "d-backup");
     let dest = exclusive_create_dir(req.backup_parent, &name)
         .with_context(|| "独占创建用户数据备份目录")?;
+    let metadata = crate::advancement_backup_metadata::Inventory::capture(req.save_dir)?;
 
     if req.fault == Some(Fault::BackupCopy) {
         // Start the copy so an incomplete backup exists, then stop.
@@ -469,6 +470,7 @@ fn build_backup(lock: &mut AdvancementLock, req: &Request<'_>) -> Result<PathBuf
     })?;
 
     let entries = verify_copy(req.save_dir, &dest)?;
+    metadata.verify_source(req.save_dir)?;
 
     if req.fault == Some(Fault::BackupSync) {
         bail!(
@@ -485,8 +487,18 @@ fn build_backup(lock: &mut AdvancementLock, req: &Request<'_>) -> Result<PathBuf
         );
     }
 
-    write_backup_manifest(&dest, req.operation_id, req.save_dir, &entries, true)?;
-    sync_tree(&dest)?;
+    // Reserve the manifest before restoring the root directory's timestamps.
+    // Writing data to this same entry later leaves those timestamps intact.
+    let mut manifest = File::create_new(dest.join("d-backup.manifest.json"))?;
+    metadata.restore_and_verify_copy(&dest)?;
+    sync_dir(req.backup_parent)?;
+    write_backup_manifest(
+        &mut manifest,
+        req.operation_id,
+        req.save_dir,
+        &entries,
+        &metadata,
+    )?;
     lock.record_backup(
         dest.to_str()
             .ok_or_else(|| anyhow!("backup_dir {} 不能无损表示为 UTF-8", dest.display()))?,
@@ -951,35 +963,36 @@ fn collect_backup_entries(
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BackupManifestFile {
+#[derive(Serialize)]
+struct BackupManifestFile<'a> {
     schema: u32,
     operation_id: String,
     source: String,
     verified: bool,
-    entries: Vec<BackupEntry>,
+    entries: &'a [BackupEntry],
+    source_metadata: &'a crate::advancement_backup_metadata::Inventory,
 }
 
 fn write_backup_manifest(
-    dest: &Path,
+    file: &mut File,
     operation_id: &str,
     source: &Path,
     entries: &[BackupEntry],
-    verified: bool,
+    source_metadata: &crate::advancement_backup_metadata::Inventory,
 ) -> Result<()> {
     let doc = BackupManifestFile {
-        schema: 1,
+        schema: 2,
         operation_id: operation_id.to_string(),
         source: source
             .to_str()
             .ok_or_else(|| anyhow!("save path is not UTF-8"))?
             .replace('\\', "/"),
-        verified,
-        entries: entries.to_vec(),
+        verified: true,
+        entries,
+        source_metadata,
     };
-    let bytes = serde_json::to_vec_pretty(&doc)?;
-    let path = dest.join("d-backup.manifest.json");
-    write_synced(&path, &bytes)?;
+    serde_json::to_writer_pretty(&mut *file, &doc).context("写入备份清单")?;
+    file.sync_all().context("同步备份清单")?;
     Ok(())
 }
 

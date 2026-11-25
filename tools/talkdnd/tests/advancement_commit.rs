@@ -171,8 +171,25 @@ fn a_copy_cannot_use_a_nested_or_ancestor_destination() {
 #[cfg(unix)]
 #[test]
 fn a_candidate_cannot_be_created_inside_the_verified_backup() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::time::UNIX_EPOCH;
+
     let (root, save, evidence_root, evidence_dir, backup_parent, _, before) =
         setup("nested-candidate-parent");
+    let relative = "checkpoints/cp-1/Characters/Aria.md";
+    let original = save.join(relative);
+    let accessed = UNIX_EPOCH + Duration::new(1_600_000_000, 120_000_000);
+    let modified = UNIX_EPOCH + Duration::new(1_600_000_001, 210_000_000);
+    fs::set_permissions(&original, fs::Permissions::from_mode(0o640)).unwrap();
+    fs::File::open(&original)
+        .unwrap()
+        .set_times(
+            fs::FileTimes::new()
+                .set_accessed(accessed)
+                .set_modified(modified),
+        )
+        .unwrap();
+    let original_meta = fs::metadata(&original).unwrap();
     let backup = backup_parent.join("2030-01-02-01-op-p2-1-d-backup");
     let error = run_to_verified_candidate(&request(
         &root,
@@ -198,6 +215,91 @@ fn a_candidate_cannot_be_created_inside_the_verified_backup() {
         .contains("受保护目录之外"));
     assert!(backup.join("d-backup.manifest.json").is_file());
     assert!(!backup.join("2030-01-02-01-op-p2-1-d-candidate").exists());
+    let copied = fs::metadata(backup.join(relative)).unwrap();
+    assert_eq!(
+        copied.permissions().mode(),
+        original_meta.permissions().mode()
+    );
+    assert_eq!(
+        (copied.uid(), copied.gid()),
+        (original_meta.uid(), original_meta.gid())
+    );
+    assert_eq!(copied.accessed().unwrap(), accessed);
+    assert_eq!(copied.modified().unwrap(), modified);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(backup.join("d-backup.manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["schema"], 2);
+    let entries = manifest["source_metadata"]["entries"].as_array().unwrap();
+    let evidence = entries
+        .iter()
+        .find(|entry| entry["path"] == relative)
+        .unwrap();
+    assert_eq!(
+        evidence["posix"]["ctime"],
+        serde_json::json!({
+            "seconds": original_meta.ctime(),
+            "nanoseconds": original_meta.ctime_nsec(),
+        })
+    );
+    assert_eq!(protected_target_bytes(&save).unwrap(), before);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn backup_rejects_an_extended_attribute_before_writing_targets() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let (root, save, evr, evd, bp, cp, before) = setup("backup-xattr");
+    let path = std::ffi::CString::new(save.join("progress.yaml").as_os_str().as_bytes()).unwrap();
+    let value = b"fixture";
+    // SAFETY: the two C strings and the data buffer outlive the syscall.
+    #[cfg(target_os = "linux")]
+    let status = unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            c"user.talkdnd-fixture".as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    };
+    #[cfg(target_os = "macos")]
+    let status = unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            c"user.talkdnd-fixture".as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+            0,
+        )
+    };
+    assert_eq!(status, 0, "{}", std::io::Error::last_os_error());
+    let error = run_to_verified_candidate(&request(
+        &root,
+        &save,
+        &evr,
+        &evd,
+        &bp,
+        &cp,
+        valid_overlay(),
+        None,
+    ))
+    .expect_err("a backup cannot discard an extended attribute");
+    assert_eq!(
+        error.report.recovery.interrupt_stage,
+        InterruptStage::Backup
+    );
+    assert!(error
+        .report
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("ACL 或扩展属性"));
+    assert!(!error.report.recovery.backup_verified);
+    let incomplete = bp.join("2030-01-02-01-op-p2-1-d-backup");
+    assert!(fs::read_dir(incomplete).unwrap().next().is_none());
     assert_eq!(protected_target_bytes(&save).unwrap(), before);
     let _ = fs::remove_dir_all(&root);
 }

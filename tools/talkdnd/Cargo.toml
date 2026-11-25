@@ -18,6 +18,8 @@ serde_norway = "0.9"
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["webp", "png", "jpeg"] }
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libc = "0.2"
 
 [profile.release]
 lto = "fat"
