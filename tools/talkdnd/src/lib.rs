@@ -1115,7 +1115,6 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             gate::check_target(&target, gate_entry)?;
         }
     }
-    let protocol_present = gate_save.as_deref().is_some_and(gate::has_protocol);
     let gate_class = gate::class_of(gate_entry);
     // ADV-P1-1a / 1c / 1d: adopted writers take the SAVE lock before any
     // target write. The lock is held through dispatch and the post-command
@@ -1196,74 +1195,22 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
         Some(r) => r,
         None => &mut os,
     };
-    let tracked = match &cli.cmd {
-        Cmd::Start { .. }
-        | Cmd::New { .. }
-        | Cmd::Migrate { .. }
-        | Cmd::Integrity { .. }
-        | Cmd::Options { .. }
-        | Cmd::Data { .. }
-        | Cmd::Knowledge { .. }
-        | Cmd::Library { .. } => None,
-        // `oracle` never reads or writes the save (P08). Tracking it would run
-        // the integrity audit after a read-only command and rewrite the
-        // reconciliation baseline date on a clean save.
-        Cmd::Oracle { .. } => None,
-        // `known` and `snapshot diff` only read the save (TASK-0142): the same
-        // audit-after-read would rewrite the baseline date for no reason.
-        Cmd::Known | Cmd::Snapshot { .. } => None,
-        Cmd::Time {
-            cmd:
-                worldtime::Cmd::Show
-                | worldtime::Cmd::Casting {
-                    cmd: worldtime::CastingCmd::Status,
-                }
-                | worldtime::Cmd::Event {
-                    cmd: worldtime::EventCmd::List { .. },
-                },
-        } => None,
-        // `adventure index show|search` and `adventure search` only read the
-        // save. `adventure index build` is not read-only: `--book` may name a
-        // folder inside the save and `build_one` writes `structured.json`
-        // there, so it stays tracked. `adventure section` writes the session
-        // log when it reads a section ahead of progress or a DM-only one with
-        // `--reason`, so it stays tracked and audited too.
-        Cmd::Adventure { cmd } => match cmd {
-            AdventureCmd::Index { cmd } => match cmd {
-                bookindex::Cmd::Show { .. } | bookindex::Cmd::Search { .. } => None,
-                bookindex::Cmd::Build { .. } => save::resolve_slot(&root, cli.save.as_deref()).ok(),
-            },
-            AdventureCmd::Search { .. } => None,
-            AdventureCmd::Section { .. } => save::resolve_slot(&root, cli.save.as_deref()).ok(),
-        },
-        // ADV-P1-1c / #285: list|show must not run the outer after_command
-        // audit (whole-CLI tree-identical). `Cmd::Migrate` is already
-        // untracked above, including `--dry-run`. `Cmd::Integrity` is
-        // untracked above as well (status/accept take the integrity lock
-        // themselves, after SAVE). Snapshot, restore, and `checkpoint <text>`
-        // stay on the default arm (the last of those is still UnadoptedWrite).
-        Cmd::Checkpoint {
-            cmd: Some(checkpoint::Cmd::List { .. } | checkpoint::Cmd::Show { .. }),
-            ..
-        } => None,
-        // ADV-P1-1d / #285: `log rolls` is read-only for the whole CLI, not
-        // only inside `rolls::show`. It must not take SAVE, create lock/state
-        // or a write probe, or run the outer audit.
-        Cmd::Log { text } if text.first().is_some_and(|word| word == "rolls") => None,
+    let tracked = match (gate_class, &cli.cmd) {
+        // The same command classification applies to all saves. The outer
+        // audit would write user data even on a clean save with an old date.
+        (gate::Class::ReadOnly | gate::Class::ControlMetadata, _) => None,
+        (
+            _,
+            Cmd::Start { .. }
+            | Cmd::New { .. }
+            | Cmd::Migrate { .. }
+            | Cmd::Integrity { .. }
+            | Cmd::Options { .. }
+            | Cmd::Data { .. }
+            | Cmd::Knowledge { .. }
+            | Cmd::Library { .. },
+        ) => None,
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
-    };
-    // Under the protocol a read-only or control-metadata command must not run
-    // the post-command audit write either: #285 tracks that side effect for
-    // saves without the protocol, and the transition gate promises that a
-    // read-only run changes no save bytes.
-    let tracked = if protocol_present
-        && matches!(
-            gate_class,
-            gate::Class::ReadOnly | gate::Class::ControlMetadata
-        ) {
-        None
-    } else {
-        tracked
     };
     let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
     let mut created = None;

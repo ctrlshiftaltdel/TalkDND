@@ -369,14 +369,73 @@ fn a_read_only_run_does_not_rewrite_the_audit_baseline() {
     let save = root.join(SAVE);
     adopt_protocol(&save);
     let baseline = fs::read(save.join("integrity.yaml")).unwrap();
-    // `xp show` is audited (`tracked`) without the protocol; under it the gate
-    // must suppress the post-command audit write.
     ok_slot(&root, &["xp", "show"]);
     assert_eq!(
         fs::read(save.join("integrity.yaml")).unwrap(),
         baseline,
         "a read-only command rewrote integrity.yaml"
     );
+}
+
+#[test]
+fn read_only_commands_preserve_a_clean_legacy_save_and_baseline() {
+    use combat_sim::integrity;
+    let root = play_root("legacy-readonly-audit");
+    ok(&root, &["new", "--date", "2030-01-02"]);
+    ok_slot(&root, &["time", "enable"]);
+    let save = root.join(SAVE);
+    fs::write(
+        save.join("entities.yaml"),
+        "version: 1\nentities:\n  - {id: E-001, name: Fixture, type: npc}\n",
+    )
+    .unwrap();
+    let notes = save.join("dm-secrets.md");
+    fs::write(&notes, "- term: fixture-term\n").unwrap();
+    let notes = notes.to_str().unwrap();
+    let mut manifest = integrity::baseline(&save);
+    let mut baseline = talkdnd::audit::current(&save);
+    baseline.date = "2000-01-01 00:00".to_string();
+    manifest.baseline = Some(serde_norway::to_value(baseline).unwrap());
+    integrity::store(&save, &manifest).unwrap();
+    let before = snapshot(&save);
+
+    for args in [
+        &["secret", "scan"][..],
+        &["secret", "import", "--from", notes],
+        &["secret", "import", "--from", notes, "--dry-run"],
+        &["memory", "list"],
+        &["entity", "list"],
+        &["entity", "show", "E-001"],
+        &["relation", "list"],
+        &["time", "show"],
+        &["time", "event", "list"],
+        &["xp", "show"],
+        &["settings"],
+        &["settings", "dice"],
+    ] {
+        ok_slot(&root, args);
+        assert!(snapshot(&save) == before, "{args:?} changed the save tree");
+    }
+
+    let cache = Path::new("secret-terms.cache.json");
+    for args in [&["guard", "clear view"][..], &["secret", "list"]] {
+        ok_slot(&root, args);
+        let mut after = snapshot(&save);
+        assert!(
+            after.remove(cache).is_some(),
+            "{args:?} did not create its cache"
+        );
+        assert!(after == before, "{args:?} changed more than its cache");
+        fs::remove_file(save.join(cache)).unwrap();
+    }
+
+    ok_slot(&root, &["secret", "import", "--from", notes, "--apply"]);
+    assert!(save.join("secret-terms.yaml").is_file());
+    assert!(
+        integrity::changes(&save).unwrap().is_empty(),
+        "a write command must still record the files it changes"
+    );
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

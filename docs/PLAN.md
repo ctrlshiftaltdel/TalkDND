@@ -280,7 +280,7 @@
 | [Issue #279](https://github.com/ctrlshiftaltdel/TalkDND/issues/279) / [PR #280](https://github.com/ctrlshiftaltdel/TalkDND/pull/280) | 将 Oracle 从会更新完整性基线的审计路径移开，恢复其只读行为。 |
 | [Issue #281](https://github.com/ctrlshiftaltdel/TalkDND/issues/281) / [PR #284](https://github.com/ctrlshiftaltdel/TalkDND/pull/284) | 将确认只读的 known、snapshot diff、adventure search/index 移出隐式完整性写入。 |
 | [Issue #282](https://github.com/ctrlshiftaltdel/TalkDND/issues/282) / [PR #283](https://github.com/ctrlshiftaltdel/TalkDND/pull/283) | 落地 v1 协作锁原语与所有者平台、接入、备份和有界获取决定，当时尚无写者接入。 |
-| [Issue #285](https://github.com/ctrlshiftaltdel/TalkDND/issues/285) | 跟踪其他只读入口的审计副作用，需逐条区分无写入和控制缓存写入。 |
+| [Issue #285](https://github.com/ctrlshiftaltdel/TalkDND/issues/285) | 跟踪只读入口改写完整性基线的副作用。草稿分支按命令的访问类型处理普通存档，并用旧基线逐条验证；秘密词检查和列表保留派生缓存。 |
 | [Issue #286](https://github.com/ctrlshiftaltdel/TalkDND/issues/286) / [PR #287](https://github.com/ctrlshiftaltdel/TalkDND/pull/287) | 修正 checkpoint 旧锁归属、抢占和控制文件备份边界，保留已有完整性锁语义。 |
 | [Issue #288](https://github.com/ctrlshiftaltdel/TalkDND/issues/288) / [PR #289](https://github.com/ctrlshiftaltdel/TalkDND/pull/289) | 建立首阶段实施顺序、依赖、迁移、验证和当前未定项，承接首阶段后暂停。 |
 | [Issue #290](https://github.com/ctrlshiftaltdel/TalkDND/issues/290) / [PR #291](https://github.com/ctrlshiftaltdel/TalkDND/pull/291) | 盘点跨 CLI 写者、实际写入目标和过渡拦截，将写者接入拆成按类验收。 |
