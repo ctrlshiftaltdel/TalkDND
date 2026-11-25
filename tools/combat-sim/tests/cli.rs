@@ -547,6 +547,42 @@ fn casting_out_of_turn_needs_a_reaction_or_force() {
 }
 
 #[test]
+fn party_long_rest_reads_the_campaign_edition_for_hit_dice() {
+    let root = unique_temp_dir("party-rest-edition");
+    fs::create_dir_all(&root).unwrap();
+    let manifest = root.join("campaign.yaml");
+    let party_file = root.join("party-state.yaml");
+    for (ruleset, expected) in [("5e-srd", 2), ("5.5e-srd", 5)] {
+        fs::write(
+            &manifest,
+            format!("name: Rest Test\nstate_dir: .\nruleset: {ruleset}\n"),
+        )
+        .unwrap();
+        fs::write(
+            &party_file,
+            "version: 1\nmembers:\n  hero:\n    name: Hero\n    hp: 1\n    max_hp: 10\n    resources:\n      hit-dice: {current: 0, max: 5, recharge: long}\n",
+        )
+        .unwrap();
+        let result = run_raw(&[
+            "--campaign",
+            manifest.to_str().unwrap(),
+            "party",
+            "rest",
+            "long",
+            "hero",
+        ]);
+        assert_success(&result, "party rest long");
+        let party = combat_sim::party::PartyState::load(&party_file).unwrap();
+        assert_eq!(party.members["hero"].hp, 10);
+        assert_eq!(
+            party.members["hero"].resources["hit-dice"].current,
+            expected
+        );
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn party_state_carries_hp_between_encounters_and_rests() {
     let root = unique_temp_dir("party-state");
     std::fs::create_dir_all(&root).unwrap();

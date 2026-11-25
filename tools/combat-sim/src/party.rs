@@ -337,16 +337,21 @@ impl Member {
     }
 
     pub fn long_rest(&mut self, dying_conditions: &[String], log: &mut Vec<String>) {
+        self.long_rest_for_edition("2014", dying_conditions, log);
+    }
+
+    pub fn long_rest_for_edition(
+        &mut self,
+        edition: &str,
+        dying_conditions: &[String],
+        log: &mut Vec<String>,
+    ) {
         if self.dead {
             log.push(format!("{} is dead and cannot rest", self.name));
             return;
         }
         for (id, r) in self.resources.iter_mut() {
-            if id == "hit-dice" {
-                r.current = (r.current + (r.max / 2).max(1)).min(r.max);
-            } else {
-                r.current = r.max;
-            }
+            r.restore_after_long_rest(id, edition);
         }
         self.set_hp(self.max_hp, dying_conditions);
         self.temp_hp = 0;

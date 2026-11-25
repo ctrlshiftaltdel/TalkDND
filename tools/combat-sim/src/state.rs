@@ -841,6 +841,14 @@ impl ResourceState {
     pub fn restore(&mut self, amount: i32) {
         self.current = (self.current + amount.max(0)).min(self.max);
     }
+
+    pub(crate) fn restore_after_long_rest(&mut self, id: &str, edition: &str) {
+        if id == "hit-dice" && edition != "2024" {
+            self.restore((self.max / 2).max(1));
+        } else {
+            self.current = self.max;
+        }
+    }
 }
 
 /// Why a condition is currently active.

@@ -224,6 +224,12 @@ pub enum RestKind {
     Long,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RestOptions {
+    pub hit_dice: Option<u32>,
+    pub food_and_water: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
@@ -11876,8 +11882,8 @@ fn death_save_at(
 ///
 /// `all` means every living party-side combatant; enemies and the dead never
 /// rest. A short rest can spend `hit_dice` Hit Dice (die + Con each, min 0).
-/// A long rest restores HP and resources, regains half the Hit Dice (min 1)
-/// and ends the creature's concentration.
+/// A long rest restores HP and resources and ends the creature's concentration.
+/// Use `rest_with_options` to confirm food and water for 2014 exhaustion recovery.
 pub fn rest(
     state: &mut EncounterState,
     kind: RestKind,
@@ -11886,6 +11892,31 @@ pub fn rest(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    rest_with_options(
+        state,
+        kind,
+        who,
+        RestOptions {
+            hit_dice,
+            ..Default::default()
+        },
+        rng,
+        log,
+    )
+}
+
+pub fn rest_with_options(
+    state: &mut EncounterState,
+    kind: RestKind,
+    who: Option<&str>,
+    options: RestOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let RestOptions {
+        hit_dice,
+        food_and_water,
+    } = options;
     let all = match who {
         Some(name) => name.eq_ignore_ascii_case("all"),
         None => true,
@@ -11901,6 +11932,9 @@ pub fn rest(
     };
     if hit_dice.is_some() && kind == RestKind::Long {
         bail!("--hd is only for short rests");
+    }
+    if food_and_water && kind == RestKind::Short {
+        bail!("--food-and-water is only for long rests");
     }
     for index in targets {
         let name = state.combatants[index].name.clone();
@@ -11930,7 +11964,11 @@ pub fn rest(
                     break_concentration(state, index, log);
                 }
                 let level = state.combatants[index].exhaustion_level;
-                if level > 0 {
+                if level > 0 && state.content.ruleset == "2014" && !food_and_water {
+                    log.log(format_args!(
+                        "{name} keeps exhaustion level {level} (2014 long rest requires food and water)"
+                    ));
+                } else if level > 0 {
                     let reduction = state
                         .content
                         .rules
@@ -11944,12 +11982,7 @@ pub fn rest(
                 let max_hp = effective_max_hp(state, index);
                 let combatant = &mut state.combatants[index];
                 for (id, resource) in combatant.resources.iter_mut() {
-                    if id == "hit-dice" {
-                        let regain = (resource.max / 2).max(1);
-                        resource.current = (resource.current + regain).min(resource.max);
-                    } else {
-                        resource.current = resource.max;
-                    }
+                    resource.restore_after_long_rest(id, &state.content.ruleset);
                 }
                 combatant.hp = max_hp;
                 combatant.temp_hp = 0;

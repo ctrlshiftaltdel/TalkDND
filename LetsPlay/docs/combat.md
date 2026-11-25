@@ -38,7 +38,7 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 - `simulate` 只有一方时会报错；清单里没写 `party:` 时必须传 `--party`。
 - 非致命：只有**近战**可以击昏；要击昏就加 `--nonlethal`（或生物数据带 `tags: [nonlethal]`）。不加就是致死。
 - 越回合的行动：`attack`、`cast`、`use` **直接报错**，先 `next`；`cast`/`use` 的反应能力照常执行。准备动作或 DM 裁定时给 `attack`/`cast`/`use` 加 `--force`（会打印 WARNING 审计行并写入战斗日志）。`move`、`interact` 不消耗行动，越回合仍只警告。`damage` 是 DM 命令，没有行动者，不受轮次限制也不消耗行动。
-- 休息：`rest short <名字|all> [--hd N]` 花 N 个生命骰（每个掷骰 + 体质调整值）恢复 HP；`rest long <名字|all>` 回满 HP 和资源、恢复一半生命骰（至少 1）并结束专注。`all` 只包括 party 一方活着的角色，敌人和死者不休息。
+- `rest short <名字|all> [--hd N]` 花 N 个生命骰恢复 HP，每次掷骰加体质调整值。`rest long <名字|all>` 回满 HP 和资源并结束专注。2014 长休恢复生命骰总数的一半（向下取整，至少 1），2024 恢复所有已花费的生命骰。`all` 只包括 party 一方活着的角色。2014 长休降低力竭时，DM 用 `--food-and-water` 确认本次指定的角色均已进食和饮水。
 - 同伴（`Characters/` 里 `controller: dm` 的队友；战斗块 `side: party`，`kind` 可以是 `pc` 或 `npc`）和 PC 一样在 0 HP 时倒地并做死亡豁免（`deathsave`）。
 - 睡眠术（2024 第二次豁免；2014 的 HP 池整个是手动）、冒险书的特殊机关、增援到场时机等是**手动**的：用 `save`、`condition add`、`activate`。
 - 增援入战：`combat-sim add --creature "id:数量@区域"`（可重复；区域默认 party zone）。side 默认取生物数据自己的 side，用 `--side` 指定时必须是一个单词（自动转小写）。先攻未指定时每个新战斗者各自掷 `1d20+先攻修正`（日志记 `(rolled)`），`--initiative N` 则用固定值（日志记 `(set)`）。插入规则：先攻总值插队，同值排在已在场者之后；**插在当前行动位置之前的新战斗者本轮不行动**（日志会写明），从下一轮起按序行动；插在当前位置之后的本轮照常行动。当前行动者与回合进度不受影响，既有战斗者的数据与日志也不会被改动。还没 `init` 时只添加不掷先攻（此时 `--initiative` 报错，`init` 会为所有人掷）；战斗已分出胜负的 state 不能再添加，需新建遭遇。新战斗者总是清醒加入；加到 party 一侧照常写回 party-state。

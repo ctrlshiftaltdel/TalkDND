@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use crate::ai::Ai;
+use crate::content::loader::Ruleset;
 use crate::content::schema::{Light, Obscurement};
 use crate::content::{self, ContentSources, ItemKind, ShownItem};
 use crate::dice::{self, DiceRng, RollMode};
@@ -498,6 +499,9 @@ pub enum Command {
         /// Short rest: spend this many Hit Dice (die + Con each).
         #[arg(long)]
         hd: Option<u32>,
+        /// Long rest: confirm each target ate and drank for 2014 exhaustion recovery.
+        #[arg(long)]
+        food_and_water: bool,
     },
 
     /// Persistent party state between encounters (`party-state.yaml` in the save).
@@ -1958,7 +1962,12 @@ fn run_cli() -> Result<()> {
         Command::Log { tail } => {
             print_log(&state_path(&sources, state.as_deref()), tail, player, &mask)
         }
-        Command::Rest { kind, who, hd } => {
+        Command::Rest {
+            kind,
+            who,
+            hd,
+            food_and_water,
+        } => {
             let path = state_path(&sources, state.as_deref());
             run_state_command(
                 &path,
@@ -1971,7 +1980,17 @@ fn run_cli() -> Result<()> {
                     } else {
                         canonical_name(state, &who)?
                     };
-                    engine::rest(state, kind.into(), Some(&who), hd, rng, lines)
+                    engine::rest_with_options(
+                        state,
+                        kind.into(),
+                        Some(&who),
+                        engine::RestOptions {
+                            hit_dice: hd,
+                            food_and_water,
+                        },
+                        rng,
+                        lines,
+                    )
                 },
             )
         }
@@ -2729,7 +2748,9 @@ fn run_party(
     })?;
     let mut party = PartyState::load(&path)?;
     // Members of the manifest party that are not recorded yet start fresh.
-    if let (Some(manifest), Ok(content)) = (read_manifest(sources), load_content(sources)) {
+    let manifest = read_manifest(sources);
+    let content = load_content(sources).ok();
+    if let (Some(manifest), Some(content)) = (&manifest, &content) {
         for id in &manifest.party {
             if !party.members.contains_key(id) {
                 if let Ok(creature) = content.resolve_creature(id) {
@@ -2740,8 +2761,8 @@ fn run_party(
             }
         }
     }
-    let dying_conditions = load_content(sources)
-        .ok()
+    let dying_conditions = content
+        .as_ref()
         .and_then(|content| content.rules.dying_conditions.clone())
         .unwrap_or_else(|| vec![crate::party::DEFAULT_DYING_CONDITION.to_string()]);
     let mut lines = Vec::new();
@@ -2772,6 +2793,13 @@ fn run_party(
             return Ok(());
         }
         PartyCommand::Rest { kind, who, hd } => {
+            let edition = manifest
+                .as_ref()
+                .and_then(|manifest| manifest.ruleset.as_deref())
+                .map(Ruleset::parse)
+                .transpose()?
+                .unwrap_or(Ruleset::FivePointFiveESrd)
+                .edition();
             let ids = pick(&party, &who)?;
             let mut rng = make_rng(seed);
             for id in ids {
@@ -2784,7 +2812,7 @@ fn run_party(
                         if hd.is_some() {
                             bail!("--hd is only for short rests");
                         }
-                        member.long_rest(&dying_conditions, &mut lines)
+                        member.long_rest_for_edition(edition, &dying_conditions, &mut lines)
                     }
                 }
             }

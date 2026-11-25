@@ -433,6 +433,18 @@ fn cli_ready_reaction_waits_across_processes_and_pass_preserves_the_ready() {
         assert_eq!(pending["pending_reaction"]["who"], "Hero");
         assert_eq!(pending["pending_reaction"]["reaction"], "Ready");
         assert_eq!(combatant(&pending, "Source")["zone"], "gamma");
+        let player_status = run_cli(&path, &["--player", "status", "--json"]);
+        assert_success(&player_status, "player status with a pending reaction");
+        let player_json: Value = serde_json::from_slice(&player_status.stdout).unwrap();
+        assert_eq!(
+            player_json["pending_reaction"],
+            serde_json::json!({"id": id, "who": "Hero", "reaction": "Ready"})
+        );
+        assert!(!stdout(&player_status).contains("Source"));
+        let player_status = run_cli(&path, &["--player", "status"]);
+        assert_success(&player_status, "player text status");
+        assert!(stdout(&player_status).contains(id));
+        assert!(!stdout(&player_status).contains("Source"));
         let saved = fs::read(&path).unwrap();
         let bytes: Value = serde_json::from_slice(&saved).unwrap();
         assert_eq!(bytes["schema_version"], 2);

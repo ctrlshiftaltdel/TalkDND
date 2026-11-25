@@ -85,9 +85,9 @@ source died, breaks the dead creature's concentration and removes the
 concentration conditions it imposed. Repeatedly setting level 6 on an already
 dead creature does not repeat the death log or cleanup.
 
-A long rest lowers the level by `long_rest_reduction`; healing and rest use the
-effective HP maximum, so a 2014 level-4 maximum is respected until the level
-drops.
+A long rest lowers the level by `long_rest_reduction`. For 2014 the DM confirms
+food and water with the `food_and_water` rest option. Other rest benefits still
+apply without confirmation, using the current effective HP maximum.
 
 ### Bloodied
 
