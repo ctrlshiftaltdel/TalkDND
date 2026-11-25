@@ -129,6 +129,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - The Execution Agent is a Grok Build session. It implements one dispatched task in its own worktree on a `task/<ID>-<name>` branch. It does not approve or merge its own work.
 - The Master Agent plans, schedules, reviews, and merges. The Master does not implement a task unless the owner writes that exception into the task record.
 - Review uses the merge gates in `kit/orchestration.md`. A green CI run does not replace a criterion-by-criterion review.
+- The project allows edits to `CHANGELOG.md` for release records and to `docs/ADVANCEMENT-*.md` for advancement design and evidence. Each task still lists its permitted paths in its GitHub Issue.
 - **Living charter.** The Master MUST update `docs/PROJECT-CHARTER.md` (the Decision Log and every affected section) in the same pull request whenever a task changes scope, goals, tech stack, rules support, or a user decision. Reviewers check this at the merge gate. If that update is missing, the review fails and the pull request is not merged.
 - Agent bootstrap treats the charter as present when this file exists and has no placeholders. The path is recorded in `AGENTS.md` and `docs/PROJECT.md`. The kit is maintained in-project, but the charter lookup stays at `docs/PROJECT-CHARTER.md`; no kit file hard-codes a different path.
 
@@ -210,6 +211,10 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-11-26 — Release and advancement documentation paths
+
+The owner requested that `docs/PROJECT.md` explicitly list `CHANGELOG.md` and `docs/ADVANCEMENT-*.md` so release and advancement tasks can register the documents they need to edit. Each task remains subject to its Issue's permitted paths and the project's forbidden paths.
 
 ### 2026-11-25 — Backup timestamp verification
 
