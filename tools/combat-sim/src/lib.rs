@@ -14,6 +14,7 @@ pub mod fsutil;
 pub mod integrity;
 pub mod party;
 pub mod player;
+mod reactions;
 pub mod roll;
 pub mod sim;
 pub mod space;

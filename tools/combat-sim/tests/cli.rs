@@ -1221,6 +1221,14 @@ fn added_combatant_before_the_current_turn_waits_until_next_round() {
         &["attack", "Rampage E", "Warden", "bite", "--seed", "1"],
     );
     assert_success(&output, "attack on the added combatant's turn");
+    let status = status_json(temp.path());
+    let output = if let Some(id) = status["pending_reaction"]["id"].as_str() {
+        let resumed = run(temp.path(), &["reaction", id, "pass"]);
+        assert_success(&resumed, "complete the attack after the player's choice");
+        resumed
+    } else {
+        output
+    };
     assert!(
         stdout(&output).contains("Rampage E attacks Warden B with Bite"),
         "{}",

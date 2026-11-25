@@ -5152,7 +5152,7 @@ fn resolve_attack_inner(
         if let Some((new_ac, new_terms)) = converted {
             current_ac = new_ac;
             current_terms = new_terms;
-            if result.total < current_ac {
+            if !result.nat20 && result.total < current_ac {
                 hit = false;
                 log.log(format_args!(
                     "{} now misses: {} vs {} MISS",
@@ -5410,9 +5410,17 @@ fn try_hit_reactions(
                 source_tags: resolved.ability.tags.clone(),
             };
             if let Some(when) = &trigger.when {
-                if !eval_predicate(state, when, &context) {
+                let tactical_ac_check = matches!(when, Predicate::WouldMissWithAcBonus(_))
+                    && state.reaction_replay.is_some()
+                    && state.combatants[target].is_pc();
+                if !tactical_ac_check && !eval_predicate(state, when, &context) {
                     continue;
                 }
+            }
+            if !confirm_player_reaction(state, target, resolved.ability.display_name(), || {
+                format!("hit:{attacker}:{key}:{attack_total}:{new_ac}")
+            }) {
+                continue;
             }
             if let Some(cost) = trigger
                 .cost
@@ -8462,6 +8470,13 @@ fn trigger_ready_at(
         log.log(format_args!("{name}'s readied action is refused: {reason}"));
         return Ok(ReadyOutcome::Refused(reason));
     }
+    if let Some(kind) = automatic {
+        if !confirm_player_reaction(state, index, "Ready", || {
+            format!("ready:{kind:?}:{source:?}:{}", ready.description)
+        }) {
+            return Ok(ReadyOutcome::Refused("player confirmation required".into()));
+        }
+    }
     let trigger_label = automatic.map(ReadyTrigger::as_str).unwrap_or("explicit");
     log.log(format_args!(
         "{name}'s readied action triggers ({trigger_label}: {})",
@@ -10510,6 +10525,13 @@ fn opportunity_attacks(
         let Some(attack) = first_melee_attack(state, hostile) else {
             continue;
         };
+        if !state.combatants[hostile].has_reaction(state.round)
+            || !confirm_player_reaction(state, hostile, "Opportunity Attack", || {
+                format!("opportunity:{mover}:{departure:?}")
+            })
+        {
+            continue;
+        }
         let profile = AttackProfile::from_attack(&attack);
         state.combatants[hostile].reaction_round = Some(state.round);
         log.log(format_args!(
@@ -10530,6 +10552,22 @@ fn opportunity_attacks(
         )?;
     }
     Ok(())
+}
+
+fn confirm_player_reaction(
+    state: &mut EncounterState,
+    index: usize,
+    label: &str,
+    context: impl FnOnce() -> String,
+) -> bool {
+    let combatant = &state.combatants[index];
+    if !combatant.is_pc() {
+        return true;
+    }
+    state
+        .reaction_replay
+        .as_mut()
+        .is_none_or(|replay| replay.ask(&combatant.name, label, context()))
 }
 
 fn fire_enter_triggers(

@@ -85,6 +85,10 @@ pub struct EncounterState {
     /// State-level spatial overrides and terrain. Absent in legacy saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial: Option<SpatialState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pending_command: Option<crate::reactions::PendingCommand>,
+    #[serde(skip)]
+    pub(crate) reaction_replay: Option<crate::reactions::ReactionReplay>,
     /// Unknown top-level fields from compatible extensions, preserved on save
     /// so a round-trip never silently drops data.
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -130,6 +134,7 @@ impl PartialEq for EncounterState {
             && self.party_state == other.party_state
             && self.schema_version == other.schema_version
             && self.spatial == other.spatial
+            && self.pending_command == other.pending_command
             && self.extra == other.extra
     }
 }
@@ -1215,6 +1220,8 @@ impl EncounterState {
             nonlethal_active: false,
             nonlethal_request: false,
             ready_in_progress: false,
+            pending_command: None,
+            reaction_replay: None,
         };
         state.refresh_initial_conditions()?;
         state.log.push(format!(
@@ -1652,12 +1659,17 @@ impl EncounterState {
             .with_context(|| format!("failed to read state file {}", path.display()))?;
         let mut state: Self = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse state file {}", path.display()))?;
-        if state.schema_version != STATE_SCHEMA_VERSION {
+        let expected_schema = if state.pending_command.is_some() {
+            crate::reactions::PENDING_SCHEMA_VERSION
+        } else {
+            STATE_SCHEMA_VERSION
+        };
+        if state.schema_version != expected_schema {
             bail!(
-                "state file {} uses schema version {}; this combat-sim supports {}",
+                "state file {} uses schema version {}. This combat-sim supports version {} for this encounter status",
                 path.display(),
                 state.schema_version,
-                STATE_SCHEMA_VERSION
+                expected_schema
             );
         }
         state
