@@ -401,6 +401,8 @@
   - [ ] `AC-4`: 明确给出“支持 `ADV-P1-6` 实现 / 阻塞 `ADV-P1-6` / 部分支持且需限定范围”的结论；结论为 `UNKNOWN` 时按阻塞处理。
   - [ ] `AC-5`: 本块的结论不得被用来把其它块的 AC 判为通过，也不得替代 `ADV-P1-11` 的端到端与故障注入证据。
 
+**交付记录（TASK-0159 / Issue #313）：** 本块已在本 Issue 的 PR 中落地（仍为 Draft，不合并）。调查报告见 [ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md](ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md)，绑定本 PR head（基线 `762313bc4d1498d3565974354076f31e5ea5b28f`）。Linux（Debian 13，内核 `6.12.113+`，本工作区 `/workspace` 所用 `ext4`）已实测目录枚举、大小写、符号链接/硬链接、特殊文件与备份元数据（含 user xattr、POSIX ACL 与目录 `sync_all`），命令与输出摘要见该报告。Windows / macOS 本工作区未实测，标 `NOT_RUN` / `UNKNOWN`。网络盘 / 同步目录 / FUSE 未获项目权限，未挂载、未接入、未探测，标 `NOT_RUN`。T11/T12 与 T5d3/T13b 仍为 `NOT_RUN` / `UNKNOWN`；设计已声称“不承诺检测”的项未改写为已检测。门结论为**部分支持且需限定范围**：该 Linux 本地实测支持按失败关闭实现迁移备份的前提，但未测平台与网络文件系统上的对应实现必须保持未实现或失败关闭，不得把本报告当作全面放行 `ADV-P1-6`、跨主机安全证明或 `ADV-P1-11` 的替代。任务状态与证据仍只在 Issue / PR / CI，本文件 AC 勾选保持 `[ ]`、不新加状态列。本块不修改产品代码、测试或 CI，不开始 `ADV-P1-6`，不新增 schema 11 或 sidecar，不启用提交入口，不修改 #264 结论。
+
 ## 只能由实现后实验证明的结论（当前 `NOT_RUN` / `UNKNOWN`）
 
 下表列出**不能**靠设计、静态阅读或既有测试通过来证明的结论。实现前它们一律是 `NOT_RUN`；实现后也只有真实执行并绑定 head 的证据才能改变状态。已运行项按环境/范围/head 记录，无法判定项写 `UNKNOWN`，都不得扩展支持范围。
@@ -416,8 +418,8 @@
 | 新路径内层锁的有界获取（默认 5 秒、可覆盖、超时失败关闭） | 另一进程长期持有（T6b） | `ADV-P1-3` | 已交付合成证据（Linux，本 PR head）：另一进程长期持有 `.talkdnd.integrity.lock` 时，新路径有界获取在预算内失败并报告「内层锁」，诊断记录 `D_save` 与各 `D_inner`；超时不写目标、不改 SAVE/成长 state、不留半锁。证据见 `tools/talkdnd/tests/advancement_inner_lock.rs` 与 `tools/combat-sim/tests/integrity_lock.rs`。Windows/macOS 由该 head 的 CI 记录，本工作区未在这两台机器上跑。整条提交路径有界仍不承诺（旧 `lock()` 仍无限阻塞）。`ADV-P1-4` 已把发布的完整性阶段接到该有界获取（`t6b_inner_lock_contention_stops_at_integrity_and_is_in_doubt`），T6b 结果只覆盖新路径，不把 `D_save` 外推为整体有界。真实发布进程 kill、掉电、网络盘/同步目录仍为 `NOT_RUN` / `UNKNOWN`。 |
 | 发布部分失败保留备份与阶段记录、不重复应用 | 每次发布前后 kill、满盘（T7a/T14） | `ADV-P1-4` | 部分交付（Linux 合成 fixture，见 `tools/talkdnd/tests/advancement_publish.rs`）：T7a 在 intent 后的已知检查点检出复核不符并拒绝，产品错误不含注入字节；写失败/同步失败后保留 `in_doubt` 与阶段记录、不自动重试；重复提交不重复增加 XP/日志。终态与伪造 `complete` 见同一文件。T7b 只证明如实报告「无法排除覆盖」（已观察前像/目标摘要，不输出注入值、不宣称检测成功）。T8 在 `preview_id` 缺失或变化时拒绝，只报「绑定变化，原因未知」，未写目标。真实进程 kill、满盘、掉电仍为 `NOT_RUN` / `UNKNOWN` |
 | 恢复工作证据与再次中断后的判定 | 恢复各窗口故障注入（T9a/T9b） | `ADV-P1-5` | 部分交付（Linux 合成 fixture，见 `tools/talkdnd/tests/advancement_recovery.rs`）：T9a 在 work 记录/受保护快照的独占创建、写、文件 sync、重读摘要或目录同步注入失败时停止，零目标写入，原未完成 state、备份位置与 intent 保持。T9b 在工作证据建立后于每文件 intent/done 用 hook 中断，再进入凭工作记录与快照判定原操作与进度，无确认选择时不写目标、不自动续跑或重放；工作记录损坏 → `in_doubt`。真实进程 kill、掉电、目录持久性、网络盘仍为 `NOT_RUN` / `UNKNOWN`。#264 未解决前不声称恢复安全。 |
-| 跨主机/网络文件系统互斥 | 网络挂载与同步目录（T11/T12），需项目权限 | `ADV-P1-13` | `NOT_RUN` / `UNKNOWN` |
-| 整盘/同相对路径镜像与旧 state 重放是否可检测 | 镜像与重放实验（T5d3/T13b） | `ADV-P1-13` | `NOT_RUN`（设计只声称“不承诺检测”） |
+| 跨主机/网络文件系统互斥 | 网络挂载与同步目录（T11/T12），需项目权限 | `ADV-P1-13` | `NOT_RUN` / `UNKNOWN`（ADV-P1-13 调查未获网络盘/同步目录/FUSE 实验权限，未挂载、未接入、未探测；不得以本地结果代替。证据见 [ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md](ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md)，基线 head `762313bc4d1498d3565974354076f31e5ea5b28f`） |
+| 整盘/同相对路径镜像与旧 state 重放是否可检测 | 镜像与重放实验（T5d3/T13b） | `ADV-P1-13` | `NOT_RUN`（设计只声称“不承诺检测”；ADV-P1-13 未做镜像或重放实验，不把该非承诺改写为已检测。证据见 [ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md](ADVANCEMENT-CROSS-PLATFORM-FS-INVESTIGATION.md)，基线 head `762313bc4d1498d3565974354076f31e5ea5b28f`） |
 | 真实存档上的 9/10→11 迁移与恢复 | 真实存档（当前禁止；只能合成 fixture） | `ADV-P1-6` | `NOT_RUN` |
 | 活动遭遇识别 | 遭遇发现算法与合成遭遇矩阵 | `ADV-P1-10` | `NOT_RUN`（算法未决） |
 | #264 根因 | 失败现场采集 | `ADV-P1-12` | `NOT_RUN` |
