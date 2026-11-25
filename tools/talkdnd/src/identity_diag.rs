@@ -122,7 +122,8 @@ const SHEET_STEM_INVALID: &str = "the sheet file name is not a valid character i
 /// Top-level keys of `sheets/<id>.yaml`, mirroring [`crate::charsheet::CharFile`].
 /// Anything else is counted as an unknown field: an unrecognised key may carry
 /// identity facts this version cannot interpret.
-const KNOWN_SHEET_FIELDS: [&str; 26] = [
+const KNOWN_SHEET_FIELDS: [&str; 27] = [
+    crate::advancement_identity::SHEET_FIELD,
     "version",
     "id",
     "name",
@@ -302,9 +303,17 @@ impl Character {
         &self.markdown_text
     }
 
+    pub(crate) fn markdown_path(&self) -> &Path {
+        &self.markdown
+    }
+
     /// Bound structured sheet path (`sheets/<id>.yaml`), when one exists.
     pub fn sheet(&self) -> Option<&str> {
         self.sheet_text.as_deref()
+    }
+
+    pub(crate) fn sheet_path(&self) -> Option<&Path> {
+        self.sheet.as_deref()
     }
 }
 

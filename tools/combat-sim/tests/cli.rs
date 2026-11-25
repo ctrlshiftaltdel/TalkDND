@@ -100,6 +100,50 @@ fn create(state: &TempState, extra: &[&str]) {
 }
 
 #[test]
+fn player_can_hide_dc_without_altering_the_original_roll_or_condition() {
+    let temp = TempState::new("hidden-dc");
+    create(&temp, &["--party", "striker-a"]);
+    assert_success(
+        &run(
+            temp.path(),
+            &[
+                "condition",
+                "add",
+                "Striker",
+                "hindered",
+                "--save-ends",
+                "wis:19",
+            ],
+        ),
+        "condition with a save DC",
+    );
+    assert_success(
+        &run(
+            temp.path(),
+            &["save", "Striker", "wis", "19", "--seed", "1"],
+        ),
+        "save",
+    );
+    let original = fs::read(temp.path()).unwrap();
+
+    let visible = run(temp.path(), &["--player", "log"]);
+    assert_success(&visible, "player log with DC");
+    assert!(stdout(&visible).contains("vs DC 19"));
+    let masked = run(temp.path(), &["--player", "log", "--hide-dc"]);
+    assert_success(&masked, "player log with hidden DC");
+    assert!(stdout(&masked).contains("1d20("));
+    assert_eq!(stdout(&masked), stdout(&visible).replace("DC 19", "DC ?"));
+
+    let visible = run(temp.path(), &["--player", "status", "--json"]);
+    assert_success(&visible, "player status with DC");
+    let masked = run(temp.path(), &["--player", "status", "--json", "--hide-dc"]);
+    assert_success(&masked, "player status with hidden DC");
+    assert!(stdout(&visible).contains("wis:19"));
+    assert_eq!(stdout(&masked), stdout(&visible).replace("wis:19", "wis:?"));
+    assert_eq!(fs::read(temp.path()).unwrap(), original);
+}
+
+#[test]
 fn full_cli_flow() {
     let temp = TempState::new("flow");
     create(&temp, &["--party", "striker-a,warden-b,caster-c"]);
@@ -544,6 +588,42 @@ fn casting_out_of_turn_needs_a_reaction_or_force() {
     );
     assert_success(&output, "forced cast");
     assert!(stdout(&output).contains("WARNING"));
+}
+
+#[test]
+fn party_long_rest_reads_the_campaign_edition_for_hit_dice() {
+    let root = unique_temp_dir("party-rest-edition");
+    fs::create_dir_all(&root).unwrap();
+    let manifest = root.join("campaign.yaml");
+    let party_file = root.join("party-state.yaml");
+    for (ruleset, expected) in [("5e-srd", 2), ("5.5e-srd", 5)] {
+        fs::write(
+            &manifest,
+            format!("name: Rest Test\nstate_dir: .\nruleset: {ruleset}\n"),
+        )
+        .unwrap();
+        fs::write(
+            &party_file,
+            "version: 1\nmembers:\n  hero:\n    name: Hero\n    hp: 1\n    max_hp: 10\n    resources:\n      hit-dice: {current: 0, max: 5, recharge: long}\n",
+        )
+        .unwrap();
+        let result = run_raw(&[
+            "--campaign",
+            manifest.to_str().unwrap(),
+            "party",
+            "rest",
+            "long",
+            "hero",
+        ]);
+        assert_success(&result, "party rest long");
+        let party = combat_sim::party::PartyState::load(&party_file).unwrap();
+        assert_eq!(party.members["hero"].hp, 10);
+        assert_eq!(
+            party.members["hero"].resources["hit-dice"].current,
+            expected
+        );
+    }
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1221,6 +1301,14 @@ fn added_combatant_before_the_current_turn_waits_until_next_round() {
         &["attack", "Rampage E", "Warden", "bite", "--seed", "1"],
     );
     assert_success(&output, "attack on the added combatant's turn");
+    let status = status_json(temp.path());
+    let output = if let Some(id) = status["pending_reaction"]["id"].as_str() {
+        let resumed = run(temp.path(), &["reaction", id, "pass"]);
+        assert_success(&resumed, "complete the attack after the player's choice");
+        resumed
+    } else {
+        output
+    };
     assert!(
         stdout(&output).contains("Rampage E attacks Warden B with Bite"),
         "{}",
@@ -1549,6 +1637,22 @@ abilities:
       level: 1
       casting_time: {amount: 1, unit: minute}
       components: {verbal: true}
+  - id: manual-trick
+    name: Manual Trick
+    tags: [spell, cantrip]
+    activation: action
+    target: {type: self}
+    effects: [{note: "DM resolves where an illusion appears"}]
+    spell: {level: 0, casting_time: {amount: 1, unit: action}}
+  - id: base-only-bolt
+    name: Base Only Bolt
+    tags: [spell]
+    activation: action
+    target: {type: creature, side: enemy, count: 1}
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    effects: [{damage: {dice: 1, type: force}}]
+    spell: {level: 1, casting_time: {amount: 1, unit: action}}
   - id: no-meta-bolt
     name: No Meta Bolt
     activation: action
@@ -1580,6 +1684,8 @@ creatures:
       - {ref: test-bolt}
       - {ref: gem-cast}
       - {ref: slow-ritual}
+      - {ref: manual-trick}
+      - {ref: base-only-bolt}
       - {ref: no-meta-bolt}
   - id: brute-b
     name: Brute B
@@ -1646,6 +1752,99 @@ impl Drop for TempCampaign {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn a_campaign_encounter_requires_explicit_closure_before_reuse() {
+    let game = TempCampaign::new("encounter-lifecycle");
+    let save = game.root.join("Saves/2030-01-02-01");
+    let directory = save.join("combat");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(game.root.join("AGENTS.md"), "Synthetic campaign\n").unwrap();
+    combat_sim::integrity::ensure(&save).unwrap();
+    let manifest = directory.join("campaign.yaml");
+    fs::write(
+        &manifest,
+        "name: Lifecycle\nlibrary: [../../../library]\nstate_dir: .\nparty: [caster-x]\n",
+    )
+    .unwrap();
+    let state = directory.join("fight.state.json");
+    let call = |args: &[&str]| run_with_campaign(&state, &manifest, args);
+    let create = ["new", "--encounter", "spell-fight"];
+    let created = call(&create);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let status_args = ["encounter", "status"];
+    let status = stdout(&call(&status_args));
+    assert!(status.starts_with("open "), "{status}");
+    let gate = || combat_sim::encounter_lifecycle::require_between_encounters(&save);
+    assert!(gate().unwrap_err().to_string().contains("still open"));
+
+    let before = fs::read(&state).unwrap();
+    let duplicate = call(&create);
+    assert!(!duplicate.status.success());
+    assert!(stderr(&duplicate).contains("close the previous encounter"));
+    assert_eq!(fs::read(&state).unwrap(), before);
+
+    let init = call(&["init", "--set", "Caster X=25", "--set", "Brute B=10"]);
+    assert!(init.status.success(), "{}", stderr(&init));
+    let close = ["encounter", "close", "--reason", "Fixture retreat"];
+    let closed = call(&close);
+    assert!(closed.status.success(), "{}", stderr(&closed));
+    assert!(stdout(&call(&status_args)).contains("Fixture retreat"));
+    gate().unwrap();
+    let duplicate_registration = directory.join("copy.state.json");
+    fs::copy(&state, &duplicate_registration).unwrap();
+    assert!(gate()
+        .unwrap_err()
+        .to_string()
+        .contains("duplicate encounter registration"));
+    fs::remove_file(duplicate_registration).unwrap();
+
+    let before = fs::read(&state).unwrap();
+    let party = directory.join("party-state.yaml");
+    let before_party = fs::read(&party).unwrap();
+    for args in [&["next"][..], &["party", "sync"]] {
+        let refused = call(args);
+        assert!(!refused.status.success(), "{args:?}");
+        assert!(stderr(&refused).contains("encounter is closed"));
+        assert_eq!(fs::read(&state).unwrap(), before);
+        assert_eq!(fs::read(&party).unwrap(), before_party);
+    }
+    let replacement = call(&create);
+    assert!(replacement.status.success(), "{}", stderr(&replacement));
+    let fresh = stdout(&call(&status_args));
+    assert!(fresh.starts_with("open "), "{fresh}");
+    assert_ne!(fresh, status);
+
+    // A pre-registration snapshot remains readable, but cannot be closed
+    // as historical until the DM explicitly confirms the legacy state.
+    let mut old: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    old["schema_version"] = Value::from(1);
+    old.as_object_mut().unwrap().remove("registration");
+    let legacy = serde_json::to_vec(&old).unwrap();
+    fs::write(&state, &legacy).unwrap();
+    assert_eq!(stdout(&call(&status_args)).trim(), "unregistered");
+    assert!(gate()
+        .unwrap_err()
+        .to_string()
+        .contains("review unregistered encounter"));
+    let refused = call(&close);
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("--confirm-legacy"));
+    assert_eq!(fs::read(&state).unwrap(), legacy);
+    let registered = call(&["encounter", "register"]);
+    assert!(registered.status.success(), "{}", stderr(&registered));
+    assert!(stdout(&call(&status_args)).starts_with("open "));
+    fs::write(&state, &legacy).unwrap();
+    let closed_legacy = call(&[
+        "encounter",
+        "close",
+        "--reason",
+        "Reviewed old encounter",
+        "--confirm-legacy",
+    ]);
+    assert!(closed_legacy.status.success(), "{}", stderr(&closed_legacy));
+    gate().unwrap();
 }
 
 fn spell_status(state: &Path, manifest: &Path) -> Value {
@@ -1779,7 +1978,7 @@ fn cast_material_rejection_leaves_the_state_unsaved() {
         "failed casts are not saved"
     );
 
-    // With the declaration the cast succeeds and the log records it.
+    let before_confirmation = fs::read(temp.path()).unwrap();
     let output = run_with_campaign(
         temp.path(),
         &campaign.manifest(),
@@ -1789,11 +1988,29 @@ fn cast_material_rejection_leaves_the_state_unsaved() {
             "gem-cast",
             "--material",
             "a diamond worth 50 gp",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("--confirm-manual"));
+    assert_eq!(fs::read(temp.path()).unwrap(), before_confirmation);
+
+    // Confirm the manual effect in addition to declaring the material.
+    let output = run_with_campaign(
+        temp.path(),
+        &campaign.manifest(),
+        &[
+            "cast",
+            "Caster",
+            "gem-cast",
+            "--material",
+            "a diamond worth 50 gp",
+            "--confirm-manual",
             "--seed",
             "1",
         ],
     );
     assert_success(&output, "cast with material");
+    assert!(stdout(&output).contains("MANUAL CONFIRMED: Gem Cast"));
     assert!(
         stdout(&output).contains("MATERIAL DECLARED: a diamond worth 50 gp"),
         "{}",
@@ -1816,6 +2033,7 @@ fn cast_material_rejection_leaves_the_state_unsaved() {
             "Caster",
             "gem-cast",
             "--ignore-components",
+            "--confirm-manual",
             "--seed",
             "1",
         ],
@@ -1826,6 +2044,62 @@ fn cast_material_rejection_leaves_the_state_unsaved() {
         "{}",
         stdout(&output)
     );
+}
+
+#[test]
+fn ready_and_unmodeled_upcasting_require_manual_confirmation_before_writing() {
+    for (label, arguments) in [
+        (
+            "ready",
+            vec![
+                "ready",
+                "Caster",
+                "--trigger",
+                "The door opens",
+                "--ability",
+                "manual-trick",
+            ],
+        ),
+        (
+            "upcast",
+            vec!["use", "Caster", "base-only-bolt", "Brute B", "--slot", "2"],
+        ),
+    ] {
+        let temp = TempState::new(label);
+        let campaign = TempCampaign::new(label);
+        let run = |args: &[&str]| run_with_campaign(temp.path(), &campaign.manifest(), args);
+        assert_success(
+            &run(&["new", "--encounter", "spell-fight", "--party", "caster-x"]),
+            "new",
+        );
+        assert_success(
+            &run(&["init", "--set", "Caster X=20", "--set", "Brute B=10"]),
+            "init",
+        );
+        let before = fs::read(temp.path()).unwrap();
+        let refused = run(&arguments);
+        assert!(!refused.status.success());
+        assert!(
+            stderr(&refused).contains("--confirm-manual"),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(fs::read(temp.path()).unwrap(), before);
+        let mut confirmed_args = arguments;
+        confirmed_args.push("--confirm-manual");
+        let confirmed = run(&confirmed_args);
+        assert_success(&confirmed, "confirmed manual spell");
+        assert_eq!(stdout(&confirmed).matches("MANUAL CONFIRMED:").count(), 1);
+        if label == "ready" {
+            let triggered = run(&["trigger", "Caster"]);
+            assert_success(&triggered, "release a previously confirmed readied spell");
+            assert!(!stdout(&triggered).contains("MANUAL CONFIRMED:"));
+        } else {
+            assert!(stdout(&confirmed).contains("UPCAST NOT MODELED"));
+            let status = spell_status(temp.path(), &campaign.manifest());
+            assert_eq!(resource_of(&status, "Caster X", "spell-slot-2"), 2);
+        }
+    }
 }
 
 #[test]

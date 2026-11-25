@@ -85,6 +85,14 @@ pub struct EncounterState {
     /// State-level spatial overrides and terrain. Absent in legacy saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial: Option<SpatialState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pending_command: Option<crate::reactions::PendingCommand>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub casting: Option<crate::long_cast::EncounterCasting>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<crate::encounter_lifecycle::Registration>,
+    #[serde(skip)]
+    pub(crate) reaction_replay: Option<crate::reactions::ReactionReplay>,
     /// Unknown top-level fields from compatible extensions, preserved on save
     /// so a round-trip never silently drops data.
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -130,6 +138,9 @@ impl PartialEq for EncounterState {
             && self.party_state == other.party_state
             && self.schema_version == other.schema_version
             && self.spatial == other.spatial
+            && self.pending_command == other.pending_command
+            && self.casting == other.casting
+            && self.registration == other.registration
             && self.extra == other.extra
     }
 }
@@ -419,7 +430,8 @@ pub struct CombatantState {
     pub action_used: bool,
     #[serde(default)]
     pub bonus_action_used: bool,
-    /// Round in which the reaction was spent.
+    /// Round in which the reaction was spent. Cleared at the start of this
+    /// combatant's next turn, regardless of the current round number.
     #[serde(default)]
     pub reaction_round: Option<u32>,
     #[serde(default)]
@@ -664,8 +676,10 @@ impl CombatantState {
         walk.max(0)
     }
 
-    pub fn has_reaction(&self, round: u32) -> bool {
-        !self.is_dead() && self.reaction_round != Some(round)
+    /// The round argument is retained for existing callers. Availability
+    /// follows this combatant's turns rather than the global round.
+    pub fn has_reaction(&self, _round: u32) -> bool {
+        !self.is_dead() && self.reaction_round.is_none()
     }
 
     pub fn resource(&self, id: &str) -> Option<&ResourceState> {
@@ -682,36 +696,7 @@ impl CombatantState {
         content: &ContentRegistry,
         query: &str,
     ) -> Result<ResolvedAbility> {
-        let mut entries = Vec::new();
-        if let Some(actions) = &self.creature.actions {
-            entries.extend(actions.iter());
-        }
-        if let Some(features) = &self.creature.features {
-            entries.extend(features.iter());
-        }
-        let mut matches = Vec::new();
-        for entry in entries {
-            let resolved = content.resolve_ability(entry)?;
-            if ability_matches(&resolved, query) {
-                matches.push(resolved);
-            }
-        }
-        match matches.len() {
-            1 => Ok(matches.remove(0)),
-            0 => bail!(
-                "creature `{}` has no ability matching `{query}`",
-                self.creature.display_name()
-            ),
-            _ => bail!(
-                "ability `{query}` is ambiguous on `{}`; matches: {}",
-                self.creature.display_name(),
-                matches
-                    .iter()
-                    .map(|resolved| resolved.ability.id.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        }
+        find_creature_ability(&self.creature, content, query)
     }
 
     /// All owned abilities, resolved with their entry params.
@@ -784,6 +769,41 @@ fn name_matches(lower_name: &str, needle: &str, prefix: bool) -> bool {
     }
 }
 
+pub fn find_creature_ability(
+    creature: &Creature,
+    content: &ContentRegistry,
+    query: &str,
+) -> Result<ResolvedAbility> {
+    let entries = creature
+        .actions
+        .iter()
+        .flatten()
+        .chain(creature.features.iter().flatten());
+    let mut matches = Vec::new();
+    for entry in entries {
+        let resolved = content.resolve_ability(entry)?;
+        if ability_matches(&resolved, query) {
+            matches.push(resolved);
+        }
+    }
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => bail!(
+            "creature `{}` has no ability matching `{query}`",
+            creature.display_name()
+        ),
+        _ => bail!(
+            "ability `{query}` is ambiguous on `{}`; matches: {}",
+            creature.display_name(),
+            matches
+                .iter()
+                .map(|resolved| resolved.ability.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 fn ability_matches(resolved: &ResolvedAbility, query: &str) -> bool {
     let needle = query.trim().to_ascii_lowercase();
     let id = &resolved.ability.id;
@@ -832,6 +852,14 @@ impl ResourceState {
 
     pub fn restore(&mut self, amount: i32) {
         self.current = (self.current + amount.max(0)).min(self.max);
+    }
+
+    pub(crate) fn restore_after_long_rest(&mut self, id: &str, edition: &str) {
+        if id == "hit-dice" && edition != "2024" {
+            self.restore((self.max / 2).max(1));
+        } else {
+            self.current = self.max;
+        }
     }
 }
 
@@ -1212,6 +1240,10 @@ impl EncounterState {
             nonlethal_active: false,
             nonlethal_request: false,
             ready_in_progress: false,
+            pending_command: None,
+            casting: None,
+            registration: None,
+            reaction_replay: None,
         };
         state.refresh_initial_conditions()?;
         state.log.push(format!(
@@ -1649,19 +1681,44 @@ impl EncounterState {
             .with_context(|| format!("failed to read state file {}", path.display()))?;
         let mut state: Self = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse state file {}", path.display()))?;
-        if state.schema_version != STATE_SCHEMA_VERSION {
+        let expected_schema = state.expected_schema_version();
+        if state.schema_version != expected_schema {
             bail!(
-                "state file {} uses schema version {}; this combat-sim supports {}",
+                "state file {} uses schema version {}. This combat-sim supports version {} for this encounter status",
                 path.display(),
                 state.schema_version,
-                STATE_SCHEMA_VERSION
+                expected_schema
             );
         }
         state
             .validate_spatial()
             .with_context(|| format!("invalid spatial data in state file {}", path.display()))?;
+        if let Some(registration) = &state.registration {
+            registration.validate()?;
+            if registration.is_closed() && state.awaiting_reaction() {
+                bail!("a closed encounter still contains a pending reaction");
+            }
+        }
         state.rebuild_caches();
         Ok(state)
+    }
+
+    fn expected_schema_version(&self) -> u32 {
+        let content = match (self.casting.is_some(), self.pending_command.is_some()) {
+            (false, false) => STATE_SCHEMA_VERSION,
+            (false, true) => crate::reactions::PENDING_SCHEMA_VERSION,
+            (true, false) => 3,
+            (true, true) => 4,
+        };
+        content + 4 * u32::from(self.registration.is_some())
+    }
+
+    pub(crate) fn refresh_schema_version(&mut self) {
+        self.schema_version = self.expected_schema_version();
+    }
+
+    pub fn awaiting_reaction(&self) -> bool {
+        self.pending_command.is_some()
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {

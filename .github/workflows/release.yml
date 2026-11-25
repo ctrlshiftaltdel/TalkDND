@@ -169,22 +169,111 @@ jobs:
           printf '%s  %s\n' "$hash" "$(basename "$archive")" > "${archive}.sha256"
 
       - name: Smoke-test the package from a renamed folder
-        if: matrix.archive != 'zip'
         shell: bash
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+          EXT: ${{ matrix.ext }}
         run: |
           set -euo pipefail
           base="$(mktemp -d)"
-          tar -xzf dist/out/*.tar.gz -C "$base"
+          archives=("$PWD"/dist/out/*."$ARCHIVE")
+          if [ "$ARCHIVE" = zip ]; then
+            (cd "$base" && 7z x "${archives[0]}" >/dev/null)
+          else
+            tar -xzf "${archives[0]}" -C "$base"
+          fi
           play="$base/我的 冒险 game"
           mv "$base/TalkDND" "$play"
-          elsewhere="$(mktemp -d)"
-          cd "$elsewhere"
-          "$play/bin/talkdnd" new --ruleset 2014 --date 2030-01-01
-          "$play/bin/talkdnd" chargen status
-          "$play/bin/talkdnd" start --no-pdf2md
-          "$play/bin/combat-sim" roll 1d20+5
-          test -d "$play/Saves/2030-01-01-01"
-          test ! -e "$elsewhere/Saves"
+          mkdir "$base/other directory"
+          cd "$base/other directory"
+          talk="$play/bin/talkdnd$EXT"
+          cs="$play/bin/combat-sim$EXT"
+          for edition in 2014 2024; do
+            date=2030-01-01
+            if [ "$edition" = 2024 ]; then date=2030-01-02; fi
+            "$talk" new --ruleset "$edition" --date "$date" >/dev/null
+            "$talk" chargen status >/dev/null
+            "$talk" start --no-pdf2md >/dev/null
+            save="$play/Saves/$date-01"
+            campaign="$save/combat/campaign.yaml"
+            fixture="$save/combat/smoke-fixture.yaml"
+            cat > "$fixture" <<'EOF'
+          creatures:
+            - id: smoke-hero
+              name: Smoke Hero
+              kind: pc
+              side: party
+              hp: 40
+              resources: {spell-slot-1: {max: 2, recharge: long}}
+              actions: [{ref: shield}, {ref: mending}]
+            - id: smoke-ally
+              name: Smoke Ally
+              kind: pc
+              side: party
+              hp: 40
+            - id: smoke-caster
+              name: Smoke Caster
+              kind: monster
+              side: enemy
+              hp: 40
+              resources: {spell-slot-1: {max: 2, recharge: long}}
+              actions: [{ref: magic-missile}]
+          EOF
+            "$cs" --campaign "$campaign" roll 1d20+5 --seed 21 | grep '1d20'
+            fight=(--campaign "$campaign" --lib "$fixture" --state smoke)
+            "$cs" "${fight[@]}" quick --foe smoke-caster --party smoke-hero,smoke-ally >/dev/null
+            "$cs" "${fight[@]}" init --set 'Smoke Caster=20' --set 'Smoke Hero=10' \
+              --set 'Smoke Ally=5' >/dev/null
+            "$cs" "${fight[@]}" cast 'Smoke Caster' magic-missile 'Smoke Hero' \
+              'Smoke Hero' 'Smoke Ally' --seed 21 | grep 'can use Shield'
+            state="$save/combat/smoke.state.json"
+            cp "$state" "$base/pending.json"
+            "$talk" start --no-pdf2md >/dev/null
+            cmp "$base/pending.json" "$state"
+            pending=$("$cs" "${fight[@]}" --player status --json)
+            id=$(jq -er '.pending_reaction | select(.who == "Smoke Hero" and .reaction == "Shield") | .id' <<< "$pending")
+            jq -e '[.combatants[].name] | index("Smoke Caster") == null' <<< "$pending" >/dev/null
+            "$cs" "${fight[@]}" reaction "$id" take >/dev/null
+            "$cs" "${fight[@]}" status --json | jq -e '
+              .pending_reaction == null
+              and any(.combatants[]; .name == "Smoke Hero" and .hp == 40 and .resources["spell-slot-1"].current == 1)
+              and any(.combatants[]; .name == "Smoke Ally" and .hp >= 35 and .hp <= 38)
+              and any(.combatants[]; .name == "Smoke Caster" and .resources["spell-slot-1"].current == 1)
+            ' >/dev/null
+            cp "$state" "$base/resolved.json"
+            if "$cs" "${fight[@]}" reaction "$id" take >/dev/null 2>&1; then
+              echo "A completed reaction was accepted again ($edition)" >&2
+              exit 1
+            fi
+            cmp "$base/resolved.json" "$state"
+            "$cs" "${fight[@]}" encounter status | grep -F 'open '
+            "$cs" "${fight[@]}" encounter close --reason 'Smoke test complete'
+            "$cs" "${fight[@]}" encounter status | grep -F 'closed '
+            sed 's@^library: \[@library: [smoke-fixture.yaml, @' "$campaign" > "$base/casting-campaign.yaml"
+            mv "$base/casting-campaign.yaml" "$campaign"
+            casting_fight=(--campaign "$campaign" --state casting)
+            "$cs" "${casting_fight[@]}" quick --foe smoke-caster --party smoke-hero,smoke-ally >/dev/null
+            "$cs" "${casting_fight[@]}" init --set 'Smoke Hero=25' --set 'Smoke Caster=10' \
+              --set 'Smoke Ally=5' >/dev/null
+            "$talk" time enable >/dev/null
+            "$talk" time casting start smoke-hero mending >/dev/null
+            id=$("$talk" time casting status | awk '$2 == "smoke-hero" && $3 == "mending" { print $1 }')
+            test -n "$id"
+            "$talk" time advance --seconds 48 >/dev/null
+            "$talk" time casting enter casting >/dev/null
+            "$cs" "${casting_fight[@]}" long-cast continue "$id" >/dev/null
+            "$talk" time casting leave >/dev/null
+            grep -F 'elapsed_seconds: 54' "$save/world-time.yaml"
+            "$talk" time advance --seconds 6 >/dev/null
+            "$talk" time casting finish "$id" --confirm-manual >/dev/null
+            "$talk" time casting status | grep -F completed
+            grep -F 'elapsed_seconds: 60' "$save/world-time.yaml"
+            grep -F "$id" "$save/combat/party-state.yaml"
+            "$cs" "${casting_fight[@]}" encounter close --reason 'Smoke test complete'
+            test -s "$save/rolls.log"
+            test ! -e Saves
+            echo "Packed $edition SRD smoke test passed"
+          done
 
       - name: Upload package
         uses: actions/upload-artifact@v7

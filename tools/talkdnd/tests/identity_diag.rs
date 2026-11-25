@@ -117,6 +117,124 @@ fn card(id: &str, name: &str) -> String {
     format!("# {name}\n\nA synthetic character card.\n\n```combat yaml\nid: {id}\nname: {name}\nlevel: 3\n```\n")
 }
 
+fn preview(fixture: &Fixture) -> serde_json::Value {
+    fs::write(fixture.root.join("AGENTS.md"), "Synthetic play root\n").unwrap();
+    let before = snapshot(&fixture.save);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_talkdnd"))
+        .arg("--root")
+        .arg(&fixture.root)
+        .args(["advancement", "identity-preview", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(snapshot(&fixture.save), before);
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn markdown_identity_preview_is_read_only_and_requests_dm_review() {
+    let fixture = Fixture::new("append-only-preview");
+    fixture.card("Characters/Aria.md", "aria", "Aria");
+    let report = preview(&fixture);
+    assert_eq!(report["consistency"], "unverified");
+    assert_eq!(report["write_capability"], "unverified");
+    let card = &report["cards"][0];
+    assert_eq!(card["path"], "Characters/Aria.md");
+    assert_eq!(card["status"], "review_required");
+    assert!(card["before_digest"].is_string());
+    assert!(card["added_bytes"].as_u64().unwrap() > 32);
+    assert!(!fixture.save.join("advancement").exists());
+    assert!(!report.to_string().contains("A synthetic character card"));
+}
+
+#[test]
+fn markdown_identity_preview_requires_both_records_and_detects_duplicate_tokens() {
+    let fixture = Fixture::new("binding-preview");
+    const TOKEN: &str = "00112233445566778899aabbccddeeff";
+    let marked_card =
+        |id, name| format!("{}\n<!-- talkdnd-identity: {TOKEN} -->\n", card(id, name));
+    let receipt = |relative, token| {
+        format!("version: 1\ncard: {relative}\ntoken: '{token}'\nhistory: unknown\n")
+    };
+    fixture.write("Characters/Aria.md", &marked_card("aria", "Aria"));
+    assert_eq!(preview(&fixture)["cards"][0]["status"], "record_missing");
+    fixture.write(
+        "advancement/aria.yaml",
+        &receipt("Characters/Aria.md", TOKEN),
+    );
+    let matched = preview(&fixture);
+    assert_eq!(matched["cards"][0]["status"], "matched");
+    assert!(!matched.to_string().contains(TOKEN));
+    fixture.write(
+        "advancement/aria.yaml",
+        &receipt("Characters/Other.md", TOKEN),
+    );
+    assert_eq!(preview(&fixture)["cards"][0]["status"], "binding_mismatch");
+    fixture.write(
+        "advancement/aria.yaml",
+        &receipt("Characters/Aria.md", TOKEN),
+    );
+    fixture.write("Characters/Brin.md", &marked_card("brin", "Brin"));
+    fixture.write(
+        "advancement/brin.yaml",
+        &receipt("Characters/Brin.md", TOKEN),
+    );
+    fixture.write(
+        "advancement/orphan.yaml",
+        &receipt("Characters/Gone.md", TOKEN),
+    );
+    let report = preview(&fixture);
+    assert_eq!(report["cards"][0]["status"], "duplicate_token");
+    assert_eq!(report["cards"][1]["status"], "duplicate_token");
+    assert_eq!(report["unmatched_records"][0], "orphan.yaml");
+}
+
+#[test]
+fn structured_identity_preview_uses_yaml_and_validates_the_carrier_reference() {
+    let fixture = Fixture::new("structured-identity-preview");
+    let card_path = "Characters/Aria.md";
+    let sheet_path = "sheets/aria.yaml";
+    fixture.card(card_path, "aria", "Aria");
+    let original = sheet_yaml("aria", "Aria", card_path, 1);
+    fixture.write(sheet_path, &original);
+    let report = preview(&fixture);
+    assert_eq!(report["cards"][0]["carrier"], sheet_path);
+    assert_eq!(report["cards"][0]["status"], "review_required");
+    let closed_document = format!("{original}...\n");
+    fixture.write(sheet_path, &closed_document);
+    assert_eq!(
+        preview(&fixture)["cards"][0]["status"],
+        "format_review_required"
+    );
+
+    let token = "19c36d2fab09bc001c681acaeefa4567";
+    fixture.write(
+        sheet_path,
+        &format!("{original}talkdnd_identity: '{token}'\n"),
+    );
+    let record = format!("version: 1\ncard: {card_path}\ncarrier: {sheet_path}\ntoken: '{token}'\nhistory: unknown\n");
+    fixture.write("advancement/aria.yaml", &record);
+    assert_eq!(preview(&fixture)["cards"][0]["status"], "matched");
+    fixture.write(
+        "advancement/aria.yaml",
+        &record.replace(sheet_path, card_path),
+    );
+    assert_eq!(preview(&fixture)["cards"][0]["status"], "binding_mismatch");
+    fixture.write("advancement/aria.yaml", &record);
+    fixture.write(
+        card_path,
+        &format!(
+            "{}\n<!-- talkdnd-identity: {token} -->\n",
+            card("aria", "Aria")
+        ),
+    );
+    assert_eq!(preview(&fixture)["cards"][0]["status"], "carrier_conflict");
+}
+
 fn sheet_yaml(id: &str, name: &str, file: &str, version: u32) -> String {
     format!(
         "version: {version}\nid: {id}\nname: {name}\ncontroller: player\nfile: {file}\nruleset: 5.5e-srd\ncombat: {{}}\n"

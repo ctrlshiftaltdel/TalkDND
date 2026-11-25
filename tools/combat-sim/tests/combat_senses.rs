@@ -664,6 +664,57 @@ fn tremorsense_sees_ground_contact_but_not_flying_or_incorporeal_creatures() {
 }
 
 #[test]
+fn tremorsense_2024_can_locate_without_granting_sight() {
+    let mut state = make_state("grid");
+    Arc::make_mut(&mut state.content).ruleset = "2024".into();
+    set_scene_light(&mut state, Some(Light::Dark));
+    place_cell(&mut state, "Tremorsenser", 1, 1);
+    place_cell(&mut state, "Target", 2, 1);
+    let observer = index(&state, "Tremorsenser");
+    let target = index(&state, "Target");
+    assert!(engine::locates_by_tremorsense(&state, observer, target));
+    assert_visibility(
+        &state,
+        "Tremorsenser",
+        "Target",
+        Visibility::HeavilyObscured,
+    );
+    add_condition(&mut state, "Target", "invisible");
+    assert!(engine::locates_by_tremorsense(&state, observer, target));
+    assert_visibility(&state, "Tremorsenser", "Target", Visibility::Blocked);
+    let log = attack_log(&mut state, "Tremorsenser", "Target");
+    assert!(
+        log.iter()
+            .any(|line| line.contains("pinpoints the target with tremorsense")),
+        "{log:?}"
+    );
+    assert!(
+        log.iter()
+            .any(|line| line.contains("dis:") && line.contains("invisible")),
+        "{log:?}"
+    );
+
+    make_flying(&mut state, "Tremorsenser", 10);
+    assert!(!engine::locates_by_tremorsense(&state, observer, target));
+    state.combatants[observer].vertical = Some(VerticalState::grounded());
+    make_flying(&mut state, "Target", 10);
+    assert!(!engine::locates_by_tremorsense(&state, observer, target));
+    state.combatants[target].vertical = Some(VerticalState::grounded());
+
+    let grid = scene_mut(&mut state).grid.as_mut().unwrap();
+    grid.rows[1].replace_range(2..3, "^");
+    grid.legend.insert(
+        "^".into(),
+        combat_sim::content::schema::GridCell {
+            elevation: Some(5),
+            ..Default::default()
+        },
+    );
+    state.rebuild_caches();
+    assert!(!engine::locates_by_tremorsense(&state, observer, target));
+}
+
+#[test]
 fn truesight_sees_darkness_and_invisible_but_not_ordinary_hiding_or_total_cover() {
     let mut state = make_state("grid");
     set_scene_light(&mut state, Some(Light::Dark));

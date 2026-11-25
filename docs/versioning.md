@@ -11,7 +11,7 @@ TalkDND 用 `主版本.次版本.补丁` 三段版本号，tag 写成 `vX.Y.Z`�
 - 每段是独立的整数，不是小数：`0.9` 之后是 `0.10`，不是 `1.0`。
 - 加次版本时补丁归零，加主版本时另两段归零。
 - 三个**产品** crate（`tools/combat-sim`、`tools/talkdnd`、`tools/talkdnd-dev`）的版本与发布 tag 保持一致，`Cargo.lock` 同步更新。
-- 第四个 crate `tools/advancement-lock` 是 `publish = false` 的**内部库**：不单独发布、不作为发布产物，但版本跟随产品版本（当前 1.6.0），与三个产品 crate 一起升级。`release.yml` 只构建 `combat-sim` 与 `talkdnd` 两个二进制，内部库不产生单独产物。
+- 第四个 crate `tools/advancement-lock` 是 `publish = false` 的**内部库**：不单独发布、不作为发布产物，但版本跟随产品版本，与三个产品 crate 一起升级。`release.yml` 只构建 `combat-sim` 与 `talkdnd` 两个二进制，内部库不产生单独产物。
 - 存档结构有变化的版本必须是次版本或主版本，并在 `talkdnd` 里加对应的自动迁移步骤（见 `LetsPlay/docs/layout.md` 的「存档结构版本」）。
 
 ## 发布流程

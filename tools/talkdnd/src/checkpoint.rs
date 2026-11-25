@@ -4,7 +4,7 @@
 //! `## 存档点` section to the newest session log — the original behavior,
 //! kept here so that lib.rs only registers and forwards.
 //! `checkpoint snapshot|list|show|restore` manage whole-save checkpoint
-//! snapshots: `checkpoints/<id>/manifest.yaml` (version 1, sha256 per covered
+//! snapshots: `checkpoints/<id>/manifest.yaml` (sha256 per covered
 //! file) plus data copies of the covered files. Snapshot keeps the newest 10
 //! and reports deletions; restore backs the whole save up first, replaces the
 //! covered files atomically (temp file + rename), deletes covered files that
@@ -32,7 +32,7 @@ use crate::{advancement_lock, audit, migrate, save};
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use combat_sim::fsutil::atomic_write;
-use combat_sim::integrity;
+use combat_sim::{campaign_time, integrity};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -43,7 +43,8 @@ use std::path::{Path, PathBuf};
 /// Checkpoint directory inside a save.
 pub const DIR: &str = "checkpoints";
 const MANIFEST: &str = "manifest.yaml";
-const VERSION: u32 = 1;
+const LEGACY_VERSION: u32 = 1;
+const CLOCK_VERSION: u32 = 2;
 /// Checkpoints kept after every snapshot; older ones are deleted and reported.
 const KEEP: usize = 10;
 const LOCK: &str = ".talkdnd.lock";
@@ -128,7 +129,7 @@ pub enum Cmd {
     },
 }
 
-/// `checkpoints/<id>/manifest.yaml`, version 1 (contract §4.1).
+/// `checkpoints/<id>/manifest.yaml`, with the clock included in version 2.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Manifest {
     pub version: u32,
@@ -198,6 +199,14 @@ pub(crate) fn hold_lock(save: &Path) -> Result<Lock> {
 
 fn snapshot(root: &Path, save: &Path, reason: Option<String>, json: bool) -> Result<()> {
     let _lock = Lock::acquire(save)?;
+    let world = campaign_time::WorldTime::load(save)?;
+    if world
+        .clock
+        .as_ref()
+        .is_some_and(|clock| clock.casting.handoff.is_some())
+    {
+        bail!("结束遭遇计时交接后再创建检查点");
+    }
     let Some(log) = save::latest_log(save) else {
         bail!("没有会话日志（Sessions/）；先 `talkdnd new` 建一个存档，再打检查点");
     };
@@ -219,7 +228,11 @@ fn snapshot(root: &Path, save: &Path, reason: Option<String>, json: bool) -> Res
             .with_context(|| format!("copy {rel_path} into the checkpoint"))?;
     }
     let manifest = Manifest {
-        version: VERSION,
+        version: if files.contains_key(campaign_time::FILE) {
+            CLOCK_VERSION
+        } else {
+            LEGACY_VERSION
+        },
         id: id.clone(),
         created: stamp(),
         reason,
@@ -465,6 +478,15 @@ fn restore_inner(
         bail!("检查点 {id} 不可用（{problem}）；已拒绝恢复");
     }
     let cm = manifest(save, id)?;
+    let world = campaign_time::WorldTime::load(save)?;
+    if cm.version < CLOCK_VERSION
+        && world
+            .clock
+            .as_ref()
+            .is_some_and(|clock| !clock.casting.is_empty())
+    {
+        bail!("该旧检查点缺少长施法时钟，无法与法术资源一起恢复");
+    }
     let current = migrate::detect(save)?;
     if cm.schema > current {
         bail!(
@@ -863,11 +885,15 @@ pub fn entry(save: &Path, id: &str) -> Entry {
     e.log_file = m.log_file.clone();
     e.log_lines = m.log_lines;
     e.files = m.files.len();
-    if m.version > VERSION {
+    if m.version > CLOCK_VERSION {
         e.problem = Some(format!(
-            "manifest version {} 不支持（本程序支持 {VERSION}）",
+            "manifest version {} 不支持（本程序支持 {CLOCK_VERSION}）",
             m.version
         ));
+        return e;
+    }
+    if (m.version == CLOCK_VERSION) != m.files.contains_key(campaign_time::FILE) {
+        e.problem = Some("检查点的版本与世界时钟副本不一致".to_string());
         return e;
     }
     let mut bytes = 0u64;
@@ -957,6 +983,10 @@ fn covered_hashes(save: &Path) -> Result<BTreeMap<String, String>> {
     for (rel_path, p) in covered_files(save) {
         let bytes = fs::read(&p).with_context(|| format!("read {}", p.display()))?;
         files.insert(rel_path, hash(&bytes));
+    }
+    if campaign_time::WorldTime::load(save)?.clock.is_some() {
+        let bytes = fs::read(save.join(campaign_time::FILE))?;
+        files.insert(campaign_time::FILE.to_string(), hash(&bytes));
     }
     Ok(files)
 }

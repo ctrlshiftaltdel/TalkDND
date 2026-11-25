@@ -1318,6 +1318,9 @@ impl<'a> Walker<'a> {
             }
         }
         self.spell_meta(ability);
+        if let Err(error) = ability.split_damage() {
+            self.error(error);
+        }
         self.effects(&ability.effects);
         for (index, trigger) in ability.triggers.iter().enumerate() {
             self.trigger(trigger, &format!("trigger #{}", index + 1));

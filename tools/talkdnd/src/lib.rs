@@ -2,7 +2,9 @@
 //! resume digest, new save skeleton, character creation, random companions,
 //! checkpoints and log entries. All dice go through combat-sim's engine.
 
+mod advancement_backup_metadata;
 pub mod advancement_commit;
+mod advancement_identity;
 pub mod advancement_inner_lock;
 pub mod advancement_lock;
 pub mod advancement_recovery;
@@ -115,6 +117,11 @@ enum Cmd {
         /// Only report what would be migrated; write nothing
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Inspect future character advancement without editing the save.
+    Advancement {
+        #[command(subcommand)]
+        cmd: AdvancementCmd,
     },
     /// Character creation (player decides every step)
     ///
@@ -816,6 +823,15 @@ enum NpcCmd {
     },
 }
 
+#[derive(Subcommand, Clone)]
+enum AdvancementCmd {
+    /// Check character identity bindings and preview the append-only change.
+    IdentityPreview {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Transition gate (ADV-P1-1pre): the writer-registry row for this invocation.
 ///
 /// The registry lives in the shared `advancement-lock` crate so both CLIs use
@@ -832,6 +848,9 @@ fn gate_entry(cli: &Cli) -> &'static str {
                 "talkdnd:migrate"
             }
         }
+        Cmd::Advancement {
+            cmd: AdvancementCmd::IdentityPreview { .. },
+        } => "talkdnd:advancement-identity-preview",
         Cmd::Chargen { cmd } => match cmd {
             ChargenCmd::Status => "talkdnd:chargen-status",
             ChargenCmd::Validate => "talkdnd:chargen-validate",
@@ -883,6 +902,10 @@ fn gate_entry(cli: &Cli) -> &'static str {
         },
         Cmd::Time { cmd } => match cmd {
             worldtime::Cmd::Show => "talkdnd:time-read",
+            worldtime::Cmd::Casting {
+                cmd: worldtime::CastingCmd::Status,
+            } => "talkdnd:time-read",
+            worldtime::Cmd::Casting { .. } => "talkdnd:time-write",
             worldtime::Cmd::Event { cmd } => match cmd {
                 worldtime::EventCmd::List { .. } => "talkdnd:time-read",
                 worldtime::EventCmd::Add { .. }
@@ -1111,7 +1134,6 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             gate::check_target(&target, gate_entry)?;
         }
     }
-    let protocol_present = gate_save.as_deref().is_some_and(gate::has_protocol);
     let gate_class = gate::class_of(gate_entry);
     // ADV-P1-1a / 1c / 1d: adopted writers take the SAVE lock before any
     // target write. The lock is held through dispatch and the post-command
@@ -1123,70 +1145,91 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     } else {
         Vec::new()
     };
+    let clock_lock = if matches!(
+        gate_class,
+        gate::Class::AdoptedWrite | gate::Class::UnadoptedWrite
+    ) && matches!(
+        cli.cmd,
+        Cmd::Time { .. }
+            | Cmd::Char { .. }
+            | Cmd::Chargen { .. }
+            | Cmd::Companion { .. }
+            | Cmd::Npc { .. }
+            | Cmd::LevelUp { .. }
+            | Cmd::Checkpoint {
+                cmd: Some(checkpoint::Cmd::Snapshot { .. } | checkpoint::Cmd::Restore { .. }),
+                ..
+            }
+            | Cmd::Migrate { dry_run: false }
+    ) {
+        gate_save
+            .as_deref()
+            .map(combat_sim::campaign_time::lock_if_present)
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    if clock_lock.is_some() {
+        let world = worldtime::load(gate_save.as_deref().expect("clock has a save"))?;
+        if let Some(clock) = &world.clock {
+            let restores = matches!(
+                cli.cmd,
+                Cmd::Checkpoint {
+                    cmd: Some(checkpoint::Cmd::Restore { .. }),
+                    ..
+                } | Cmd::Migrate { dry_run: false }
+            );
+            if restores
+                && clock
+                    .casting
+                    .casts
+                    .values()
+                    .any(|cast| cast.status == combat_sim::long_cast::CastStatus::Casting)
+            {
+                bail!("finish or interrupt active long castings before restoring or migrating the save");
+            }
+            if clock.casting.handoff.is_some()
+                && matches!(
+                    cli.cmd,
+                    Cmd::Char { .. }
+                        | Cmd::Chargen { .. }
+                        | Cmd::Companion { .. }
+                        | Cmd::Npc { .. }
+                        | Cmd::LevelUp { .. }
+                        | Cmd::Checkpoint {
+                            cmd: Some(checkpoint::Cmd::Restore { .. }),
+                            ..
+                        }
+                        | Cmd::Migrate { dry_run: false }
+                )
+            {
+                bail!("reconcile the encounter clock before changing party or save data outside combat");
+            }
+        }
+    }
     let mut os = step_rng();
     let mut seeded = cli.seed.map(seeded_rng);
     let rng: &mut dyn DiceRng = match seeded.as_mut() {
         Some(r) => r,
         None => &mut os,
     };
-    let tracked = match &cli.cmd {
-        Cmd::Start { .. }
-        | Cmd::New { .. }
-        | Cmd::Migrate { .. }
-        | Cmd::Integrity { .. }
-        | Cmd::Options { .. }
-        | Cmd::Data { .. }
-        | Cmd::Knowledge { .. }
-        | Cmd::Library { .. } => None,
-        // `oracle` never reads or writes the save (P08). Tracking it would run
-        // the integrity audit after a read-only command and rewrite the
-        // reconciliation baseline date on a clean save.
-        Cmd::Oracle { .. } => None,
-        // `known` and `snapshot diff` only read the save (TASK-0142): the same
-        // audit-after-read would rewrite the baseline date for no reason.
-        Cmd::Known | Cmd::Snapshot { .. } => None,
-        // `adventure index show|search` and `adventure search` only read the
-        // save. `adventure index build` is not read-only: `--book` may name a
-        // folder inside the save and `build_one` writes `structured.json`
-        // there, so it stays tracked. `adventure section` writes the session
-        // log when it reads a section ahead of progress or a DM-only one with
-        // `--reason`, so it stays tracked and audited too.
-        Cmd::Adventure { cmd } => match cmd {
-            AdventureCmd::Index { cmd } => match cmd {
-                bookindex::Cmd::Show { .. } | bookindex::Cmd::Search { .. } => None,
-                bookindex::Cmd::Build { .. } => save::resolve_slot(&root, cli.save.as_deref()).ok(),
-            },
-            AdventureCmd::Search { .. } => None,
-            AdventureCmd::Section { .. } => save::resolve_slot(&root, cli.save.as_deref()).ok(),
-        },
-        // ADV-P1-1c / #285: list|show must not run the outer after_command
-        // audit (whole-CLI tree-identical). `Cmd::Migrate` is already
-        // untracked above, including `--dry-run`. `Cmd::Integrity` is
-        // untracked above as well (status/accept take the integrity lock
-        // themselves, after SAVE). Snapshot, restore, and `checkpoint <text>`
-        // stay on the default arm (the last of those is still UnadoptedWrite).
-        Cmd::Checkpoint {
-            cmd: Some(checkpoint::Cmd::List { .. } | checkpoint::Cmd::Show { .. }),
-            ..
-        } => None,
-        // ADV-P1-1d / #285: `log rolls` is read-only for the whole CLI, not
-        // only inside `rolls::show`. It must not take SAVE, create lock/state
-        // or a write probe, or run the outer audit.
-        Cmd::Log { text } if text.first().is_some_and(|word| word == "rolls") => None,
+    let tracked = match (gate_class, &cli.cmd) {
+        // The same command classification applies to all saves. The outer
+        // audit would write user data even on a clean save with an old date.
+        (gate::Class::ReadOnly | gate::Class::ControlMetadata, _) => None,
+        (
+            _,
+            Cmd::Start { .. }
+            | Cmd::New { .. }
+            | Cmd::Migrate { .. }
+            | Cmd::Integrity { .. }
+            | Cmd::Options { .. }
+            | Cmd::Data { .. }
+            | Cmd::Knowledge { .. }
+            | Cmd::Library { .. },
+        ) => None,
         _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
-    };
-    // Under the protocol a read-only or control-metadata command must not run
-    // the post-command audit write either: #285 tracks that side effect for
-    // saves without the protocol, and the transition gate promises that a
-    // read-only run changes no save bytes.
-    let tracked = if protocol_present
-        && matches!(
-            gate_class,
-            gate::Class::ReadOnly | gate::Class::ControlMetadata
-        ) {
-        None
-    } else {
-        tracked
     };
     let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
     let mut created = None;
@@ -1342,6 +1385,12 @@ fn dispatch(
 ) -> Result<()> {
     let root = root.to_path_buf();
     match cli.cmd.clone() {
+        Cmd::Advancement {
+            cmd: AdvancementCmd::IdentityPreview { json },
+        } => {
+            let save = save::resolve_slot(&root, cli.save.as_deref())?;
+            advancement_identity::run(&save, json)?;
+        }
         Cmd::Char { who, op } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             for l in charsheet::run(&s, &who, op.unwrap_or(charsheet::Op::Show), rng)? {

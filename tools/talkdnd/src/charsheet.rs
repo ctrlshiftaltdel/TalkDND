@@ -2757,6 +2757,9 @@ pub enum Op {
         kind: String,
         #[arg(long, default_value_t = 0)]
         hd: u32,
+        /// Long rest: confirm the character ate and drank for 2014 exhaustion recovery.
+        #[arg(long)]
+        food_and_water: bool,
     },
     /// `condition add poisoned` / `condition remove poisoned`
     ///
@@ -3266,17 +3269,31 @@ fn apply(
             r.current = (r.current + add).min(r.max);
             format!("恢复 {rid}（{}/{}）", r.current, r.max)
         }
-        Op::Rest { kind, hd } => {
+        Op::Rest {
+            kind,
+            hd,
+            food_and_water,
+        } => {
             let mut log = Vec::new();
             match kind.as_str() {
                 "short" | "短休" => {
+                    if food_and_water {
+                        bail!("--food-and-water is only for long rests");
+                    }
                     m.short_rest(hd, rng, &mut log)?;
                 }
                 "long" | "长休" => {
-                    m.long_rest(&dying, &mut log);
-                    if cf.exhaustion > 0 {
-                        cf.exhaustion -= 1;
-                        log.push(format!("exhaustion → {}", cf.exhaustion));
+                    m.long_rest_for_edition(&book.rs, &dying, &mut log);
+                    if !m.dead && cf.exhaustion > 0 {
+                        if book.rs == "2014" && !food_and_water {
+                            log.push(format!(
+                                "力竭保持 {} 级（2014 长休需要确认已进食和饮水）",
+                                cf.exhaustion
+                            ));
+                        } else {
+                            cf.exhaustion -= 1;
+                            log.push(format!("exhaustion → {}", cf.exhaustion));
+                        }
                     }
                 }
                 _ => bail!("rest short|long"),
@@ -4072,6 +4089,7 @@ mod tests {
             Op::Rest {
                 kind: "long".into(),
                 hd: 0,
+                food_and_water: false,
             },
             &mut rng,
             &mut out,
@@ -4080,6 +4098,55 @@ mod tests {
         assert_eq!(ps.members["tess"].hp, 12);
         assert!(ps.members["tess"].conditions.is_empty());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn character_long_rest_checks_nutrition_and_regains_hit_dice_by_edition() {
+        let dir = std::env::temp_dir();
+        for (edition, food_and_water, expected_level, expected_dice) in [
+            ("2014", false, 3, 2),
+            ("2014", true, 2, 2),
+            ("2024", false, 2, 5),
+        ] {
+            let book = Book::srd(edition);
+            let mut character = cf(edition);
+            character.exhaustion = 3;
+            let mut party = PartyState::default();
+            let mut member = Member {
+                name: "Tess".into(),
+                hp: 1,
+                max_hp: 12,
+                ..Default::default()
+            };
+            member.resources.insert(
+                "hit-dice".into(),
+                ResourceState {
+                    current: 0,
+                    max: 5,
+                    recharge: combat_sim::content::schema::Recharge::Long,
+                    short_rest_regain: None,
+                },
+            );
+            party.members.insert(character.id.clone(), member);
+            apply(
+                &dir,
+                &mut character,
+                &mut party,
+                &book,
+                Op::Rest {
+                    kind: "long".into(),
+                    hd: 0,
+                    food_and_water,
+                },
+                &mut combat_sim::dice::seeded_rng(0),
+                &mut Vec::new(),
+            )
+            .unwrap();
+            let member = &party.members[&character.id];
+            assert_eq!(character.exhaustion, expected_level);
+            assert_eq!(member.resources["hit-dice"].current, expected_dice);
+            assert_eq!(member.hp, 12);
+        }
     }
 
     #[test]

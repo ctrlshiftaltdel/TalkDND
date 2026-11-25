@@ -1,6 +1,6 @@
 [package]
 name = "talkdnd"
-version = "1.6.0"
+version = "1.7.0"
 edition = "2021"
 description = "TalkDND play helper: start digest, new save, character creation, random companions, checkpoints"
 license = "MIT"
@@ -18,6 +18,8 @@ serde_norway = "0.9"
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["webp", "png", "jpeg"] }
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libc = "0.2"
 
 [profile.release]
 lto = "fat"

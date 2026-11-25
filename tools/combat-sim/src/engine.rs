@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -15,12 +15,12 @@ use serde::{Deserialize, Serialize};
 use crate::content::expr::ExprContext;
 use crate::content::schema::{
     Ability, AbilityCost, AbilityEntry, AbilityName, ActionResolution, Activation, Attack,
-    AttackEffect, AttackKind, AttackProperty, BasicAction, CheckEffect, CheckWho, ConditionFlag,
-    Cover, CritMode, DamageEffect, DamagePart, DamageType, Direction, Duration, DurationUntil,
-    Effect, EndsOn, ExprValue, ForcedMoveEffect, GrappleRule, Light, Modifier, ModifierApplies,
-    ModifierEffect, ModifierFilter, Obscurement, OncePer, Predicate, Recharge, SaveEffect,
-    SaveEndsAt, SceneMode, ShoveRule, Size, TargetRef, TargetSide, TargetType, ToggleTriggerEffect,
-    Trigger, TriggerWhen, TwoWeaponRule, UnarmedStrikeRule,
+    AttackEffect, AttackKind, AttackProperty, BasicAction, CastingUnit, CheckEffect, CheckWho,
+    ConditionFlag, Cover, CritMode, DamageEffect, DamagePart, DamageType, Direction, Duration,
+    DurationUntil, Effect, EndsOn, ExprValue, ForcedMoveEffect, GrappleRule, Light, Modifier,
+    ModifierApplies, ModifierEffect, ModifierFilter, Obscurement, OncePer, Predicate, Recharge,
+    SaveEffect, SaveEndsAt, SceneMode, ShoveRule, Size, TargetRef, TargetSide, TargetType,
+    ToggleTriggerEffect, Trigger, TriggerWhen, TwoWeaponRule, UnarmedStrikeRule,
 };
 use crate::content::{ContentRegistry, ResolvedAbility};
 use crate::dice::{seeded_rng, D20Roll, DiceExpr, DiceRng, RollMode, RollRecord};
@@ -29,8 +29,8 @@ use crate::space::{
     FallMap, FallResolution, FallResolver, FallRuleKind, FlightCapability, FlightCheck,
     FlightConditions, FlightRules, FlightState, FlightSubject, Footprint, GridMap, HeightProfile,
     LandingCondition, LandingOutcome, LineOfSight, MovementCell, MovementMap, MovementPlanner,
-    PlanOutcome, Position, Space, SpatialBlocker, SpatialBody, SpatialPose, SpatialProfile,
-    TraversalCreature, OPEN_ZONE,
+    PlanOutcome, Position, Space, SpaceView, SpatialBlocker, SpatialBody, SpatialPose,
+    SpatialProfile, TraversalCreature, OPEN_ZONE,
 };
 use crate::state::{
     ability_from_text, active_duration, ActiveCondition, ActiveDuration, ActiveSaveEnds,
@@ -171,6 +171,9 @@ pub struct ShoveOptions {
 /// Prefix for per-turn Attack action slots stored in `CombatantState::once_used`.
 /// The `turn:` prefix is cleared by the existing turn-start reset.
 const ATTACK_SLOT_PREFIX: &str = "turn:attack-action:slot:";
+const TURN_BONUS_SPELL: &str = "casting-turn:bonus-spell";
+const TURN_OTHER_SPELL: &str = "casting-turn:other-spell";
+const TURN_SLOT_SPELL: &str = "casting-turn:slot-spell";
 
 /// Ability/use command options.
 #[derive(Debug, Clone, Default)]
@@ -201,6 +204,7 @@ pub struct CastParams {
     pub slot_level: Option<i32>,
     pub material: Option<String>,
     pub ignore_components: bool,
+    pub manual_confirmation: Option<bool>,
 }
 
 /// A character's condition-duration override supplied by the CLI.
@@ -222,6 +226,12 @@ pub struct AddConditionOptions {
 pub enum RestKind {
     Short,
     Long,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RestOptions {
+    pub hit_dice: Option<u32>,
+    pub food_and_water: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -458,26 +468,6 @@ fn source_is_visible(state: &EncounterState, holder: usize, source_name: &str) -
     space.cover(from.as_ref(), to.as_ref()) != Cover::Total
 }
 
-fn frightened_source_names(state: &EncounterState, holder: usize) -> Vec<String> {
-    state.combatants[holder]
-        .conditions
-        .iter()
-        .filter_map(|active| {
-            if !condition_behavior(state, &active.condition)
-                .is_some_and(|behavior| behavior.cannot_move_closer_to_source)
-            {
-                return None;
-            }
-            let name = active
-                .source
-                .as_deref()
-                .or(active.linked.as_deref())?
-                .to_string();
-            source_is_visible(state, holder, &name).then_some(name)
-        })
-        .collect()
-}
-
 fn distance_from_source(state: &EncounterState, source: usize, position: &Position) -> Option<i32> {
     if spatial_query_enabled(state) {
         return spatial_distance_to_position(state, source, position);
@@ -493,10 +483,23 @@ fn ensure_frightened_move(
     from: &Position,
     to: &Position,
 ) -> Result<()> {
-    for name in frightened_source_names(state, holder) {
-        let Some(source) = exact_index(state, &name) else {
+    for active in &state.combatants[holder].conditions {
+        if !condition_behavior(state, &active.condition)
+            .is_some_and(|behavior| behavior.cannot_move_closer_to_source)
+        {
+            continue;
+        }
+        let Some(source) = active
+            .source
+            .as_deref()
+            .or(active.linked.as_deref())
+            .and_then(|name| exact_index(state, name))
+        else {
             continue;
         };
+        if state.combatants[source].is_dead() {
+            continue;
+        }
         let Some(from_ft) = distance_from_source(state, source, from) else {
             continue;
         };
@@ -505,9 +508,8 @@ fn ensure_frightened_move(
         };
         if to_ft < from_ft {
             bail!(
-                "`{}` can't willingly move closer to `{}` (source of fear)",
-                state.combatants[holder].name,
-                name
+                "`{}` can't willingly move closer to the source of fear",
+                state.combatants[holder].name
             );
         }
     }
@@ -1078,6 +1080,10 @@ fn eval_predicate(
                 .any(|tag| tag.eq_ignore_ascii_case("spell"));
             is_spell == flag.get()
         }
+        Predicate::SourceHasTag(tag) => context
+            .source_tags
+            .iter()
+            .any(|source| source.eq_ignore_ascii_case(tag)),
         Predicate::SlotLevelMin(minimum) => context.slot_level.unwrap_or(0) >= *minimum,
         Predicate::DamageDealt(flag) => (context.damage_dealt > 0) == flag.get(),
         Predicate::WouldMissWithAcBonus(bonus) => {
@@ -1706,11 +1712,17 @@ fn start_turn(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> bool {
+    for combatant in &mut state.combatants {
+        combatant.once_used.remove(TURN_BONUS_SPELL);
+        combatant.once_used.remove(TURN_OTHER_SPELL);
+        combatant.once_used.remove(TURN_SLOT_SPELL);
+    }
     let speed = effective_speed(state, index);
     {
         let combatant = &mut state.combatants[index];
         combatant.action_used = false;
         combatant.bonus_action_used = false;
+        combatant.reaction_round = None;
         combatant.speed_left = speed;
         combatant
             .once_used
@@ -1753,6 +1765,17 @@ fn end_turn(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    let missed = state.casting.as_ref().is_some_and(|casting| {
+        casting.casts.values().any(|cast| {
+            cast.progress.status == crate::long_cast::CastStatus::Casting
+                && cast.progress.recipe.caster_id == state.combatants[index].creature_id()
+                && (cast.last_action_round != Some(state.round)
+                    || cast.progress.ready_to_complete())
+        })
+    });
+    if missed {
+        break_concentration(state, index, log);
+    }
     run_owned_triggers(state, index, TriggerWhen::EndOfTurn, None, rng, log);
     expire_conditions(state, index, rng, log)?;
     expire_subject_conditions(state, index, UntilPhase::End, log);
@@ -3308,9 +3331,9 @@ fn spend_action(
 }
 
 fn spend_reaction(state: &mut EncounterState, index: usize, _log: &mut dyn LogSink) -> Result<()> {
-    if state.combatants[index].reaction_round == Some(state.round) {
+    if state.combatants[index].reaction_round.is_some() {
         bail!(
-            "`{}` has already used a reaction this round",
+            "`{}` has already used their reaction and must wait until the start of their next turn",
             state.combatants[index].name
         );
     }
@@ -4539,7 +4562,8 @@ pub fn can_see(state: &EncounterState, observer: usize, target: usize) -> CanSee
         };
     }
 
-    if senses_in_range(senses.tremorsense, distance)
+    if state.content.ruleset == "2014"
+        && senses_in_range(senses.tremorsense, distance)
         && is_ground_contact(state, target)
         && !is_incorporeal(state, target)
     {
@@ -4695,6 +4719,54 @@ fn is_incorporeal(state: &EncounterState, index: usize) -> bool {
         })
 }
 
+/// Locates a creature by vibrations on the modeled floor. On a grid the
+/// surface is the same floor level, and zone scenes only establish a shared
+/// surface within a zone. This query grants neither sight nor a clear path.
+pub fn locates_by_tremorsense(state: &EncounterState, observer: usize, target: usize) -> bool {
+    let (Some(observer_creature), Some(target_creature)) =
+        (state.combatants.get(observer), state.combatants.get(target))
+    else {
+        return false;
+    };
+    let senses = parse_senses(observer_creature.creature.senses.as_deref());
+    if observer == target
+        || senses.tremorsense.is_none()
+        || !is_ground_contact(state, observer)
+        || !is_ground_contact(state, target)
+        || is_incorporeal(state, target)
+    {
+        return false;
+    }
+    let Some(space) = state.space() else {
+        return false;
+    };
+    let (from, to) = (
+        observer_creature.position_ref(),
+        target_creature.position_ref(),
+    );
+    if !space
+        .distance(from.as_ref(), to.as_ref())
+        .is_some_and(|distance| senses_in_range(senses.tremorsense, distance))
+    {
+        return false;
+    }
+    match space {
+        SpaceView::Zones(_) => observer_creature.zone == target_creature.zone,
+        SpaceView::Grid(grid) => {
+            let floor = |combatant: &CombatantState| {
+                let [x, y] = combatant.cell()?;
+                let floor = grid.map().cell_at(x, y)?.elevation.unwrap_or_default();
+                combatant
+                    .pose
+                    .as_ref()
+                    .is_none_or(|pose| pose.cell.z == floor)
+                    .then_some(floor)
+            };
+            matches!((floor(observer_creature), floor(target_creature)), (Some(a), Some(b)) if a == b)
+        }
+    }
+}
+
 fn sense_defeats_hidden(
     state: &EncounterState,
     target: usize,
@@ -4702,7 +4774,8 @@ fn sense_defeats_hidden(
     distance: i32,
 ) -> bool {
     senses_in_range(senses.blindsight, distance)
-        || (senses_in_range(senses.tremorsense, distance)
+        || (state.content.ruleset == "2014"
+            && senses_in_range(senses.tremorsense, distance)
             && is_ground_contact(state, target)
             && !is_incorporeal(state, target))
 }
@@ -5019,6 +5092,15 @@ fn resolve_attack_inner(
         source.eq_ignore_ascii_case("hidden") || source.eq_ignore_ascii_case("invisible")
     });
     let attacker_view = can_see(state, attacker, target);
+    if log.enabled()
+        && state.content.ruleset == "2024"
+        && visibility_penalty_from(&attacker_view)
+        && locates_by_tremorsense(state, attacker, target)
+    {
+        log.log(format_args!(
+            "{attacker_name} pinpoints the target with tremorsense"
+        ));
+    }
     if visibility_penalty_from(&attacker_view) && !hidden_modifier {
         let label = if attacker_view.light == Light::Dark
             && attacker_view.obscurement != Obscurement::Heavy
@@ -5143,31 +5225,31 @@ fn resolve_attack_inner(
         ));
     }
 
-    if hit && !options.no_reactions {
-        let converted = try_hit_reactions(
+    if hit
+        && !options.no_reactions
+        && try_defensive_reaction(
             state,
-            attacker,
             target,
-            profile,
-            &facts,
-            result.total,
-            current_ac,
-            source,
+            DefensiveReactionEvent::Hit {
+                attacker,
+                profile,
+                facts: &facts,
+                total: result.total,
+                ac: current_ac,
+            },
             rng,
             log,
-        )?;
-        if let Some((new_ac, new_terms)) = converted {
-            current_ac = new_ac;
-            current_terms = new_terms;
-            if result.total < current_ac {
-                hit = false;
-                log.log(format_args!(
-                    "{} now misses: {} vs {} MISS",
-                    attacker_name,
-                    result.total,
-                    ac_text(current_ac, &current_terms)
-                ));
-            }
+        )?
+    {
+        (current_ac, current_terms) = effective_ac(state, target, Some(attacker), &facts)?;
+        if !result.nat20 && result.total < current_ac {
+            hit = false;
+            log.log(format_args!(
+                "{} now misses: {} vs {} MISS",
+                attacker_name,
+                result.total,
+                ac_text(current_ac, &current_terms)
+            ));
         }
     }
 
@@ -5354,95 +5436,120 @@ fn trigger_abilities(
     resolved
 }
 
-fn try_hit_reactions(
+#[derive(Clone, Copy)]
+enum DefensiveReactionEvent<'a> {
+    Hit {
+        attacker: usize,
+        profile: &'a AttackProfile,
+        facts: &'a AttackFacts,
+        total: i32,
+        ac: i32,
+    },
+    TargetedSpell {
+        caster: usize,
+        source: &'a EffectSource,
+    },
+}
+
+fn try_defensive_reaction(
     state: &mut EncounterState,
-    attacker: usize,
     target: usize,
-    profile: &AttackProfile,
-    facts: &AttackFacts,
-    attack_total: i32,
-    current_ac: i32,
-    source: Option<&EffectSource>,
+    event: DefensiveReactionEvent<'_>,
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
-) -> Result<Option<(i32, Vec<(i32, String)>)>> {
-    let abilities = trigger_abilities(state, target, TriggerWhen::OnHitTaken);
-    if abilities.is_empty() {
-        return Ok(None);
+) -> Result<bool> {
+    if !state.combatants[target].has_reaction(state.round)
+        || has_flag(state, target, ConditionFlag::NoReactions)
+        || is_incapacitated(state, target)
+        || state.combatants[target].dormant
+    {
+        return Ok(false);
     }
-    let mut converted = None;
-    let mut new_ac = current_ac;
-    for resolved in abilities {
+    let when = match event {
+        DefensiveReactionEvent::Hit { .. } => TriggerWhen::OnHitTaken,
+        DefensiveReactionEvent::TargetedSpell { .. } => TriggerWhen::OnTargetedSpell,
+    };
+    for resolved in trigger_abilities(state, target, when) {
         for (trigger_index, trigger) in resolved.ability.triggers.iter().enumerate() {
-            if trigger.on != TriggerWhen::OnHitTaken
+            if trigger.on != when
                 || (!trigger.reaction && resolved.ability.activation != Activation::Reaction)
             {
                 continue;
             }
-            if state.combatants[target].reaction_round == Some(state.round) {
-                continue;
-            }
-            if has_flag(state, target, ConditionFlag::NoReactions)
-                || is_incapacitated(state, target)
-                || state.combatants[target].dormant
-            {
-                continue;
-            }
-            let key = format!(
-                "trigger:{}:{}:{}",
-                target, resolved.ability.id, trigger_index
-            );
+            let key = format!("trigger:{target}:{}:{trigger_index}", resolved.ability.id);
             if !trigger_available(state, target, trigger, &key) {
                 continue;
             }
-            if !trigger_affordable(state, target, trigger) {
+            let cost = trigger.cost.as_ref().or(resolved.ability.cost.as_ref());
+            if cost.is_some_and(|cost| !can_afford(state, target, cost)) {
                 continue;
             }
-            let context = PredicateContext {
-                self_idx: target,
-                actor: target,
-                target: Some(target),
-                attacker: Some(attacker),
-                linked: None,
-                source: None,
-                attack: facts.clone(),
-                has_advantage: false,
-                has_disadvantage: false,
-                damage_dealt: 0,
-                slot_level: resolved.ability.slot_level,
-                current_attack_total: Some(attack_total),
-                current_ac: Some(new_ac),
-                ability: profile.ability,
-                damage_type: None,
-                source_tags: resolved.ability.tags.clone(),
+            let Ok(cast_marker) = check_spell_turn(state, target, &resolved.ability, cost) else {
+                continue;
             };
-            if let Some(when) = &trigger.when {
-                if !eval_predicate(state, when, &context) {
+
+            let mut predicate = PredicateContext::for_owner(target);
+            predicate.target = Some(target);
+            let (attack, fingerprint) = match event {
+                DefensiveReactionEvent::Hit {
+                    attacker,
+                    profile,
+                    facts,
+                    total,
+                    ac,
+                } => {
+                    predicate.attacker = Some(attacker);
+                    predicate.attack = facts.clone();
+                    predicate.ability = profile.ability;
+                    predicate.current_attack_total = Some(total);
+                    predicate.current_ac = Some(ac);
+                    predicate.slot_level = resolved.ability.slot_level;
+                    predicate.source_tags = resolved.ability.tags.clone();
+                    (Some(profile), format!("hit:{attacker}:{key}:{total}:{ac}"))
+                }
+                DefensiveReactionEvent::TargetedSpell { caster, source } => {
+                    predicate.attacker = Some(caster);
+                    predicate.source = Some(state.combatants[caster].name.clone());
+                    predicate.slot_level = source.slot_level;
+                    predicate.source_tags = source.tags.clone();
+                    (None, format!("targeted:{caster}:{key}:{}", source.id))
+                }
+            };
+            if let Some(condition) = &trigger.when {
+                let tactical_ac_check = when == TriggerWhen::OnHitTaken
+                    && matches!(condition, Predicate::WouldMissWithAcBonus(_))
+                    && state.reaction_replay.is_some()
+                    && state.combatants[target].is_pc();
+                if !tactical_ac_check && !eval_predicate(state, condition, &predicate) {
                     continue;
                 }
             }
-            if let Some(cost) = trigger
-                .cost
-                .clone()
-                .or_else(|| resolved.ability.cost.clone())
-            {
-                if !spend_cost(state, target, &cost, log)? {
+            if !confirm_player_reaction(state, target, resolved.ability.display_name(), || {
+                fingerprint
+            }) {
+                continue;
+            }
+            if let Some(cost) = cost {
+                if !spend_cost(state, target, cost, log)? {
                     continue;
                 }
             }
             spend_reaction(state, target, log)?;
+            record_spell_turn(state, target, cast_marker);
             mark_trigger_used(state, target, trigger, &key);
-            let owner_name = state.combatants[target].name.clone();
+            let owner_name = &state.combatants[target].name;
             log.log(format_args!(
                 "{owner_name} uses {} (reaction)",
                 resolved.ability.display_name()
             ));
-            let effect_source = EffectSource::from_ability(&resolved.ability, &resolved.params);
             let effect_context = EffectContext {
                 actor: target,
                 target: Some(target),
-                source: Some(effect_source),
-                attack: Some(profile.clone()),
+                source: Some(EffectSource::from_ability(
+                    &resolved.ability,
+                    &resolved.params,
+                )),
+                attack: attack.cloned(),
                 option: None,
                 crit: false,
                 damage_dealt: 0,
@@ -5451,19 +5558,10 @@ fn try_hit_reactions(
                 has_disadvantage: false,
             };
             apply_effects(state, &effect_context, &trigger.effects, rng, log)?;
-            let (ac_after, terms_after) = effective_ac(state, target, Some(attacker), facts)?;
-            new_ac = ac_after;
-            converted = Some((ac_after, terms_after));
-            if attack_total < new_ac {
-                break;
-            }
-        }
-        if attack_total < new_ac {
-            break;
+            return Ok(true);
         }
     }
-    let _ = source;
-    Ok(converted)
+    Ok(false)
 }
 
 fn trigger_available(state: &EncounterState, owner: usize, trigger: &Trigger, key: &str) -> bool {
@@ -5512,12 +5610,14 @@ pub fn spend_spell_slot(
         resource: format!("spell-slot-{level}"),
         amount: 1,
     };
+    let cast_marker = check_slot_spell_turn(state, owner, Some(&cost))?;
     if !spend_cost(state, owner, &cost, log)? {
         bail!(
             "`{}` has no level {level} spell slot left",
             state.combatants[owner].name
         );
     }
+    record_spell_turn(state, owner, cast_marker);
     Ok(())
 }
 
@@ -7375,6 +7475,92 @@ fn cost_arcanum_level(resource: &str) -> Option<i32> {
     resource.strip_prefix("arcanum-")?.parse().ok()
 }
 
+/// Returns the current turn's marker to write after the cast is paid.
+fn check_spell_turn(
+    state: &EncounterState,
+    actor: usize,
+    ability: &Ability,
+    cost: Option<&AbilityCost>,
+) -> Result<Option<&'static str>> {
+    let has_tag = |name: &str| {
+        ability
+            .tags
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case(name))
+    };
+    if state.current_index().is_none()
+        || (ability.spell.is_none() && !has_tag("spell") && !uses_spell_slot(cost))
+    {
+        return Ok(None);
+    }
+    let used = &state.combatants[actor].once_used;
+    let edition = state.content.ruleset.as_str();
+    if edition == "2024" {
+        return check_slot_spell_turn(state, actor, cost);
+    }
+    if edition != "2014" {
+        return Ok(None);
+    }
+    let bonus = ability
+        .spell
+        .as_ref()
+        .map_or(ability.activation == Activation::Bonus, |spell| {
+            spell.casting_time.unit == CastingUnit::BonusAction
+        });
+    let action_cantrip = ability.spell.as_ref().map_or(
+        ability.activation == Activation::Action
+            && (ability.slot_level == Some(0) || has_tag("cantrip")),
+        |spell| {
+            spell.level == 0
+                && spell.casting_time.unit == CastingUnit::Action
+                && spell.casting_time.amount.unwrap_or(1) == 1
+        },
+    );
+    if action_cantrip {
+        return Ok(None);
+    }
+    if used.contains_key(TURN_BONUS_SPELL) || (bonus && used.contains_key(TURN_OTHER_SPELL)) {
+        bail!(
+            "2014 allows only a one-action cantrip alongside a bonus-action spell on the same turn"
+        );
+    }
+    Ok(Some(if bonus {
+        TURN_BONUS_SPELL
+    } else {
+        TURN_OTHER_SPELL
+    }))
+}
+
+fn check_slot_spell_turn(
+    state: &EncounterState,
+    actor: usize,
+    cost: Option<&AbilityCost>,
+) -> Result<Option<&'static str>> {
+    if !uses_spell_slot(cost) || state.content.ruleset != "2024" || state.current_index().is_none()
+    {
+        return Ok(None);
+    }
+    if state.combatants[actor]
+        .once_used
+        .contains_key(TURN_SLOT_SPELL)
+    {
+        bail!("2024 allows expending only one spell slot to cast a spell on the same turn");
+    }
+    Ok(Some(TURN_SLOT_SPELL))
+}
+
+fn uses_spell_slot(cost: Option<&AbilityCost>) -> bool {
+    cost.is_some_and(|cost| {
+        cost.amount > 0 && cost_slot_level(&cost.resource).is_some_and(|level| level > 0)
+    })
+}
+
+fn record_spell_turn(state: &mut EncounterState, actor: usize, marker: Option<&str>) {
+    if let Some(marker) = marker {
+        state.combatants[actor].once_used.insert(marker.into(), 1);
+    }
+}
+
 /// The settlement computed for one spell cast before any state mutation.
 ///
 /// Built only for abilities that carry spell metadata; everything here is
@@ -7390,6 +7576,37 @@ struct SpellCastPlan {
     main_dice: Option<String>,
     /// Component declaration lines logged after the cast is committed.
     notes: Vec<String>,
+    manual_followup: bool,
+}
+
+fn check_manual_spell_cast(
+    ability: &Ability,
+    plan_has_manual_followup: bool,
+    confirmation: Option<bool>,
+) -> Result<bool> {
+    let Some(confirmed) = confirmation else {
+        // Library callers and already-pending commands use their original behavior.
+        return Ok(false);
+    };
+    let spell = ability.spell.is_some()
+        || ability
+            .tags
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case("spell"));
+    let notes_only = !ability.effects.is_empty()
+        && ability
+            .effects
+            .iter()
+            .all(|effect| matches!(effect, Effect::Note(_)));
+    let requires_confirmation =
+        plan_has_manual_followup || (spell && (ability.manual.is_some() || notes_only));
+    if requires_confirmation && !confirmed {
+        bail!(
+            "`{}` needs manual settlement. Confirm with --confirm-manual before spending actions or resources",
+            ability.display_name()
+        );
+    }
+    Ok(requires_confirmation)
 }
 
 /// Validates one spell cast against its spell metadata and computes the
@@ -7413,7 +7630,7 @@ fn plan_spell_cast(
         .expect("plan_spell_cast is only called for spell abilities");
     let base_level = i32::from(spell.level);
 
-    // D-11: minute/hour casting times cannot complete inside a combat round.
+    // Minute/hour casting uses the campaign handoff and its own action path.
     let unit_name = match spell.casting_time.unit {
         crate::content::schema::CastingUnit::Minute => Some("minute"),
         crate::content::schema::CastingUnit::Hour => Some("hour"),
@@ -7427,7 +7644,7 @@ fn plan_spell_cast(
             .unwrap_or_default();
         bail!(
             "`{}` has a casting time of {amount}{unit_name}s and cannot be completed within a \
-             combat round; resolve it outside combat (DM narration or talkdnd ritual)",
+             combat round; use talkdnd time casting for a long spell",
             ability.display_name()
         );
     }
@@ -7523,11 +7740,14 @@ fn plan_spell_cast(
                         ability.display_name()
                     ),
                     // Allowed, but the cast only produces base effects.
-                    None => log.log(format_args!(
-                        "UPCAST NOT MODELED: `{}` has no upcast table; casting at slot \
-                         level {slot} produces base effects",
-                        ability.display_name()
-                    )),
+                    None => {
+                        plan.manual_followup = true;
+                        log.log(format_args!(
+                            "UPCAST NOT MODELED: `{}` has no upcast table; casting at slot \
+                             level {slot} produces base effects",
+                            ability.display_name()
+                        ));
+                    }
                 },
                 None => {}
             }
@@ -7671,6 +7891,7 @@ fn use_resolved_ability(
     let ability = &resolved.ability;
     ensure_can_act(state, actor)?;
     let target_spec = ability.target.clone().unwrap_or_default();
+    let split_damage = ability.split_damage().map_err(anyhow::Error::msg)?;
     let mut effective_targets: Vec<usize> = targets.to_vec();
     match target_spec.target_type {
         TargetType::Zone => {
@@ -7734,6 +7955,15 @@ fn use_resolved_ability(
                     ability.display_name()
                 );
             }
+            if let Some(damage) = split_damage {
+                if targets.len() > 1 && targets.len() != damage.repeat as usize {
+                    bail!(
+                        "`{}` needs one target or one target entry per damage repeat ({} entries)",
+                        ability.display_name(),
+                        damage.repeat
+                    );
+                }
+            }
             for target in targets {
                 if !target_matches_side(state, actor, *target, target_spec.side) {
                     bail!(
@@ -7782,10 +8012,20 @@ fn use_resolved_ability(
     } else {
         None
     };
+    let manual_confirmed = check_manual_spell_cast(
+        ability,
+        plan.as_ref().is_some_and(|plan| plan.manual_followup),
+        cast.manual_confirmation,
+    )?;
     let effective_cost = plan
         .as_ref()
         .and_then(|plan| plan.cost.clone())
         .or_else(|| ability.cost.clone());
+    let cast_marker = if settlement.cost_paid {
+        None
+    } else {
+        check_spell_turn(state, actor, ability, effective_cost.as_ref())?
+    };
     if let Some(cost) = &effective_cost {
         if !settlement.cost_paid && !can_afford(state, actor, cost) {
             bail!(
@@ -7803,6 +8043,10 @@ fn use_resolved_ability(
         if !settlement.cost_paid {
             let _ = spend_cost(state, actor, cost, log)?;
         }
+    }
+    record_spell_turn(state, actor, cast_marker);
+    if manual_confirmed {
+        log.log(format_args!("MANUAL CONFIRMED: {}", ability.display_name()));
     }
     if ability.concentration && !settlement.concentration_started {
         begin_concentration(state, actor, ability, log);
@@ -7856,6 +8100,24 @@ fn use_resolved_ability(
             },
             None => std::borrow::Cow::Borrowed(&ability.effects),
         };
+    if source_is_spell && !options.no_reactions && target_spec.target_type == TargetType::Creature {
+        let source = context_base.source.as_ref().expect("spell has a source");
+        let mut offered = BTreeSet::new();
+        for &target in &effective_targets {
+            if offered.insert(target) {
+                try_defensive_reaction(
+                    state,
+                    target,
+                    DefensiveReactionEvent::TargetedSpell {
+                        caster: actor,
+                        source,
+                    },
+                    rng,
+                    log,
+                )?;
+            }
+        }
+    }
     match target_spec.target_type {
         TargetType::SelfTarget => {
             let context = EffectContext {
@@ -7864,16 +8126,25 @@ fn use_resolved_ability(
             };
             apply_effects(state, &context, &effects, rng, log)?;
         }
-        TargetType::Creature => {
-            for target in &effective_targets {
+        TargetType::Creature if split_damage.is_some() && effective_targets.len() > 1 => {
+            let [Effect::Damage(damage)] = effects.as_ref() else {
+                unreachable!("split damage validated before spell settlement");
+            };
+            let mut resolved_targets = BTreeSet::new();
+            for &target in &effective_targets {
+                if !resolved_targets.insert(target) {
+                    continue;
+                }
+                let mut damage = damage.clone();
+                damage.repeat = effective_targets.iter().filter(|&&id| id == target).count() as u32;
                 let context = EffectContext {
-                    target: Some(*target),
+                    target: Some(target),
                     ..context_base.clone()
                 };
-                apply_effects(state, &context, &effects, rng, log)?;
+                apply_damage_effect(state, &context, &damage, rng, log)?;
             }
         }
-        TargetType::Zone => {
+        TargetType::Creature | TargetType::Zone => {
             for target in &effective_targets {
                 let context = EffectContext {
                     target: Some(*target),
@@ -7886,7 +8157,6 @@ fn use_resolved_ability(
     if source_is_spell {
         fire_ends_on(state, actor, EndsOn::OwnSpell, log);
     }
-    let _ = options;
     run_ready_triggers(state, ReadyTrigger::Ability, actor, rng, log);
     Ok(())
 }
@@ -7985,6 +8255,18 @@ pub fn use_ability(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    use_ability_with_manual_confirmation(state, actor_name, ability_name, options, None, rng, log)
+}
+
+pub(crate) fn use_ability_with_manual_confirmation(
+    state: &mut EncounterState,
+    actor_name: &str,
+    ability_name: &str,
+    options: &UseOptions,
+    manual_confirmation: Option<bool>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
     let actor = state
         .find_index(actor_name)
         .map_err(|error| anyhow!(error.to_string()))?;
@@ -8037,6 +8319,7 @@ pub fn use_ability(
             slot_level: options.slot_level,
             material: options.material.clone(),
             ignore_components: options.ignore_components,
+            manual_confirmation,
         },
         AbilitySettlement {
             action_spent: false,
@@ -8060,6 +8343,16 @@ pub fn ready(
     state: &mut EncounterState,
     who: &str,
     options: &ReadyOptions,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    ready_with_manual_confirmation(state, who, options, None, log)
+}
+
+pub(crate) fn ready_with_manual_confirmation(
+    state: &mut EncounterState,
+    who: &str,
+    options: &ReadyOptions,
+    manual_confirmation: Option<bool>,
     log: &mut dyn LogSink,
 ) -> Result<()> {
     let index = state
@@ -8089,30 +8382,44 @@ pub fn ready(
     let description = normalize_ready_description(&options.description)?;
     validate_ready_response(state, index, &options.response)?;
     let ready_ability = ready_ability(state, index, &options.response)?;
+    let manual_confirmed = match &ready_ability {
+        Some(resolved) => check_manual_spell_cast(&resolved.ability, false, manual_confirmation)?,
+        None => false,
+    };
+    let ready_cost = ready_ability
+        .as_ref()
+        .and_then(|resolved| resolved.ability.cost.as_ref());
+    let cast_marker = match &ready_ability {
+        Some(resolved) => check_spell_turn(state, index, &resolved.ability, ready_cost)?,
+        None => None,
+    };
 
     // RAW: setting Ready casts/holds the spell. Pay its cost now, then spend
     // the action; a failed payment or action spend leaves no partial state.
-    if let Some(resolved) = &ready_ability {
-        if let Some(cost) = &resolved.ability.cost {
-            if !spend_cost(state, index, cost, log)? {
-                bail!(
-                    "`{}` cannot afford {} {}",
-                    state.combatants[index].name,
-                    cost.amount,
-                    cost.resource
-                );
-            }
+    if let Some(cost) = ready_cost {
+        if !spend_cost(state, index, cost, log)? {
+            bail!(
+                "`{}` cannot afford {} {}",
+                state.combatants[index].name,
+                cost.amount,
+                cost.resource
+            );
         }
     }
     if let Err(error) = spend_action(state, index, Activation::Action, log) {
-        if let Some(resolved) = &ready_ability {
-            if let Some(cost) = &resolved.ability.cost {
-                refund_cost(state, index, cost);
-            }
+        if let Some(cost) = ready_cost {
+            refund_cost(state, index, cost);
         }
         return Err(error);
     }
+    record_spell_turn(state, index, cast_marker);
     if let Some(resolved) = &ready_ability {
+        if manual_confirmed {
+            log.log(format_args!(
+                "MANUAL CONFIRMED: {}",
+                resolved.ability.display_name()
+            ));
+        }
         if resolved.ability.concentration {
             begin_concentration(state, index, &resolved.ability, log);
         }
@@ -8462,12 +8769,19 @@ fn trigger_ready_at(
         clear_ready_if_any(state, index, "expired", log);
         return Ok(ReadyOutcome::Expired);
     }
-    if state.combatants[index].reaction_round == Some(state.round)
+    if !state.combatants[index].has_reaction(state.round)
         || has_flag(state, index, ConditionFlag::NoReactions)
     {
-        let reason = format!("`{name}` cannot use a reaction this round");
+        let reason = format!("`{name}` has no reaction available");
         log.log(format_args!("{name}'s readied action is refused: {reason}"));
         return Ok(ReadyOutcome::Refused(reason));
+    }
+    if let Some(kind) = automatic {
+        if !confirm_player_reaction(state, index, "Ready", || {
+            format!("ready:{kind:?}:{source:?}:{}", ready.description)
+        }) {
+            return Ok(ReadyOutcome::Refused("player confirmation required".into()));
+        }
     }
     let trigger_label = automatic.map(ReadyTrigger::as_str).unwrap_or("explicit");
     log.log(format_args!(
@@ -8843,6 +9157,19 @@ pub fn use_entry(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    use_entry_with_manual_confirmation(state, actor_name, name, targets, options, None, rng, log)
+}
+
+pub(crate) fn use_entry_with_manual_confirmation(
+    state: &mut EncounterState,
+    actor_name: &str,
+    name: &str,
+    targets: &[String],
+    options: &UseOptions,
+    manual_confirmation: Option<bool>,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
     let actor = state
         .find_index(actor_name)
         .map_err(|error| anyhow!(error.to_string()))?;
@@ -8872,7 +9199,15 @@ pub fn use_entry(
         log_outcome(state, log);
         return Ok(());
     }
-    use_ability(state, actor_name, name, options, rng, log)
+    use_ability_with_manual_confirmation(
+        state,
+        actor_name,
+        name,
+        options,
+        manual_confirmation,
+        rng,
+        log,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -9009,10 +9344,190 @@ fn on_death(state: &mut EncounterState, target: usize, log: &mut dyn LogSink) {
     }
 }
 
+fn casting_actor(state: &EncounterState, caster_id: &str) -> Result<usize> {
+    let mut matches =
+        state.combatants.iter().enumerate().filter(|(_, actor)| {
+            actor.side.as_str() == "party" && actor.creature_id() == caster_id
+        });
+    match (matches.next(), matches.next()) {
+        (Some((actor, _)), None) => Ok(actor),
+        _ => bail!("the encounter does not have a unique party member with ID `{caster_id}`"),
+    }
+}
+
+/// Imports the campaign's active casts into a trial encounter. The same
+/// concentration and action paths handle damage, other spells and missed turns.
+pub fn attach_long_casts(
+    state: &mut EncounterState,
+    casting: crate::long_cast::EncounterCasting,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    use crate::long_cast::{CastRecipe, CONCENTRATION_PREFIX};
+    let mut prepared = Vec::new();
+    for (id, cast) in &casting.casts {
+        let recipe = &cast.progress.recipe;
+        let actor = casting_actor(state, &recipe.caster_id)?;
+        ensure_can_act(state, actor)?;
+        let resolved =
+            state.combatants[actor].find_owned_ability(&state.content, &recipe.spell_id)?;
+        let mut ability = resolved.ability;
+        let current = CastRecipe::from_ability(
+            &recipe.caster_id,
+            &state.content.ruleset,
+            &ability,
+            recipe.material.clone(),
+        )?;
+        if &current != recipe {
+            bail!("the encounter's spell, edition or cost differs from the campaign casting");
+        }
+        ability.id = format!("{CONCENTRATION_PREFIX}{id}");
+        prepared.push((actor, ability));
+    }
+    for index in 0..state.combatants.len() {
+        let name = &state.combatants[index].name;
+        if state
+            .concentration
+            .get(name)
+            .and_then(|focus| focus.ability.as_deref())
+            .is_some_and(|ability| ability.starts_with(CONCENTRATION_PREFIX))
+        {
+            break_concentration(state, index, log);
+        }
+    }
+    state.casting = Some(casting);
+    for (actor, ability) in prepared {
+        begin_concentration(state, actor, &ability, log);
+    }
+    state.refresh_schema_version();
+    Ok(())
+}
+
+fn active_long_cast(
+    state: &EncounterState,
+    id: &str,
+) -> Result<(usize, crate::long_cast::EncounterCast)> {
+    use crate::long_cast::{CastStatus, CONCENTRATION_PREFIX};
+    let cast = state
+        .casting
+        .as_ref()
+        .and_then(|casting| casting.casts.get(id))
+        .with_context(|| format!("no attached long casting with ID `{id}`"))?;
+    if cast.progress.status != CastStatus::Casting {
+        bail!("this long casting is no longer active");
+    }
+    let actor = casting_actor(state, &cast.progress.recipe.caster_id)?;
+    let marker = format!("{CONCENTRATION_PREFIX}{id}");
+    let focus = state.concentration.get(&state.combatants[actor].name);
+    if focus.and_then(|focus| focus.ability.as_deref()) != Some(marker.as_str()) {
+        bail!("the caster no longer has concentration for this casting");
+    }
+    Ok((actor, cast.clone()))
+}
+
+pub fn continue_long_cast(
+    state: &mut EncounterState,
+    id: &str,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let (actor, mut cast) = active_long_cast(state, id)?;
+    ensure_can_act(state, actor)?;
+    if state.current_index() != Some(actor) {
+        bail!("long casting continues during the caster's turn");
+    }
+    cast.spend_turn(state.round)?;
+    let spell = state.combatants[actor]
+        .find_owned_ability(&state.content, &cast.progress.recipe.spell_id)?;
+    let marker = check_spell_turn(state, actor, &spell.ability, None)?;
+    spend_action(state, actor, Activation::Action, log)?;
+    record_spell_turn(state, actor, marker);
+    log.log(format_args!(
+        "{} continues `{id}` ({} of {} seconds)",
+        state.combatants[actor].name,
+        cast.progress.elapsed_seconds,
+        cast.progress.recipe.required_seconds,
+    ));
+    state
+        .casting
+        .as_mut()
+        .expect("cast is attached")
+        .casts
+        .insert(id.into(), cast);
+    Ok(())
+}
+
+pub fn finish_long_cast(
+    state: &mut EncounterState,
+    id: &str,
+    confirm_manual: bool,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let (actor, mut cast) = active_long_cast(state, id)?;
+    ensure_can_act(state, actor)?;
+    if state.current_index() != Some(actor) || !cast.progress.ready_to_complete() {
+        bail!("finish the long casting on the caster's turn once its full duration has elapsed");
+    }
+    if !confirm_manual {
+        bail!("confirm the long spell's manual effects with --confirm-manual");
+    }
+    let recipe = &cast.progress.recipe;
+    let resolved = state.combatants[actor].find_owned_ability(&state.content, &recipe.spell_id)?;
+    let marker = check_spell_turn(state, actor, &resolved.ability, recipe.cost.as_ref())?;
+    if let Some(cost) = &recipe.cost {
+        if !spend_cost(state, actor, cost, log)? {
+            bail!("the spell's resource is no longer available");
+        }
+    }
+    record_spell_turn(state, actor, marker);
+    cast.progress.status = crate::long_cast::CastStatus::Completed;
+    state
+        .casting
+        .as_mut()
+        .expect("cast is attached")
+        .casts
+        .insert(id.into(), cast);
+    if resolved.ability.concentration {
+        begin_concentration(state, actor, &resolved.ability, log);
+    } else {
+        break_concentration(state, actor, log);
+    }
+    log.log(format_args!(
+        "MANUAL CONFIRMED: completed long casting `{id}`"
+    ));
+    Ok(())
+}
+
+pub(crate) fn interrupt_long_cast(
+    state: &mut EncounterState,
+    id: &str,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let (actor, _) = active_long_cast(state, id)?;
+    break_concentration(state, actor, log);
+    Ok(())
+}
+
 fn break_concentration(state: &mut EncounterState, actor: usize, log: &mut dyn LogSink) {
     let name = state.combatants[actor].name.clone();
-    if state.concentration.remove(&name).is_none() {
+    let Some(previous) = state.concentration.remove(&name) else {
         return;
+    };
+    if let Some(id) = previous
+        .ability
+        .as_deref()
+        .and_then(|id| id.strip_prefix(crate::long_cast::CONCENTRATION_PREFIX))
+    {
+        if let Some(cast) = state
+            .casting
+            .as_mut()
+            .and_then(|casting| casting.casts.get_mut(id))
+        {
+            if cast.progress.status == crate::long_cast::CastStatus::Casting {
+                cast.progress.status = crate::long_cast::CastStatus::Interrupted;
+                log.log(format_args!(
+                    "{name}'s long casting is interrupted without spending its slot"
+                ));
+            }
+        }
     }
     log.log(format_args!("{name}'s concentration ends"));
     for combatant in &mut state.combatants {
@@ -9161,6 +9676,7 @@ fn apply_damage_rolls(
     }
     if state.combatants[target].hp <= 0 {
         clear_ready_if_any(state, target, "0 HP", log);
+        break_concentration(state, target, log);
     }
 
     // Massive damage.
@@ -10470,6 +10986,7 @@ fn opportunity_attacks(
                 && !has_flag(state, *index, ConditionFlag::NoReactions)
                 && !has_flag(state, *index, ConditionFlag::NoOpportunityAttacks)
                 && !is_incapacitated(state, *index)
+                && can_see(state, *index, mover).visibility <= Visibility::LightlyObscured
                 && {
                     if spatial_query_enabled(state) {
                         let observer = spatial_body_for(state, *index);
@@ -10517,6 +11034,13 @@ fn opportunity_attacks(
         let Some(attack) = first_melee_attack(state, hostile) else {
             continue;
         };
+        if !state.combatants[hostile].has_reaction(state.round)
+            || !confirm_player_reaction(state, hostile, "Opportunity Attack", || {
+                format!("opportunity:{mover}:{departure:?}")
+            })
+        {
+            continue;
+        }
         let profile = AttackProfile::from_attack(&attack);
         state.combatants[hostile].reaction_round = Some(state.round);
         log.log(format_args!(
@@ -10537,6 +11061,22 @@ fn opportunity_attacks(
         )?;
     }
     Ok(())
+}
+
+fn confirm_player_reaction(
+    state: &mut EncounterState,
+    index: usize,
+    label: &str,
+    context: impl FnOnce() -> String,
+) -> bool {
+    let combatant = &state.combatants[index];
+    if !combatant.is_pc() {
+        return true;
+    }
+    state
+        .reaction_replay
+        .as_mut()
+        .is_none_or(|replay| replay.ask(&combatant.name, label, context()))
 }
 
 fn fire_enter_triggers(
@@ -11785,8 +12325,8 @@ fn death_save_at(
 ///
 /// `all` means every living party-side combatant; enemies and the dead never
 /// rest. A short rest can spend `hit_dice` Hit Dice (die + Con each, min 0).
-/// A long rest restores HP and resources, regains half the Hit Dice (min 1)
-/// and ends the creature's concentration.
+/// A long rest restores HP and resources and ends the creature's concentration.
+/// Use `rest_with_options` to confirm food and water for 2014 exhaustion recovery.
 pub fn rest(
     state: &mut EncounterState,
     kind: RestKind,
@@ -11795,6 +12335,31 @@ pub fn rest(
     rng: &mut dyn DiceRng,
     log: &mut dyn LogSink,
 ) -> Result<()> {
+    rest_with_options(
+        state,
+        kind,
+        who,
+        RestOptions {
+            hit_dice,
+            ..Default::default()
+        },
+        rng,
+        log,
+    )
+}
+
+pub fn rest_with_options(
+    state: &mut EncounterState,
+    kind: RestKind,
+    who: Option<&str>,
+    options: RestOptions,
+    rng: &mut dyn DiceRng,
+    log: &mut dyn LogSink,
+) -> Result<()> {
+    let RestOptions {
+        hit_dice,
+        food_and_water,
+    } = options;
     let all = match who {
         Some(name) => name.eq_ignore_ascii_case("all"),
         None => true,
@@ -11810,6 +12375,9 @@ pub fn rest(
     };
     if hit_dice.is_some() && kind == RestKind::Long {
         bail!("--hd is only for short rests");
+    }
+    if food_and_water && kind == RestKind::Short {
+        bail!("--food-and-water is only for long rests");
     }
     for index in targets {
         let name = state.combatants[index].name.clone();
@@ -11839,7 +12407,11 @@ pub fn rest(
                     break_concentration(state, index, log);
                 }
                 let level = state.combatants[index].exhaustion_level;
-                if level > 0 {
+                if level > 0 && state.content.ruleset == "2014" && !food_and_water {
+                    log.log(format_args!(
+                        "{name} keeps exhaustion level {level} (2014 long rest requires food and water)"
+                    ));
+                } else if level > 0 {
                     let reduction = state
                         .content
                         .rules
@@ -11853,12 +12425,7 @@ pub fn rest(
                 let max_hp = effective_max_hp(state, index);
                 let combatant = &mut state.combatants[index];
                 for (id, resource) in combatant.resources.iter_mut() {
-                    if id == "hit-dice" {
-                        let regain = (resource.max / 2).max(1);
-                        resource.current = (resource.current + regain).min(resource.max);
-                    } else {
-                        resource.current = resource.max;
-                    }
+                    resource.restore_after_long_rest(id, &state.content.ruleset);
                 }
                 combatant.hp = max_hp;
                 combatant.temp_hp = 0;

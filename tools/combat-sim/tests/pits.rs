@@ -212,7 +212,7 @@ fn simulate_defaults_to_manifest_party_and_errors_without_one() {
 }
 
 #[test]
-fn heal_with_slot_and_cast_spend_spell_slots() {
+fn heal_with_slot_and_cast_share_the_2024_turn_limit() {
     let t = setup("slots", "pit-fight");
     ok(&["--state", t.p(), "damage", "Hero", "10"]);
     ok(&[
@@ -232,7 +232,7 @@ fn heal_with_slot_and_cast_spend_spell_slots() {
         combatant(&t, "Hero")["resources"]["spell-slot-1"]["current"],
         2
     );
-    ok(&[
+    let cast = [
         "--state",
         t.p(),
         "cast",
@@ -241,7 +241,17 @@ fn heal_with_slot_and_cast_spend_spell_slots() {
         "Hero",
         "--seed",
         "1",
-    ]);
+    ];
+    let before = std::fs::read(t.p()).unwrap();
+    let refused = run(&cast);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("only one spell slot"));
+    assert_eq!(std::fs::read(t.p()).unwrap(), before);
+    for _ in 0..3 {
+        ok(&["--state", t.p(), "next", "--seed", "1"]);
+    }
+    assert_eq!(combatant(&t, "Hero")["current"], true);
+    ok(&cast);
     assert_eq!(
         combatant(&t, "Hero")["resources"]["spell-slot-1"]["current"],
         1

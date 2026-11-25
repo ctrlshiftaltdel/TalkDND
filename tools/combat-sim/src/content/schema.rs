@@ -1321,6 +1321,10 @@ pub struct TargetSpec {
     pub side: Option<TargetSide>,
     #[serde(default)]
     pub count: Option<u32>,
+    /// Each listed creature receives one repeat of the single damage effect.
+    /// A lone target receives all repeats.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub split_repeated_damage: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1569,6 +1573,27 @@ pub struct Ability {
 impl Ability {
     pub fn display_name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    pub(crate) fn split_damage(&self) -> Result<Option<&DamageEffect>, String> {
+        let Some(target) = &self.target else {
+            return Ok(None);
+        };
+        if !target.split_repeated_damage {
+            return Ok(None);
+        }
+        if let [Effect::Damage(damage)] = self.effects.as_slice() {
+            if target.target_type == TargetType::Creature
+                && damage.repeat > 1
+                && target.count == Some(damage.repeat)
+            {
+                return Ok(Some(damage));
+            }
+        }
+        Err(format!(
+            "ability `{}` split_repeated_damage requires a creature target count equal to the repeat count of its only damage effect, with at least two repeats",
+            self.id
+        ))
     }
 }
 
@@ -2060,6 +2085,7 @@ pub enum TriggerWhen {
     OnHit,
     OnMiss,
     OnHitTaken,
+    OnTargetedSpell,
     OnDamageTaken,
     StartOfTurn,
     EndOfTurn,
@@ -2110,6 +2136,7 @@ pub enum Predicate {
     /// The holder's exhaustion level is at least this value.
     ExhaustionLevelMin(u32),
     IsSpell(Flag),
+    SourceHasTag(String),
     SlotLevelMin(i32),
     DamageDealt(Flag),
     WouldMissWithAcBonus(i32),
@@ -2138,6 +2165,7 @@ const PREDICATE_KEYS: &[&str] = &[
     "source_in_line_of_sight",
     "exhaustion_level_min",
     "is_spell",
+    "source_has_tag",
     "slot_level_min",
     "damage_dealt",
     "would_miss_with_ac_bonus",
@@ -2192,6 +2220,7 @@ impl<'de> Deserialize<'de> for Predicate {
                     "source_in_line_of_sight" => Predicate::SourceInLineOfSight(map.next_value()?),
                     "exhaustion_level_min" => Predicate::ExhaustionLevelMin(map.next_value()?),
                     "is_spell" => Predicate::IsSpell(map.next_value()?),
+                    "source_has_tag" => Predicate::SourceHasTag(map.next_value()?),
                     "slot_level_min" => Predicate::SlotLevelMin(map.next_value()?),
                     "damage_dealt" => Predicate::DamageDealt(map.next_value()?),
                     "would_miss_with_ac_bonus" => {

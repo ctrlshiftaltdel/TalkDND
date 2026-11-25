@@ -5,7 +5,7 @@
 //! `new` applies it to party-side combatants; every state command writes the
 //! party's values back; `party rest` handles rests outside combat.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -26,12 +26,14 @@ pub const DEFAULT_DYING_CONDITION: &str = concat!("un", "conscious");
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PartyState {
-    /// On-disk schema; 0 and 1 are compatible, newer versions are refused.
+    /// On-disk schema; version 2 adds long casting receipts.
     #[serde(default)]
     pub version: u32,
     /// Keyed by creature id.
     #[serde(default)]
     pub members: BTreeMap<String, Member>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub completed_casts: BTreeSet<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -66,9 +68,12 @@ impl PartyState {
             .with_context(|| format!("failed to read {}", path.display()))?;
         let state: Self =
             serde_norway::from_str(&text).with_context(|| format!("invalid {}", path.display()))?;
-        if state.version > 1 {
+        if !matches!(
+            (state.version, state.completed_casts.is_empty()),
+            (0 | 1, true) | (2, false)
+        ) {
             bail!(
-                "{}: unsupported party-state schema version {} (this combat-sim supports 1); update talkdnd",
+                "{}: unsupported party-state schema version {} or inconsistent casting receipts; update talkdnd",
                 path.display(),
                 state.version
             );
@@ -78,7 +83,11 @@ impl PartyState {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let mut current = self.clone();
-        current.version = 1;
+        current.version = if self.completed_casts.is_empty() {
+            1
+        } else {
+            2
+        };
         let text = format!(
             "# TalkDND party state (written by combat-sim; edit with care)\n{}",
             serde_norway::to_string(&current)?
@@ -111,6 +120,64 @@ impl PartyState {
             seen.push(id.clone());
             self.members.insert(id, Member::from_combatant(combatant));
         }
+        if let Some(casting) = &state.casting {
+            for (id, cast) in &casting.casts {
+                if cast.progress.status == crate::long_cast::CastStatus::Completed {
+                    self.completed_casts.insert(id.clone());
+                }
+            }
+        }
+    }
+
+    /// A handoff cannot make an older encounter authoritative over a slot
+    /// already spent or recovered in the party sidecar during exploration.
+    pub fn verify_encounter_resources(&self, state: &EncounterState) -> Result<()> {
+        for actor in &state.combatants {
+            if actor.side.as_str() != "party" {
+                continue;
+            }
+            let Some(member) = self.members.get(actor.creature_id()) else {
+                continue;
+            };
+            if member.resources != actor.resources {
+                bail!(
+                    "{} 的遭遇资源与存档不一致，请用当前队伍状态重新建立遭遇",
+                    actor.name
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The receipt and the decrement are persisted by the same PartyState save.
+    pub fn settle_long_cast(
+        &mut self,
+        id: &str,
+        recipe: &crate::long_cast::CastRecipe,
+    ) -> Result<()> {
+        if self.completed_casts.contains(id) {
+            return Ok(());
+        }
+        let member = self
+            .members
+            .get_mut(&recipe.caster_id)
+            .context("party caster is missing")?;
+        if member.dead || member.hp <= 0 {
+            bail!("the caster cannot finish this spell");
+        }
+        if let Some(cost) = &recipe.cost {
+            let resource = member
+                .resources
+                .get_mut(&cost.resource)
+                .context("the spell resource is missing")?;
+            let amount = i32::try_from(cost.amount).context("the spell cost is out of range")?;
+            if resource.current < amount {
+                bail!("the spell resource is no longer available");
+            }
+            resource.current -= amount;
+        }
+        self.completed_casts.insert(id.into());
+        Ok(())
     }
 
     pub fn summary_lines(&self) -> Vec<String> {
@@ -337,16 +404,21 @@ impl Member {
     }
 
     pub fn long_rest(&mut self, dying_conditions: &[String], log: &mut Vec<String>) {
+        self.long_rest_for_edition("2014", dying_conditions, log);
+    }
+
+    pub fn long_rest_for_edition(
+        &mut self,
+        edition: &str,
+        dying_conditions: &[String],
+        log: &mut Vec<String>,
+    ) {
         if self.dead {
             log.push(format!("{} is dead and cannot rest", self.name));
             return;
         }
         for (id, r) in self.resources.iter_mut() {
-            if id == "hit-dice" {
-                r.current = (r.current + (r.max / 2).max(1)).min(r.max);
-            } else {
-                r.current = r.max;
-            }
+            r.restore_after_long_rest(id, edition);
         }
         self.set_hp(self.max_hp, dying_conditions);
         self.temp_hp = 0;

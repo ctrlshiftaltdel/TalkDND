@@ -38,7 +38,7 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 - `simulate` 只有一方时会报错；清单里没写 `party:` 时必须传 `--party`。
 - 非致命：只有**近战**可以击昏；要击昏就加 `--nonlethal`（或生物数据带 `tags: [nonlethal]`）。不加就是致死。
 - 越回合的行动：`attack`、`cast`、`use` **直接报错**，先 `next`；`cast`/`use` 的反应能力照常执行。准备动作或 DM 裁定时给 `attack`/`cast`/`use` 加 `--force`（会打印 WARNING 审计行并写入战斗日志）。`move`、`interact` 不消耗行动，越回合仍只警告。`damage` 是 DM 命令，没有行动者，不受轮次限制也不消耗行动。
-- 休息：`rest short <名字|all> [--hd N]` 花 N 个生命骰（每个掷骰 + 体质调整值）恢复 HP；`rest long <名字|all>` 回满 HP 和资源、恢复一半生命骰（至少 1）并结束专注。`all` 只包括 party 一方活着的角色，敌人和死者不休息。
+- `rest short <名字|all> [--hd N]` 花 N 个生命骰恢复 HP，每次掷骰加体质调整值。`rest long <名字|all>` 回满 HP 和资源并结束专注。2014 长休恢复生命骰总数的一半（向下取整，至少 1），2024 恢复所有已花费的生命骰。`all` 只包括 party 一方活着的角色。2014 长休降低力竭时，DM 用 `--food-and-water` 确认本次指定的角色均已进食和饮水。
 - 同伴（`Characters/` 里 `controller: dm` 的队友；战斗块 `side: party`，`kind` 可以是 `pc` 或 `npc`）和 PC 一样在 0 HP 时倒地并做死亡豁免（`deathsave`）。
 - 睡眠术（2024 第二次豁免；2014 的 HP 池整个是手动）、冒险书的特殊机关、增援到场时机等是**手动**的：用 `save`、`condition add`、`activate`。
 - 增援入战：`combat-sim add --creature "id:数量@区域"`（可重复；区域默认 party zone）。side 默认取生物数据自己的 side，用 `--side` 指定时必须是一个单词（自动转小写）。先攻未指定时每个新战斗者各自掷 `1d20+先攻修正`（日志记 `(rolled)`），`--initiative N` 则用固定值（日志记 `(set)`）。插入规则：先攻总值插队，同值排在已在场者之后；**插在当前行动位置之前的新战斗者本轮不行动**（日志会写明），从下一轮起按序行动；插在当前位置之后的本轮照常行动。当前行动者与回合进度不受影响，既有战斗者的数据与日志也不会被改动。还没 `init` 时只添加不掷先攻（此时 `--initiative` 报错，`init` 会为所有人掷）；战斗已分出胜负的 state 不能再添加，需新建遭遇。新战斗者总是清醒加入；加到 party 一侧照常写回 party-state。
@@ -70,6 +70,14 @@ $CS roll 1d20+7 --adv --dc 12                       # 战斗外的任意掷骰
 
 没有现成遭遇时不用写 YAML：`combat-sim --campaign <存档>/combat/campaign.yaml --state q quick --foe goblin:4 --foe wolf:2@near --distance 40 --light dim`。5 行网格，队伍在 `near`，敌人默认在 `far`。2014 存档可直接用 `Rules/combat/2014/srd/` 里的全部 SRD 5.1 怪物和法术（`content list --kind creature`）。
 
+## 登记与结束遭遇
+
+新建战役内的遭遇会登记为开放。用 `$CS --state <名字> encounter status` 查状态。战斗结束、队伍撤退或 DM 中止遭遇时，用 `$CS --state <名字> encounter close --reason "<原因>"` 记录结束。先处理待确认的反应，并结清这场遭遇接管的世界时间。
+
+结束后可以查看战况和日志，战斗动作与队伍同步会拒绝使用已结束的状态。可以用新名字建立下一场遭遇，或在确认原遭遇已结束后复用名字。
+
+旧遭遇显示 `unregistered`。DM 核对其所属存档后，可用 `encounter register` 登记为开放，或在 `encounter close` 上加 `--confirm-legacy` 直接记录为已结束。遇到 `unverified` 时先核对文件和队伍的归属。
+
 ## 玩家视图：未识别怪物的名称遮蔽
 
 `status`、`log`、`simulate` 默认是 DM 视图，显示真实名字。要给玩家看同一份内容时加 `--player`：
@@ -80,6 +88,7 @@ $CS --campaign "$COMBAT_SIM_CAMPAIGN" --player status
 ```
 
 - 未识别的怪物显示 `appearance`（creature 数据里的字段），或 `$T identify --appearance <东西> "<描述>"` 写的覆盖值，否则用「一只大型野兽」这样的体型+类型描述。
+- 玩家查看 `log` 或 `status` 时，可以加 `--hide-dc` 单独隐藏检定 DC。日志仍显示骰值和成败，JSON 中的持续状态仍显示豁免属性。原始数值保留在本地存档。
 - 识别后用 `$T identify <东西>` 记录，`identified.yaml` 里 `identified: true` 的条目恢复真名；PC 和同伴永远显示真名。
 - `identified.yaml` 默认从 `--campaign` 指向的存档（`<存档>/combat/campaign.yaml` 的上一级）读取；也可以加 `--save Saves/<存档>` 或设 `TALKDND_SAVE`。
 - `combat-sim roll` 的每次掷骰也会追加到 `<存档>/rolls.log`（同上定位存档），`$T log rolls` 可查。

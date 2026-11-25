@@ -52,6 +52,371 @@ fn elapsed_days(save: &Path) -> f64 {
     v["elapsed_days"].as_f64().unwrap()
 }
 
+const CAST_LIBRARY: &str = r#"
+abilities:
+  - id: test-spell
+    name: Test Spell
+    tags: [spell]
+    activation: action
+    cost: {resource: spell-slot-1, amount: 1}
+    slot_level: 1
+    target: {type: self}
+    effects: [{note: "A fixture effect for the DM"}]
+    spell:
+      level: 1
+      casting_time: {amount: 1, unit: minute}
+creatures:
+  - id: test-caster
+    name: Test Caster
+    kind: pc
+    side: party
+    ac: 12
+    hp: 20
+    speed: {walk: 30}
+    resources:
+      spell-slot-1: {max: 2, recharge: long}
+    actions: [{ref: test-spell}]
+  - id: test-enemy
+    name: Test Enemy
+    kind: monster
+    side: enemy
+    ac: 10
+    hp: 10
+    speed: {walk: 30}
+scenes:
+  - id: room
+    name: Test Room
+    mode: zones
+    zones: [{id: near}, {id: far}]
+    edges: [{a: near, b: far, distance: 10}]
+encounters:
+  - id: test-fight
+    name: Test Fight
+    scene: room
+    party_zone: near
+    members: [{creature: test-enemy, zone: far}]
+"#;
+
+fn casting_save(name: &str, edition: &str) -> (PathBuf, PathBuf, PathBuf) {
+    use combat_sim::{
+        content::ContentSources,
+        dice::seeded_rng,
+        engine,
+        state::{EncounterState, NewEncounter},
+    };
+
+    let (root, save) = new_save(name);
+    let combat = save.join("combat");
+    let manifest = combat.join("campaign.yaml");
+    fs::write(
+        &manifest,
+        format!(
+            "name: Casting Test\nruleset: \"{edition}\"\nlibrary: [cast-fixture.yaml]\nstate_dir: .\nparty: [test-caster]\n"
+        ),
+    )
+    .unwrap();
+    fs::write(combat.join("cast-fixture.yaml"), CAST_LIBRARY).unwrap();
+    let content = ContentSources {
+        campaign: Some(manifest),
+        ..Default::default()
+    }
+    .load()
+    .unwrap();
+    let mut state = EncounterState::from_encounter(
+        content,
+        &NewEncounter {
+            encounter: "test-fight".into(),
+            party: vec!["test-caster".into()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    state.party_state = Some(combat.join("party-state.yaml"));
+    let caster = state
+        .combatants
+        .iter()
+        .position(|actor| actor.name == "Test Caster")
+        .unwrap();
+    engine::init(
+        &mut state,
+        &[(caster, 25)],
+        &mut seeded_rng(1),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(state.current_index(), Some(caster));
+    let encounter = combat.join("fight.state.json");
+    state.save(&encounter).unwrap();
+    ok(&root, &["time", "enable"]);
+    (root, save, encounter)
+}
+
+fn begin_cast(root: &Path, save: &Path, seconds: &str) -> String {
+    ok(
+        root,
+        &["time", "casting", "start", "test-caster", "test-spell"],
+    );
+    let world = talkdnd::worldtime::load(save).unwrap();
+    let id = world
+        .clock
+        .unwrap()
+        .casting
+        .casts
+        .into_keys()
+        .next()
+        .unwrap();
+    ok(root, &["time", "advance", "--seconds", seconds]);
+    ok(root, &["time", "casting", "enter", "fight"]);
+    id
+}
+
+fn attach_cast(save: &Path, encounter: &Path) -> combat_sim::state::EncounterState {
+    let mut state = combat_sim::state::EncounterState::load(encounter).unwrap();
+    let world = talkdnd::worldtime::load(save).unwrap();
+    let phase = world.clock.unwrap().casting.encounter_progress().unwrap();
+    combat_sim::engine::attach_long_casts(&mut state, phase, &mut Vec::new()).unwrap();
+    state
+}
+
+fn assert_one_cast_paid(save: &Path, id: &str) {
+    let party = combat_sim::party::PartyState::load(&save.join("combat/party-state.yaml")).unwrap();
+    assert_eq!(party.completed_casts.len(), 1);
+    assert!(party.completed_casts.contains(id));
+    assert_eq!(
+        party.members["test-caster"].resources["spell-slot-1"].current,
+        1
+    );
+}
+
+#[test]
+fn one_cast_resumes_across_both_scene_changes_without_double_counting() {
+    use combat_sim::{dice::seeded_rng, engine};
+    let (root, save, encounter) = casting_save("cross-scene", "2014");
+    let id = begin_cast(&root, &save, "42");
+    let before = fs::read(wt_path(&save)).unwrap();
+    assert!(
+        combat_sim::encounter_lifecycle::require_between_encounters(&save)
+            .unwrap_err()
+            .to_string()
+            .contains("clock is still attached")
+    );
+    assert_eq!(code(&root, &["time", "advance", "--seconds", "6"]).0, 1);
+    assert_eq!(fs::read(wt_path(&save)).unwrap(), before);
+
+    let mut state = attach_cast(&save, &encounter);
+    let mut log = Vec::new();
+    let mut rng = seeded_rng(12);
+    engine::continue_long_cast(&mut state, &id, &mut log).unwrap();
+    assert!(engine::continue_long_cast(&mut state, &id, &mut log).is_err());
+    engine::next_turn(&mut state, &mut rng, &mut log).unwrap();
+    engine::next_turn(&mut state, &mut rng, &mut log).unwrap();
+    engine::continue_long_cast(&mut state, &id, &mut log).unwrap();
+    state.save(&encounter).unwrap();
+    assert!(ok(&root, &["time", "show"]).contains("已过秒数：54"));
+    assert!(ok(&root, &["time", "casting", "leave"]).contains("12 秒"));
+    let after = fs::read(wt_path(&save)).unwrap();
+    assert_eq!(code(&root, &["time", "casting", "leave"]).0, 1);
+    assert_eq!(fs::read(wt_path(&save)).unwrap(), after);
+
+    ok(&root, &["time", "advance", "--seconds", "6"]);
+    assert!(ok(&root, &["time", "casting", "status"]).contains("60/60 秒 ready"));
+    assert_eq!(code(&root, &["time", "casting", "finish", &id]).0, 1);
+    assert!(!save.join("combat/party-state.yaml").exists());
+    ok(
+        &root,
+        &["time", "casting", "finish", &id, "--confirm-manual"],
+    );
+    assert_one_cast_paid(&save, &id);
+    assert_eq!(
+        code(
+            &root,
+            &["time", "casting", "finish", &id, "--confirm-manual"]
+        )
+        .0,
+        1
+    );
+    assert_one_cast_paid(&save, &id);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn leaving_combat_recovers_a_completed_cast_when_party_write_was_interrupted() {
+    use combat_sim::engine;
+    let (root, save, encounter) = casting_save("combat-cast-repair", "2024");
+    let id = begin_cast(&root, &save, "54");
+    let (exit, output) = code(&root, &["checkpoint", "snapshot"]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("计时交接"), "{output}");
+    let mut state = attach_cast(&save, &encounter);
+    let mut log = Vec::new();
+    engine::continue_long_cast(&mut state, &id, &mut log).unwrap();
+    assert!(engine::finish_long_cast(&mut state, &id, false, &mut log).is_err());
+    engine::finish_long_cast(&mut state, &id, true, &mut log).unwrap();
+    state.save(&encounter).unwrap();
+
+    assert!(!save.join("combat/party-state.yaml").exists());
+    assert!(ok(&root, &["time", "casting", "leave"]).contains("6 秒"));
+    assert_one_cast_paid(&save, &id);
+    assert!(ok(&root, &["time", "casting", "status"]).contains("completed"));
+    assert_eq!(code(&root, &["time", "casting", "leave"]).0, 1);
+    assert_one_cast_paid(&save, &id);
+    let _ = fs::remove_dir_all(&root);
+}
+
+fn snapshot(root: &Path) -> serde_json::Value {
+    serde_json::from_str(&ok(root, &["checkpoint", "snapshot", "--json"])).unwrap()
+}
+
+#[test]
+fn checkpoint_restores_the_clock_and_party_receipt_together() {
+    let (root, save, _) = casting_save("cast-checkpoint", "2024");
+    let legacy = snapshot(&root);
+    assert_eq!(legacy["version"], 1);
+    ok(
+        &root,
+        &["time", "casting", "start", "test-caster", "test-spell"],
+    );
+    ok(&root, &["time", "advance", "--minutes", "1"]);
+    let clock = talkdnd::worldtime::load(&save).unwrap().clock.unwrap();
+    let id = clock.casting.casts.into_keys().next().unwrap();
+    ok(
+        &root,
+        &["time", "casting", "finish", &id, "--confirm-manual"],
+    );
+    let checkpoint = snapshot(&root);
+    assert_eq!(checkpoint["version"], 2);
+    assert!(checkpoint["files"]["world-time.yaml"].is_string());
+    assert!(checkpoint["files"]["combat/party-state.yaml"].is_string());
+
+    let party_path = save.join("combat/party-state.yaml");
+    let mut party = combat_sim::party::PartyState::load(&party_path).unwrap();
+    party
+        .members
+        .get_mut("test-caster")
+        .unwrap()
+        .resources
+        .get_mut("spell-slot-1")
+        .unwrap()
+        .current = 2;
+    party.save(&party_path).unwrap();
+    ok(&root, &["time", "advance", "--seconds", "6"]);
+
+    let current = fs::read(wt_path(&save)).unwrap();
+    let (exit, output) = code(
+        &root,
+        &[
+            "checkpoint",
+            "restore",
+            legacy["id"].as_str().unwrap(),
+            "--yes",
+        ],
+    );
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("缺少长施法时钟"), "{output}");
+    assert_eq!(fs::read(wt_path(&save)).unwrap(), current);
+    assert_eq!(
+        combat_sim::party::PartyState::load(&party_path).unwrap(),
+        party
+    );
+
+    ok(
+        &root,
+        &[
+            "checkpoint",
+            "restore",
+            checkpoint["id"].as_str().unwrap(),
+            "--yes",
+        ],
+    );
+    assert!(ok(&root, &["time", "show"]).contains("已过秒数：60"));
+    assert!(ok(&root, &["time", "casting", "status"]).contains("completed"));
+    assert_one_cast_paid(&save, &id);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn missing_the_casting_action_interrupts_without_spending_a_slot() {
+    use combat_sim::{dice::seeded_rng, engine};
+    let (root, save, encounter) = casting_save("combat-cast-interrupt", "2024");
+    let id = begin_cast(&root, &save, "42");
+    let mut state = attach_cast(&save, &encounter);
+    let mut log = Vec::new();
+    engine::next_turn(&mut state, &mut seeded_rng(3), &mut log).unwrap();
+    state.save(&encounter).unwrap();
+    ok(&root, &["time", "casting", "leave"]);
+    let show = ok(&root, &["time", "casting", "status"]);
+    assert!(
+        show.contains(&id) && show.contains("42/60 秒 interrupted"),
+        "{show}"
+    );
+    assert!(!save.join("combat/party-state.yaml").exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn losing_concentration_interrupts_the_same_cast_without_spending_a_slot() {
+    use combat_sim::{dice::seeded_rng, engine};
+    let (root, save, encounter) = casting_save("combat-concentration-break", "2014");
+    let id = begin_cast(&root, &save, "42");
+    let mut state = attach_cast(&save, &encounter);
+    let mut log = Vec::new();
+    engine::continue_long_cast(&mut state, &id, &mut log).unwrap();
+    engine::damage(
+        &mut state,
+        "Test Caster",
+        "20",
+        None,
+        false,
+        &mut seeded_rng(3),
+        &mut log,
+    )
+    .unwrap();
+    state.save(&encounter).unwrap();
+    ok(&root, &["time", "casting", "leave"]);
+    let show = ok(&root, &["time", "casting", "status"]);
+    assert!(
+        show.contains(&id) && show.contains("48/60 秒 interrupted"),
+        "{show}"
+    );
+    let caster = state
+        .combatants
+        .iter()
+        .find(|actor| actor.name == "Test Caster")
+        .unwrap();
+    assert_eq!(caster.resources["spell-slot-1"].current, 2);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn stale_encounter_cannot_restore_a_slot_spent_in_exploration() {
+    let (root, save, encounter) = casting_save("stale-encounter-resources", "2024");
+    ok(
+        &root,
+        &["time", "casting", "start", "test-caster", "test-spell"],
+    );
+    ok(&root, &["time", "advance", "--minutes", "1"]);
+    let clock = talkdnd::worldtime::load(&save).unwrap().clock.unwrap();
+    let id = clock.casting.casts.into_keys().next().unwrap();
+    ok(
+        &root,
+        &["time", "casting", "finish", &id, "--confirm-manual"],
+    );
+    ok(
+        &root,
+        &["time", "casting", "start", "test-caster", "test-spell"],
+    );
+
+    let before_clock = fs::read(wt_path(&save)).unwrap();
+    let before_battle = fs::read(&encounter).unwrap();
+    let (exit, output) = code(&root, &["time", "casting", "enter", "fight"]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("遭遇资源与存档不一致"), "{output}");
+    assert_eq!(fs::read(wt_path(&save)).unwrap(), before_clock);
+    assert_eq!(fs::read(&encounter).unwrap(), before_battle);
+    assert_one_cast_paid(&save, &id);
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn disabled_by_default_and_writes_are_refused() {
     let (r, save) = new_save("off-default");
@@ -478,6 +843,29 @@ fn broken_or_newer_world_time_files_are_refused() {
         out.contains("world-time.yaml") && out.contains("2"),
         "{out}"
     );
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn minute_and_second_advances_import_the_legacy_clock_once() {
+    let (r, save) = new_save("exact-clock");
+    ok(&r, &["time", "enable"]);
+    ok(&r, &["time", "advance", "--hours", "1"]);
+    let legacy = fs::read(wt_path(&save)).unwrap();
+    assert!(String::from_utf8_lossy(&legacy).contains("version: 1"));
+    ok(&r, &["time", "show"]);
+    assert_eq!(fs::read(wt_path(&save)).unwrap(), legacy);
+
+    ok(&r, &["time", "advance", "--seconds", "6"]);
+    let world = talkdnd::worldtime::load(&save).unwrap();
+    assert_eq!(world.version, 2);
+    assert_eq!(world.clock.unwrap().elapsed_seconds, 3_606);
+    ok(&r, &["time", "advance", "--minutes", "1"]);
+    ok(&r, &["time", "advance", "--hours", "1"]);
+    let world = talkdnd::worldtime::load(&save).unwrap();
+    assert_eq!(world.clock.unwrap().elapsed_seconds, 7_266);
+    let show = ok(&r, &["time", "show"]);
+    assert!(show.contains("已过秒数：7266"), "{show}");
     let _ = fs::remove_dir_all(&r);
 }
 

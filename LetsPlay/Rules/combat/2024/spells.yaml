@@ -9,6 +9,28 @@
 # Upcast that is not a main-damage/heal dice table (extra darts/targets) and the
 # persistent areas (moonbeam, spirit guardians) stay manual (D-6).
 abilities:
+  - id: mending
+    name: Mending
+    tags: [spell, cantrip]
+    activation: action
+    range: 5
+    target: {type: self}
+    effects:
+      - note: "The DM adjudicates the repair of a single small break or tear in a touched object. The repair cannot restore an object's magic."
+    ai: {role: none}
+    source: "SRD 5.2.1 Mending (transmutation cantrip)"
+    spell:
+      level: 0
+      school: transmutation
+      casting_time: {amount: 1, unit: minute}
+      components:
+        verbal: true
+        somatic: true
+        material: {text: "two lodestones"}
+      ritual: false
+      classes: [bard, cleric, druid, sorcerer, wizard]
+      range_text: Touch
+      duration_text: Instantaneous
   - id: fire-bolt
     name: Fire Bolt
     tags: [spell, cantrip]
@@ -87,11 +109,11 @@ abilities:
     cost: {resource: spell-slot-1, amount: 1}
     slot_level: 1
     range: 120
-    target: {type: creature, side: enemy, count: 1}
+    target: {type: creature, side: enemy, count: 3, split_repeated_damage: true}
     effects:
       - damage: {dice: "1d4+1", type: force, repeat: 3}
     ai: {role: damage}
-    source: "PHB 2024: three darts, 1d4+1 force each, automatically hit (all darts on one target here)"
+    source: "PHB 2024: three darts, 1d4+1 force each, automatically hit"
     todo: ["Upcast creates one more dart per slot level above 1; dart count is not a dice table, so higher slots keep base effects (UPCAST NOT MODELED)"]
     spell:
       level: 1
@@ -114,6 +136,10 @@ abilities:
       - on: on_hit_taken
         reaction: true
         when: {would_miss_with_ac_bonus: 5}
+        effects: [{apply_condition: {condition: shielded, to: self, duration: {until: start_of_source_next_turn}}}]
+      - on: on_targeted_spell
+        reaction: true
+        when: {source_has_tag: magic-missile}
         effects: [{apply_condition: {condition: shielded, to: self, duration: {until: start_of_source_next_turn}}}]
     ai: {role: defense}
     source: "PHB 2024: +5 AC until start of your next turn incl. triggering attack; no damage from Magic Missile"

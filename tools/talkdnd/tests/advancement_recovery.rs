@@ -456,6 +456,46 @@ fn t9a_work_evidence_faults_stop_with_zero_target_writes() {
 
 #[cfg(unix)]
 #[test]
+fn both_recovery_choices_hold_the_integrity_lock_from_intent_through_done() {
+    use std::{cell::Cell, time::Duration};
+
+    for (tag, choice) in [
+        ("lock-continue", RecoveryChoice::ContinueToTarget),
+        ("lock-rollback", RecoveryChoice::RollbackToPreimage),
+    ] {
+        let fx = leftover_with_publish_fault(tag, Fault::LogAppend);
+        let evd = rec_dir(&fx.evr, tag);
+        let checks = Cell::new(0);
+        let compete = |rel: &str, save: &Path| {
+            if rel == "integrity.yaml" {
+                assert!(
+                    combat_sim::integrity::lock_with_timeout(save, Duration::ZERO).is_err(),
+                    "another writer acquired the integrity lock during {tag}"
+                );
+                checks.set(checks.get() + 1);
+            }
+            Ok(())
+        };
+        let mut req = rec_req(
+            &fx.root,
+            &fx.save,
+            &fx.evr,
+            &evd,
+            tag,
+            Some(choice),
+            true,
+            None,
+        );
+        req.hooks.after_intent = Some(&compete);
+        req.hooks.after_done = Some(&compete);
+        recover(&req).unwrap();
+        assert_eq!(checks.get(), 2, "{tag}");
+        assert!(combat_sim::integrity::lock_with_timeout(&fx.save, Duration::ZERO).is_ok());
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn continue_to_target_finishes_partial_publish_including_extension() {
     let fx = leftover_with_publish_fault("cont", Fault::LogAppend);
     // Replace targets (including the synthetic extension) are already at the
@@ -539,6 +579,78 @@ fn continue_to_target_finishes_partial_publish_including_extension() {
         }
     }
     assert_eq!(marker_count(&fx.save, "op-p1-5"), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_rejects_changes_to_backup_contents_or_metadata() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for (tag, damage) in [
+        ("backup-content", "恢复备份条目与清单不一致"),
+        ("backup-mode", "备份条目元数据与清单不一致"),
+    ] {
+        let fx = leftover_with_publish_fault(tag, Fault::LogAppend);
+        let path = fx.backup.join("sheets/aria.yaml");
+        if tag == "backup-content" {
+            fs::write(path, b"changed backup bytes\n").unwrap();
+        } else {
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            fs::set_permissions(path, fs::Permissions::from_mode(mode ^ 0o040)).unwrap();
+        }
+        let before = snapshot_tree(&fx.save);
+        let evd = rec_dir(&fx.evr, tag);
+        let req = rec_req(
+            &fx.root,
+            &fx.save,
+            &fx.evr,
+            &evd,
+            tag,
+            Some(RecoveryChoice::RollbackToPreimage),
+            true,
+            None,
+        );
+        let failure = recover(&req).expect_err("changed backup evidence must stop recovery");
+        let error = failure.report.error.as_deref().unwrap();
+        assert!(
+            error.contains(damage) && error.contains("sheets/aria.yaml"),
+            "{error}"
+        );
+        assert!(!failure.report.evidence_established);
+        assert!(failure.report.written_paths.is_empty());
+        assert!(tree_unchanged(&fx.save, &before));
+        assert_leftover_intent_unchanged(&fx);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_accepts_the_legacy_backup_manifest() {
+    let fx = leftover_with_publish_fault("backup-v1", Fault::LogAppend);
+    let path = fx.backup.join("d-backup.manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    manifest["schema"] = serde_json::json!(1);
+    manifest.as_object_mut().unwrap().remove("source_metadata");
+    fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+    let evd = rec_dir(&fx.evr, "backup-v1");
+    let req = rec_req(
+        &fx.root,
+        &fx.save,
+        &fx.evr,
+        &evd,
+        "rec-backup-v1",
+        Some(RecoveryChoice::RollbackToPreimage),
+        true,
+        None,
+    );
+    let report = recover(&req).expect("version 1 backup still supplies the byte preimage");
+    assert_eq!(report.protocol_state, State::Failed);
+    assert_eq!(
+        bytes_at(&fx.save, "sheets/aria.yaml"),
+        fx.preimage["sheets/aria.yaml"]
+    );
 }
 
 #[cfg(unix)]

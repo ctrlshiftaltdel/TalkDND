@@ -302,6 +302,50 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Mask engine-formatted DCs for display. The original roll and encounter log
+/// retain the number and, when present, its calculation.
+pub(crate) fn hide_dcs(line: &str) -> String {
+    let mut masked = String::with_capacity(line.len());
+    let mut copied = 0;
+    for (start, _) in line.match_indices("DC ") {
+        if start < copied
+            || line[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        let value_start = start + "DC ".len();
+        let value = line[value_start..].trim_start();
+        let digits = value.strip_prefix('-').unwrap_or(value);
+        let digit_count = digits.bytes().take_while(u8::is_ascii_digit).count();
+        if digit_count == 0 {
+            continue;
+        }
+        let mut end = line.len() - digits.len() + digit_count;
+        if let Some(formula) = line[end..].strip_prefix(" (") {
+            let mut depth = 1;
+            for (offset, byte) in formula.bytes().enumerate() {
+                match byte {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    end += " (".len() + offset + 1;
+                    break;
+                }
+            }
+        }
+        masked.push_str(&line[copied..value_start]);
+        masked.push('?');
+        copied = end;
+    }
+    masked.push_str(&line[copied..]);
+    masked
+}
+
 /// Mask names in a status JSON document (text mode is masked line by line).
 pub fn mask_status_json(value: &mut serde_json::Value, state: &EncounterState, mask: &PlayerMask) {
     let replacements = mask.replacements(state);
@@ -326,6 +370,15 @@ pub fn mask_status_json(value: &mut serde_json::Value, state: &EncounterState, m
 mod tests {
     use super::*;
     use crate::content::schema::Size;
+
+    #[test]
+    fn dc_mask_hides_numbers_and_formulas_but_retains_dice_and_outcomes() {
+        assert_eq!(
+            hide_dcs("豁免 1d20(9) vs DC 17 (8 + (4 + 5)) FAIL; retry at DC -2"),
+            "豁免 1d20(9) vs DC ? FAIL; retry at DC ?"
+        );
+        assert_eq!(hide_dcs("SDC 18 and DC unknown"), "SDC 18 and DC unknown");
+    }
 
     fn creature(id: &str, name: &str, size: Size, kind: &str) -> Creature {
         let json = format!(

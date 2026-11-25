@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "advancement-lock"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "chrono",
  "serde",
@@ -197,7 +197,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "combat-sim"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "advancement-lock",
  "anyhow",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "talkdnd"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "advancement-lock",
  "anyhow",
@@ -774,6 +774,7 @@ dependencies = [
  "clap",
  "combat-sim",
  "image",
+ "libc",
  "serde",
  "serde_json",
  "serde_norway",

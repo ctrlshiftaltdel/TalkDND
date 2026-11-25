@@ -2270,7 +2270,7 @@ fn give_hit_dice(state: &mut EncounterState, name: &str, die: u32, count: i32) {
 }
 
 #[test]
-fn short_rest_spends_hit_dice_and_long_rest_regains_half() {
+fn rests_spend_and_regain_hit_dice_by_edition() {
     let mut state = encounter_state("multi-side", &["striker-a"], &[]);
     let name = state.combatants[0].name.clone();
     give_hit_dice(&mut state, &name, 8, 4);
@@ -2304,16 +2304,20 @@ fn short_rest_spends_hit_dice_and_long_rest_regains_half() {
         .get_mut("hit-dice")
         .unwrap()
         .current = 0;
-    engine::rest(
-        &mut state,
-        RestKind::Long,
-        Some(&name),
-        None,
-        &mut rng,
-        &mut Vec::new(),
-    )
-    .unwrap();
-    assert_eq!(state.combatants[i].resources["hit-dice"].current, 2);
+    for (edition, expected) in [("2014", 2), ("2024", 4)] {
+        let mut state = state.clone();
+        std::sync::Arc::make_mut(&mut state.content).ruleset = edition.into();
+        engine::rest(
+            &mut state,
+            RestKind::Long,
+            Some(&name),
+            None,
+            &mut rng,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(state.combatants[i].resources["hit-dice"].current, expected);
+    }
 }
 
 #[test]

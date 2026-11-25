@@ -16,8 +16,8 @@
 
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
-use combat_sim::fsutil::atomic_write;
-use serde::{Deserialize, Serialize};
+use combat_sim::campaign_time::{SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE};
+#[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -45,7 +45,7 @@ pub enum Cmd {
         #[arg(long)]
         phase: Option<String>,
     },
-    /// Advance the clock (pure addition; at least one of --days/--hours)
+    /// Advance the clock by days, hours, minutes or seconds.
     ///
     /// 存档启用成长协议后，本命令在写目标前取得 SAVE 锁；SAVE state 缺失、不可写、active 或 in_doubt 时以退出码 1 拒绝且不写任何目标文件。没有协议文件的存档保持既有行为，不自动初始化。
     Advance {
@@ -55,12 +55,48 @@ pub enum Cmd {
         /// Hours to add (h/24 days)
         #[arg(long, value_name = "N")]
         hours: Option<String>,
+        /// Minutes to add, using the exact campaign clock
+        #[arg(long, value_name = "N")]
+        minutes: Option<String>,
+        /// Seconds to add, using the exact campaign clock
+        #[arg(long, value_name = "N")]
+        seconds: Option<String>,
+    },
+    /// Track a minute- or hour-long spell across exploration and combat.
+    Casting {
+        #[command(subcommand)]
+        cmd: CastingCmd,
     },
     /// Due-dated events
     Event {
         #[command(subcommand)]
         cmd: EventCmd,
     },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum CastingCmd {
+    /// Begin a long casting during exploration.
+    Start {
+        caster: String,
+        spell: String,
+        #[arg(long)]
+        material: Option<String>,
+    },
+    /// Show casting progress without changing the save.
+    Status,
+    /// Attach active castings to an encounter that has rolled initiative.
+    Enter { encounter: String },
+    /// Reconcile the encounter clock and resume exploration.
+    Leave,
+    /// Pay once for a completed exploration casting and confirm its effects.
+    Finish {
+        id: String,
+        #[arg(long)]
+        confirm_manual: bool,
+    },
+    /// Interrupt an exploration casting without spending a slot.
+    Interrupt { id: String },
 }
 
 #[derive(Subcommand, Clone)]
@@ -97,85 +133,22 @@ pub enum EventCmd {
     Skip { id: String },
 }
 
-pub const FILE: &str = "world-time.yaml";
-pub const VERSION: u32 = 1;
+pub use combat_sim::campaign_time::{Event, WorldTime, FILE, VERSION};
 
-/// The event statuses (contract §4.5): pending until done or skipped;
-/// terminal states refuse further done/skip.
 pub const PENDING: &str = "pending";
 pub const DONE: &str = "done";
 pub const SKIPPED: &str = "skipped";
-
-/// One scheduled event (contract §4.5; field names frozen).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Event {
-    /// Sequential, never reused: EV-001, EV-002, ...
-    pub id: String,
-    /// Free-text date label the event comes due on.
-    pub due: String,
-    pub title: String,
-    /// pending | done | skipped
-    pub status: String,
-    #[serde(default)]
-    pub dm_only: bool,
-    #[serde(default)]
-    pub notes: String,
-}
-
-/// `world-time.yaml`, version 1. A missing file is the default
-/// (disabled, empty); a newer version is refused like every sidecar.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct WorldTime {
-    #[serde(default)]
-    pub version: u32,
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub calendar: String,
-    #[serde(default)]
-    pub date: String,
-    #[serde(default)]
-    pub phase: String,
-    /// The only day counter; `time advance` adds to it, nothing else does.
-    #[serde(default)]
-    pub elapsed_days: f64,
-    #[serde(default)]
-    pub events: Vec<Event>,
-}
 
 fn path(save: &Path) -> PathBuf {
     save.join(FILE)
 }
 
-/// Load `world-time.yaml`; a missing file is the disabled default, an
-/// invalid file or a newer version is refused naming file and version.
 pub fn load(save: &Path) -> Result<WorldTime> {
-    let p = path(save);
-    if !p.is_file() {
-        return Ok(WorldTime::default());
-    }
-    let wt: WorldTime = serde_norway::from_str(
-        &fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?,
-    )
-    .with_context(|| format!("invalid {}", p.display()))?;
-    if wt.version > VERSION {
-        bail!(
-            "{}: unsupported world-time schema version {} (this talkdnd supports {VERSION}); update talkdnd",
-            p.display(),
-            wt.version
-        );
-    }
-    Ok(wt)
+    WorldTime::load(save)
 }
 
 fn store(save: &Path, wt: &WorldTime) -> Result<()> {
-    let mut current = wt.clone();
-    current.version = VERSION;
-    let text = format!(
-        "# TalkDND world time: an optional in-world calendar with due-dated events.\n# Off by default; only `talkdnd time ...` advances it; hand edits are reported by `talkdnd check`.\n{}",
-        serde_norway::to_string(&current)?
-    );
-    atomic_write(path(save), text.as_bytes())
+    wt.store(save)
 }
 
 /// Write commands need the feature on; the file is never created for them.
@@ -293,6 +266,271 @@ fn log_line(save: &Path, line: &str) -> Result<()> {
     Ok(())
 }
 
+fn casting_spell(
+    save: &Path,
+    caster: &str,
+    spell: &str,
+    material: Option<String>,
+) -> Result<(
+    combat_sim::content::schema::Creature,
+    combat_sim::long_cast::CastRecipe,
+)> {
+    use combat_sim::content::schema::CreatureKind;
+    let content = combat_sim::content::ContentSources {
+        campaign: Some(save.join("combat/campaign.yaml")),
+        ..Default::default()
+    }
+    .load()?;
+    let creature = content.resolve_creature(caster)?;
+    let party = creature
+        .side
+        .as_ref()
+        .map_or(creature.kind() == CreatureKind::Pc, |side| {
+            side.as_str() == "party"
+        });
+    if !party || !matches!(creature.kind(), CreatureKind::Pc | CreatureKind::Npc) {
+        bail!("long casting needs an exact party character ID");
+    }
+    let ability = combat_sim::state::find_creature_ability(&creature, &content, spell)?;
+    let recipe = combat_sim::long_cast::CastRecipe::from_ability(
+        caster,
+        &content.ruleset,
+        &ability.ability,
+        material,
+    )?;
+    Ok((creature, recipe))
+}
+
+fn attached_progress(
+    save: &Path,
+    ledger: &combat_sim::long_cast::CastingLedger,
+) -> Result<(
+    combat_sim::state::EncounterState,
+    combat_sim::long_cast::EncounterCasting,
+)> {
+    use combat_sim::long_cast::Handoff;
+    use combat_sim::state::EncounterState;
+    let handoff = ledger
+        .handoff
+        .as_ref()
+        .context("no long casting is attached to combat")?;
+    let path = Handoff::encounter_path(save, &handoff.encounter_file)?;
+    let state = EncounterState::load(&path)?;
+    let battle = match state.casting.as_ref() {
+        Some(casting) if casting.handoff_id == handoff.id => casting.clone(),
+        _ if state.round == handoff.start_round
+            && Handoff::fingerprint(&path)? == handoff.before_digest =>
+        {
+            ledger.encounter_progress()?
+        }
+        _ => bail!("the encounter no longer matches the recorded long casting handoff"),
+    };
+    ledger.validate_encounter(&battle, state.round)?;
+    Ok((state, battle))
+}
+
+fn run_casting(save: &Path, cmd: CastingCmd) -> Result<()> {
+    use combat_sim::long_cast::{CastStatus, Handoff};
+    use combat_sim::party::{Member, PartyState, FILE_NAME};
+    use combat_sim::state::{EncounterState, STATE_SUFFIX};
+
+    let mut world = load(save)?;
+    if matches!(cmd, CastingCmd::Status) {
+        let Some(clock) = &world.clock else {
+            println!("没有长施法记录");
+            return Ok(());
+        };
+        let casts = if clock.casting.handoff.is_some() {
+            attached_progress(save, &clock.casting)?
+                .1
+                .casts
+                .into_iter()
+                .map(|(id, cast)| (id, cast.progress))
+                .collect()
+        } else {
+            clock.casting.casts.clone()
+        };
+        for (id, cast) in casts {
+            println!(
+                "{id} {} {} {}/{} 秒 {}",
+                cast.recipe.caster_id,
+                cast.recipe.spell_id,
+                cast.elapsed_seconds,
+                cast.recipe.required_seconds,
+                cast.phase_name(),
+            );
+        }
+        return Ok(());
+    }
+
+    require_enabled(&world)?;
+    world.enable_second_clock()?;
+    let clock = world.clock.as_mut().expect("exact clock");
+    let party_path = save.join("combat").join(FILE_NAME);
+    let line = match cmd {
+        CastingCmd::Start {
+            caster,
+            spell,
+            material,
+        } => {
+            clock.casting.require_exploration()?;
+            let (creature, recipe) = casting_spell(save, &caster, &spell, material)?;
+            let party = PartyState::load(&party_path)?;
+            let member = party
+                .members
+                .get(&caster)
+                .cloned()
+                .unwrap_or_else(|| Member::from_creature(&creature));
+            if member.dead || member.hp <= 0 {
+                bail!("施法者无法开始长施法");
+            }
+            if let Some(cost) = &recipe.cost {
+                let amount = i32::try_from(cost.amount).context("invalid long spell cost")?;
+                if member
+                    .resources
+                    .get(&cost.resource)
+                    .is_none_or(|resource| resource.current < amount)
+                {
+                    bail!("施法者缺少该法术所需的资源");
+                }
+            }
+            let id = combat_sim::long_cast::new_id();
+            let line = format!(
+                "长施法 {id}：{caster} 开始 {}（{} 秒）",
+                recipe.spell_id, recipe.required_seconds
+            );
+            clock.casting.begin(id, recipe)?;
+            line
+        }
+        CastingCmd::Enter { encounter } => {
+            let filename = if encounter == combat_sim::state::DEFAULT_STATE_FILE
+                || encounter.ends_with(STATE_SUFFIX)
+            {
+                encounter
+            } else {
+                format!("{encounter}{STATE_SUFFIX}")
+            };
+            let path = Handoff::encounter_path(save, &filename)?;
+            let state = EncounterState::load(&path)?;
+            if state.round == 0
+                || state.current_index().is_none()
+                || state.outcome.is_some()
+                || state.awaiting_reaction()
+            {
+                bail!("交接需要已掷先攻、进行中且没有待确认反应的遭遇");
+            }
+            if state
+                .registration
+                .as_ref()
+                .is_some_and(|entry| entry.is_closed())
+            {
+                bail!("已结束的遭遇不能接管施法时钟");
+            }
+            let saved_party = state
+                .party_state
+                .as_deref()
+                .context("the encounter has no campaign party-state")?;
+            if saved_party.file_name() != party_path.file_name()
+                || saved_party
+                    .parent()
+                    .map(std::fs::canonicalize)
+                    .transpose()?
+                    != party_path.parent().map(std::fs::canonicalize).transpose()?
+            {
+                bail!("the encounter belongs to a different party state");
+            }
+            let party = PartyState::load(&party_path)?;
+            if clock.casting.casts.iter().any(|(id, cast)| {
+                cast.status == CastStatus::Casting && party.completed_casts.contains(id)
+            }) {
+                bail!("长施法资源已经扣除，请先重试完成以同步战役状态");
+            }
+            party.verify_encounter_resources(&state)?;
+            clock.casting.enter(Handoff {
+                id: combat_sim::long_cast::new_id(),
+                encounter_file: filename,
+                before_digest: Handoff::fingerprint(&path)?,
+                start_round: state.round,
+            })?;
+            let mut trial = state;
+            combat_sim::engine::attach_long_casts(
+                &mut trial,
+                clock.casting.encounter_progress()?,
+                &mut Vec::new(),
+            )?;
+            "长施法进度已交接给遭遇".to_string()
+        }
+        CastingCmd::Leave => {
+            let (state, battle) = attached_progress(save, &clock.casting)?;
+            if state.awaiting_reaction() {
+                bail!("先处理遭遇中的待确认反应，再回到探索");
+            }
+            let elapsed = world.reconcile_combat(&battle, state.round)?;
+            let mut party = PartyState::load(&party_path)?;
+            if battle.casts.iter().any(|(id, cast)| {
+                cast.progress.status == CastStatus::Completed && !party.completed_casts.contains(id)
+            }) {
+                party.record(&state);
+                party.save(&party_path)?;
+            }
+            format!("长施法进度已回到探索，战斗计入 {elapsed} 秒")
+        }
+        CastingCmd::Finish { id, confirm_manual } => {
+            clock.casting.require_exploration()?;
+            let cast = clock
+                .casting
+                .casts
+                .get_mut(&id)
+                .context("unknown long casting ID")?;
+            if !cast.ready_to_complete() {
+                bail!("该长施法未完成持续时间，或已经结束");
+            }
+            if !confirm_manual {
+                bail!("先用 --confirm-manual 确认由 DM 结算法术效果");
+            }
+            let (creature, recipe) = casting_spell(
+                save,
+                &cast.recipe.caster_id,
+                &cast.recipe.spell_id,
+                cast.recipe.material.clone(),
+            )?;
+            if recipe != cast.recipe {
+                bail!("施法记录的规则或资源已变更");
+            }
+            let mut party = PartyState::load(&party_path)?;
+            party
+                .members
+                .entry(recipe.caster_id.clone())
+                .or_insert_with(|| Member::from_creature(&creature));
+            party.settle_long_cast(&id, &recipe)?;
+            party.save(&party_path)?;
+            cast.status = CastStatus::Completed;
+            format!("MANUAL CONFIRMED：长施法 {id} 完成")
+        }
+        CastingCmd::Interrupt { id } => {
+            clock.casting.require_exploration()?;
+            let cast = clock
+                .casting
+                .casts
+                .get_mut(&id)
+                .context("unknown long casting ID")?;
+            if cast.status != CastStatus::Casting {
+                bail!("该长施法已经结束");
+            }
+            if PartyState::load(&party_path)?.completed_casts.contains(&id) {
+                bail!("该长施法已扣除资源，请重试完成以同步状态");
+            }
+            cast.status = CastStatus::Interrupted;
+            format!("长施法 {id} 已中断，未消耗法术资源")
+        }
+        CastingCmd::Status => unreachable!("status is read-only"),
+    };
+    store(save, &world)?;
+    log_line(save, &line)?;
+    println!("{line}");
+    Ok(())
+}
+
 /// `time show|enable|disable|set|advance|event ...` (P06, TASK-0063).
 pub fn run(root: &Path, save: &Path, cmd: Cmd) -> Result<()> {
     let _ = root;
@@ -304,7 +542,22 @@ pub fn run(root: &Path, save: &Path, cmd: Cmd) -> Result<()> {
                 println!("- 历法：{}", label(&wt.calendar));
                 println!("- 日期：{}", label(&wt.date));
                 println!("- 时段：{}", label(&wt.phase));
-                println!("- 已过天数：{}", fmt_days(wt.elapsed_days));
+                if let Some(clock) = &wt.clock {
+                    let mut seconds = clock.elapsed_seconds;
+                    if clock.casting.handoff.is_some() {
+                        let (state, battle) = attached_progress(save, &clock.casting)?;
+                        seconds = seconds
+                            .checked_add(battle.elapsed_seconds(state.round)?)
+                            .context("campaign seconds overflow")?;
+                    }
+                    println!(
+                        "- 已过天数：{}",
+                        fmt_days(combat_sim::campaign_time::as_days(seconds))
+                    );
+                    println!("- 已过秒数：{}", seconds);
+                } else {
+                    println!("- 已过天数：{}", fmt_days(wt.elapsed_days));
+                }
                 // Player view (contract §6.1): dm_only events stay out of
                 // both totals, so the counts cannot leak their existence.
                 let visible = wt.events.iter().filter(|e| !e.dm_only).count();
@@ -351,6 +604,16 @@ pub fn run(root: &Path, save: &Path, cmd: Cmd) -> Result<()> {
                 println!("世界时间已是未启用状态；未改动、未记日志");
                 return Ok(());
             }
+            if wt.clock.as_ref().is_some_and(|clock| {
+                clock.casting.handoff.is_some()
+                    || clock
+                        .casting
+                        .casts
+                        .values()
+                        .any(|cast| cast.status == combat_sim::long_cast::CastStatus::Casting)
+            }) {
+                bail!("世界时间支撑进行中的长施法，请先结束交接与施法");
+            }
             wt.enabled = false;
             store(save, &wt)?;
             log_line(save, "世界时间：停用（日期与事件数据保留）")?;
@@ -387,32 +650,51 @@ pub fn run(root: &Path, save: &Path, cmd: Cmd) -> Result<()> {
             log_line(save, &line)?;
             println!("{line}");
         }
-        Cmd::Advance { days, hours } => {
+        Cmd::Advance {
+            days,
+            hours,
+            minutes,
+            seconds,
+        } => {
             let mut wt = load(save)?;
             require_enabled(&wt)?;
-            let d = parse_amount("days", days)?;
-            let h = parse_amount("hours", hours)?;
-            if d == 0 && h == 0 {
-                bail!("--days/--hours 至少一个且合计必须大于 0；存档未改动");
-            }
-            let add = round9(d as f64 + h as f64 / 24.0);
-            let new = round9(wt.elapsed_days + add);
-            if new == round9(wt.elapsed_days) {
-                println!("已过天数未变化；未改动、未记日志");
-                return Ok(());
+            let exact = wt.clock.is_some() || minutes.is_some() || seconds.is_some();
+            let d = u64::from(parse_amount("days", days)?);
+            let h = u64::from(parse_amount("hours", hours)?);
+            let m = u64::from(parse_amount("minutes", minutes)?);
+            let s = u64::from(parse_amount("seconds", seconds)?);
+            let elapsed = d * SECONDS_PER_DAY + h * SECONDS_PER_HOUR + m * SECONDS_PER_MINUTE + s;
+            if elapsed == 0 {
+                bail!("--days/--hours/--minutes/--seconds 至少一个且合计必须大于 0；存档未改动");
             }
             let old = wt.elapsed_days;
-            wt.elapsed_days = new;
+            let line = if exact {
+                wt.advance_seconds(elapsed)?;
+                format!(
+                    "世界时间：已过 {} 秒（新增 {} 秒）",
+                    wt.clock.as_ref().expect("exact clock").elapsed_seconds,
+                    elapsed,
+                )
+            } else {
+                let add = round9(d as f64 + h as f64 / 24.0);
+                let new = round9(old + add);
+                if new == round9(old) {
+                    println!("已过天数未变化；未改动、未记日志");
+                    return Ok(());
+                }
+                wt.elapsed_days = new;
+                format!(
+                    "世界时间：已过天数 {} → {}（+{}）",
+                    fmt_days(old),
+                    fmt_days(new),
+                    fmt_days(add)
+                )
+            };
             store(save, &wt)?;
-            let line = format!(
-                "世界时间：已过天数 {} → {}（+{}）",
-                fmt_days(old),
-                fmt_days(new),
-                fmt_days(add)
-            );
             log_line(save, &line)?;
             println!("{line}");
         }
+        Cmd::Casting { cmd } => run_casting(save, cmd)?,
         Cmd::Event { cmd } => match cmd {
             EventCmd::Add {
                 due,
@@ -589,6 +871,7 @@ mod tests {
                 dm_only: true,
                 notes: "npc:E-001".into(),
             }],
+            clock: None,
         };
         store(&save, &wt).unwrap();
         let back = load(&save).unwrap();
@@ -680,6 +963,7 @@ mod tests {
             date: "1 Hammer".into(),
             phase: "morning".into(),
             elapsed_days: 2.5,
+            clock: None,
             events: vec![
                 Event {
                     id: "EV-001".into(),

@@ -95,17 +95,20 @@ usable at a distance less than or equal to its range.
 - **Blindsight** ignores light and obscurement within range, and perceives
   hidden and invisible creatures. It still respects total cover / blocked line
   of sight.
-- **Tremorsense** perceives creatures in contact with the ground within range,
-  regardless of light, obscurement or cover. A creature at altitude 0 but in a
-  flying/hovering state is not in ground contact. Creatures with an
-  `incorporeal` tag are not sensed. It also perceives hidden creatures.
+- **Tremorsense** on 2024 encounters uses `locates_by_tremorsense` for location.
+  Both creatures must be grounded, within range, and on the modeled shared
+  floor. Equal grid floor elevations or a shared logical zone establish the
+  floor. Cover and darkness still affect sight and attacks. Aerial and
+  incorporeal targets are excluded. The 2014 sight calculation retains its
+  existing tremorsense behavior.
 - **Truesight** sees through normal darkness and the `invisible` condition
   within range and respects total cover. It does **not** defeat ordinary
   hiding.
-- **`hidden`** blocks normal vision and darkvision at any range. Blindsight and
-  tremorsense perceive a hidden creature within range; truesight does not.
-- **`invisible`** blocks normal vision and darkvision. Blindsight, tremorsense
-  (ground contact) and truesight perceive the creature.
+- **`hidden`** blocks normal vision and darkvision. Blindsight can see the
+  creature within range when cover permits. Tremorsense follows the edition
+  rules above.
+- **`invisible`** blocks normal vision and darkvision. Blindsight and truesight
+  can see the creature within range when cover permits.
 
 Magical darkness is out of scope. It is not modelled as a separate light or
 obscurement source; a scene can still be authored as `dark` plus `heavy`
@@ -127,8 +130,9 @@ engine does not know whether a darkness effect is magical.
 Total cover is not counted a second time as "cannot see": cover remains the
 attack-legality and AC rule. The hidden/invisible condition modifiers are
 suppressed when the observer has a sense that defeats that condition, so
-truesight/blindsight/tremorsense do not double-count the condition and normal
-vision keeps the existing condition behaviour.
+the attack calculation does not double-count the condition. In 2024,
+tremorsense location does not suppress an unseen modifier or enable an
+opportunity attack that requires sight.
 
 A creature without a `senses` string uses normal vision. There is no automatic
 Perception roll; a DM who wants an active search resolves it manually.

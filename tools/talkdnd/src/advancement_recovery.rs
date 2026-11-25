@@ -836,9 +836,8 @@ fn recovery_plan(
     candidate: Option<&Path>,
 ) -> Result<RecoveryPlan> {
     let backup = backup.ok_or_else(|| anyhow!("缺少原操作备份位置，无法取得前像，停止"))?;
-    if !backup.is_dir() {
-        bail!("备份目录不存在或不是目录：{}", backup.display());
-    }
+    crate::advancement_commit::verify_recovery_backup(backup, req.save_dir, &leftover.operation_id)
+        .map_err(|err| anyhow!("重新验收原操作备份 {}：{err:#}", backup.display()))?;
 
     // Registered replace targets are defined from the candidate if present,
     // otherwise from the backup (rollback still has to cover every registered
@@ -1305,42 +1304,45 @@ fn apply_integrity(
     let Some(file) = plan.files.iter().find(|f| f.kind == RecoverKind::Integrity) else {
         return Ok(());
     };
+    if work_file(work, &file.rel).is_some_and(|entry| entry.done) {
+        already_done.push(file.rel.clone());
+        return Ok(());
+    }
+    let stop = |error: String| ApplyStop::Failed {
+        error,
+        written: written.clone(),
+        already_done: already_done.clone(),
+        merge: true,
+    };
+    let _held = acquire_inner_integrity_lock(req.save_dir, &req.inner_lock)
+        .map_err(|err| stop(format!("{err}。完整性更新停止")))?;
+    let current = read_rel(req.save_dir, &file.rel).map_err(|err| stop(format!("{err}")))?;
+    if current != file.current {
+        return Err(stop(
+            "integrity.yaml 在恢复计划生成后已变化，停止且不覆盖，要求人工合并".into(),
+        ));
+    }
     let mut file = PlannedFile {
         rel: file.rel.clone(),
         kind: file.kind,
-        current: read_rel(req.save_dir, "integrity.yaml").unwrap_or_default(),
+        current,
         preimage: file.preimage.clone(),
         target: file.target.clone(),
         class: file.class,
     };
     if choice == RecoveryChoice::ContinueToTarget {
-        match compute_integrity_target(req, work) {
-            Ok(bytes) => {
-                file.target = bytes;
-                file.class = classify(
-                    RecoverKind::Integrity,
-                    &file.current,
-                    &file.preimage,
-                    &file.target,
-                    true,
-                );
-            }
-            Err(err) => {
-                return Err(ApplyStop::Failed {
-                    error: format!("{err}"),
-                    written: written.clone(),
-                    already_done: already_done.clone(),
-                    merge: true,
-                });
-            }
-        }
+        file.target = compute_integrity_target(req, work).map_err(|err| stop(format!("{err}")))?;
+        file.class = classify(
+            RecoverKind::Integrity,
+            &file.current,
+            &file.preimage,
+            &file.target,
+            true,
+        );
         if matches!(file.class, FileClass::Neither | FileClass::LaterLogAppends) {
-            return Err(ApplyStop::Failed {
-                error: "integrity.yaml 的当前内容既非前像也非继续目标，要求人工合并，未覆盖".into(),
-                written: written.clone(),
-                already_done: already_done.clone(),
-                merge: true,
-            });
+            return Err(stop(
+                "integrity.yaml 的当前内容既非前像也非继续目标，要求人工合并，未覆盖".into(),
+            ));
         }
     }
     apply_one(req, work, &file, choice, written, already_done)
@@ -1352,8 +1354,6 @@ fn compute_integrity_target(req: &RecoveryRequest<'_>, work: &WorkRecord) -> Res
         .as_ref()
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("继续到目标需要原备份以计算完整性前像"))?;
-    let _held = acquire_inner_integrity_lock(req.save_dir, &req.inner_lock)
-        .map_err(|err| anyhow!("{err}。完整性更新停止；整条提交路径仍不承诺有界"))?;
     // `before` is the original preimage tree (the D backup), same as
     // ADV-P1-4's snapshot taken before publish. `now` is the live tree
     // after replace and log files have been recovered. Dirty / accepted

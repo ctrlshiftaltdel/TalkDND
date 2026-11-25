@@ -97,7 +97,8 @@ response). A move that starts inside the reach does not count as entering it.
   concentration.
 - A trigger releases the held ability without paying its cost again or
   starting concentration again; it spends the holder's reaction exactly once.
-  A reaction already used this round refuses the trigger and keeps the ready.
+  A spent reaction refuses the trigger and keeps the ready until the holder's
+  next turn, when the reaction refreshes and the ready expires.
 - Expiry is at the start of the holder's next turn. `start_turn` clears the
   ready before the new turn's triggers run.
 - `ready-clear` clears it immediately.
