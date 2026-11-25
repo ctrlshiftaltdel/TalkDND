@@ -211,6 +211,10 @@ Validation is the kit check, the full kit test suite and the leak check in Succe
 
 ## Decision Log
 
+### 2026-11-25 — Backup timestamp verification
+
+The implementation records the source POSIX status-change timestamp (`ctime`) in the backup manifest as audit evidence. Acceptance verifies the recoverable content and metadata, including permissions, ownership, restorable timestamps, ACLs, extended attributes, and existing user backups. If required data or metadata cannot be preserved and verified, the migration stops before writing any target. This resolves a technical interpretation of the existing backup requirement. Implementation and platform verification are still required.
+
 ### 2026-11-25 — Append-only identity for legacy Markdown cards
 
 The owner approved adding one non-secret identity marker at the end of a Markdown-only character card after DM review. The existing bytes stay intact. The card and its advancement record must agree on the marker and its card reference, and previous advancement selections remain unknown. The first delivery previews the proposed append and checks existing pairs without writing. Migration requires a verified whole-save backup and an explicit DM review of the association.

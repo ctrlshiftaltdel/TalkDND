@@ -302,7 +302,7 @@
 - **建议允许路径：** `tools/talkdnd/src/migrate.rs`、`tools/talkdnd/src/charsheet.rs`、`tools/talkdnd/src/progress.rs`、新增 sidecar 模块、`tools/talkdnd/src/lib.rs`、`tools/talkdnd/src/advancement_commit.rs`（`ADV-P1-4` 的发布模块，用于注册 sidecar 与主 schema 元数据目标）、`tools/talkdnd/tests/`、`LetsPlay/docs/layout.md`（存档结构权威）、`docs/ADVANCEMENT-IDENTITY-CONTRACT.md`（记录实现状态与证据位置）、三个 crate 的 `Cargo.toml` 版本号、`CHANGELOG.md`、`docs/PROJECT-CHARTER.md`（按 LIVING CHARTER 同 PR 更新）
 - **Depends on:** `ADV-P1-1e`、`ADV-P1-5`；**具体身份方案已获所有者授权**（sidecar 字段、随机源、令牌生命周期、旧格式无损写入与重绑/克隆协议）；**`ADV-P1-13` 的跨平台枚举/链接/备份调查结论支持实现**——结论为 `UNKNOWN` 时本块阻塞，不得以“调查是并行任务”为由视为已满足
 - **Acceptance criteria:**
-  - [ ] `AC-1`: 迁移预览只读、不写任何文件；只有完整备份（含既有用户备份）校验通过后才开始写；备份失败、空间不足或特殊文件/元数据无法安全复制时停止且目标未改。
+  - [ ] `AC-1`: 迁移预览只读；完整备份通过验收后才开始写。原始 POSIX `ctime` 留在清单供审计。遇到空间不足、特殊文件或无法保留并验证的可恢复元数据时，停止且保持目标字节原样。见[锁与恢复契约](ADVANCEMENT-LOCK-DESIGN.md)。
   - [ ] `AC-2`: 9 与 10 自动迁移到 11；已是 11 不重复迁移；未来/未知 schema 与损坏数据失败关闭；不迁移时的旧数据仍按已批准边界可读。
   - [ ] `AC-3`: 角色承载体与 sidecar 双侧保存同一随机非秘密标识；缺失、不一致或同档重复一律停止；不按名称、旧 ID 或摘要自动绑定，不自动分叉/合并。
   - [ ] `AC-4`: 旧角色首次关联需 DM 核对确认；无法无损处理时停止，原字节保留，不伪造历史、不把缺失记录当成“没有选择”。
