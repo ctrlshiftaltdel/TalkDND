@@ -29,8 +29,8 @@ use crate::space::{
     FallMap, FallResolution, FallResolver, FallRuleKind, FlightCapability, FlightCheck,
     FlightConditions, FlightRules, FlightState, FlightSubject, Footprint, GridMap, HeightProfile,
     LandingCondition, LandingOutcome, LineOfSight, MovementCell, MovementMap, MovementPlanner,
-    PlanOutcome, Position, Space, SpatialBlocker, SpatialBody, SpatialPose, SpatialProfile,
-    TraversalCreature, OPEN_ZONE,
+    PlanOutcome, Position, Space, SpaceView, SpatialBlocker, SpatialBody, SpatialPose,
+    SpatialProfile, TraversalCreature, OPEN_ZONE,
 };
 use crate::state::{
     ability_from_text, active_duration, ActiveCondition, ActiveDuration, ActiveSaveEnds,
@@ -4532,7 +4532,8 @@ pub fn can_see(state: &EncounterState, observer: usize, target: usize) -> CanSee
         };
     }
 
-    if senses_in_range(senses.tremorsense, distance)
+    if state.content.ruleset == "2014"
+        && senses_in_range(senses.tremorsense, distance)
         && is_ground_contact(state, target)
         && !is_incorporeal(state, target)
     {
@@ -4688,6 +4689,54 @@ fn is_incorporeal(state: &EncounterState, index: usize) -> bool {
         })
 }
 
+/// Locates a creature by vibrations on the modeled floor. On a grid the
+/// surface is the same floor level, and zone scenes only establish a shared
+/// surface within a zone. This query grants neither sight nor a clear path.
+pub fn locates_by_tremorsense(state: &EncounterState, observer: usize, target: usize) -> bool {
+    let (Some(observer_creature), Some(target_creature)) =
+        (state.combatants.get(observer), state.combatants.get(target))
+    else {
+        return false;
+    };
+    let senses = parse_senses(observer_creature.creature.senses.as_deref());
+    if observer == target
+        || senses.tremorsense.is_none()
+        || !is_ground_contact(state, observer)
+        || !is_ground_contact(state, target)
+        || is_incorporeal(state, target)
+    {
+        return false;
+    }
+    let Some(space) = state.space() else {
+        return false;
+    };
+    let (from, to) = (
+        observer_creature.position_ref(),
+        target_creature.position_ref(),
+    );
+    if !space
+        .distance(from.as_ref(), to.as_ref())
+        .is_some_and(|distance| senses_in_range(senses.tremorsense, distance))
+    {
+        return false;
+    }
+    match space {
+        SpaceView::Zones(_) => observer_creature.zone == target_creature.zone,
+        SpaceView::Grid(grid) => {
+            let floor = |combatant: &CombatantState| {
+                let [x, y] = combatant.cell()?;
+                let floor = grid.map().cell_at(x, y)?.elevation.unwrap_or_default();
+                combatant
+                    .pose
+                    .as_ref()
+                    .is_none_or(|pose| pose.cell.z == floor)
+                    .then_some(floor)
+            };
+            matches!((floor(observer_creature), floor(target_creature)), (Some(a), Some(b)) if a == b)
+        }
+    }
+}
+
 fn sense_defeats_hidden(
     state: &EncounterState,
     target: usize,
@@ -4695,7 +4744,8 @@ fn sense_defeats_hidden(
     distance: i32,
 ) -> bool {
     senses_in_range(senses.blindsight, distance)
-        || (senses_in_range(senses.tremorsense, distance)
+        || (state.content.ruleset == "2014"
+            && senses_in_range(senses.tremorsense, distance)
             && is_ground_contact(state, target)
             && !is_incorporeal(state, target))
 }
@@ -5012,6 +5062,15 @@ fn resolve_attack_inner(
         source.eq_ignore_ascii_case("hidden") || source.eq_ignore_ascii_case("invisible")
     });
     let attacker_view = can_see(state, attacker, target);
+    if log.enabled()
+        && state.content.ruleset == "2024"
+        && visibility_penalty_from(&attacker_view)
+        && locates_by_tremorsense(state, attacker, target)
+    {
+        log.log(format_args!(
+            "{attacker_name} pinpoints the target with tremorsense"
+        ));
+    }
     if visibility_penalty_from(&attacker_view) && !hidden_modifier {
         let label = if attacker_view.light == Light::Dark
             && attacker_view.obscurement != Obscurement::Heavy
@@ -10478,6 +10537,7 @@ fn opportunity_attacks(
                 && !has_flag(state, *index, ConditionFlag::NoReactions)
                 && !has_flag(state, *index, ConditionFlag::NoOpportunityAttacks)
                 && !is_incapacitated(state, *index)
+                && can_see(state, *index, mover).visibility <= Visibility::LightlyObscured
                 && {
                     if spatial_query_enabled(state) {
                         let observer = spatial_body_for(state, *index);

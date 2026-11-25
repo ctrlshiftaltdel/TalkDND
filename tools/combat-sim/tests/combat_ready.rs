@@ -493,6 +493,20 @@ fn cli_leaving_reach_can_pause_for_the_players_opportunity_attack() {
             .count(),
         1
     );
+
+    let dark_path = scratch.dir.join("dark.state.json");
+    Arc::make_mut(state.scene.as_mut().unwrap()).light =
+        Some(combat_sim::content::schema::Light::Dark);
+    state.rebuild_caches();
+    state.save(&dark_path).unwrap();
+    assert_success(
+        &run_cli(&dark_path, &["move", "Source", "beta"]),
+        "unseen mover can leave",
+    );
+    let resolved = EncounterState::load(&dark_path).unwrap();
+    assert_eq!(resolved.combatants[source].zone, "beta");
+    assert!(resolved.combatants[hero].has_reaction(resolved.round));
+    assert!(!status_json(&dark_path)["pending_reaction"].is_object());
 }
 
 #[test]
