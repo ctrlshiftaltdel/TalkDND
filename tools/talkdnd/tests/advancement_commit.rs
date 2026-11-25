@@ -115,6 +115,11 @@ fn request<'a>(
         candidate_parent,
         overlays,
         fault,
+        extra_targets: Vec::new(),
+        preview_id: None,
+        instance_tag: "",
+        hooks: Default::default(),
+        inner_lock: Default::default(),
     }
 }
 

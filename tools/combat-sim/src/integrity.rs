@@ -396,6 +396,28 @@ pub fn after_write_with_locked(
     after_write_guarded(save, before, now, None)
 }
 
+/// The exact bytes [`store`] would write for `m`. Does not take the lock
+/// and does not write.
+pub fn render(m: &Manifest) -> Result<Vec<u8>> {
+    let text = format!(
+        "# TalkDND save integrity manifest (written by talkdnd/combat-sim; do not edit).\n# Accept hand edits with `talkdnd integrity accept --reason \"...\"`.\n{}",
+        serde_norway::to_string(m)?
+    );
+    Ok(text.into_bytes())
+}
+
+/// Compute the manifest [`after_write_with_locked`] would store, without
+/// writing and without acquiring a lock. Dirty files (already out of step
+/// with the manifest in `before`) stay flagged. The caller must already
+/// hold the lock if they will publish these bytes on the new path.
+pub fn planned_after_write(
+    save: &Path,
+    before: &BTreeMap<String, String>,
+    now: &BTreeMap<String, String>,
+) -> Result<Manifest> {
+    planned_after_write_inner(save, before, now, None)
+}
+
 /// The manifest read-modify-write itself; the caller holds [`lock`].
 /// `fault` is a test-only hook (see the `interleaved_manifest_writers`
 /// regression test), always `None` in production. It runs just before the
@@ -407,19 +429,33 @@ fn after_write_guarded(
     now: &BTreeMap<String, String>,
     fault: Option<&dyn Fn()>,
 ) -> Result<()> {
+    let m = planned_after_write_inner(save, before, now, fault)?;
+    // If nothing changed, planned_after_write_inner still returns the
+    // current (or new baseline) manifest; store is required when the
+    // manifest is new or updated. Compare with the on-disk copy.
+    match load(save)? {
+        Some(old) if old == m => Ok(()),
+        _ => store(save, &m),
+    }
+}
+
+fn planned_after_write_inner(
+    save: &Path,
+    before: &BTreeMap<String, String>,
+    now: &BTreeMap<String, String>,
+    fault: Option<&dyn Fn()>,
+) -> Result<Manifest> {
     if let Some(f) = fault {
         f();
     }
     let Some(mut m) = load(save)? else {
         // First tool write on an old save: the current state is the baseline.
-        let m = Manifest {
+        return Ok(Manifest {
             version: 1,
             files: now.clone(),
             baseline: None,
             accepted: Vec::new(),
-        };
-        store(save, &m)?;
-        return Ok(());
+        });
     };
     let clean = |p: &String| match m.files.get(p) {
         Some(old) => before.get(p) == Some(old),
@@ -440,16 +476,13 @@ fn after_write_guarded(
             updates.push((p.clone(), None));
         }
     }
-    if updates.is_empty() {
-        return Ok(());
-    }
     for (p, h) in updates {
         match h {
             Some(h) => m.files.insert(p, h),
             None => m.files.remove(&p),
         };
     }
-    store(save, &m)
+    Ok(m)
 }
 
 /// The save directory for a file inside `Saves/<slot>/combat/`, when that
