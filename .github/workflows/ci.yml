@@ -81,7 +81,7 @@ jobs:
           RUST_BACKTRACE: '1'
         run: cargo test --manifest-path tools/combat-sim/Cargo.toml
 
-      - name: Sample isolated macOS playtest lock
+      - name: Compare macOS libtest lock samples
         if: ${{ always() && runner.os == 'macOS' }}
         timeout-minutes: 5
         env:
@@ -97,6 +97,17 @@ jobs:
             else
               code=$?
               printf 'isolated sample %s: exit %s\n' "$sample" "$code"
+              failed=1
+            fi
+          done
+          for sample in $(seq 1 24); do
+            sample_log="$RUNNER_TEMP/playtest-lock-sample.log"
+            if cargo test --manifest-path tools/combat-sim/Cargo.toml --locked --lib > "$sample_log" 2>&1; then
+              printf 'parallel-lib sample %s: exit 0\n' "$sample"
+            else
+              code=$?
+              printf 'parallel-lib sample %s: exit %s\n' "$sample" "$code"
+              cat "$sample_log"
               failed=1
             fi
           done
