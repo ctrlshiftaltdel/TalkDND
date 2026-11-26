@@ -17,6 +17,7 @@ pub mod integrity;
 pub mod long_cast;
 pub mod party;
 pub mod player;
+pub mod playtest;
 mod reactions;
 pub mod roll;
 pub mod sim;

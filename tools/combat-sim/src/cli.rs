@@ -4,6 +4,7 @@
 //! append the emitted lines, and save. `new`, `content` and `simulate` are the
 //! only commands that need content sources.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,7 @@ use crate::engine::{
     self, AddConditionOptions, AttackOptions, FallOptions, GrappleOptions, ReadyOptions, RestKind,
     ShoveMode, ShoveOptions, UnarmedOptions, UseOptions,
 };
+use crate::playtest::{self, Outcome, Stage};
 use crate::reactions::{AnsweredReaction, PendingCommand, ReactionNotice, ReactionReplay};
 use crate::sim::{self, SimulationConfig};
 use crate::space::FallAbility;
@@ -1156,7 +1158,12 @@ fn save_lock_unavailable(save_dir: &Path, command: &str, err: gate::Error) -> an
         gate::ErrorKind::CorruptState => "SAVE state 不可用或损坏",
         _ => "无法取得 SAVE 锁",
     };
-    save_lock_unavailable_text(save_dir, command, &format!("{reason}；{err}"))
+    let error = save_lock_unavailable_text(save_dir, command, &format!("{reason}；{err}"));
+    if err.kind() == gate::ErrorKind::LockTimeout {
+        playtest::classified_error(Outcome::LockUnavailable, error.to_string())
+    } else {
+        error
+    }
 }
 
 fn save_lock_unavailable_text(save_dir: &Path, command: &str, reason: &str) -> anyhow::Error {
@@ -1191,6 +1198,40 @@ pub fn run() -> Result<()> {
 }
 
 fn run_cli() -> Result<()> {
+    let cli = Cli::parse();
+    let mut observation = ReactionObservation {
+        enabled: playtest::enabled(),
+        save: None,
+        answer: false,
+        waiting: false,
+    };
+    let started = observation.enabled.then(std::time::Instant::now);
+    let result = run_game(cli, &mut observation);
+    if observation.answer || observation.waiting {
+        if let (Some(save), Some(started)) = (observation.save, started) {
+            let elapsed = started.elapsed();
+            if let Some(root) = gate::play_root_for_save(&save) {
+                playtest::observe(
+                    &root,
+                    Stage::Reaction,
+                    playtest::classify(&result, observation.waiting),
+                    playtest::ruleset_for_save(&save),
+                    elapsed,
+                );
+            }
+        }
+    }
+    result
+}
+
+struct ReactionObservation {
+    enabled: bool,
+    save: Option<PathBuf>,
+    answer: bool,
+    waiting: bool,
+}
+
+fn run_game(cli: Cli, observation: &mut ReactionObservation) -> Result<()> {
     let Cli {
         state,
         seed,
@@ -1202,7 +1243,7 @@ fn run_cli() -> Result<()> {
         player,
         save,
         command,
-    } = Cli::parse();
+    } = cli;
 
     let sources = ContentSources {
         libraries: lib,
@@ -1219,8 +1260,12 @@ fn run_cli() -> Result<()> {
     let save = crate::player::save_dir(save.as_deref(), sources.campaign_path().as_deref())
         .or_else(|| local_clock.map(Path::to_path_buf));
     let mask = crate::player::PlayerMask::load(save.as_deref());
-    check_transition_gate(&command, save.as_deref(), state.as_deref(), &sources)?;
     let entry = gate_entry(&command);
+    if observation.enabled && entry == "combat-sim:state-write" {
+        observation.save.clone_from(&save);
+        observation.answer = matches!(command, Command::Reaction { .. });
+    }
+    check_transition_gate(&command, save.as_deref(), state.as_deref(), &sources)?;
     let save_locks = if gate::class_of(entry) == gate::Class::AdoptedWrite {
         hold_adopted_save_locks(&command, save.as_deref(), state.as_deref(), &sources, entry)?
     } else {
@@ -1285,14 +1330,20 @@ fn run_cli() -> Result<()> {
     let (command, invocation) = match command {
         Command::Reaction { id, answer } => {
             let current = EncounterState::load(&path)?;
-            let pending = current
-                .pending_command
-                .ok_or_else(|| anyhow!("no player reaction is pending"))?;
+            let pending = current.pending_command.ok_or_else(|| {
+                playtest::classified_error(
+                    Outcome::Refused,
+                    "no player reaction is pending".to_string(),
+                )
+            })?;
             if id != pending.window.id {
-                bail!(
-                    "reaction ID is no longer current. {}",
-                    pending.window.prompt()
-                );
+                return Err(playtest::classified_error(
+                    Outcome::Refused,
+                    format!(
+                        "reaction ID is no longer current. {}",
+                        pending.window.prompt()
+                    ),
+                ));
             }
             let same_save = match (pending.save.as_deref(), save.as_deref()) {
                 (Some(original), Some(current)) => same_dir(original, current),
@@ -1300,7 +1351,11 @@ fn run_cli() -> Result<()> {
                 _ => false,
             };
             if !same_save {
-                bail!("use the same save or campaign context as the original combat command");
+                return Err(playtest::classified_error(
+                    Outcome::Refused,
+                    "use the same save or campaign context as the original combat command"
+                        .to_string(),
+                ));
             }
             let original = serde_json::from_value(pending.command.clone())
                 .context("invalid original command for the pending reaction")?;
@@ -1320,6 +1375,7 @@ fn run_cli() -> Result<()> {
             serde_json::Value::Null
         },
         continuation: invocation,
+        waiting: Cell::new(false),
     };
 
     let result = match command {
@@ -2252,6 +2308,7 @@ fn run_cli() -> Result<()> {
     } else {
         result
     };
+    observation.waiting = observation.enabled && invocation.waiting.get();
     drop(save_locks);
     result
 }
@@ -2748,6 +2805,7 @@ fn resolve_party(sources: &ContentSources, party: Option<String>) -> Result<Vec<
 struct StateInvocation {
     command: serde_json::Value,
     continuation: Option<(PendingCommand, ReactionAnswer)>,
+    waiting: Cell<bool>,
 }
 
 fn encounter_lock_path(path: &Path) -> PathBuf {
@@ -2806,7 +2864,10 @@ where
     import_campaign_casting(&mut state, state_path, save)?;
     let (seed, nonce, choices, rolls) = if let Some((pending, answer)) = &invocation.continuation {
         if state.pending_command.as_ref() != Some(pending) {
-            bail!("pending reaction changed; read status and try again");
+            return Err(playtest::classified_error(
+                Outcome::Refused,
+                "pending reaction changed; read status and try again".to_string(),
+            ));
         }
         let mut choices = pending.choices.clone();
         choices.push(AnsweredReaction {
@@ -2852,6 +2913,7 @@ where
         state.refresh_schema_version();
         state.save(state_path)?;
         println!("{prompt}");
+        invocation.waiting.set(true);
         return Ok(());
     }
     result?;

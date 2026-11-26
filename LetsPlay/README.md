@@ -171,6 +171,8 @@ bin\combat-sim.exe roll 1d20+5
 
 自动化开关决定 DM 哪些事直接做、哪些先问你、哪些等你开口，按存档保存：`bin/talkdnd settings automation` 查看，`show` 看某个场景/遭遇的生效值，`set` / `reset` 修改（`--reason` 必填）。优先级是 **遭遇 > 场景 > 存档默认**；玩家选择和玩家反应永远不能设为 `auto`，每次改动都会写进会话日志。`bin/talkdnd start` 的摘要会显示当前生效值与覆盖数量。完整说明见 `docs/automation.md`。
 
+受控 DM 主机可开启[自动游玩反馈试点](docs/playtest-feedback.md)。默认关闭，玩家照常游玩。
+
 ## 战斗
 
 在本目录（清单路径相对于存档文件，模板见 `example/save/combat/campaign.yaml`）。Windows 把 `bin/combat-sim` 换成 `bin\combat-sim.exe`：

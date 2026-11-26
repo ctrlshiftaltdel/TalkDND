@@ -470,12 +470,18 @@ fn restore_inner(
 ) -> Result<()> {
     let fault = fault.unwrap_or_default();
     if !yes {
-        bail!("恢复会替换存档里覆盖范围的文件；确认请加 --yes（会先把整份存档备份到 Saves/{BACKUP_DIR}/）");
+        return Err(combat_sim::playtest::classified_error(
+            combat_sim::playtest::Outcome::Refused,
+            format!("恢复会替换存档里覆盖范围的文件；确认请加 --yes（会先把整份存档备份到 Saves/{BACKUP_DIR}/）"),
+        ));
     }
     let _lock = Lock::acquire(save)?;
     let dir = resolve(save, id)?;
     if let Some(problem) = &entry(save, id).problem {
-        bail!("检查点 {id} 不可用（{problem}）；已拒绝恢复");
+        return Err(combat_sim::playtest::classified_error(
+            combat_sim::playtest::Outcome::Refused,
+            format!("检查点 {id} 不可用（{problem}）；已拒绝恢复"),
+        ));
     }
     let cm = manifest(save, id)?;
     let world = campaign_time::WorldTime::load(save)?;
@@ -485,14 +491,20 @@ fn restore_inner(
             .as_ref()
             .is_some_and(|clock| !clock.casting.is_empty())
     {
-        bail!("该旧检查点缺少长施法时钟，无法与法术资源一起恢复");
+        return Err(combat_sim::playtest::classified_error(
+            combat_sim::playtest::Outcome::Refused,
+            "该旧检查点缺少长施法时钟，无法与法术资源一起恢复".to_string(),
+        ));
     }
     let current = migrate::detect(save)?;
     if cm.schema > current {
-        bail!(
-            "检查点 {id} 的 schema {} 比当前存档（schema {current}）新；请更新 talkdnd 后再恢复",
-            cm.schema
-        );
+        return Err(combat_sim::playtest::classified_error(
+            combat_sim::playtest::Outcome::Refused,
+            format!(
+                "检查点 {id} 的 schema {} 比当前存档（schema {current}）新；请更新 talkdnd 后再恢复",
+                cm.schema
+            ),
+        ));
     }
 
     // 1. Whole-save backup before anything changes.
@@ -633,7 +645,10 @@ fn restore_inner(
                         leftovers.join("、")
                     );
                 }
-                return Err(anyhow::anyhow!(msg));
+                return Err(combat_sim::playtest::classified_error(
+                    combat_sim::playtest::Outcome::RollbackFailed,
+                    msg,
+                ));
             }
         }
     }
@@ -1352,9 +1367,14 @@ impl Lock {
             // Never take over, however old the file is: a live snapshot or
             // restore may legitimately run for longer than any age heuristic,
             // and a crashed one needs a human to confirm no writer is alive.
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => bail!(
-                "另一个 checkpoint 操作正在进行（锁 {} 已存在）；本工具不会删除、接管或改动已有锁文件。请先确认没有仍在运行的 checkpoint/恢复写者，再由人工检查并在确认安全后移除该锁文件",
-                path.display()
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(
+                combat_sim::playtest::classified_error(
+                    combat_sim::playtest::Outcome::LockUnavailable,
+                    format!(
+                        "另一个 checkpoint 操作正在进行（锁 {} 已存在）；本工具不会删除、接管或改动已有锁文件。请先确认没有仍在运行的 checkpoint/恢复写者，再由人工检查并在确认安全后移除该锁文件",
+                        path.display()
+                    ),
+                )
             ),
             Err(err) => Err(anyhow::Error::new(err))
                 .with_context(|| format!("open lock {}", path.display())),

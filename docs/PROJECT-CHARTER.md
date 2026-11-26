@@ -30,6 +30,7 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 - Keep copyrighted books and adventures, personal saves, and DM secrets out of Git, Issues, pull requests, commit messages, and CI logs.
 - Publish prebuilt `combat-sim` binaries for the release targets in this charter, and keep a from-source build for everyone else.
 - Record product decisions in this charter so later tasks do not drift from them.
+- Pilot automatic reporting of typed play failures on an owner-controlled DM host. Players keep the regular local workflow, and the software can report eligible faults without asking them to enter feedback.
 - Let the DM leave a published adventure only within a per-save, creation-locked deviation scope and ratio, with every original element registered in a DM-only ledger.
 - Resume a campaign across sessions with a recoverable state history (checkpoints and structured diffs), stable entity and relation memory, optional in-world time, and fast local navigation of the player's own books, all inside the existing save and under the same privacy and spoiler discipline.
 - Resolve spatial rules through one kernel: reach uses the target's volume, line of sight and cover use the same blocker volumes, areas intersect target volumes, movement is stepwise, and flight/falls are explicit engine commands with edition-specific triggers.
@@ -65,6 +66,8 @@ Play and development are separate roots.
 | Repository root | Development only. `AGENTS.md` is the collaboration contract, not the DM guide. Tools live in `tools/combat-sim` (engine), `tools/talkdnd` (play helper), `tools/advancement-lock` (shared advancement control files and the cross-CLI transition gate both programs depend on) and `tools/talkdnd-dev` (dev tools). AgentOrch core is `AGENTS.md` plus `kit/`, `editions/`, `templates/`, `scripts/`, `tests/` and `MANIFEST.json`; project configuration is `docs/PROJECT.md`, design goals are `docs/PLAN.md`, and the living charter is `docs/PROJECT-CHARTER.md`. Nothing required to play lives here. |
 
 Release archives contain the whole git-tracked `LetsPlay/` tree plus the binary at `LetsPlay/bin/`; extracting one gives a ready play folder. `build-artifacts` artifacts contain only the binary at the archive root; extracting one into `LetsPlay/bin/` is the install. No launcher script points outside `LetsPlay/`. Full-book packs are a separate release asset, not part of that archive: they are built locally from the owner's pdf2md indexes and are never committed.
+
+The playtest pilot keeps its delivery queue below the play root's ignored `.talkdnd/playtest-feedback/` directory, outside saves and checkpoints.
 
 ## Supported rulesets
 
@@ -111,6 +114,8 @@ Never put save contents, DM secrets, or copyrighted text into Issues, pull reque
 
 The same ban covers chat dumps of those materials, orchestration notes, and backups. Local saves and player books stay untracked.
 
+Public playtest reports use fixed fields for program version, platform, ruleset, stage, error code, coarse count and the derived incident fingerprint. Private paths, game and diagnostic text, and credentials stay on the host. An explicit canonical play-root binding and a dedicated Issues-only credential authorize publication from one installation on the pilot host to the fixed GitHub repository.
+
 ## Platform targets
 
 Prebuilt packages (`combat-sim` and `talkdnd`) are published for these three targets:
@@ -137,6 +142,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 
 - Platform: a local CLI. Linux, Windows, and macOS are the player platforms. The three prebuilt targets are listed above.
 - Data and privacy: player books and saves are local. Tracked combat data is SRD-only. The privacy rule above is mandatory. Full-book packs are built locally from pdf2md indexes, are never in Git, and are published only as separate release assets; CI uses synthetic fixtures and never builds, downloads or uploads them.
+- The feedback pilot is off by default. The host owner can enable local recording and optionally provide the GitHub CLI and a dedicated credential for background issue creation.
 - Reliability: dice come from the operating system's entropy through `combat-sim`, not from the model inventing a roll.
 - Assumptions: the player can run an agent that reads `LetsPlay/` and executes `LetsPlay/bin/combat-sim`. The SRD packs ship with the program; adding the SRD PDFs is optional. GitHub is reachable for Issues, pull requests, and CI. One of the four rulesets per save is enough.
 
@@ -146,6 +152,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 - A save's `ruleset` selects one of the four options: `*-srd` loads only the edition's SRD layer, `*-full` requires an unlocked full pack for that edition, and the engine does not load the other edition's directory.
 - `uv run --no-project python scripts/validate_kit.py --project-ready`, `uv run --no-project python -m unittest discover -s tests`, `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-leaks`, and `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` pass on a tree that has no player books and no saves.
 - Release automation builds the three prebuilt targets named in this charter.
+- A synthetic pilot verifies that opting out creates no feedback state, the accepted fault classes produce a deduplicated report without private input, and recorder or transport failures preserve the play command and save result.
 - Full-book packs build from the owner's local pdf2md indexes, validate as `distribution: full`, and are published as separate, optional release assets without entering Git, the LetsPlay archive or CI logs; hosted CI neither builds nor uploads them.
 - A pull request that changes scope, goals, tech stack, rules support, or a user decision also updates this charter in that same pull request.
 - A default encounter keeps the legacy combat AI. The P6 utility planner and P7 bounded search are library-level opt-ins with explicit fallback, and changing the default requires a later quality gate that shows no team-combat, target-completion or latency regression.
@@ -211,6 +218,10 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-11-26 — Automated playtest feedback pilot (#322)
+
+The owner authorized an optional pilot for start and resume, checkpoint snapshot and restore, and combat reaction outcomes. Record typed events locally outside saves after the game locks are released. A confirmed restore rollback failure qualifies immediately. Other supported technical failures qualify after three occurrences within the two latest local sessions. Waiting, ordinary refusals and unclassified outcomes remain local. An explicitly configured owner-controlled host can use an Issues-only credential and the GitHub CLI to publish fixed-field reports to the project repository in the background. A durable local queue and the remote incident fingerprint identify existing reports. An ambiguous create result triggers lookup-only reconciliation. The pilot keeps the save schema and player choice boundaries, and synthetic validation uses a fake transport. Disable it through the host environment and revoke the dedicated credential to halt outbound requests.
 
 ### 2026-11-26 — Release and advancement documentation paths
 

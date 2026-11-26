@@ -59,6 +59,7 @@ pub fn content_check(root: &Path, save: &Path) -> (bool, String) {
 
 fn run_content_check(bin: &Path, manifest: &Path) -> (bool, String) {
     match Command::new(bin)
+        .env_remove(combat_sim::playtest::TOKEN_ENV)
         .arg("--campaign")
         .arg(manifest)
         .args(["content", "check"])
@@ -219,6 +220,7 @@ pub fn kick_pdf2md(root: &Path) -> String {
         .open(&log)
         .ok();
     let mut cmd = Command::new("uv");
+    cmd.env_remove(combat_sim::playtest::TOKEN_ENV);
     cmd.current_dir(root)
         .args([
             "run",
