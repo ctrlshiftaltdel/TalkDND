@@ -1635,3 +1635,91 @@ fn same_second_restore_rolls_back_to_this_operation_not_the_earlier_backup() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn playtest_feedback_preserves_existing_checkpoint_refusals() {
+    use std::collections::BTreeMap;
+    use std::process::Output;
+
+    fn contents(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        let mut files = BTreeMap::new();
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files.extend(contents(&path));
+            } else {
+                files.insert(path.clone(), fs::read(path).unwrap());
+            }
+        }
+        files
+    }
+
+    fn run(root: &Path, enabled: bool, args: &[&str]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_talkdnd"));
+        command.arg("--root").arg(root).args(args);
+        command.env_remove("TALKDND_PLAYTEST_GH_TOKEN");
+        if enabled {
+            // Ambient auth alone must not authorize a feedback worker.
+            command
+                .env("TALKDND_PLAYTEST_FEEDBACK", "1")
+                .env("GH_TOKEN", "SYNTHETIC_AMBIENT");
+        } else {
+            command.env_remove("TALKDND_PLAYTEST_FEEDBACK");
+        }
+        command.output().unwrap()
+    }
+
+    let (root, save) = fixture("playtest-refusal");
+    fs::write(save.join(".talkdnd.lock"), "synthetic-lock-owner").unwrap();
+    let before = contents(&save);
+    let args = [
+        "checkpoint",
+        "snapshot",
+        "--reason",
+        "synthetic-private-reference",
+    ];
+    let baseline = run(&root, false, &args);
+    assert_eq!(baseline.status.code(), Some(1));
+    assert!(!root.join(".talkdnd/playtest-feedback").exists());
+
+    fs::write(root.join(".talkdnd"), "synthetic-unusable-queue").unwrap();
+    let broken_queue = run(&root, true, &args);
+    assert_eq!(broken_queue.status, baseline.status);
+    assert_eq!(broken_queue.stdout, baseline.stdout);
+    assert_eq!(broken_queue.stderr, baseline.stderr);
+    assert_eq!(contents(&save), before);
+
+    fs::remove_file(root.join(".talkdnd")).unwrap();
+    for _ in 0..3 {
+        let recorded = run(&root, true, &args);
+        assert_eq!(recorded.status, baseline.status);
+        assert_eq!(recorded.stdout, baseline.stdout);
+        assert_eq!(recorded.stderr, baseline.stderr);
+        assert_eq!(contents(&save), before);
+    }
+    let declined_restore = run(
+        &root,
+        true,
+        &["checkpoint", "restore", "synthetic-checkpoint-ref"],
+    );
+    assert_eq!(declined_restore.status.code(), Some(1));
+    assert_eq!(contents(&save), before);
+    let data = fs::read_to_string(root.join(".talkdnd/playtest-feedback/state.json")).unwrap();
+    for private in [
+        "synthetic-lock-owner",
+        "synthetic-private-reference",
+        "synthetic-checkpoint-ref",
+        "SYNTHETIC_AMBIENT",
+    ] {
+        assert!(!data.contains(private));
+    }
+    let state: serde_json::Value = serde_json::from_str(&data).unwrap();
+    assert_eq!(state["reports"].as_array().unwrap().len(), 1);
+    assert_eq!(state["reports"][0]["event"]["stage"], "checkpoint_snapshot");
+    assert_eq!(state["reports"][0]["event"]["outcome"], "lock_unavailable");
+    assert_eq!(state["reports"][0]["delivery"], "ready");
+    assert!(state["totals"].as_array().unwrap().iter().any(|count| {
+        count["event"]["stage"] == "checkpoint_restore" && count["event"]["outcome"] == "refused"
+    }));
+    fs::remove_dir_all(root).unwrap();
+}

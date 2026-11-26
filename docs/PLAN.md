@@ -26,6 +26,8 @@
 - `talkdnd knowledge search/get/cite/context/related` 用稳定 ID、确定性排序和固定来源 `ruling/save/book/srd/adventure/original`。默认隐藏未来剧情、未识别名与原创隐藏面。显式 DM 视图标记 `visibility: dm`。`dm-secrets.md` 内容始终留在秘密边界内。知识查询与 `guard` 共用过滤边界，查询本身保持只读、离线且无持久化索引或秘密缓存。其他命令已有的控制缓存按各命令契约验收。
 - 自动化级别为 `manual / assisted / auto`，有效顺序为遭遇 > 场景 > 存档默认。`resolution` 和 `combat` 默认 `auto`，`npc`、`player_choice`、`reaction` 和 `near_limit` 默认 `assisted`。程序校验类别、级别和覆盖 ID，审计改动，接近上限先警告。玩家选择与反应不得设为 `auto`，开关不改变规则、骰子或默认战术 AI。[玩家自动化说明](../LetsPlay/docs/automation.md) · [知识说明](../LetsPlay/docs/knowledge.md)
 
+- 自动游玩反馈在受控 DM 主机上显式开启，记录开局、续档、检查点和战斗反应的结构化结果。记录落在游玩根目录的忽略目录。后台仅向固定 GitHub 仓库发送白名单字段，按阶段和故障码去重，遇到创建结果不明先查询。回滚确认失败立即入队，其余已分类技术故障在最近两场累计三次入队。试点验证与成长迁移分别取证。[任务 #322](https://github.com/ctrlshiftaltdel/TalkDND/issues/322)
+
 ### 规则数据、战斗和施法
 
 - 同一 Rust 引擎生成所有骰子、结算战斗及已支持的机械检定。触及按体积，视线和掩护按同一组障碍，区域与目标体积求交，移动逐步校验。飞行与坠落由显式命令处理。启用空间字段的遭遇走统一查询，旧存档保留旧二维结果。

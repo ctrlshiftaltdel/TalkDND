@@ -1121,16 +1121,63 @@ fn writer_lists(targets: &str, name: &str) -> bool {
 pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     let cli = Cli::parse_from(args);
     let root = save::find_root(cli.root.as_deref())?;
+    let stage = if combat_sim::playtest::enabled() {
+        playtest_stage(&cli.cmd)
+    } else {
+        None
+    };
+    let mut created = None;
+    let started = stage.map(|_| std::time::Instant::now());
+    let result = run_game(&root, &cli, &mut created);
+    if let (Some(stage), Some(started)) = (stage, started) {
+        let elapsed = started.elapsed();
+        let selected = if stage == combat_sim::playtest::Stage::NewGame {
+            created
+        } else {
+            save::resolve_slot(&root, cli.save.as_deref()).ok()
+        };
+        let ruleset = selected
+            .as_deref()
+            .and_then(combat_sim::playtest::ruleset_for_save);
+        combat_sim::playtest::observe(
+            &root,
+            stage,
+            combat_sim::playtest::classify(&result, false),
+            ruleset,
+            elapsed,
+        );
+    }
+    result
+}
+
+fn playtest_stage(cmd: &Cmd) -> Option<combat_sim::playtest::Stage> {
+    use combat_sim::playtest::Stage;
+    match cmd {
+        Cmd::New { .. } => Some(Stage::NewGame),
+        Cmd::Start { .. } => Some(Stage::Resume),
+        Cmd::Checkpoint {
+            cmd: Some(checkpoint::Cmd::Snapshot { .. }),
+            ..
+        } => Some(Stage::CheckpointSnapshot),
+        Cmd::Checkpoint {
+            cmd: Some(checkpoint::Cmd::Restore { .. }),
+            ..
+        } => Some(Stage::CheckpointRestore),
+        _ => None,
+    }
+}
+
+fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()> {
     // ADV-P1-1pre transition gate: a save that has adopted the advancement
     // protocol refuses every writer that has not been wired to it. This runs
     // before dispatch, so a refused command touches nothing.
-    let gate_entry = gate_entry(&cli);
-    let gate_save = save::resolve_slot(&root, cli.save.as_deref()).ok();
+    let gate_entry = gate_entry(cli);
+    let gate_save = save::resolve_slot(root, cli.save.as_deref()).ok();
     gate::check_save(gate_save.as_deref(), gate_entry)?;
     // A command may also write outside the selected save: `--book` can point at
     // a folder that belongs to another save, so every such target is checked.
     if let Some(save) = gate_save.as_deref() {
-        for target in extra_write_targets(&root, &cli, save) {
+        for target in extra_write_targets(root, cli, save) {
             gate::check_target(&target, gate_entry)?;
         }
     }
@@ -1141,7 +1188,7 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     // Group D (`log`, `check`, `integrity status` / `accept`) uses this same
     // hold; do not drop it earlier and do not open a second time. No auto-init.
     let save_locks = if gate_class == gate::Class::AdoptedWrite {
-        hold_adopted_save_locks(&root, &cli, gate_save.as_deref(), gate_entry)?
+        hold_adopted_save_locks(root, cli, gate_save.as_deref(), gate_entry)?
     } else {
         Vec::new()
     };
@@ -1229,11 +1276,10 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             | Cmd::Knowledge { .. }
             | Cmd::Library { .. },
         ) => None,
-        _ => save::resolve_slot(&root, cli.save.as_deref()).ok(),
+        _ => save::resolve_slot(root, cli.save.as_deref()).ok(),
     };
     let before = tracked.as_deref().map(combat_sim::integrity::snapshot);
-    let mut created = None;
-    let result = dispatch(&root, &cli, rng, &mut created);
+    let result = dispatch(root, cli, rng, created);
     let result = if let (Some(s), Some(before)) = (tracked.as_deref(), before.as_ref()) {
         if s.is_dir() {
             match result {
@@ -1249,8 +1295,8 @@ pub fn run<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     // Audit the save `new` actually created: inferring the newest slot would
     // pick a later-dated save that was never touched by this command.
     let result = if result.is_ok() {
-        if let Some(dir) = created {
-            audit::audit(&dir).map(|_| ())
+        if let Some(dir) = created.as_deref() {
+            audit::audit(dir).map(|_| ())
         } else {
             result
         }
@@ -1350,11 +1396,19 @@ fn save_lock_unavailable(
         advancement_lock::ErrorKind::CorruptState => "SAVE state 不可用或损坏",
         _ => "无法取得 SAVE 锁",
     };
-    anyhow::anyhow!(
+    let message = format!(
         "存档已启用成长协议（{}）：{command} 无法取得 SAVE 锁（{reason}；{}）。已拒绝执行，未写入任何目标文件。不要把协议文件当成普通文件删改。",
         save_dir.display(),
         err
-    )
+    );
+    if err.kind() == advancement_lock::ErrorKind::LockTimeout {
+        combat_sim::playtest::classified_error(
+            combat_sim::playtest::Outcome::LockUnavailable,
+            message,
+        )
+    } else {
+        anyhow::anyhow!(message)
+    }
 }
 
 fn print_audit(s: &Path) -> Result<()> {

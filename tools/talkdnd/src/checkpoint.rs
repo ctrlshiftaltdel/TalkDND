@@ -470,7 +470,10 @@ fn restore_inner(
 ) -> Result<()> {
     let fault = fault.unwrap_or_default();
     if !yes {
-        bail!("恢复会替换存档里覆盖范围的文件；确认请加 --yes（会先把整份存档备份到 Saves/{BACKUP_DIR}/）");
+        return Err(combat_sim::playtest::classified_error(
+            combat_sim::playtest::Outcome::Refused,
+            format!("恢复会替换存档里覆盖范围的文件；确认请加 --yes（会先把整份存档备份到 Saves/{BACKUP_DIR}/）"),
+        ));
     }
     let _lock = Lock::acquire(save)?;
     let dir = resolve(save, id)?;
@@ -633,7 +636,10 @@ fn restore_inner(
                         leftovers.join("、")
                     );
                 }
-                return Err(anyhow::anyhow!(msg));
+                return Err(combat_sim::playtest::classified_error(
+                    combat_sim::playtest::Outcome::RollbackFailed,
+                    msg,
+                ));
             }
         }
     }
@@ -1352,9 +1358,14 @@ impl Lock {
             // Never take over, however old the file is: a live snapshot or
             // restore may legitimately run for longer than any age heuristic,
             // and a crashed one needs a human to confirm no writer is alive.
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => bail!(
-                "另一个 checkpoint 操作正在进行（锁 {} 已存在）；本工具不会删除、接管或改动已有锁文件。请先确认没有仍在运行的 checkpoint/恢复写者，再由人工检查并在确认安全后移除该锁文件",
-                path.display()
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(
+                combat_sim::playtest::classified_error(
+                    combat_sim::playtest::Outcome::LockUnavailable,
+                    format!(
+                        "另一个 checkpoint 操作正在进行（锁 {} 已存在）；本工具不会删除、接管或改动已有锁文件。请先确认没有仍在运行的 checkpoint/恢复写者，再由人工检查并在确认安全后移除该锁文件",
+                        path.display()
+                    ),
+                )
             ),
             Err(err) => Err(anyhow::Error::new(err))
                 .with_context(|| format!("open lock {}", path.display())),
