@@ -80,7 +80,7 @@
 | `talkdnd check`（无参数）：`lib.rs:1075` → `print_audit` → `audit::audit` | `integrity.yaml`（旧存档首次创建清单/baseline） | 完整性锁 | **是**（清单） | **SAVE 锁** | 输出审计；在旧存档上可能写清单。 | 不能列为纯只读。 |
 | `talkdnd integrity status`：`lib.rs:779` → `print_audit` → `audit::audit` | 同上 | 完整性锁 | **是**（清单） | **SAVE 锁** | 旧存档首次运行会创建清单/baseline。 | 与 `check` 无参数同路径。 |
 | `talkdnd integrity accept --reason`：`audit::accept`（`audit.rs:372`） | `integrity.yaml`、最新会话日志 | 完整性锁 | **是**（清单/日志） | **SAVE 锁** | 在完整性锁内接受当前文件/值为新 baseline，并记日志。 | 会改变清单 baseline；不是只读。 |
-| 普通命令外层 `audit::after_command`（`audit.rs:355`；`lib.rs:740`） | `integrity.yaml`（清单指纹/baseline） | 完整性锁 | **是**（清单） | 随所属命令接入；外层保持完整性锁 | 在 `dispatch` 后取完整性锁，按前后快照更新清单；clean 时可能重写 baseline 日期。 | #279/#281 已把若干只读命令移出 `tracked`；不得把“未跟踪”当成“无写入”。 |
+| 普通命令外层 `audit::after_command`（`audit.rs:355`；`lib.rs:740`） | `integrity.yaml`（清单指纹/baseline） | 完整性锁 | **是**（清单） | 随所属命令接入；外层保持完整性锁 | 在 `dispatch` 后取完整性锁，按前后快照更新清单；clean 时可能重写 baseline 日期。 | #279/#281/#317 已把登记为 `ReadOnly`/`ControlMetadata` 的条目移出 `tracked`（#285 已收口）；不得把“未跟踪”当成“无写入”。 |
 | `combat-sim` / `talkdnd` 的日志追加：`save::append`、`rolls::append`、`player::append_combat_lines`、`player::append_roll` | `Sessions/*.md`、`rolls.log` | 无 | **是** | **SAVE 锁**（随调用方） | 追加不截断；同一操作重复执行会重复追加；无法用追加语义判断“是否已应用”。 | 幂等由 `ADV-P1-4` 设计，不在本文验收。 |
 
 ### 2.6 其它存档写入
@@ -148,30 +148,30 @@
 | `talkdnd snapshot diff`（`diff::run`） | #281 移出 `tracked`（`lib.rs:720`）；只读存档与 checkpoint。 | `None`（#281） | `snapshot` 其他子命令未在本行声明。 |
 | `talkdnd adventure search`（`adventure::search`） | #281 移出 `tracked`（`lib.rs:732`）；只读。 | `None`（#281） | 不写日志。 |
 | `talkdnd adventure index show/search`（`bookindex::run` Show/Search） | #281 移出 `tracked`（`lib.rs:729`）；只读。 | `None`（#281） | `index build` 不是只读（§2.6）。 |
-| `talkdnd adventure section --list` | `adventure::section` 的 `list` 分支只列标题；不写日志。 | `tracked`（`Section` 保留） | 非 `--list` 且超前/DM-only 带 `--reason` 会写日志（§2.6），不能整组声明只读。 |
+| `talkdnd adventure section --list` | `adventure::section` 的 `list` 分支只列标题；不写日志。 | `None`（gate `adventure-section-read`；#317） | 非 `--list` 且超前/DM-only 带 `--reason` 会写日志（§2.6），不能整组声明只读。 |
 | `talkdnd log rolls`（`lib.rs:1220`） | `rolls::show` 只读 `rolls.log`。 | `None`（ADV-P1-1d：整个 CLI 运行整树字节一致） | 不追加。 |
-| `talkdnd xp show`（`progress::xp_show`，`progress.rs:447`） | 仅 `check::sheets` + `Progress::load`。 | `tracked`（#285 未闭合） | 只读。 |
-| `talkdnd loot show`（`progress::loot_show`，`progress.rs:1246`） | 仅 `Progress::load`。 | `tracked` | 只读。 |
-| `talkdnd memory list`（`memory::run` List，`memory.rs:195`） | 仅 `load`。 | `tracked`（#285 未闭合） | 只读。 |
-| `talkdnd entity list/show`（`entity::run`，`entity.rs:91`） | 仅 `load`；`show` 读取关系但只读。 | `tracked`（#285 未闭合） | 只读。 |
-| `talkdnd relation list/show/context`（`graph::run`，`graph.rs:120`） | 仅 `load`。 | `tracked`（#285 未闭合） | 只读。 |
-| `talkdnd time show/event list`（`worldtime::run`，`worldtime.rs:283`） | 仅 `load`。 | `tracked`（#285 未闭合） | 只读。 |
-| `talkdnd settings`（无子命令）/ `settings dice`（不带值）/ `settings automation`（无子命令） | `settings::lines`（`settings.rs:38`）/ `automation_lines`（`settings.rs:248`）只读 `migrate::load`。 | `tracked`（#285 未闭合） | 只读。 |
-| `talkdnd settings style show`（`memory::run_style` Show，`memory.rs:386`） | 仅读取 memory/设置。 | `tracked` | 只读。 |
+| `talkdnd xp show`（`progress::xp_show`，`progress.rs:447`） | 仅 `check::sheets` + `Progress::load`。 | `None`（gate `xp-show`；#317 / #285） | 只读。 |
+| `talkdnd loot show`（`progress::loot_show`，`progress.rs:1246`） | 仅 `Progress::load`。 | `None`（gate `loot-show`；#317） | 只读。 |
+| `talkdnd memory list`（`memory::run` List，`memory.rs:195`） | 仅 `load`。 | `None`（gate `memory-list`；#317 / #285） | 只读。 |
+| `talkdnd entity list/show`（`entity::run`，`entity.rs:91`） | 仅 `load`；`show` 读取关系但只读。 | `None`（gate `entity-read`；#317 / #285） | 只读。 |
+| `talkdnd relation list/show/context`（`graph::run`，`graph.rs:120`） | 仅 `load`。 | `None`（gate `relation-read`；#317 / #285） | 只读。 |
+| `talkdnd time show/event list`（`worldtime::run`，`worldtime.rs:283`） | 仅 `load`。 | `None`（gate `time-read`；#317 / #285） | 只读。 |
+| `talkdnd settings`（无子命令）/ `settings dice`（不带值）/ `settings automation`（无子命令） | `settings::lines`（`settings.rs:38`）/ `automation_lines`（`settings.rs:248`）只读 `migrate::load`。 | `None`（gate `settings-read`；#317 / #285） | 只读。 |
+| `talkdnd settings style show`（`memory::run_style` Show，`memory.rs:386`） | 仅读取 memory/设置。 | `None`（gate `settings-style-read`；#317） | 只读。 |
 | `talkdnd checkpoint list/show`（`checkpoint::run` List/Show，`checkpoint.rs:150`） | 只读 checkpoint 目录与 manifest。 | `None`（`Cmd::Checkpoint` List/Show；ADV-P1-1c / #285） | 整个 CLI 运行前后整树字节一致；不取 SAVE 锁、不写探针。 |
 | `talkdnd migrate --dry-run`（`lib.rs:1033` → `ensure(..., true)`） | `migrate::ensure` 的 dry-run 分支只读。 | `None`（`Cmd::Migrate`） | 不写备份、不迁移。 |
-| `talkdnd secret scan`（`secret::scan_lines`，`secret.rs:542`） | 只读指定文件并报告数量/行号。 | `tracked` | 不写缓存。 |
-| `talkdnd secret import`（默认 dry-run，`secret.rs:658` 的 `!apply` 分支） | 只读来源文件与手动词，输出预览。 | `tracked` | `--apply` 会写（§2.6）。 |
-| `talkdnd handout list`（`handout::list`，`handout.rs:519`） | 只读 registry。 | `tracked` | 仅 player 视图只读；`--dm` 会在 registry 缺失时 build/store 书目录 `handouts.yaml`，按写者处理。 |
-| `talkdnd original list/status`（`original::list`/`status_lines`） | 只读 `original.yaml`。 | `tracked` | `original add/plan` 会写。 |
-| `talkdnd reveal list/check`（`reveal::list`/`check`） | 只读 `reveals.yaml`。 | `tracked` | `reveal add` 会写。 |
+| `talkdnd secret scan`（`secret::scan_lines`，`secret.rs:542`） | 只读指定文件并报告数量/行号。 | `None`（gate `secret-scan`；#317） | 不写缓存。 |
+| `talkdnd secret import`（默认 dry-run，`secret.rs:658` 的 `!apply` 分支） | 只读来源文件与手动词，输出预览。 | `None`（gate `secret-import-dry-run`；#317） | `--apply` 会写（§2.6）。 |
+| `talkdnd handout list`（`handout::list`，`handout.rs:519`） | 只读 registry。 | `None`（gate `handout-list`；#317） | 仅 player 视图只读；`--dm` 会在 registry 缺失时 build/store 书目录 `handouts.yaml`，按写者处理。 |
+| `talkdnd original list/status`（`original::list`/`status_lines`） | 只读 `original.yaml`。 | `None`（gate `original-read`；#317） | `original add/plan` 会写。 |
+| `talkdnd reveal list/check`（`reveal::list`/`check`） | 只读 `reveals.yaml`。 | `None`（gate `reveal-read`；#317） | `reveal add` 会写。 |
 | `talkdnd options`（`print_options`） | 只读规则数据。 | `None`（`Cmd::Options`） | 不写存档。 |
 | `talkdnd data status`（`lib.rs:2050`） | 只读本地数据文件。 | `None`（`Cmd::Data`） | `data import` 会写存档外文件。 |
 | `combat-sim status/scene/log/simulate` | 只读 state/日志；`--player` 只读 `identified.yaml`。 | `N/A`（无 talkdnd 审计） | `simulate` 不写 state。 |
 | `combat-sim content list/show/check` / `pack list/show/verify` | 只读内容文件。 | `N/A` | `content import-srd-prose`/`content import-srd-pack`/`content import-srd` 与 `content pack build/release` 按 `--out` 位置区分；目标在存档内时是写者。 |
 | `combat-sim party show` | 只读 party-state。 | `N/A` | `party rest/set-hp/sync` 会写。 |
 
-**只读命令 ≠ 整次运行不写存档。** 上表中 `tracked` 的只读命令仍会走 `lib.rs::run` 的外层 `audit::after_command`（`lib.rs:740`），在干净存档上可能重写 `integrity.yaml` 的分钟级 baseline；#285 正是跟踪这些副作用。本文把“声明只读”作为**接入目标**；在 #285 闭合或这些命令被移出 `tracked` 之前，不得把当前实现说成“已只读”或“不写任何文件”。`tracked=None` 的条目由 #279/#281 修复或本来就在 `None` 列表，仍以各自 Issue 与代码为准。
+**只读命令 ≠ 整次运行不写存档。** 上表条目按 `tools/advancement-lock` 登记表分类：`ReadOnly`/`ControlMetadata` 条目自 #317（`ab6d7f24`，#285 已收口）起不再走 `lib.rs::run` 的外层 `audit::after_command`，干净存档上整次运行整树字节一致（`transition_gate.rs::read_only_commands_preserve_a_clean_legacy_save_and_baseline` 以固定旧 baseline 日期回归）；`guard`/`secret list` 属 `ControlMetadata`，仅允许 `secret-terms.cache.json` 增量。仍未移出的是 `char`（含 `char show` 与 `spells` 只读视图，走写者条目）。不得把“未跟踪”当成“无写入”；写者条目仍以各自 Issue 与代码为准。
 
 **`char <who> spells` 的只读视图**：`charsheet::run` 在 `commit()` 之前提前返回（`charsheet.rs:3696`），本身不写 sheet/party/Markdown；但 `Cmd::Char` 仍走 `tracked` 外层审计，可能改写 `integrity.yaml` baseline。接入时必须同时处理这层副作用，否则“只读视图”仍会改变存档字节。
 
@@ -227,7 +227,7 @@
 **实现位置（代码为准）：**
 
 - 共享 crate `tools/advancement-lock`：控制文件名 `LOCK_FILE`/`STATE_FILE`、`has_protocol`、`enclosing_protocol_dir`、写者注册表 `WRITERS`、分类 `Class`（含 `AdoptedWrite`）、统一拒绝错误 `Refused` 与 `--help` 文案，以及 SAVE 锁原语（`init`/`open`、`check_ordinary_write`、`check_writable`）。普通写入必须用 `check_ordinary_write`（不要求目录 sync，以免 Windows 上拒绝所有普通写入）；D 提交仍应使用 `check_writable`。依赖 `serde`/`serde_json`/`sha2`/`chrono`。
-- `talkdnd`：`tools/talkdnd/src/lib.rs` 的 `gate_entry`（对 `Cmd` 穷尽分类）、`run()` 中的门检查，以及对组 A / 组 C / 组 D `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（`open` + `check_ordinary_write`，持锁至命令后审计结束，不提前释放、不再开第二把）；组 C 在 SAVE 之后再取 checkpoint `.talkdnd.lock`（`checkpoint::hold_lock` / `Lock::acquire`），协议存档上反向获取判为协议违规；组 D 的 `audit` / `after_command` / `accept` 在取完整性锁之前要求 SAVE 已持有（`tools/talkdnd/src/audit.rs`），否则不改写清单；`lib.rs` 的 `tracked` 将 `checkpoint list|show` 与 `log rolls` 显式移出外层审计（`migrate --dry-run` 随 `Cmd::Migrate` 本就不跟踪；`Cmd::Integrity` 本就不跟踪，由 status/accept 自己取完整性锁）；`save::append` 与 `rolls::append` 在协议存档上未持有 SAVE 时拒绝追加；`migrate::write_meta` 在协议存档上未持有 SAVE 时拒绝改写 `save-meta.yaml`；`migrate::copy_tree` 与 `checkpoint::copy_tree` / `remove_extras` 仅在存档根目录排除运行控制文件与 `digest.md` / `secret-terms.cache.json`；`tools/talkdnd/src/advancement_lock.rs` 再导出共享 crate 的 v1 原语，组 A 行为不变。
+- `talkdnd`：`tools/talkdnd/src/lib.rs` 的 `gate_entry`（对 `Cmd` 穷尽分类）、`run()` 中的门检查，以及对组 A / 组 C / 组 D `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（`open` + `check_ordinary_write`，持锁至命令后审计结束，不提前释放、不再开第二把）；组 C 在 SAVE 之后再取 checkpoint `.talkdnd.lock`（`checkpoint::hold_lock` / `Lock::acquire`），协议存档上反向获取判为协议违规；组 D 的 `audit` / `after_command` / `accept` 在取完整性锁之前要求 SAVE 已持有（`tools/talkdnd/src/audit.rs`），否则不改写清单；`lib.rs` 的 `tracked` 按 gate 分类跳过全部 `ReadOnly`/`ControlMetadata` 条目（#317 起；含 `checkpoint list|show`、`log rolls` 与 #285 的只读候选，原显式 `None` 列表并入 gate 分类；`migrate --dry-run` 随 `Cmd::Migrate` 本就不跟踪；`Cmd::Integrity` 本就不跟踪，由 status/accept 自己取完整性锁）；`save::append` 与 `rolls::append` 在协议存档上未持有 SAVE 时拒绝追加；`migrate::write_meta` 在协议存档上未持有 SAVE 时拒绝改写 `save-meta.yaml`；`migrate::copy_tree` 与 `checkpoint::copy_tree` / `remove_extras` 仅在存档根目录排除运行控制文件与 `digest.md` / `secret-terms.cache.json`；`tools/talkdnd/src/advancement_lock.rs` 再导出共享 crate 的 v1 原语，组 A 行为不变。
 - `combat-sim`：`tools/combat-sim/src/cli.rs` 的 `gate_entry`、`write_targets`/`content_out_dirs`、`check_transition_gate` 与 `run_cli` 中对组 B `AdoptedWrite` 在 dispatch 前取得 SAVE 锁（同样 `open` + `check_ordinary_write`，持锁至命令与完整性清单更新结束）。`PartyState::save` 与 `EncounterState::save` 仍在写后更新完整性清单，但完整性锁只序列化清单、不再被当作内容保护；内容写入受 SAVE 锁约束。单次状态命令的 `state.save` → `party.save` → 日志追加在 SAVE 内执行，失败时报告已写/未写阶段，不声称多文件原子性。`player::append_roll` / `append_combat_lines` 在协议存档上未持有 SAVE 时拒绝追加。`integrity::lock` 内没有全局 SAVE 检查（否则无协议的单元测试会失败）。`combat-sim` 不依赖 `talkdnd`。
 - 测试：`tools/advancement-lock` 单元测试与 `tests/save_lock.rs`、`tools/talkdnd/tests/transition_gate.rs`、`tools/talkdnd/tests/advancement_save_lock.rs`、`tools/talkdnd/tests/advancement_lock.rs`（经再导出回归原语）、`tools/talkdnd/src/migrate.rs` 的 `write_meta` / 迁移备份用例、`tools/talkdnd/tests/checkpoint.rs` 的整份恢复备份用例、`tools/combat-sim/tests/transition_gate.rs`、`tools/combat-sim/tests/advancement_save_lock.rs`（CLI 测试直接调用真实二进制，不是只测包装函数）。
 
