@@ -123,9 +123,9 @@ Rust 标准库没有 xattr API；`fs::copy` 在本环境不是「完整元数据
 
 本环境 Rust `Metadata::created()` 与 GNU `stat` 的 `Birth` 字段有值；本次未验证该出生时间在何种替换下保持不变，也不把它当成跨平台身份。所有权未做 `chown` 实验（无特权）。
 
-## 4. Windows 与 macOS（`NOT_RUN` / `UNKNOWN`）
+## 4. Windows 与 macOS（#313 快照，`NOT_RUN` / `UNKNOWN`）
 
-本工作区没有 Windows 或 macOS 执行环境，也没有绑定这两台机器、该 head 的本次实测。下列条目全部为 `NOT_RUN` / `UNKNOWN`，不得用第 3 节的 Linux 结果填充：
+#313 的调查环境仅有 Linux，未取得对应 Windows 或 macOS 的实测。下列条目为 #313 当时的 `NOT_RUN` / `UNKNOWN`。后续 #328 的 Windows 实测与仍未验证的项目见[第 9 节](#9-328-补充调查)。
 
 - 目录枚举（含短名、大小写折叠、尾随点/空格、备用数据流或资源叉等）
 - 大小写敏感性（常见 NTFS / APFS 默认与 Linux 不同，但未测）
