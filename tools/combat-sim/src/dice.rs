@@ -412,10 +412,14 @@ impl RngCore for OsDiceRng {
     }
 
     fn fill_bytes(&mut self, destination: &mut [u8]) {
-        OsRng
-            .try_fill_bytes(destination)
+        try_fill_os_random(destination)
             .unwrap_or_else(|error| panic!("operating system RNG failed: {error}"));
     }
+}
+
+/// Fill bytes from the operating-system RNG and propagate entropy failures.
+pub fn try_fill_os_random(destination: &mut [u8]) -> Result<(), rand::rand_core::OsError> {
+    OsRng.try_fill_bytes(destination)
 }
 
 /// RNG for step-by-step commands: fresh OS entropy for every roll.
