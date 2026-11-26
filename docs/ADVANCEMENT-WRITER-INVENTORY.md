@@ -171,9 +171,9 @@
 | `combat-sim content list/show/check` / `pack list/show/verify` | 只读内容文件。 | `N/A` | `content import-srd-prose`/`content import-srd-pack`/`content import-srd` 与 `content pack build/release` 按 `--out` 位置区分；目标在存档内时是写者。 |
 | `combat-sim party show` | 只读 party-state。 | `N/A` | `party rest/set-hp/sync` 会写。 |
 
-**只读命令 ≠ 整次运行不写存档。** 上表条目按 `tools/advancement-lock` 登记表分类：`ReadOnly`/`ControlMetadata` 条目自 #317（`ab6d7f24`，#285 已收口）起不再走 `lib.rs::run` 的外层 `audit::after_command`，干净存档上整次运行整树字节一致（`transition_gate.rs::read_only_commands_preserve_a_clean_legacy_save_and_baseline` 以固定旧 baseline 日期回归）；`guard`/`secret list` 属 `ControlMetadata`，仅允许 `secret-terms.cache.json` 增量。仍未移出的是 `char`（含 `char show` 与 `spells` 只读视图，走写者条目）。不得把“未跟踪”当成“无写入”；写者条目仍以各自 Issue 与代码为准。
+**只读命令 ≠ 整次运行不写存档。** 上表条目按 `tools/advancement-lock` 登记表分类：`ReadOnly`/`ControlMetadata` 条目自 #317（`ab6d7f24`，#285 已收口）起不再走 `lib.rs::run` 的外层 `audit::after_command`，干净存档上整次运行整树字节一致（`transition_gate.rs::read_only_commands_preserve_a_clean_legacy_save_and_baseline` 以固定旧 baseline 日期回归）；`guard`/`secret list` 属 `ControlMetadata`，仅允许 `secret-terms.cache.json` 增量。仍未移出的是 `char` 写者条目（含 `char show` 与 `spells adopt/sync/terrain`；普通 `spells` 视图走 `char-spells-read` 只读条目）。不得把“未跟踪”当成“无写入”；写者条目仍以各自 Issue 与代码为准。
 
-**`char <who> spells` 的只读视图**：`charsheet::run` 在 `commit()` 之前提前返回（`charsheet.rs:3696`），本身不写 sheet/party/Markdown；但 `Cmd::Char` 仍走 `tracked` 外层审计，可能改写 `integrity.yaml` baseline。接入时必须同时处理这层副作用，否则“只读视图”仍会改变存档字节。
+**`char <who> spells` 的只读视图**：`charsheet::run` 在 `commit()` 之前提前返回（`charsheet.rs:3696`），本身不写 sheet/party/Markdown；#317 起该视图走 gate `char-spells-read` 只读条目，不触发外层审计。`spells adopt/sync/terrain` 与其他 `char` op（含 `char show`）仍走写者条目 `talkdnd:char`，可能改写 `integrity.yaml` baseline。
 
 ### 3.2 明确**不是**只读的易混路径
 
