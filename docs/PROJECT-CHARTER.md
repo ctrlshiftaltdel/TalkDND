@@ -48,6 +48,8 @@ TalkDND is an unofficial fan project. It is not affiliated with or endorsed by W
 
 ## Non-goals
 
+- First-stage identity migration covers only DM-confirmed first enrollment in strict v1. A subsequent stage can handle explicit rebind, physical renaming and choice-history records once their respective contracts are approved and verified. [Owner decision in #330](https://github.com/ctrlshiftaltdel/TalkDND/issues/330)
+
 - Never distribute copyrighted adventures. Rulebook content ships only under the owner's licence: SRD 5.1 / 5.2.1 packs under CC-BY-4.0, and (from v1.2) PHB/DMG/MM full packs unlocked by the player's own PDF. Players add PDFs only when they want page images, PDF fallback, or full-book content; their books stay on their machine.
 - Do not commit save contents, character sheets, session logs, or DM secrets. `LetsPlay/Saves/README.md` is the only save-tree file that belongs in Git.
 - Do not mix 5e and 5.5e rules inside one save.
@@ -209,7 +211,7 @@ Current choices. The dated record and the rejected alternatives are in the Decis
 
 ## Open decisions
 
-Single-class advancement: schema 11, automatic 9/10 migration, B/D and Q, full backup and explicit recovery, preservation of manual edits and unknown history, reliable-only numeric updates and fail-closed encounter boundaries are decided design goals, not implemented. Stable identity and lossless legacy-format writing, random source and token lifecycle, rebind/clone/rollback protocols, complete enumeration and platform/filesystem behavior, operation IDs and stages, concrete recovery operations and encounter discovery remain to be designed and validated. The 2026-11-16 decisions fix the lock's platform boundary, the order in which commit may be enabled, the backup/control-metadata split and bounded acquisition on the new path, and `tools/talkdnd/src/advancement_lock.rs` provides the v1 primitives. The 2026-11-18 decisions add the shared `tools/advancement-lock` crate and the transition gate: saves with the control files already refuse unadopted writers, but no writer takes the SAVE lock yet, so which writers take it, in which order, and when commit is actually enabled still depend on onboarding every relevant new-version writer, and the commit entry point remains disabled. Old-binary entry-point compatibility, edition-specific rules and content integration also remain open; see [the written design](superpowers/specs/2026-11-10-character-advancement-design.md). #264's root cause remains unknown; synthetic identity, fault and concurrency tests have not been run for this design. If implementation or validation is infeasible, stop and report rather than narrow platforms or safety commitments. First-stage completion and acceptance are followed by a pause. Other material questions still follow the project decision gate.
+Single-class advancement: schema 11, automatic 9/10 migration, B/D and Q, full backup and explicit recovery, preservation of manual edits and unknown history, reliable-only numeric updates and fail-closed encounter boundaries are decided design goals. The first-enrollment library builds strict v1 candidates with append-only legacy carriers, checks the DM-reviewed preimages and uses fallible OS entropy. Save-wide enumeration, admission and publication of those candidates belong to #330. The 2026-11-16 decisions fix the lock's platform boundary, the order in which commit may be enabled, the backup/control-metadata split and bounded acquisition on the new path. The 2026-11-18 decisions add the shared `tools/advancement-lock` crate and the transition gate. Keep the player commit entry point disabled until the applicable writers, lock ordering, verified backups and recovery have been covered. Rebind, clone and rollback compatibility, old-binary entry points, edition-specific rules and content integration still require their own evidence. #264's root cause remains unknown. If validation is infeasible, report the missing evidence and retain the agreed safety commitments. First-stage completion and acceptance are followed by a pause. Other material questions still follow the project decision gate. [Advancement design](superpowers/specs/2026-11-10-character-advancement-design.md) · [#330](https://github.com/ctrlshiftaltdel/TalkDND/issues/330)
 
 ## Initial milestone
 
@@ -218,6 +220,10 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-11-27 — Strict v1 first enrollment for advancement identity
+
+The owner approved first enrollment for schema 9/10 using strict v1, with `history: unknown` and the same 128-bit non-secret identifier in the carrier and sidecar. Reuse the existing fallible operating-system RNG. Confirm the character and exact preimages with the DM, then preserve old Markdown bytes and all existing YAML values in the candidate. Rebind is outside the first delivery. Local Linux ext4 is the first candidate for write admission, subject to evidence for admission, full backup and explicit recovery. The library generates unpublished candidate bytes in #345. #330 covers migration and publication. [Owner decision in #330](https://github.com/ctrlshiftaltdel/TalkDND/issues/330)
 
 ### 2026-11-26 — Playtest pilot ships as patch v1.7.1 (owner decision)
 

@@ -19,6 +19,9 @@
 //! recovery is a separate library API in [`crate::advancement_recovery`].
 
 use crate::advancement_backup_metadata::Inventory;
+pub use crate::advancement_identity::{
+    prepare_first_enrollment, EnrollmentApproval, EnrollmentCandidate, EnrollmentRequest,
+};
 use crate::advancement_lock::{
     self, open, AdvancementLock, CompletionEvidence, Error as LockError, OpenOptions, Stage, State,
 };
