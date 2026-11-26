@@ -390,7 +390,11 @@ pub fn ruleset_for_save(save: &Path) -> Option<Ruleset> {
     struct Manifest {
         ruleset: Option<String>,
     }
-    let campaign = File::open(save.join("combat/campaign.yaml")).ok()?;
+    let path = save.join("combat/campaign.yaml");
+    if !safe_existing_file(&path).ok()? {
+        return None;
+    }
+    let campaign = File::open(path).ok()?;
     let manifest: Manifest = serde_norway::from_reader(campaign.take(64 * 1024)).ok()?;
     match manifest.ruleset {
         Some(value) => Ruleset::parse(&value).ok(),

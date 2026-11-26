@@ -335,3 +335,46 @@ fn only_the_bound_play_root_publishes_on_a_shared_host() {
         Delivery::Linked(97)
     );
 }
+
+#[test]
+fn ruleset_observation_reads_regular_manifests_and_rejects_directories() {
+    let fixture = Fixture::new();
+    let combat = fixture.0.join("combat");
+    fs::create_dir(&combat).unwrap();
+    let manifest = combat.join("campaign.yaml");
+    fs::create_dir(&manifest).unwrap();
+    assert_eq!(ruleset_for_save(&fixture.0), None);
+    fs::remove_dir(&manifest).unwrap();
+    fs::write(&manifest, "ruleset: 5e-srd\n").unwrap();
+    assert_eq!(ruleset_for_save(&fixture.0), Some(Ruleset::FiveESrd));
+}
+
+#[cfg(unix)]
+#[test]
+fn feedback_foreground_rejects_fifo_and_symlinks() {
+    let fixture = Fixture::new();
+    let combat = fixture.0.join("combat");
+    fs::create_dir(&combat).unwrap();
+    let manifest = combat.join("campaign.yaml");
+    let unrelated = fixture.0.join("unrelated.yaml");
+    fs::write(&unrelated, "ruleset: 5e-srd\n").unwrap();
+    std::os::unix::fs::symlink(&unrelated, &manifest).unwrap();
+    assert_eq!(ruleset_for_save(&fixture.0), None);
+    fs::remove_file(&manifest).unwrap();
+
+    let queue = fixture.queue();
+    std::os::unix::fs::symlink(&unrelated, queue.0.join("record.lock")).unwrap();
+    assert!(queue.lock("record.lock", 1).is_err());
+    std::os::unix::fs::symlink(&unrelated, queue.0.join("state.json")).unwrap();
+    assert!(queue.read().is_err());
+
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&manifest)
+        .status()
+        .unwrap()
+        .success());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let save = fixture.0.clone();
+    std::thread::spawn(move || sender.send(ruleset_for_save(&save)).unwrap());
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), None);
+}
