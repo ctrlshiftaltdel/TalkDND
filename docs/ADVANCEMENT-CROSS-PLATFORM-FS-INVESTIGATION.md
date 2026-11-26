@@ -1,5 +1,7 @@
 # 跨平台/网络文件系统调查（ADV-P1-13）
 
+第 1–8 节保留 #313 的 Linux 调查快照。第 9 节补充 #328 的 Windows NTFS 实测与写入准入结论。
+
 本报告只涉及合成临时实验目录，以及对已批准文档与产品代码的边界指针。不修改产品代码、测试或 CI；不开始 `ADV-P1-6`；不新增 schema 11 或选择 sidecar，也不发明 sidecar 字段或路径；不启用成长提交或恢复 CLI 入口；不改变旧完整性锁的阻塞 API；`CURRENT_SCHEMA` 保持 10。#264 结论不变，本报告不把 #264 写成已解决。
 
 调查与仓库 head 绑定：`762313bc4d1498d3565974354076f31e5ea5b28f`（`origin/main`，[PR #312](https://github.com/ctrlshiftaltdel/TalkDND/pull/312) / `ADV-P1-5` 合并）。本报告不得被用来把其它块的验收标准判为通过，也不得替代 `ADV-P1-11` 的端到端与故障注入证据。不得据此扩展支持的平台或文件系统范围，不得承诺跨主机安全。通过或整洁的书面记录不是真实存档的安全证明，也不是开始 `ADV-P1-6` 的充分条件。
@@ -121,9 +123,9 @@ Rust 标准库没有 xattr API；`fs::copy` 在本环境不是「完整元数据
 
 本环境 Rust `Metadata::created()` 与 GNU `stat` 的 `Birth` 字段有值；本次未验证该出生时间在何种替换下保持不变，也不把它当成跨平台身份。所有权未做 `chown` 实验（无特权）。
 
-## 4. Windows 与 macOS（`NOT_RUN` / `UNKNOWN`）
+## 4. Windows 与 macOS（#313 快照，`NOT_RUN` / `UNKNOWN`）
 
-本工作区没有 Windows 或 macOS 执行环境，也没有绑定这两台机器、该 head 的本次实测。下列条目全部为 `NOT_RUN` / `UNKNOWN`，不得用第 3 节的 Linux 结果填充：
+#313 的调查环境仅有 Linux，未取得对应 Windows 或 macOS 的实测。下列条目为 #313 当时的 `NOT_RUN` / `UNKNOWN`。后续 #328 的 Windows 实测与仍未验证的项目见[第 9 节](#9-328-补充调查)。
 
 - 目录枚举（含短名、大小写折叠、尾随点/空格、备用数据流或资源叉等）
 - 大小写敏感性（常见 NTFS / APFS 默认与 Linux 不同，但未测）
@@ -264,3 +266,55 @@ Rust OsStr::to_str()=None
 - 不是 `ADV-P1-11` 的端到端或故障注入证据，也不能把其它块的 AC 标为通过。
 - 不是掉电、真实进程杀死、跨主机互斥或 #264 的结论更新。
 - 不是真实存档上的安全证明。
+
+## 9. #328 补充调查
+
+2026-11-26，在 Windows x64 本机独立任务检出的合成临时目录运行。源代码基线为 `9c1896294575989fcb6de0e3af13bc3a8761e912`。系统报告 Windows 10.0.26100，PowerShell 7.6.9，.NET 10.0.14。实验目录所在卷由 `DriveInfo` 报告为 `Fixed`、`NTFS`。以下观察只适用于这个目录、此卷及所用 API。探针只访问合成数据。
+
+### 9.1 Windows 本地 NTFS 观察
+
+| 项目 | 合成方法与实际结果 | 证据边界 |
+|---|---|---|
+| 枚举 | `Get-ChildItem -Force` 与 `.NET Directory.EnumerateFileSystemEntries` 观察同一批 5 个条目。两者都看到隐藏文件、点开头名称、空格和非 ASCII 名称。枚举省略 `.` 和 `..`。 | 迭代中途 I/O 错误、并发改名、短名、尾随点和空格均为 `NOT_RUN`。 |
+| 大小写与 Unicode | 用小写路径读到大写名称对应的原内容。原拼写保留，用 `FileMode.CreateNew` 再建同名小写项得到 `IOException`，HRESULT `0x80070050`。NFC 与 NFD 名称各自存在，内容可独立读取。 | 仅约束合成目录。启用区分大小写属性的 NTFS 目录为 `NOT_RUN`。 |
+| 硬链接 | `New-Item -ItemType HardLink` 成功。写第二个名称后第一个名称读取到新字节，`fsutil hardlink list` 退出 0 并返回两个名称。普通 `File.Copy` 产生独立文件，随后修改源文件未改变副本。 | 当前 Windows 写入接口未因此取得安全复制硬链接的证据。 |
+| 重解析点与符号链接 | 目录联接成功，枚举显示 `ReparsePoint`，`fsutil reparsepoint query` 退出 0。以联接路径读取子文件时跟随到了目标。创建文件符号链接和悬空链接均失败，文件链接重试返回原生错误 1314。 | 仅联接的识别及跟随已验证。符号链接可建时的枚举、悬空链接和环的语义仍为 `UNKNOWN`。 |
+| 特殊文件 | 相对路径上的合成 `AF_UNIX` 本地套接字在绑定期间显示 `ReparsePoint` 且非容器，`fsutil reparsepoint query` 退出 0。 | 设备节点、命名管道及其他重解析标签为 `NOT_RUN`。枚举中的非容器也需要类型检查。 |
+| 基础文件属性与时间戳 | 对源文件成功设置只读属性及创建、写入、访问时间，再以 `File.Copy` 复制。文件 SHA-256 相同，副本保留只读属性和最后写入时间，创建时间及最后访问时间不相同。 | 普通复制的成功不足以验证所要求的时间戳。Windows 创建时间与 POSIX 状态变更时间 `ctime` 的审计含义各自独立。 |
+| ACL 与所有者 | 普通同用户副本的访问 DACL 和所有者读取一致。合成源文件的显式 ACL `Set-Acl` 返回拒绝访问，`icacls /grant` 重试退出 5，回读确认未改。 | 显式 DACL、SACL、其他所有者的复制与恢复为 `UNKNOWN`。未观察到显式 DACL 已设置的样本。 |
+| ADS 与 EA/xattr | 命名数据流写入及回读成功。复制后枚举到同一流，流内容匹配。`fsutil file queryEA` 退出 0，当前工具的 `setEA` 返回参数无效并退出 1。 | ADS 的结果仅覆盖一个命名流。未建立带 NTFS EA 的正样本，EA 或 Unix xattr 的复制与恢复为 `UNKNOWN`。 |
+| 复制失败与同步 | 对缺失源尝试覆盖合成目标时收到 `FileNotFoundException`，目标 SHA-256 相同。普通文件的 `FileStream.Flush(true)` 返回成功。目录以通用 `File.OpenHandle` 打开时收到拒绝访问（`0x80070005`），该分支未调用 flush。 | 只验证此复制失败的文件终态及指定 API 的返回。空间耗尽、并发替换、目录原生句柄 API、崩溃及掉电后持久性均为 `NOT_RUN`。 |
+
+上述探针以 PowerShell 和 .NET 运行。主探针进程退出 0，分别记录预期拒绝的分项异常与原生退出码。补跑验证了文件符号链接错误码、显式 DACL 未改变、原生 EA 工具限制及相对路径套接字。典型输出如下。
+
+```text
+enumeration|0|count=5 names_found=True force_hidden=True dot=True spaces=True unicode=True dots=False
+case_second_create|1|IOException|0x80070050
+hardlink|0|type=HardLink source_changed=True fsutil_exit=0 fsutil_entry_count=2 copy_independent=True
+junction|0|type=Junction reparse=True fsutil_exit=0 open_followed=True
+file_link=1 native_error=1314
+af_unix_bound=0 reparse=True container=False fsutil_exit=0
+icacls_exit=5
+explicit_acl_differs=False
+copy_metadata|0|src_creation_requested=True src_write_requested=True src_access_requested=True creation_equal=False write_equal=True access_equal=False readonly_source=True readonly_copy=True dacl_equal=True owner_equal=True named_stream_listed=True named_stream_value_equal=True content_equal=True
+copy_missing_source|0|rejected=True target_bytes_equal=True
+flush_regular|0|flush_to_disk_returned=true
+flush_directory_generic_handle|1|UnauthorizedAccessException|0x80070005
+```
+
+### 9.2 准入与备份结论
+
+| 范围 | 支持的结论 |
+|---|---|
+| #313 的本地 Linux ext4 实测挂载 | 支持设计不跟随链接的枚举、普通文件和特殊文件识别、跨设备检查、元数据核对以及目录同步调用。实际部署仍需验证可准入根目录、完整备份和失败终态。其他 ext4 配置和其他 Linux 文件系统保持未测。 |
+| #328 的 Windows NTFS 合成目录 | 支持在后续诊断中区分部分链接与重解析项，并证明普通复制遗漏了部分时间戳。Windows 成长提交受现有 Unix 目录同步能力门约束，继续失败关闭。schema 11 迁移当前尚未启用。 |
+| macOS 或未测本地文件系统 | 此次枚举、大小写、链接与特殊文件、权限、ACL、xattr、可恢复时间戳和目录同步均为 `NOT_RUN`。对应产品准入保持 `UNKNOWN`。 |
+| 网络盘、FUSE、同步目录 | 未授权探测，全部 `NOT_RUN`。固定卷、单次同步调用、同客户端锁自检、未见同步标记均不足以判断路径没有同步。无法可靠确认时，准入方案应拒绝写入。现有强制准入仍未实现。 |
+
+依 [OD-1 和 OD-7](ADVANCEMENT-LOCK-DESIGN.md)，#328 仅补足部分事实。准入后还须验证用户资料及既有用户备份的全部字节和必需的可恢复元数据。锁与操作证据按既有约定单独保留，源 POSIX `ctime` 供审计。空间不足、目录枚举失败、链接或特殊文件、或任何必需元数据无法复制并校验时，应在写入目标前停止。真实存档、掉电重启、跨主机互斥与 #264 的根因仍没有新增证据。
+
+### 9.3 独立准入任务建议
+
+建议单独立项，只交付成长写入前的准入判定。待所有者明确首批支持的部署边界，再对已知本地平台、存档根及备份目标逐项核对实际文件系统、挂载和路径组成，拒绝链接、跨设备或无法可靠分类的路径。同步工具可能在普通本地目录上运行。专用非同步目录可作为经批准的部署前提，运行时仍须拒绝已知同步位置与无法解释的路径，并公开说明检测边界。
+
+验收可用合成路径覆盖已准入根、未获准根、重解析点或链接、未知文件系统、权限与枚举故障，并对比拒绝前后用户目标、锁、临时目录与元数据的状态。检查必须在协议建立控制文件或准备写入目标之前发生。候选发布前应复核可变化的路径和卷身份。迁移接线、版本切换和故障恢复在各自验收中单独取证。
