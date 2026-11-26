@@ -1,6 +1,6 @@
 [package]
 name = "advancement-lock"
-version = "1.7.0"
+version = "1.7.1"
 edition = "2021"
 description = "Shared TalkDND advancement control files, transition gate, and SAVE lock"
 license = "MIT"
