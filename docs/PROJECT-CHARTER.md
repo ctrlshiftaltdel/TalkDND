@@ -219,6 +219,10 @@ Validation is the kit check, the full kit test suite and the leak check in Succe
 
 ## Decision Log
 
+### 2026-11-26 — Playtest pilot ships as patch v1.7.1 (owner decision)
+
+The owner directed that the opt-in playtest feedback pilot (#322, off by default) ship as v1.7.1 even though `docs/versioning.md` reserves a minor bump for added features. This is a one-time owner decision, recorded here so it does not silently become precedent; `docs/versioning.md` keeps its current semantics. The release also carries the two documentation-only registrations #320 and #324 and no save-schema change.
+
 ### 2026-11-26 — Automated playtest feedback pilot (#322)
 
 The owner authorized an optional pilot for start and resume, checkpoint snapshot and restore, and combat reaction outcomes. Record typed events locally outside saves after the game locks are released. A confirmed restore rollback failure qualifies immediately. Other supported technical failures qualify after three occurrences within the two latest local sessions. Waiting, ordinary refusals and unclassified outcomes remain local. An explicitly configured owner-controlled host can use an Issues-only credential and the GitHub CLI to publish fixed-field reports to the project repository in the background. A durable local queue and the remote incident fingerprint identify existing reports. An ambiguous create result triggers lookup-only reconciliation. The pilot keeps the save schema and player choice boundaries, and synthetic validation uses a fake transport. Disable it through the host environment and revoke the dedicated credential to halt outbound requests.
