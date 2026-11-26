@@ -7,6 +7,7 @@ pub mod advancement_commit;
 mod advancement_identity;
 pub mod advancement_inner_lock;
 pub mod advancement_lock;
+mod advancement_preview;
 pub mod advancement_recovery;
 pub mod advancement_validation;
 pub mod adventure;
@@ -829,6 +830,9 @@ enum AdvancementCmd {
     IdentityPreview {
         #[arg(long)]
         json: bool,
+        /// Preview the next level of one player character, by exact ID or name.
+        #[arg(long, value_name = "CHARACTER")]
+        level_up: Option<String>,
     },
 }
 
@@ -1448,10 +1452,14 @@ fn dispatch(
     let root = root.to_path_buf();
     match cli.cmd.clone() {
         Cmd::Advancement {
-            cmd: AdvancementCmd::IdentityPreview { json },
+            cmd: AdvancementCmd::IdentityPreview { json, level_up },
         } => {
             let save = save::resolve_slot(&root, cli.save.as_deref())?;
-            advancement_identity::run(&save, json)?;
+            if let Some(who) = level_up {
+                advancement_preview::run(&root, &save, &who, json)?;
+            } else {
+                advancement_identity::run(&save, json)?;
+            }
         }
         Cmd::Char { who, op } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;

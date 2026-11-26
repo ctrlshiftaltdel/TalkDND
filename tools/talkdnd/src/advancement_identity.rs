@@ -184,8 +184,7 @@ fn load_record(path: &Path) -> Result<Record> {
     Ok(record)
 }
 
-fn inspect(save: &Path) -> Result<Preview> {
-    let diagnostic = identity_diag::diagnose(save);
+fn inspect_discovered(save: &Path, diagnostic: &identity_diag::Report) -> Result<Preview> {
     let mut preview = Preview {
         consistency: "unverified",
         write_capability: "unverified",
@@ -197,9 +196,9 @@ fn inspect(save: &Path) -> Result<Preview> {
         },
         issues: diagnostic
             .issues
-            .into_iter()
+            .iter()
             .map(|issue| DiscoveryIssue {
-                path: issue.path,
+                path: issue.path.clone(),
                 kind: format!("{:?}", issue.kind),
             })
             .collect(),
@@ -241,6 +240,22 @@ fn inspect(save: &Path) -> Result<Preview> {
     }
     preview.unmatched_records = records.into_keys().collect();
     Ok(preview)
+}
+
+pub(crate) fn binding_status(
+    save: &Path,
+    diagnostic: &identity_diag::Report,
+    character: &identity_diag::Character,
+) -> &'static str {
+    inspect_discovered(save, diagnostic)
+        .ok()
+        .and_then(|preview| {
+            preview
+                .cards
+                .into_iter()
+                .find(|card| card.path == character.markdown())
+        })
+        .map_or("unknown", |card| card.status)
 }
 
 fn inspect_carrier(
@@ -310,7 +325,7 @@ fn inspect_carrier(
 }
 
 pub fn run(save: &Path, json: bool) -> Result<()> {
-    let preview = inspect(save)?;
+    let preview = inspect_discovered(save, &identity_diag::diagnose(save))?;
     if json {
         println!("{}", serde_json::to_string(&preview)?);
         return Ok(());
