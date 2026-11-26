@@ -32,6 +32,7 @@ struct Preview {
     opportunity_source: &'static str,
     class_features: Vec<String>,
     abilities: Vec<AbilityPotential>,
+    abilities_with_conflicting_sources: Vec<&'static str>,
     candidates: Vec<Candidate>,
     unknowns: Vec<&'static str>,
     dm_review: &'static str,
@@ -54,6 +55,12 @@ struct Candidate {
     category: Option<String>,
     minimum_level: Option<i64>,
     eligibility: &'static str,
+}
+
+struct CharacterFacts {
+    class: String,
+    class_source: &'static str,
+    structured_combat: Option<Value>,
 }
 
 pub(crate) fn run(root: &Path, save: &Path, who: &str, json: bool) -> Result<()> {
@@ -116,13 +123,13 @@ fn inspect(root: &Path, save: &Path, who: &str) -> Result<Preview> {
     let current_level = level(&combat)?;
     ensure!(current_level < 20, "角色已达 20 级");
     let target_level = current_level + 1;
-    let (class, class_source) = character_class(save, character, &combat, current_level, ruleset)?;
+    let character_facts = character_facts(save, character, &combat, current_level, ruleset)?;
 
     let edition = ruleset.edition();
     let book = classdata::Book::srd(edition);
     let definition = book
         .classes
-        .get(&class)
+        .get(&character_facts.class)
         .context("缺少该职业经核对的升级表")?;
     let class_features: Vec<String> = definition
         .features
@@ -157,14 +164,18 @@ fn inspect(root: &Path, save: &Path, who: &str) -> Result<Preview> {
     if opportunity.is_some() && missing_catalog {
         unknowns.push("feat_catalog_incomplete");
     }
-    let abilities = if has_asi {
-        let values = ability_potential(&combat);
-        if values.len() != data::ABILITIES.len() {
+    let (abilities, abilities_with_conflicting_sources) = if has_asi {
+        let (values, conflicts) =
+            ability_potential(&combat, character_facts.structured_combat.as_ref());
+        if values.len() + conflicts.len() != data::ABILITIES.len() {
             unknowns.push("missing_ability_scores");
         }
-        values
+        if !conflicts.is_empty() {
+            unknowns.push("conflicting_ability_sources");
+        }
+        (values, conflicts)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     let world = save.join("world-time.yaml");
     let world_readable = match fs::symlink_metadata(world) {
@@ -185,8 +196,8 @@ fn inspect(root: &Path, save: &Path, who: &str) -> Result<Preview> {
         identity: advancement_identity::binding_status(save, &diagnostic, character),
         encounter,
         ruleset,
-        class,
-        class_source,
+        class: character_facts.class,
+        class_source: character_facts.class_source,
         current_level,
         target_level,
         proficiency_bonus: crate::progress::prof_for_level(target_level),
@@ -199,6 +210,7 @@ fn inspect(root: &Path, save: &Path, who: &str) -> Result<Preview> {
         },
         class_features,
         abilities,
+        abilities_with_conflicting_sources,
         candidates,
         unknowns,
         dm_review: "专长前置、能力值分配、HP 与其他衍生效果需由玩家和 DM 核对",
@@ -223,13 +235,13 @@ fn level(combat: &Value) -> Result<i32> {
         .context("角色卡没有可信的 1–20 等级")
 }
 
-fn character_class(
+fn character_facts(
     save: &Path,
     character: &identity_diag::Character,
     combat: &Value,
     current_level: i32,
     ruleset: Ruleset,
-) -> Result<(String, &'static str)> {
+) -> Result<CharacterFacts> {
     let inferred = charsheet::infer_controller(character.markdown(), combat);
     let Some(path) = character.sheet_path() else {
         ensure!(inferred == charsheet::PLAYER, "未找到该玩家角色");
@@ -245,7 +257,11 @@ fn character_class(
                 .is_ok_and(|value| (1..=current_level).contains(&value)),
             "旧角色卡的职业来源与等级不一致"
         );
-        return Ok((class.to_ascii_lowercase(), "generated_card"));
+        return Ok(CharacterFacts {
+            class: class.to_ascii_lowercase(),
+            class_source: "generated_card",
+            structured_combat: None,
+        });
     };
     let text = regular_text(&save.join(path), "结构化角色卡不可读取")?;
     let sheet: charsheet::CharFile =
@@ -269,28 +285,44 @@ fn character_class(
         "结构化角色卡与 Markdown 等级不一致"
     );
     let class = sheet.class().context("角色卡没有可信的职业字段")?;
-    Ok((class.to_ascii_lowercase(), "structured_sheet"))
+    Ok(CharacterFacts {
+        class: class.to_ascii_lowercase(),
+        class_source: "structured_sheet",
+        structured_combat: Some(sheet.combat),
+    })
 }
 
-fn ability_potential(combat: &Value) -> Vec<AbilityPotential> {
-    data::ABILITIES
-        .into_iter()
-        .filter_map(|ability| {
-            let score = combat.get("abilities")?.get(ability)?.as_i64()?;
-            if !(1..=30).contains(&score) {
-                return None;
-            }
-            let score = score as i32;
-            let after = |delta| (score + delta <= 20).then_some(data::modifier(score + delta));
-            Some(AbilityPotential {
-                ability,
-                current_score: score,
-                current_modifier: data::modifier(score),
-                modifier_after_plus_one: after(1),
-                modifier_after_plus_two: after(2),
-            })
-        })
-        .collect()
+fn ability_potential(
+    markdown: &Value,
+    structured: Option<&Value>,
+) -> (Vec<AbilityPotential>, Vec<&'static str>) {
+    let score_in = |combat: &Value, ability: &str| {
+        combat
+            .get("abilities")?
+            .get(ability)?
+            .as_i64()
+            .filter(|score| (1..=30).contains(score))
+            .map(|score| score as i32)
+    };
+    let mut values = Vec::new();
+    let mut conflicts = Vec::new();
+    for ability in data::ABILITIES {
+        let score = score_in(markdown, ability);
+        if structured.is_some_and(|sheet| score_in(sheet, ability) != score) {
+            conflicts.push(ability);
+            continue;
+        }
+        let Some(score) = score else { continue };
+        let after = |delta| (score + delta <= 20).then_some(data::modifier(score + delta));
+        values.push(AbilityPotential {
+            ability,
+            current_score: score,
+            current_modifier: data::modifier(score),
+            modifier_after_plus_one: after(1),
+            modifier_after_plus_two: after(2),
+        });
+    }
+    (values, conflicts)
 }
 
 fn candidates(

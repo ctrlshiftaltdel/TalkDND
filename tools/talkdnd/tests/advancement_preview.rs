@@ -258,6 +258,16 @@ fn four_rulesets_use_only_their_catalog_and_full_unlock() {
             let full = choices.iter().find(|row| row["id"] == full_feat).unwrap();
             assert_eq!(full["category"], "epic-boon");
             assert_eq!(full["eligibility"], "not_met");
+
+            fixture.pack(
+                edition,
+                Distribution::Full,
+                &format!("full-{edition}-phb"),
+                feat("updated-full-source", "general", 4),
+            );
+            let updated = fixture.preview();
+            assert!(updated.to_string().contains("updated-full-source"));
+            assert!(!updated.to_string().contains(&full_feat));
         }
         assert!(!preview.to_string().contains("never print synthetic"));
     }
@@ -307,6 +317,31 @@ fn invalid_qualifying_sources_and_dm_characters_are_not_previewed() {
 }
 
 #[test]
+fn structured_and_markdown_conflicts_omit_only_unreliable_ability_predictions() {
+    let fixture = Fixture::new(9, "5e-srd");
+    write(
+        &fixture.save,
+        "sheets/hero.yaml",
+        b"version: 1\nid: hero\nname: Synthetic Hero\nfile: Characters/hero.md\nruleset: \"2014\"\ncontroller: player\ninfo: {class: fighter}\ncombat: {level: 3, abilities: {str: 16, dex: 20, con: 12}}\n",
+    );
+    let preview = fixture.preview();
+    assert_eq!(preview["class_source"], "structured_sheet");
+    assert_eq!(
+        preview["abilities_with_conflicting_sources"],
+        json!(["str"])
+    );
+    assert!(preview["unknowns"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("conflicting_ability_sources")));
+    let abilities = preview["abilities"].as_array().unwrap();
+    assert!(!abilities.iter().any(|row| row["ability"] == "str"));
+    assert!(abilities
+        .iter()
+        .any(|row| row["ability"] == "con" && row["current_score"] == 12));
+}
+
+#[test]
 fn open_and_uncertain_encounters_allow_only_an_unbound_preview() {
     let fixture = Fixture::new(10, "5.5e-srd");
     let marker = "11111111111111111111111111111111";
@@ -315,6 +350,7 @@ fn open_and_uncertain_encounters_allow_only_an_unbound_preview() {
         format!("version: 1\ncard: Characters/hero.md\ntoken: \"{marker}\"\nhistory: unknown\n");
     write(&fixture.save, "advancement/hero.yaml", matching.as_bytes());
     let state = json!({
+        "schema_version": 5,
         "party_state": fixture.save.join("combat/party-state.yaml"),
         "registration": { "id": "0123456789abcdef0123456789abcdef" },
         "log": ["synthetic DM-only encounter detail"],
