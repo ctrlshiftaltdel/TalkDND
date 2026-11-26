@@ -1,6 +1,6 @@
 # 成长 sidecar：角色身份事实与候选契约
 
-状态：仅设计，静态事实基线 `5394ea2379302f6d4df912e7c1bc315b4856d4f9`；没有实施、迁移或证明可靠身份。所有者已选择 [B/D 与恢复边界](https://github.com/ctrlshiftaltdel/TalkDND/issues/183#issuecomment-6788131462)以及 [Q 和四条配套规则](https://github.com/ctrlshiftaltdel/TalkDND/issues/183#issuecomment-6896073489)；[成长设计](superpowers/specs/2026-11-10-character-advancement-design.md)、[恢复选项](ADVANCEMENT-RECOVERY-OPTIONS.md) 和 [安全审计](ADVANCEMENT-SAFETY-AUDIT.md) 为依据。仅核查公开代码和测试，不读取真实存档、书或秘密。UNKNOWN 表示尚不能判定，不代表安全或不存在。
+本文保留静态事实基线 `5394ea2379302f6d4df912e7c1bc315b4856d4f9`，第 6 节记录后续决定与首次入籍候选。所有者已选择 [B/D 与恢复边界](https://github.com/ctrlshiftaltdel/TalkDND/issues/183#issuecomment-6788131462)以及 [Q 和四条配套规则](https://github.com/ctrlshiftaltdel/TalkDND/issues/183#issuecomment-6896073489)；[成长设计](superpowers/specs/2026-11-10-character-advancement-design.md)、[恢复选项](ADVANCEMENT-RECOVERY-OPTIONS.md) 和 [安全审计](ADVANCEMENT-SAFETY-AUDIT.md) 为依据。证据来自公开代码和合成测试。UNKNOWN 表示尚不能判定。
 
 已选 Q：角色承载体与 sidecar 保存同一随机非秘密标识，缺失、不一致或同一存档内重复均停止。旧角色保留原数据和未知历史，首次关联由 DM 核对确认，不能无损处理则停止。删除后同名或同 ID 重建不得自动继承历史；确需认领时须 DM 明确确认，并走带备份与阶段记录的显式重绑。身份仅在同档唯一，完整复制存档可作为独立分支；同档重复停止，不自动合并或分叉。恢复须先保护当前内容并由人明确确认。共同复制角色与 sidecar 或整体重放旧备份无法凭内部标识检测，不得承诺检测；旧程序和外部编辑器不受协作锁约束。
 
@@ -95,13 +95,15 @@ DM 可以用 `talkdnd advancement identity-preview --json` 只读核对。预览
 
 跨平台权限、大小写、符号链接/硬链接、文件系统同步与锁、非协作写入和可验证完整备份仍 UNKNOWN；不能以 Linux 单次试验推广。设计文档正常 Git revert 不修改任何存档。
 
-## 6. #327 决策稿 — Q 的写入契约候选
+## 6. Q 的写入契约与首次入籍候选
 
-本节由 [#327](https://github.com/ctrlshiftaltdel/TalkDND/issues/327) 暂拟，待所有者决定。方向 Q、按载体无损追加和显式恢复沿用章程既有决定。当前 `advancement_identity.rs` 仅预览；以下写入、改名、重绑及恢复断言是 [#330](https://github.com/ctrlshiftaltdel/TalkDND/issues/330) 及后续实现的验收输入。
+本节由 [#327](https://github.com/ctrlshiftaltdel/TalkDND/issues/327) 提出。所有者在 2026-11-27 批准严格 v1、旧历史未知、首批仅首次入籍，以及复用现有系统随机源。[#330 的已批准决定](https://github.com/ctrlshiftaltdel/TalkDND/issues/330)
+
+[#345](https://github.com/ctrlshiftaltdel/TalkDND/issues/345) 提供内存中的首次入籍候选。调用方提供已发现的角色、Markdown 与可选 YAML 的原字节、确认时的相对定位与对应摘要、sidecar 是否存在，以及同档已占用或已预留的标识。一个已经匹配的载体和 sidecar 在输入中计为一份绑定。函数返回载体与 sidecar 两个相对目标及各自的候选字节。#330 在 SAVE 锁内完成整档枚举、完整备份、前像复核、迁移发布和显式恢复。
 
 ### 绑定格式与生成
 
-推荐延续只读预览已识别的身份格式。仅有 Markdown 的卡使用一行 `<!-- talkdnd-identity: <token> -->`；存在结构化卡时仅允许 `sheets/<id>.yaml` 顶层 `talkdnd_identity`，其值是带引号的标识字符串。绑定目标为 `advancement/<id>.yaml`，每个可成长角色登记一份，载体与 sidecar 的标识逐字相等。`id`、`card` 与 `carrier` 仅用于定位和校验关系；显示名、摘要、路径、文件 ID 和锁的 `save_id` 均不作为人物标识。
+v1 延续只读预览已识别的身份格式。仅有 Markdown 的卡使用一行 `<!-- talkdnd-identity: <token> -->`；存在结构化卡时仅允许 `sheets/<id>.yaml` 顶层 `talkdnd_identity`，其值是带引号的标识字符串。绑定目标为 `advancement/<id>.yaml`，每个可成长角色登记一份，载体与 sidecar 的标识逐字相等。`id`、`card` 与 `carrier` 仅用于定位和校验关系；显示名、摘要、路径、文件 ID 和锁的 `save_id` 均不作为人物标识。
 
 | `advancement/<id>.yaml` 的 v1 字段 | 候选约束 |
 | --- | --- |
@@ -115,7 +117,7 @@ DM 可以用 `talkdnd advancement identity-preview --json` 只读核对。预览
 
 迁移开放前逐项审计新建、建卡重跑、结构化卡重存、Markdown 输出、命令行升级和恢复等协作写者。保存既有卡须留住标识和原有归属，遇到无法保留的重序列化或载体转换则停止。新建角色的入籍路径、首次创建 `advancement/` 目录及前像缺失与空文件的区分均须实现和取证，才能开放 schema 11 写入。现有只读形状探测仍可用全零计算追加长度，登记和写入复核必须拒绝磁盘上出现的全零值。
 
-推荐复用 `combat-sim` 已锁定的 `rand` 0.9.5，在实现任务中从 `OsRng` 通过 `TryRngCore::try_fill_bytes` 取得 16 字节，并向调用方返回错误。`tools/combat-sim/src/dice.rs` 中 `OsDiceRng` 的 `RngCore::fill_bytes` 把该 API 的错误转换成 panic，保持原有骰路径即可。只在取得 SAVE、校验前像且确认登记后为候选生成标识，不在日志或输出中回显。每个标识最多尝试生成 8 次，每次排除全零和当前存档中已有或已保留的标识。熵失败或耗尽重试次数时停止，用户数据原样保留。合成验收注入全零、碰撞、连续碰撞和熵失败，生产路径不接受注入值。时间、名称、路径及锁 ID 的哈希不满足 Q 的随机约束。此方案复用已有依赖，其他依赖方案继续单独审批。
+候选复用 `combat-sim` 已锁定的 `rand` 0.9.5，从 `OsRng` 通过 `TryRngCore::try_fill_bytes` 取得 16 字节，并向调用方返回错误。`OsDiceRng` 的 `RngCore::fill_bytes` 保持原有骰路径的错误处理。实际迁移应在取得 SAVE、校验前像且确认登记后为候选生成标识，不在日志或输出中回显。每个标识最多尝试生成 8 次，每次排除全零和当前存档中已有或已保留的标识。熵失败或耗尽重试次数时停止，用户数据原样保留。合成验收注入全零、碰撞、连续碰撞和熵失败，生产路径始终使用系统随机源。
 
 ### 合成样例 — 纸面走查
 
