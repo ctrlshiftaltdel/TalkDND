@@ -284,6 +284,17 @@ impl QueueState {
 
 struct Queue(PathBuf);
 
+#[derive(Debug)]
+struct QueueLock(File);
+
+impl Drop for QueueLock {
+    fn drop(&mut self) {
+        // On Unix, a child can retain the open file description until exec.
+        // Release the lock before closing this descriptor.
+        let _ = self.0.unlock();
+    }
+}
+
 impl Queue {
     fn open(root: &Path) -> io::Result<Self> {
         if !advancement_lock::is_play_root(root) {
@@ -305,7 +316,7 @@ impl Queue {
         Ok(Self(queue))
     }
 
-    fn lock(&self, name: &str, attempts: usize) -> anyhow::Result<File> {
+    fn lock(&self, name: &str, attempts: usize) -> anyhow::Result<QueueLock> {
         let path = self.0.join(name);
         safe_existing_file(&path)?;
         let lock = OpenOptions::new()
@@ -316,7 +327,7 @@ impl Queue {
             .open(path)?;
         for index in 0..attempts {
             match lock.try_lock() {
-                Ok(()) => return Ok(lock),
+                Ok(()) => return Ok(QueueLock(lock)),
                 Err(fs::TryLockError::WouldBlock) if index + 1 < attempts => {
                     std::thread::sleep(Duration::from_millis(2));
                 }
