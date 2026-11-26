@@ -221,6 +221,7 @@ fn four_rulesets_use_only_their_catalog_and_full_unlock() {
         let fixture = Fixture::new(10, ruleset);
         let srd_feat = format!("srd-{edition}");
         let full_feat = format!("full-{edition}");
+        let full_pack_id = format!("full-{edition}-phb");
         let other = if edition == "2014" { "2024" } else { "2014" };
         fixture.pack(
             edition,
@@ -231,7 +232,7 @@ fn four_rulesets_use_only_their_catalog_and_full_unlock() {
         fixture.pack(
             edition,
             Distribution::Full,
-            &format!("full-{edition}-phb"),
+            &full_pack_id,
             feat(&full_feat, "epic-boon", 19),
         );
         fixture.pack(
@@ -256,18 +257,39 @@ fn four_rulesets_use_only_their_catalog_and_full_unlock() {
         assert_eq!(srd["eligibility"], "unknown");
         if full {
             let full = choices.iter().find(|row| row["id"] == full_feat).unwrap();
+            assert_eq!(full["source"], full_pack_id);
             assert_eq!(full["category"], "epic-boon");
             assert_eq!(full["eligibility"], "not_met");
 
+            let full_asset = fixture
+                .root
+                .join(format!("Rules/packs/{full_pack_id}.pack.json"));
+            let original_bytes = fs::read(&full_asset).unwrap();
             fixture.pack(
                 edition,
                 Distribution::Full,
-                &format!("full-{edition}-phb"),
+                &full_pack_id,
                 feat("updated-full-source", "general", 4),
             );
+            let replacement_bytes = fs::read(&full_asset).unwrap();
+            assert_ne!(original_bytes, replacement_bytes);
+            let replacement =
+                ContentPack::from_value(&serde_json::from_slice(&replacement_bytes).unwrap())
+                    .unwrap();
+            assert_eq!(replacement.pack.id, full_pack_id);
+            assert_eq!(
+                replacement.content.feats.unwrap()[0].id,
+                "updated-full-source"
+            );
+
             let updated = fixture.preview();
-            assert!(updated.to_string().contains("updated-full-source"));
-            assert!(!updated.to_string().contains(&full_feat));
+            let candidates = updated["candidates"].as_array().unwrap();
+            let ids: Vec<_> = candidates
+                .iter()
+                .map(|candidate| candidate["id"].as_str().unwrap())
+                .collect();
+            assert_eq!(ids, [srd_feat.as_str(), "updated-full-source"]);
+            assert_eq!(candidates[1]["source"], full_pack_id);
         }
         assert!(!preview.to_string().contains("never print synthetic"));
     }
