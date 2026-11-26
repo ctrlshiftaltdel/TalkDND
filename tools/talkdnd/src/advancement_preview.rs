@@ -1,0 +1,419 @@
+//! Player-facing preview of one level, using the save's existing read-only inputs.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+
+use anyhow::{ensure, Context, Result};
+use combat_sim::content::loader::Ruleset;
+use combat_sim::content::schema::CampaignManifest;
+use combat_sim::content::{ContentPack, Distribution};
+use serde::Serialize;
+use serde_norway::Value;
+
+use crate::advancement_validation::{self, ConditionCheck, ConditionStatus, ValidationDecision};
+use crate::{advancement_identity, charsheet, classdata, data, identity_diag, library, migrate};
+
+#[derive(Serialize)]
+struct Preview {
+    consistency: &'static str,
+    write_capability: &'static str,
+    submission_binding: &'static str,
+    identity: &'static str,
+    encounter: &'static str,
+    ruleset: Ruleset,
+    class: String,
+    class_source: &'static str,
+    current_level: i32,
+    target_level: i32,
+    proficiency_bonus: i32,
+    xp_threshold: i64,
+    opportunity: Option<&'static str>,
+    opportunity_source: &'static str,
+    class_features: Vec<String>,
+    abilities: Vec<AbilityPotential>,
+    candidates: Vec<Candidate>,
+    unknowns: Vec<&'static str>,
+    dm_review: &'static str,
+}
+
+#[derive(Serialize)]
+struct AbilityPotential {
+    ability: &'static str,
+    current_score: i32,
+    current_modifier: i32,
+    modifier_after_plus_one: Option<i32>,
+    modifier_after_plus_two: Option<i32>,
+}
+
+#[derive(Serialize)]
+struct Candidate {
+    id: String,
+    name: String,
+    source: String,
+    category: Option<String>,
+    minimum_level: Option<i64>,
+    eligibility: &'static str,
+}
+
+pub(crate) fn run(root: &Path, save: &Path, who: &str, json: bool) -> Result<()> {
+    let preview = inspect(root, save, who)?;
+    if json {
+        println!("{}", serde_json::to_string(&preview)?);
+    } else {
+        print!("{}", serde_norway::to_string(&preview)?);
+    }
+    Ok(())
+}
+
+fn inspect(root: &Path, save: &Path, who: &str) -> Result<Preview> {
+    let saves = root.join("Saves");
+    ensure!(
+        save.parent() == Some(saves.as_path()),
+        "成长预览需要游玩目录中的存档"
+    );
+    for path in [saves, save.to_path_buf(), save.join("combat")] {
+        ensure!(
+            fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir()),
+            "存档或战斗目录不是可验证的普通目录"
+        );
+    }
+    let manifest: CampaignManifest = serde_norway::from_str(&regular_text(
+        &save.join("combat/campaign.yaml"),
+        "战役规则来源不可读取",
+    )?)
+    .map_err(|_| anyhow::anyhow!("战役规则来源损坏"))?;
+    let ruleset = Ruleset::parse(manifest.ruleset.as_deref().context("战役未指定规则集")?)
+        .map_err(|_| anyhow::anyhow!("战役规则集无效，请核对 campaign.yaml"))?;
+
+    ensure!(
+        regular_file(&save.join(migrate::FILE)),
+        "缺少可验证的存档 schema"
+    );
+    let schema = migrate::load(save)
+        .map_err(|_| anyhow::anyhow!("无法读取当前存档 schema"))?
+        .context("缺少存档 schema")?
+        .schema;
+    ensure!(matches!(schema, 9 | 10), "成长预览支持 schema 9 和 10");
+
+    let diagnostic = identity_diag::diagnose(save);
+    ensure!(
+        diagnostic.status < identity_diag::Status::Ambiguous,
+        "角色发现不完整或资料相互冲突，请核对身份诊断"
+    );
+    let who = who.trim().to_lowercase();
+    ensure!(!who.is_empty(), "请选择要预览的玩家角色");
+    let character = diagnostic
+        .characters
+        .iter()
+        .find(|c| {
+            c.markdown_path().starts_with("Characters")
+                && (c.id().to_lowercase() == who || c.name().to_lowercase() == who)
+        })
+        .context("未找到该玩家角色")?;
+    let markdown = regular_text(&save.join(character.markdown_path()), "角色卡不可读取")?;
+    let combat = crate::start::combat_block(&markdown).context("角色卡没有可信的 combat 数据")?;
+    let current_level = level(&combat)?;
+    ensure!(current_level < 20, "角色已达 20 级");
+    let target_level = current_level + 1;
+    let (class, class_source) = character_class(save, character, &combat, current_level, ruleset)?;
+
+    let edition = ruleset.edition();
+    let book = classdata::Book::srd(edition);
+    let definition = book
+        .classes
+        .get(&class)
+        .context("缺少该职业经核对的升级表")?;
+    let class_features: Vec<String> = definition
+        .features
+        .iter()
+        .filter(|feature| feature.0 == target_level)
+        .map(|feature| feature.1.clone())
+        .collect();
+    let has_asi = definition
+        .asi
+        .as_ref()
+        .context("职业升级表缺少属性提升安排")?
+        .contains(&target_level);
+    let opportunity = if edition == "2014" && has_asi {
+        Some("ability_score_improvement_or_optional_feat")
+    } else if class_features.iter().any(|name| name == "Epic Boon") {
+        Some("epic_boon_or_other_qualified_feat")
+    } else if has_asi {
+        Some("ability_score_improvement_feat_or_other_qualified_feat")
+    } else {
+        None
+    };
+
+    let mut unknowns = vec!["milestone_and_prior_selections", "source_consistency"];
+    if edition == "2014" && has_asi {
+        unknowns.push("optional_feat_rule_at_this_table");
+    }
+    if opportunity.is_some() && !ruleset.is_full() {
+        unknowns.push("feat_catalog_limited_to_srd");
+    }
+    let (candidates, missing_catalog) =
+        candidates(root, ruleset, target_level, opportunity.is_some())?;
+    if opportunity.is_some() && missing_catalog {
+        unknowns.push("feat_catalog_incomplete");
+    }
+    let abilities = if has_asi {
+        let values = ability_potential(&combat);
+        if values.len() != data::ABILITIES.len() {
+            unknowns.push("missing_ability_scores");
+        }
+        values
+    } else {
+        Vec::new()
+    };
+    let world = save.join("world-time.yaml");
+    let world_readable = match fs::symlink_metadata(world) {
+        Ok(meta) => meta.file_type().is_file(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    };
+    let encounter = if world_readable
+        && combat_sim::encounter_lifecycle::require_between_encounters(save).is_ok()
+    {
+        "clear_at_read"
+    } else {
+        "active_or_unknown"
+    };
+    Ok(Preview {
+        consistency: "unverified",
+        write_capability: "unverified",
+        submission_binding: "unavailable_in_read_only_preview",
+        identity: advancement_identity::binding_status(save, &diagnostic, character),
+        encounter,
+        ruleset,
+        class,
+        class_source,
+        current_level,
+        target_level,
+        proficiency_bonus: crate::progress::prof_for_level(target_level),
+        xp_threshold: crate::progress::XP_TABLE[current_level as usize],
+        opportunity,
+        opportunity_source: if edition == "2014" {
+            "SRD 5.1 class progression"
+        } else {
+            "SRD 5.2.1 class progression"
+        },
+        class_features,
+        abilities,
+        candidates,
+        unknowns,
+        dm_review: "专长前置、能力值分配、HP 与其他衍生效果需由玩家和 DM 核对",
+    })
+}
+
+fn regular_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file())
+}
+
+fn regular_text(path: &Path, reason: &'static str) -> Result<String> {
+    ensure!(regular_file(path), "{reason}");
+    fs::read_to_string(path).map_err(|_| anyhow::anyhow!(reason))
+}
+
+fn level(combat: &Value) -> Result<i32> {
+    combat
+        .get("level")
+        .and_then(Value::as_i64)
+        .filter(|level| (1..=20).contains(level))
+        .map(|level| level as i32)
+        .context("角色卡没有可信的 1–20 等级")
+}
+
+fn character_class(
+    save: &Path,
+    character: &identity_diag::Character,
+    combat: &Value,
+    current_level: i32,
+    ruleset: Ruleset,
+) -> Result<(String, &'static str)> {
+    let inferred = charsheet::infer_controller(character.markdown(), combat);
+    let Some(path) = character.sheet_path() else {
+        ensure!(inferred == charsheet::PLAYER, "未找到该玩家角色");
+        let (class, origin_level) = combat
+            .get("notes")
+            .and_then(Value::as_str)
+            .and_then(|notes| notes.split_once(". Generated by talkdnd"))
+            .and_then(|(prefix, _)| prefix.rsplit_once(' '))
+            .context("旧角色卡没有可核对的职业字段")?;
+        ensure!(
+            origin_level
+                .parse::<i32>()
+                .is_ok_and(|value| (1..=current_level).contains(&value)),
+            "旧角色卡的职业来源与等级不一致"
+        );
+        return Ok((class.to_ascii_lowercase(), "generated_card"));
+    };
+    let text = regular_text(&save.join(path), "结构化角色卡不可读取")?;
+    let sheet: charsheet::CharFile =
+        serde_norway::from_str(&text).map_err(|_| anyhow::anyhow!("结构化角色卡无效"))?;
+    ensure!(
+        sheet.controller.as_deref().unwrap_or(inferred) == charsheet::PLAYER,
+        "未找到该玩家角色"
+    );
+    ensure!(
+        sheet.id == character.id() && sheet.name == character.name(),
+        "结构化角色卡与已发现身份不一致"
+    );
+    let sheet_ruleset =
+        Ruleset::parse(&sheet.ruleset).map_err(|_| anyhow::anyhow!("角色卡规则版次无效"))?;
+    ensure!(
+        sheet_ruleset.edition() == ruleset.edition(),
+        "角色卡与战役规则版次不一致"
+    );
+    ensure!(
+        level(&sheet.combat)? == current_level,
+        "结构化角色卡与 Markdown 等级不一致"
+    );
+    let class = sheet.class().context("角色卡没有可信的职业字段")?;
+    Ok((class.to_ascii_lowercase(), "structured_sheet"))
+}
+
+fn ability_potential(combat: &Value) -> Vec<AbilityPotential> {
+    data::ABILITIES
+        .into_iter()
+        .filter_map(|ability| {
+            let score = combat.get("abilities")?.get(ability)?.as_i64()?;
+            if !(1..=30).contains(&score) {
+                return None;
+            }
+            let score = score as i32;
+            let after = |delta| (score + delta <= 20).then_some(data::modifier(score + delta));
+            Some(AbilityPotential {
+                ability,
+                current_score: score,
+                current_modifier: data::modifier(score),
+                modifier_after_plus_one: after(1),
+                modifier_after_plus_two: after(2),
+            })
+        })
+        .collect()
+}
+
+fn candidates(
+    root: &Path,
+    ruleset: Ruleset,
+    target_level: i32,
+    show_choices: bool,
+) -> Result<(Vec<Candidate>, bool)> {
+    let edition = ruleset.edition();
+    let full_packs = if ruleset.is_full() {
+        let unlocked: Vec<_> = library::pack_status(root)
+            .into_iter()
+            .filter(|status| {
+                status.edition == edition && status.state == library::PackState::Unlocked
+            })
+            .collect();
+        ensure!(
+            !unlocked.is_empty(),
+            "此 FULL 规则集缺少同版已授权的内容包，请检查书库的解锁状态"
+        );
+        unlocked
+    } else {
+        Vec::new()
+    };
+    if !show_choices {
+        return Ok((Vec::new(), false));
+    }
+
+    let srd = if edition == "2014" {
+        "srd-5.1-feats"
+    } else {
+        "srd-5.2.1-feats"
+    };
+    let srd_path = root
+        .join("Rules/combat")
+        .join(edition)
+        .join("srd")
+        .join(format!("{srd}.pack.json"));
+    let mut rows = BTreeMap::new();
+    let missing_srd = match fs::symlink_metadata(&srd_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        _ => add_candidates(
+            &mut rows,
+            &srd_path,
+            edition,
+            Distribution::Srd,
+            srd,
+            target_level,
+        )?,
+    };
+    for status in full_packs {
+        let file = status.file.context("已解锁内容包没有来源")?;
+        add_candidates(
+            &mut rows,
+            &root.join(file),
+            edition,
+            Distribution::Full,
+            &status.id,
+            target_level,
+        )?;
+    }
+    let missing_catalog = missing_srd || rows.is_empty();
+    Ok((rows.into_values().collect(), missing_catalog))
+}
+
+fn add_candidates(
+    rows: &mut BTreeMap<String, Candidate>,
+    path: &Path,
+    edition: &str,
+    distribution: Distribution,
+    source: &str,
+    target_level: i32,
+) -> Result<bool> {
+    ensure!(regular_file(path), "专长目录来源不是普通文件");
+    let pack = library::pack_value(path)
+        .and_then(|value| ContentPack::from_value(&value))
+        .map_err(|_| anyhow::anyhow!("专长目录无法验证，请核对已安装内容包"))?;
+    ensure!(
+        pack.pack.id == source
+            && pack.pack.edition == edition
+            && pack.pack.distribution == distribution,
+        "专长目录的规则版次或授权来源不一致"
+    );
+    let feats = pack.content.feats.unwrap_or_default();
+    let empty = feats.is_empty();
+    for feat in feats {
+        let category = feat.data.as_ref().and_then(|data| data.get("type"));
+        let minimum_level = feat
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/prerequisites/minimum_level"))
+            .and_then(serde_json::Value::as_i64);
+        let mut checks = vec![ConditionCheck {
+            id: "qualification_and_history".into(),
+            status: ConditionStatus::Unknown,
+        }];
+        if let Some(minimum) = minimum_level {
+            checks.push(ConditionCheck {
+                id: "minimum_level".into(),
+                status: if i64::from(target_level) >= minimum {
+                    ConditionStatus::Met
+                } else {
+                    ConditionStatus::NotMet
+                },
+            });
+        }
+        let eligibility = match advancement_validation::evaluate(&checks, None)? {
+            ValidationDecision::Rejected { unmet_ids, .. } if !unmet_ids.is_empty() => "not_met",
+            _ => "unknown",
+        };
+        rows.insert(
+            feat.id.clone(),
+            Candidate {
+                name: feat.name.unwrap_or_else(|| feat.id.clone()),
+                id: feat.id,
+                source: source.into(),
+                category: category
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                minimum_level,
+                eligibility,
+            },
+        );
+    }
+    Ok(empty)
+}

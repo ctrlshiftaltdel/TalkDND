@@ -794,7 +794,7 @@ fn read_pack_header(path: &Path) -> Result<PackHeaderMeta> {
     Ok(header.pack)
 }
 
-fn pack_value(path: &Path) -> Result<serde_json::Value> {
+pub(crate) fn pack_value(path: &Path) -> Result<serde_json::Value> {
     let text = fs::read_to_string(path).with_context(|| format!("read pack {}", path.display()))?;
     if name_of(path).to_ascii_lowercase().ends_with(".json") {
         serde_json::from_str(&text).with_context(|| format!("parse pack {}", path.display()))
