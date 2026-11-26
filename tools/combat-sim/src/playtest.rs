@@ -15,6 +15,7 @@ use crate::content::loader::Ruleset;
 use crate::fsutil::atomic_write;
 
 const ENABLE: &str = "TALKDND_PLAYTEST_FEEDBACK";
+const PUBLISH_ROOT: &str = "TALKDND_PLAYTEST_PUBLISH_ROOT";
 pub const TOKEN_ENV: &str = "TALKDND_PLAYTEST_GH_TOKEN";
 const WORKER: &str = "--talkdnd-playtest-feedback-worker";
 const FORMAT: u8 = 1;
@@ -420,6 +421,12 @@ pub fn observe(
     {
         return;
     }
+    let Some(configured) = std::env::var_os(PUBLISH_ROOT) else {
+        return;
+    };
+    let Some(bound_root) = publishing_root(root, Path::new(&configured)) else {
+        return;
+    };
     let (Some(token), Ok(executable)) = (github::dedicated_token(), std::env::current_exe()) else {
         return;
     };
@@ -427,8 +434,9 @@ pub fn observe(
     github::isolated_process(&mut command);
     command
         .arg(WORKER)
-        .current_dir(root)
+        .current_dir(&bound_root)
         .env(ENABLE, "1")
+        .env(PUBLISH_ROOT, &bound_root)
         .env(TOKEN_ENV, token)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -446,15 +454,42 @@ pub fn worker_if_requested() -> bool {
         return false;
     }
     if enabled() {
-        if let (Ok(root), Some(token)) = (std::env::current_dir(), github::dedicated_token()) {
-            if let Ok(queue) = Queue::open(&root) {
-                if let Some(transport) = github::Gh::new(token, &queue.0) {
-                    let _ = deliver(&queue, &transport);
-                }
-            }
+        if let (Ok(root), Some(configured)) =
+            (std::env::current_dir(), std::env::var_os(PUBLISH_ROOT))
+        {
+            run_publisher(&root, Path::new(&configured), |queue| {
+                github::dedicated_token().and_then(|token| github::Gh::new(token, &queue.0))
+            });
         }
     }
     true
+}
+
+/// A pilot has one canonical publishing root. Another installation on the
+/// same host can record locally, but never uses this root's publisher identity.
+fn publishing_root(root: &Path, configured: &Path) -> Option<PathBuf> {
+    if !configured.is_absolute() {
+        return None;
+    }
+    let active = root.canonicalize().ok()?;
+    let allowed = configured.canonicalize().ok()?;
+    (active == allowed && advancement_lock::is_play_root(&allowed)).then_some(allowed)
+}
+
+fn run_publisher<T: github::Transport>(
+    root: &Path,
+    configured: &Path,
+    make_transport: impl FnOnce(&Queue) -> Option<T>,
+) {
+    let Some(allowed) = publishing_root(root, configured) else {
+        return;
+    };
+    let Ok(queue) = Queue::open(&allowed) else {
+        return;
+    };
+    if let Some(transport) = make_transport(&queue) {
+        let _ = deliver(&queue, &transport);
+    }
 }
 
 fn deliver(queue: &Queue, transport: &impl github::Transport) -> anyhow::Result<()> {

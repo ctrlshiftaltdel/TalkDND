@@ -114,7 +114,7 @@ Never put save contents, DM secrets, or copyrighted text into Issues, pull reque
 
 The same ban covers chat dumps of those materials, orchestration notes, and backups. Local saves and player books stay untracked.
 
-Public playtest reports use fixed fields for program version, platform, ruleset, stage, error code, coarse count and the derived incident fingerprint. Private paths, game and diagnostic text, and credentials stay on the host. A dedicated Issues-only credential authorizes the single fixed GitHub repository after explicit host opt-in.
+Public playtest reports use fixed fields for program version, platform, ruleset, stage, error code, coarse count and the derived incident fingerprint. Private paths, game and diagnostic text, and credentials stay on the host. An explicit canonical play-root binding and a dedicated Issues-only credential authorize publication from one installation on the pilot host to the fixed GitHub repository.
 
 ## Platform targets
 

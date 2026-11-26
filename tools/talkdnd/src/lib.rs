@@ -1234,7 +1234,11 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
                     .values()
                     .any(|cast| cast.status == combat_sim::long_cast::CastStatus::Casting)
             {
-                bail!("finish or interrupt active long castings before restoring or migrating the save");
+                return Err(combat_sim::playtest::classified_error(
+                    combat_sim::playtest::Outcome::Refused,
+                    "finish or interrupt active long castings before restoring or migrating the save"
+                        .to_string(),
+                ));
             }
             if clock.casting.handoff.is_some()
                 && matches!(
@@ -1251,7 +1255,11 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
                         | Cmd::Migrate { dry_run: false }
                 )
             {
-                bail!("reconcile the encounter clock before changing party or save data outside combat");
+                return Err(combat_sim::playtest::classified_error(
+                    combat_sim::playtest::Outcome::Refused,
+                    "reconcile the encounter clock before changing party or save data outside combat"
+                        .to_string(),
+                ));
             }
         }
     }

@@ -2864,7 +2864,10 @@ where
     import_campaign_casting(&mut state, state_path, save)?;
     let (seed, nonce, choices, rolls) = if let Some((pending, answer)) = &invocation.continuation {
         if state.pending_command.as_ref() != Some(pending) {
-            bail!("pending reaction changed; read status and try again");
+            return Err(playtest::classified_error(
+                Outcome::Refused,
+                "pending reaction changed; read status and try again".to_string(),
+            ));
         }
         let mut choices = pending.choices.clone();
         choices.push(AnsweredReaction {

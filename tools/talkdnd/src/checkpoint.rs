@@ -478,7 +478,10 @@ fn restore_inner(
     let _lock = Lock::acquire(save)?;
     let dir = resolve(save, id)?;
     if let Some(problem) = &entry(save, id).problem {
-        bail!("检查点 {id} 不可用（{problem}）；已拒绝恢复");
+        return Err(combat_sim::playtest::classified_error(
+            combat_sim::playtest::Outcome::Refused,
+            format!("检查点 {id} 不可用（{problem}）；已拒绝恢复"),
+        ));
     }
     let cm = manifest(save, id)?;
     let world = campaign_time::WorldTime::load(save)?;
@@ -488,14 +491,20 @@ fn restore_inner(
             .as_ref()
             .is_some_and(|clock| !clock.casting.is_empty())
     {
-        bail!("该旧检查点缺少长施法时钟，无法与法术资源一起恢复");
+        return Err(combat_sim::playtest::classified_error(
+            combat_sim::playtest::Outcome::Refused,
+            "该旧检查点缺少长施法时钟，无法与法术资源一起恢复".to_string(),
+        ));
     }
     let current = migrate::detect(save)?;
     if cm.schema > current {
-        bail!(
-            "检查点 {id} 的 schema {} 比当前存档（schema {current}）新；请更新 talkdnd 后再恢复",
-            cm.schema
-        );
+        return Err(combat_sim::playtest::classified_error(
+            combat_sim::playtest::Outcome::Refused,
+            format!(
+                "检查点 {id} 的 schema {} 比当前存档（schema {current}）新；请更新 talkdnd 后再恢复",
+                cm.schema
+            ),
+        ));
     }
 
     // 1. Whole-save backup before anything changes.

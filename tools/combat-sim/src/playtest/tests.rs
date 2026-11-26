@@ -306,3 +306,32 @@ fn local_time_bucket_and_queue_size_stay_bounded() {
     assert!(queue.update(|state| state.record(timed)).is_err());
     assert_eq!(fs::read(state).unwrap(), oversized);
 }
+
+#[test]
+fn only_the_bound_play_root_publishes_on_a_shared_host() {
+    let allowed = Fixture::new();
+    let allowed_queue = eligible_queue(&allowed);
+    let other = Fixture::new();
+    let other_queue = eligible_queue(&other);
+    let authorized_calls = Cell::new(0);
+    let factory = |_: &Queue| {
+        authorized_calls.set(authorized_calls.get() + 1);
+        Some(Fake::new(Creation::Created(97)))
+    };
+
+    run_publisher(&other.0, &allowed.0, factory);
+    run_publisher(&allowed.0, Path::new("."), factory);
+    run_publisher(&allowed.0, &allowed.0.join("missing"), factory);
+    assert_eq!(authorized_calls.get(), 0);
+    assert_eq!(
+        other_queue.read().unwrap().reports[0].delivery,
+        Delivery::Ready
+    );
+
+    run_publisher(&allowed.0, &allowed.0, factory);
+    assert_eq!(authorized_calls.get(), 1);
+    assert_eq!(
+        allowed_queue.read().unwrap().reports[0].delivery,
+        Delivery::Linked(97)
+    );
+}

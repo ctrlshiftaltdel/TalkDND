@@ -5,7 +5,7 @@
 ## 启用和停止
 
 - 默认关闭。主机所有者在 DM 的进程环境中将 `TALKDND_PLAYTEST_FEEDBACK` 设为 `1`，启用本地记录。
-- 要开启后台发单，在该主机安装 GitHub CLI `gh`，将其所在绝对目录加入 `PATH`，并由主机的安全凭据配置提供 `TALKDND_PLAYTEST_GH_TOKEN`。使用仅能读写 `ctrlshiftaltdel/TalkDND` Issues 的独立凭据。没有专用凭据时，队列只保留在本地。
+- 要开启后台发单，将 `TALKDND_PLAYTEST_PUBLISH_ROOT` 设为该主机唯一的上报游玩根目录的绝对路径。程序会比较规范化后的路径，其他安装只记录在本地。在该主机安装 GitHub CLI `gh`，将其所在绝对目录加入 `PATH`，并由主机的安全凭据配置提供 `TALKDND_PLAYTEST_GH_TOKEN`。使用仅能读写 `ctrlshiftaltdel/TalkDND` Issues 的独立凭据。缺少有效的目录绑定或专用凭据时，队列只保留在本地。
 - 要停止新的记录和上报，从 DM 进程的环境移除 `TALKDND_PLAYTEST_FEEDBACK` 并重启该进程。若要立即阻止已启动的后台请求，撤销专用凭据。已经提交的 Issue 仍可在 GitHub 上处理。
 
 ## 记录和上报范围
