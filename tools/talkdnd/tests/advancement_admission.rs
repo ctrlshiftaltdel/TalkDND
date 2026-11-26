@@ -63,6 +63,8 @@ impl Drop for Fixture {
 #[cfg(target_os = "linux")]
 #[test]
 fn actual_linux_mount_is_observed_without_mutating_the_fixture() {
+    use std::io::Write;
+
     let fixture = Fixture::new();
     let decision = fixture.check(&fixture.backup, &[]);
     if let Ok(mount) = std::process::Command::new("findmnt")
@@ -76,7 +78,12 @@ fn actual_linux_mount_is_observed_without_mutating_the_fixture() {
         let fs_type = columns.next().unwrap();
         let vfs = columns.next().unwrap();
         let writable = vfs.split(',').any(|flag| flag == "rw");
-        eprintln!("advancement fixture mount: filesystem={fs_type}, writable={writable}");
+        // Write directly to stderr so the regular CI test command records the observation.
+        writeln!(
+            std::io::stderr().lock(),
+            "advancement fixture mount: filesystem={fs_type}, writable={writable}"
+        )
+        .unwrap();
         if fs_type == "ext4" && writable {
             assert_eq!(decision, Admission::Admitted);
         } else if fs_type != "ext4" {
@@ -90,6 +97,20 @@ fn actual_linux_mount_is_observed_without_mutating_the_fixture() {
             Admission::Admitted | Admission::Unsupported(Reason::Filesystem)
         ));
     }
+    let first_backup = fixture.root.join("first-backup");
+    assert_eq!(
+        inspect(
+            &fixture.save,
+            &fixture.root,
+            &ApprovedRoots {
+                saves: &fixture.root,
+                backups: &fixture.root,
+                synchronized: &[],
+            },
+        ),
+        decision
+    );
+    assert!(!first_backup.exists());
     fixture.unchanged(&["character.md"]);
 }
 
