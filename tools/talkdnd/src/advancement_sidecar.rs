@@ -70,7 +70,10 @@ pub struct PendingBinding {
 impl PendingBinding {
     /// The confirm arguments a DM would pass after reviewing these bytes.
     pub fn confirm_args(&self) -> Vec<String> {
-        let mut args = vec![format!("--confirm-binding {}={}", self.markdown, self.markdown_digest)];
+        let mut args = vec![format!(
+            "--confirm-binding {}={}",
+            self.markdown, self.markdown_digest
+        )];
         if let (Some(sheet), Some(digest_text)) = (&self.sheet, &self.sheet_digest) {
             args.push(format!("--confirm-binding {sheet}={digest_text}"));
         }
@@ -303,25 +306,20 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
 
         // A confirm naming this carrier without matching its current bytes is
         // a refusal: the DM reviewed something else.
-        let digest_of = |rel: &str| -> Option<&str> {
-            if rel == markdown_rel {
-                Some(&markdown_digest)
-            } else if sheet_rel.as_deref() == Some(rel) {
-                sheet_digest.as_deref()
-            } else {
-                None
-            }
-        };
         for rel in [&markdown_rel, sheet_rel.as_deref()].into_iter().flatten() {
-            if let Some(group) = grouped.get(rel) {
-                if let (Some(expected), Some(given)) =
-                    (digest_of(rel), group.first().map(|confirm| confirm.digest.as_str()))
-                {
-                    if given != expected {
-                        plan.refused
-                            .push(format!("{rel} 的确认摘要与当前字节不符；请先重新只读核对"));
-                    }
-                }
+            let Some(group) = grouped.get(rel) else {
+                continue;
+            };
+            let expected = if rel == markdown_rel {
+                markdown_digest.as_str()
+            } else {
+                // A sheet locator can only be confirmed here when the sheet
+                // was read above, so its digest exists.
+                sheet_digest.as_deref().expect("confirmed sheet has a digest")
+            };
+            if group[0].digest != expected {
+                plan.refused
+                    .push(format!("{rel} 的确认摘要与当前字节不符；请先重新只读核对"));
             }
         }
 
