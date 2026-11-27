@@ -1226,29 +1226,37 @@ fn validate_candidate(dest: &Path, operation_id: &str) -> Result<CandidateManife
     })
 }
 
-fn load_sheet(path: &Path) -> Result<CharFile> {
+/// Read user YAML for candidate validation. Schema 11 preserves a UTF-8 BOM
+/// on character sheets (#345), so every reader here strips it before parsing;
+/// the on-disk bytes are never rewritten.
+fn read_yaml(path: &Path) -> Result<String> {
     let text = fs::read_to_string(path)?;
+    Ok(text.trim_start_matches('\u{feff}').to_string())
+}
+
+fn load_sheet(path: &Path) -> Result<CharFile> {
+    let text = read_yaml(path)?;
     let cf: CharFile =
         serde_norway::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
     Ok(cf)
 }
 
 fn load_progress(path: &Path) -> Result<Progress> {
-    let text = fs::read_to_string(path)?;
+    let text = read_yaml(path)?;
     let progress: Progress =
         serde_norway::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
     Ok(progress)
 }
 
 fn load_integrity(path: &Path) -> Result<Manifest> {
-    let text = fs::read_to_string(path)?;
+    let text = read_yaml(path)?;
     let manifest: Manifest =
         serde_norway::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
     Ok(manifest)
 }
 
 fn validate_save_meta(path: &Path, errors: &mut Vec<String>) -> Result<()> {
-    let text = fs::read_to_string(path)?;
+    let text = read_yaml(path)?;
     let value: serde_norway::Value =
         serde_norway::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
     let schema = value

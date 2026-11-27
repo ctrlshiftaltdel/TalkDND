@@ -919,10 +919,12 @@ impl Report {
             ));
         }
         if !self.identity_pending.is_empty() {
-            v.push("以下角色未确认前像，本次未绑定（存档保持 schema 10）：".into());
-            for pending in &self.identity_pending {
-                v.push(format!("  {pending}"));
-            }
+            // The full digest list belongs to the dry-run review entry; an
+            // applied run only points there, keeping `start`'s digest small.
+            v.push(
+                "成长身份未完成：另跑 `talkdnd migrate --dry-run` 只读核对前像摘要并逐张确认（存档保持 schema 10）"
+                    .into(),
+            );
         }
         if !self.identity_refused.is_empty() {
             v.push("以下情况拒绝自动绑定（存档保持 schema 10）：".into());
@@ -1397,9 +1399,10 @@ fn identity_step_11(
             .with_context(|| "为 schema 10→11 初始化成长协议控制文件失败；未做任何身份写入")?;
     }
 
+    // The lock requires 1-96 ASCII letters, digits, '-' or '_': no '.'.
     let operation_id = format!(
         "schema11-{}",
-        chrono::Local::now().format("%Y%m%d-%H%M%S%.6f")
+        chrono::Local::now().format("%Y%m%d-%H%M%S-%6f")
     );
     let request = crate::advancement_commit::Request {
         root,

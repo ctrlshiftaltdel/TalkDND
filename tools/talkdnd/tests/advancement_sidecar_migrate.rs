@@ -552,7 +552,8 @@ fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
     assert!(!failed.report.published, "{failed}");
     assert_eq!(
         failed.report.recovery.interrupt_stage,
-        talkdnd::advancement_commit::InterruptStage::Publish
+        talkdnd::advancement_commit::InterruptStage::Publish,
+        "{failed}"
     );
     assert!(
         fs::read_to_string(fixture.save.join("save-meta.yaml"))
