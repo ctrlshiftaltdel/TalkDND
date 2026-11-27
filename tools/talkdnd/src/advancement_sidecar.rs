@@ -252,10 +252,10 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
             plan.occupied.push(token.to_owned());
         }
 
-        let carrier_token = sheet_rel.as_ref().zip(sheet_token.as_deref()).map_or_else(
-            || markdown_token.clone(),
-            |(_sheet, token)| Some(token.to_owned()),
-        );
+        let carrier_token = match sheet_rel.as_deref().zip(sheet_token.as_deref()) {
+            Some((_sheet, token)) => Some(token.to_owned()),
+            None => markdown_token.map(str::to_owned),
+        };
         let record = match records.remove(&format!("{}.yaml", character.id())) {
             Some(path) => match load_record(&path) {
                 Ok(record) => Some(record),
@@ -310,7 +310,10 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
 
         // A confirm naming this carrier without matching its current bytes is
         // a refusal: the DM reviewed something else.
-        for rel in [&markdown_rel, sheet_rel.as_deref()].into_iter().flatten() {
+        for rel in [Some(markdown_rel.as_str()), sheet_rel.as_deref()]
+            .into_iter()
+            .flatten()
+        {
             let Some(group) = grouped.get(rel) else {
                 continue;
             };
@@ -360,21 +363,18 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
     }
 
     // Confirms that name no discovered carrier are stale, not harmless.
-    let known: Vec<String> = plan
+    let mut known: Vec<String> = Vec::new();
+    for character in plan
         .report
         .characters
         .iter()
         .filter(|character| character.markdown_path().starts_with("Characters"))
-        .flat_map(|character| {
-            [
-                character.markdown().to_owned(),
-                character.sheet().map(str::to_owned),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<String>>()
-        })
-        .collect();
+    {
+        known.push(character.markdown().to_owned());
+        if let Some(sheet) = character.sheet() {
+            known.push(sheet.to_owned());
+        }
+    }
     for path in grouped.keys() {
         if !known.iter().any(|known_path| known_path == path) {
             plan.refused.push(format!("确认了不存在的载体 {path}"));
@@ -420,13 +420,14 @@ pub fn prepare(plan: &BindingPlan, save: &Path) -> Result<Vec<EnrollmentCandidat
             "{} 已存在，拒绝首次入籍（空文件同样视为存在）",
             sidecar_rel(character)
         );
+        let occupied: Vec<&str> = plan.occupied.iter().map(String::as_str).collect();
         let request = EnrollmentRequest {
             schema: plan.schema,
             character,
             markdown: &markdown,
             sheet: sheet.as_deref(),
             sidecar_exists,
-            occupied_tokens: &plan.occupied,
+            occupied_tokens: &occupied,
             approval: Some(EnrollmentApproval {
                 markdown: (markdown_rel, &markdown_digest),
                 sheet: sheet_rel.zip(sheet_digest.as_deref()),
