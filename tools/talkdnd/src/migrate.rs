@@ -1090,17 +1090,12 @@ pub fn ensure_with_bindings(
         report.identity_bound = step.bound;
         report.identity_d_backup = Some(step.backup);
         report.to = CURRENT_SCHEMA;
-        let note = format!(
-            "[{}] 成长身份入籍 schema {CHAIN_SCHEMA}→{CURRENT_SCHEMA}（严格 v1，旧历史 unknown；D 协议发布）",
-            chrono::Local::now().format("%H:%M")
-        );
-        if let Some(log) = save::latest_log(save) {
-            save::append(&log, &format!("- {note}"))?;
-        }
-        report.log_text = Some(match report.log_text.take() {
-            Some(chain) => format!("{chain}\n{note}"),
-            None => note,
-        });
+        // The D protocol's `publish_logs` step already appended the operation
+        // marker to `rolls.log` and the session logs as part of the committed
+        // transaction. Do not append a second line with `save::append` here:
+        // it runs after the commit and its failure would report an error for a
+        // save whose data was already published. The human-readable summary
+        // stays in `report`/`Report::lines`.
     }
     Ok(report)
 }
@@ -1388,9 +1383,41 @@ fn identity_step_11(
 
     // Reuse the plan's extra targets: the sidecars plus `save-meta.yaml`.
     let extra_targets = plan.extra_targets();
-    let preview_id = crate::advancement_commit::binding_preview_id(save, &extra_targets)?;
+    // Bind the D preview digest to the exact carrier bytes the DM reviewed,
+    // not to whatever bytes happen to be live when the commit starts. The D
+    // publish recomputes the same digest from the live snapshot, so a carrier
+    // edited between reviewed planning and snapshot/publish is refused instead
+    // of overwritten by the stale candidate.
+    let measured: BTreeMap<String, String> = plan.reviewed_preimages().into_iter().collect();
+    let preview_id = crate::advancement_commit::binding_preview_id_with_preimages(
+        save,
+        &extra_targets,
+        &measured,
+    )?;
 
     let backups_root = root.join("Saves").join(BACKUP_DIR);
+    // Copy/preparation preconditions the D run also re-checks, observed here
+    // before the first control file is initialized. A first migration is the
+    // one place allowed to create protocol files, and only after these pass.
+    combat_sim::encounter_lifecycle::require_between_encounters(save)
+        .context("初始化成长协议前拒绝：不在遭遇间隙；未写入任何协议或目标文件")?;
+    let device_probe = if backups_root.is_dir() {
+        backups_root.clone()
+    } else {
+        root.join("Saves")
+    };
+    // The device probe is advisory only where the platform cannot expose a
+    // usable key (Windows reports a constant); the D backup step re-checks
+    // against the real backup parent afterwards.
+    if let (Ok(here), Ok(there)) = (
+        crate::advancement_commit::device_key(save),
+        crate::advancement_commit::device_key(&device_probe),
+    ) {
+        anyhow::ensure!(
+            crate::advancement_commit::devices_match(here, there),
+            "初始化成长协议前拒绝：存档与备份目录不在同一设备；未写入任何协议或目标文件"
+        );
+    }
     fs::create_dir_all(&backups_root)?;
     let evidence_root = backups_root.join(".operations");
     let evidence_dir = evidence_root.join(slot);

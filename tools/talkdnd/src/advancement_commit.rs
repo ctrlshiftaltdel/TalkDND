@@ -1408,6 +1408,18 @@ pub fn op_marker(operation_id: &str) -> String {
 /// This is not a full preview implementation (ADV-P1-7). A mismatch may
 /// only be reported as "绑定变化，原因未知".
 pub fn binding_preview_id(save: &Path, extra_targets: &[String]) -> Result<String> {
+    binding_preview_id_with_preimages(save, extra_targets, &BTreeMap::new())
+}
+
+/// [`binding_preview_id`] with caller-supplied preimages for some paths.
+/// Each entry replaces the live bytes' digest in the accumulated listing. The
+/// schema-11 migration supplies the DM-reviewed carrier digests here, so the
+/// D publish only matches when those exact reviewed bytes are still current.
+pub fn binding_preview_id_with_preimages(
+    save: &Path,
+    extra_targets: &[String],
+    measured: &BTreeMap<String, String>,
+) -> Result<String> {
     let mut listing = protected_target_bytes(save)?;
     for rel in extra_targets {
         if listing.contains_key(rel) {
@@ -1422,9 +1434,13 @@ pub fn binding_preview_id(save: &Path, extra_targets: &[String]) -> Result<Strin
     }
     let mut acc = Vec::new();
     for (path, bytes) in listing {
+        let digest = measured
+            .get(&path)
+            .cloned()
+            .unwrap_or_else(|| digest_bytes(&bytes));
         acc.extend_from_slice(path.as_bytes());
         acc.push(0);
-        acc.extend_from_slice(digest_bytes(&bytes).as_bytes());
+        acc.extend_from_slice(digest.as_bytes());
         acc.push(0);
     }
     Ok(digest_bytes(&acc))

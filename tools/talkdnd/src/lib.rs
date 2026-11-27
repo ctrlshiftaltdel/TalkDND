@@ -116,10 +116,12 @@ enum Cmd {
     /// Migrate an old save's on-disk schema (backs the whole save up first)
     ///
     /// 存档启用成长协议后，非 --dry-run 的迁移以退出码 1 拒绝且不写目标文件。
-    /// schema 10→11 的成长身份绑定额外要求 DM 确认：先跑 `migrate --dry-run`
-    /// 只读核对每张未绑定角色卡的前像摘要，再带 `--confirm-binding PATH=DIGEST`
-    /// 重跑完成入籍；无确认时存档停在 schema 10。首个可写环境是已通过准入
-    /// （#344）的本地 Linux ext4；未准入平台拒绝身份写入，存档保持 schema 10。
+    /// 带 `--confirm-binding PATH=DIGEST` 的已确认 schema 10→11 迁移改走 D 协议：
+    /// 先解析并核对确认，再检查准入与复制前置条件，通过后才由 D 取得 SAVE、
+    /// 备份并发布；这条路径不先跑普通迁移的 checkpoint 锁或 ruleset 改写。
+    /// 无确认时存档停在 schema 10。首个可写环境是已通过准入（#344）的本地
+    /// Linux ext4；确认且准入通过后，首次迁移才被允许创建协议控制文件（唯一
+    /// 例外，见章程 Decision Log）；未准入平台拒绝身份写入，存档保持 schema 10。
     Migrate {
         /// Only report what would be migrated; write nothing
         #[arg(long)]
@@ -1196,33 +1198,51 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
         }
     }
     let gate_class = gate::class_of(gate_entry);
+    // A confirmed schema-10 identity migration is the D protocol's commit: it
+    // opens SAVE itself after its own admission/preflight. Holding the ordinary
+    // wrapper SAVE here would make the D `open` take a second descriptor on the
+    // same lock and block until timeout, so this one path leaves SAVE to D. The
+    // transition gate above still checked the writer class and save state; the
+    // D `check_writable` re-checks the state before any write.
+    let identity_migrate = match &cli.cmd {
+        Cmd::Migrate {
+            dry_run: false,
+            confirm_binding,
+        } if !confirm_binding.is_empty() => gate_save.as_deref().is_some_and(|s| {
+            matches!(migrate::detect(s), Ok(schema) if schema == migrate::CHAIN_SCHEMA)
+        }),
+        _ => false,
+    };
     // ADV-P1-1a / 1c / 1d: adopted writers take the SAVE lock before any
     // target write. The lock is held through dispatch and the post-command
     // audit (`audit::after_command`) and dropped only after that returns.
     // Group D (`log`, `check`, `integrity status` / `accept`) uses this same
     // hold; do not drop it earlier and do not open a second time. No auto-init.
-    let save_locks = if gate_class == gate::Class::AdoptedWrite {
+    let save_locks = if gate_class == gate::Class::AdoptedWrite && !identity_migrate {
         hold_adopted_save_locks(root, cli, gate_save.as_deref(), gate_entry)?
     } else {
         Vec::new()
     };
-    let clock_lock = if matches!(
-        gate_class,
-        gate::Class::AdoptedWrite | gate::Class::UnadoptedWrite
-    ) && matches!(
-        cli.cmd,
-        Cmd::Time { .. }
-            | Cmd::Char { .. }
-            | Cmd::Chargen { .. }
-            | Cmd::Companion { .. }
-            | Cmd::Npc { .. }
-            | Cmd::LevelUp { .. }
-            | Cmd::Checkpoint {
-                cmd: Some(checkpoint::Cmd::Snapshot { .. } | checkpoint::Cmd::Restore { .. }),
-                ..
-            }
-            | Cmd::Migrate { dry_run: false, .. }
-    ) {
+    let clock_lock = if !identity_migrate
+        && matches!(
+            gate_class,
+            gate::Class::AdoptedWrite | gate::Class::UnadoptedWrite
+        )
+        && matches!(
+            cli.cmd,
+            Cmd::Time { .. }
+                | Cmd::Char { .. }
+                | Cmd::Chargen { .. }
+                | Cmd::Companion { .. }
+                | Cmd::Npc { .. }
+                | Cmd::LevelUp { .. }
+                | Cmd::Checkpoint {
+                    cmd: Some(checkpoint::Cmd::Snapshot { .. } | checkpoint::Cmd::Restore { .. }),
+                    ..
+                }
+                | Cmd::Migrate { dry_run: false, .. }
+        )
+    {
         gate_save
             .as_deref()
             .map(combat_sim::campaign_time::lock_if_present)
@@ -1231,7 +1251,9 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
     } else {
         None
     };
-    if clock_lock.is_some() {
+    // The confirmed identity path runs these same refusal checks read-only and
+    // leaves SAVE ordering to the D commit, which takes SAVE before it writes.
+    if clock_lock.is_some() || identity_migrate {
         let world = worldtime::load(gate_save.as_deref().expect("clock has a save"))?;
         if let Some(clock) = &world.clock {
             let restores = matches!(
@@ -1736,24 +1758,33 @@ fn dispatch(
             confirm_binding,
         } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
-            // AC-1: non-dry-run migrate writes only after SAVE (held by
-            // `run` for AdoptedWrite) and checkpoint `.talkdnd.lock`.
-            let _checkpoint = if dry_run {
-                None
-            } else {
-                Some(checkpoint::hold_lock(&s)?)
-            };
-            if !dry_run {
-                if let Some(line) = save::migrate_ruleset(&s)? {
-                    println!("{line}");
-                }
-            }
-            // Each confirmation must name a real reviewed carrier: parsing
-            // fails closed before anything is written.
+            // Parse the DM's confirmations before anything on the write path.
+            // An invalid confirmation must fail closed without a checkpoint or
+            // a ruleset mutation.
             let confirms = confirm_binding
                 .iter()
                 .map(|spec| advancement_sidecar::BindingConfirm::parse(spec))
                 .collect::<Result<Vec<_>, _>>()?;
+            // A confirmed schema-10 identity migration is owned by the D
+            // protocol: it takes SAVE itself, verifies admission, backs up and
+            // publishes. The ordinary migration's pre-write checkpoint lock
+            // and `save::migrate_ruleset` mutation must not run first, or they
+            // would touch the save before the confirmation/admission/preflight
+            // gates. Ordinary `start` / `migrate` (no confirmations, or a
+            // legacy chain below schema 10) keeps the old behaviour.
+            let identity_only = !dry_run
+                && !confirms.is_empty()
+                && migrate::detect(&s)? == migrate::CHAIN_SCHEMA;
+            let _checkpoint = if dry_run || identity_only {
+                None
+            } else {
+                Some(checkpoint::hold_lock(&s)?)
+            };
+            if !dry_run && !identity_only {
+                if let Some(line) = save::migrate_ruleset(&s)? {
+                    println!("{line}");
+                }
+            }
             let report = migrate::ensure_with_bindings(&s, &root, dry_run, &confirms)?;
             for line in report.lines() {
                 println!("{line}");

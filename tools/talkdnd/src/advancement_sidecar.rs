@@ -85,13 +85,25 @@ impl PendingBinding {
     }
 }
 
+/// One confirmed carrier and the reviewed preimage digests (the bytes the DM
+/// actually saw in `migrate --dry-run`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfirmedCarrier {
+    index: usize,
+    markdown_digest: String,
+    sheet_digest: Option<String>,
+}
+
 /// The complete schema-11 plan for one save. `refused` is fail-closed: when
 /// it is non-empty no binding happens for the whole save.
 #[derive(Debug)]
 pub struct BindingPlan {
-    /// Indices into the diagnostic's party characters that carry a valid
-    /// reviewed approval for every carrier byte.
-    confirmed: Vec<usize>,
+    /// Party characters that carry a valid reviewed approval, together with
+    /// the exact preimage digests the DM confirmed. `prepare` rechecks the
+    /// live bytes against these stored digests, so a carrier edited between
+    /// planning and snapshot/candidate is refused instead of silently
+    /// re-approved against its new bytes.
+    confirmed: Vec<ConfirmedCarrier>,
     pub pending: Vec<PendingBinding>,
     pub refused: Vec<String>,
     /// Every token already bound in the save (carriers and records), so
@@ -130,6 +142,29 @@ impl BindingPlan {
             .characters
             .get(index)
             .filter(|character| character.markdown_path().starts_with("Characters"))
+    }
+
+    /// The reviewed preimage digests the DM confirmed, as `(POSIX path,
+    /// digest)` pairs. The migration feeds these into the D preview digest so
+    /// D's own recomputation fails closed if a carrier changes between the
+    /// reviewed plan and the snapshot/publish.
+    pub fn reviewed_preimages(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for confirmed in &self.confirmed {
+            let Some(character) = self.party(confirmed.index) else {
+                continue;
+            };
+            out.push((
+                character.markdown().to_owned(),
+                confirmed.markdown_digest.clone(),
+            ));
+            if let (Some(sheet), Some(digest_text)) =
+                (character.sheet(), confirmed.sheet_digest.as_ref())
+            {
+                out.push((sheet.to_owned(), digest_text.clone()));
+            }
+        }
+        out
     }
 }
 
@@ -348,7 +383,11 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
                 })
             });
         if confirmed {
-            plan.confirmed.push(index);
+            plan.confirmed.push(ConfirmedCarrier {
+                index,
+                markdown_digest,
+                sheet_digest,
+            });
         } else {
             plan.pending.push(PendingBinding {
                 markdown: markdown_rel,
@@ -398,9 +437,9 @@ pub fn prepare(plan: &BindingPlan, save: &Path) -> Result<Vec<EnrollmentCandidat
         plan.schema
     );
     let mut candidates = Vec::new();
-    for &index in &plan.confirmed {
+    for confirmed in &plan.confirmed {
         let character = plan
-            .party(index)
+            .party(confirmed.index)
             .context("规划与发现结果不一致，拒绝继续")?;
         let markdown_rel = character.markdown();
         let markdown = read_regular(&save.join(character.markdown_path()))?;
@@ -409,10 +448,23 @@ pub fn prepare(plan: &BindingPlan, save: &Path) -> Result<Vec<EnrollmentCandidat
             .map(|path| read_regular(&save.join(path)))
             .transpose()?;
         let sheet_rel = character.sheet();
-        let markdown_digest = digest(&markdown).as_str().to_owned();
-        let sheet_digest = sheet
+        // Re-read the live bytes and require them to still be the reviewed
+        // preimage. Without this, a carrier edited after planning would be
+        // re-approved against its new digest and the stale reviewed approval
+        // would be overwritten by the D publish.
+        let live_markdown = digest(&markdown).as_str().to_owned();
+        ensure!(
+            live_markdown == confirmed.markdown_digest,
+            "{markdown_rel} 在只读核对后已变化；请重新运行 `migrate --dry-run` 核对并确认新的前像"
+        );
+        let live_sheet = sheet
             .as_deref()
             .map(|bytes| digest(bytes).as_str().to_owned());
+        ensure!(
+            live_sheet == confirmed.sheet_digest,
+            "{} 在只读核对后已变化；请重新运行 `migrate --dry-run` 核对并确认新的前像",
+            sheet_rel.unwrap_or("角色卡结构化文件")
+        );
         let sidecar_path =
             save.join(Path::new("advancement").join(format!("{}.yaml", character.id())));
         let sidecar_exists = match fs::symlink_metadata(&sidecar_path) {
@@ -434,8 +486,8 @@ pub fn prepare(plan: &BindingPlan, save: &Path) -> Result<Vec<EnrollmentCandidat
             sidecar_exists,
             occupied_tokens: &occupied,
             approval: Some(EnrollmentApproval {
-                markdown: (markdown_rel, &markdown_digest),
-                sheet: sheet_rel.zip(sheet_digest.as_deref()),
+                markdown: (markdown_rel, confirmed.markdown_digest.as_str()),
+                sheet: sheet_rel.zip(confirmed.sheet_digest.as_deref()),
             }),
         };
         candidates.push(prepare_first_enrollment(request)?);
