@@ -865,7 +865,8 @@ fn append_prereq_rows(
 /// known-illegal rejections.
 fn feature_named_status(preview: &Preview, facts: &CharacterFacts, name: &str) -> ConditionStatus {
     let edition = preview.ruleset.edition();
-    let Some(definition) = classdata::Book::srd(edition).classes.get(&preview.class) else {
+    let book = classdata::Book::srd(edition);
+    let Some(definition) = book.classes.get(&preview.class) else {
         return Unknown;
     };
     let has = |features: &[(i32, String, String)]| {
