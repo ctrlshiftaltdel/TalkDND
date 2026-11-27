@@ -514,9 +514,11 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
 #[cfg(unix)]
 #[test]
 fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
-    use talkdnd::advancement_commit::{binding_preview_id, run_to_complete, Fault, Request};
+    use talkdnd::advancement_commit::{
+        binding_preview_id, digest_bytes, run_to_complete, Fault, Request,
+    };
     use talkdnd::advancement_lock as adv;
-    use talkdnd::advancement_recovery::{self, RecoveryHooks, RecoveryRequest};
+    use talkdnd::advancement_recovery::{self, RecoveryChoice, RecoveryHooks, RecoveryRequest};
 
     let fixture = Fixture::new("interrupt");
     fixture.seed_card();
@@ -549,7 +551,9 @@ fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
         backup_parent: &backup_parent,
         candidate_parent: &backup_parent,
         overlays,
-        fault: Some(Fault::PublishWrite),
+        // Deterministic stop after every registered replace target (including
+        // the sidecar and save-meta) has been published, and after the logs.
+        fault: Some(Fault::IntegrityUpdate),
         extra_targets,
         preview_id: Some(preview),
         instance_tag: "",
@@ -557,24 +561,60 @@ fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
         inner_lock: Default::default(),
         ext4_metadata: false,
     };
+    fn confirmed<'a>(
+        choice: RecoveryChoice,
+        root: &'a Path,
+        save: &'a Path,
+        recovery_id: &'a str,
+        evidence_root: &'a Path,
+        evidence_dir: &'a Path,
+    ) -> RecoveryRequest<'a> {
+        RecoveryRequest {
+            root,
+            save_dir: save,
+            recovery_id,
+            evidence_root,
+            evidence_dir,
+            choice: Some(choice),
+            confirm_choice: true,
+            extra_targets: Vec::new(),
+            fault: None,
+            hooks: RecoveryHooks::default(),
+            inner_lock: Default::default(),
+        }
+    }
+
     let failed = run_to_complete(&request).unwrap_err();
     assert!(!failed.report.published, "{failed}");
     assert_eq!(
         failed.report.recovery.interrupt_stage,
-        talkdnd::advancement_commit::InterruptStage::Publish,
+        talkdnd::advancement_commit::InterruptStage::Logs,
         "{failed}"
     );
-    assert!(
-        fs::read_to_string(fixture.save.join("save-meta.yaml"))
-            .unwrap()
-            .contains("schema: 10"),
-        "the fault must stop before save-meta reaches 11"
-    );
-    assert!(!fixture.save.join(SIDECAR).exists());
 
-    // A later hand edit lands on an unpublished target while the operation
-    // is stopped. Explicit recovery must not silently clobber it: without a
-    // confirmed human choice nothing is written, and the bytes stay.
+    // The sidecar really existed and was published by the operation before
+    // the stop; the state tables record its absent preimage (digest of empty
+    // bytes) and the nonempty target.
+    let published_sidecar = fs::read(fixture.save.join(SIDECAR)).unwrap();
+    assert!(!published_sidecar.is_empty());
+    assert_eq!(published_sidecar, candidates[0].sidecar_bytes);
+    let state = adv::open(&fixture.root, &fixture.save, &adv::OpenOptions::new())
+        .unwrap()
+        .state()
+        .clone();
+    let published = state
+        .published
+        .iter()
+        .find(|entry| entry.path == SIDECAR)
+        .expect("sidecar was published");
+    assert!(published.done, "{published:?}");
+    assert_eq!(published.before, digest_bytes(b""));
+    assert_eq!(published.after, digest_bytes(&published_sidecar));
+    assert!(state.pending.iter().all(|pending| pending.path != SIDECAR));
+
+    // A later hand edit lands on a target while the operation is stopped.
+    // Explicit recovery must not silently clobber it: without a confirmed
+    // human choice nothing is written, and the bytes stay.
     let hand_edit = fixture.save.join(CARD_PATH);
     fs::write(&hand_edit, b"# hand edited after the interrupt\n").unwrap();
     let inspect = RecoveryRequest {
@@ -601,4 +641,119 @@ fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
         b"# hand edited after the interrupt\n",
         "an unconfirmed recovery must protect later hand edits"
     );
+    // Restore the card: the refusal above already proved protection, and the
+    // rollback below exercises ordinary preimage restoration.
+    fs::write(&hand_edit, CARD).unwrap();
+
+    // An unrelated EXISTING EMPTY file is not the missing preimage: rollback
+    // refuses and leaves it exactly where it is.
+    fs::write(fixture.save.join(SIDECAR), b"").unwrap();
+    let empty = advancement_recovery::recover(&confirmed(
+        RecoveryChoice::RollbackToPreimage,
+        &fixture.root,
+        &fixture.save,
+        "schema11-interrupt",
+        &evidence_root,
+        &evidence_dir,
+    ))
+    .unwrap_err();
+    assert!(
+        empty
+            .report
+            .error
+            .as_deref()
+            .is_some_and(|err| err.contains(SIDECAR)),
+        "{empty}"
+    );
+    assert_eq!(fs::read(fixture.save.join(SIDECAR)).unwrap(), b"");
+
+    // A later hand-edited sidecar is likewise not removed.
+    fs::write(fixture.save.join(SIDECAR), b"# later sidecar hand edit\n").unwrap();
+    let edited = advancement_recovery::recover(&confirmed(
+        RecoveryChoice::RollbackToPreimage,
+        &fixture.root,
+        &fixture.save,
+        "schema11-interrupt",
+        &evidence_root,
+        &evidence_dir,
+    ))
+    .unwrap_err();
+    assert!(
+        edited
+            .report
+            .error
+            .as_deref()
+            .is_some_and(|err| err.contains(SIDECAR)),
+        "{edited}"
+    );
+    assert_eq!(
+        fs::read(fixture.save.join(SIDECAR)).unwrap(),
+        b"# later sidecar hand edit\n"
+    );
+
+    // The intent is persisted before the after-intent hook, so a hook that
+    // rewrites the sidecar is caught by the final type/byte re-check: the
+    // replaced entry is left untouched and the conflict is reported.
+    let hook_save = fixture.save.clone();
+    let rewrite_sidecar = move |rel: &str, _save: &Path| -> std::result::Result<(), String> {
+        if rel == SIDECAR {
+            fs::write(hook_save.join(SIDECAR), b"# hook rewrote the sidecar\n")
+                .map_err(|err| err.to_string())?;
+        }
+        Ok(())
+    };
+    let mut hooked = confirmed(
+        RecoveryChoice::RollbackToPreimage,
+        &fixture.root,
+        &fixture.save,
+        "schema11-interrupt",
+        &evidence_root,
+        &evidence_dir,
+    );
+    hooked.hooks.after_intent = Some(&rewrite_sidecar);
+    let raced = advancement_recovery::recover(&hooked).unwrap_err();
+    assert!(
+        raced
+            .report
+            .error
+            .as_deref()
+            .is_some_and(|err| err.contains(SIDECAR)),
+        "{raced}"
+    );
+    assert_eq!(
+        fs::read(fixture.save.join(SIDECAR)).unwrap(),
+        b"# hook rewrote the sidecar\n",
+        "the post-intent re-check must leave the hook's replacement untouched"
+    );
+    assert!(
+        !raced
+            .report
+            .written_paths
+            .iter()
+            .any(|path| path == SIDECAR),
+        "{raced:?}"
+    );
+
+    // Only when live bytes still equal the operation's recorded target does
+    // the confirmed rollback restore true path absence.
+    fs::write(fixture.save.join(SIDECAR), &published_sidecar).unwrap();
+    let report = advancement_recovery::recover(&confirmed(
+        RecoveryChoice::RollbackToPreimage,
+        &fixture.root,
+        &fixture.save,
+        "schema11-interrupt",
+        &evidence_root,
+        &evidence_dir,
+    ))
+    .unwrap();
+    assert!(report.error.is_none(), "{:?}", report.error);
+    assert!(
+        !fixture.save.join(SIDECAR).exists(),
+        "rollback must restore true path absence, not write empty bytes"
+    );
+    assert_eq!(fs::read(&hand_edit).unwrap(), CARD);
+    assert_eq!(fs::read(fixture.save.join(SHEET_PATH)).unwrap(), SHEET);
+    let meta = fs::read_to_string(fixture.save.join("save-meta.yaml")).unwrap();
+    assert!(meta.contains("schema: 10"), "{meta}");
+    assert!(!meta.contains("schema: 11"), "{meta}");
 }
