@@ -17,7 +17,7 @@
 
 ### 更新说明 / 迁移
 
-- 旧存档（schema ≤ 10）第一次运行新版本时行为不变：先整份备份到 `Saves/_backups/` 再迁移到 schema 10；schema 10 → 11 需按上述确认流程单独完成。schema 11 存档在旧版二进制下按既有语义拒绝打开（`update talkdnd`）。
+- 旧存档（schema ≤ 10）第一次运行新版本时行为不变：先整份备份到 `Saves/_backups/` 再迁移到 schema 10；schema 10 → 11 需按上述确认流程单独完成。新开存档也从 schema 10 起，建角色后经同一确认流程入籍到 11。schema 11 存档在旧版二进制下按既有语义拒绝打开（`update talkdnd`）。
 - 契约与交付边界见 `docs/ADVANCEMENT-IDENTITY-CONTRACT.md` §6「迁移交付记录」；存档目录变化见 `LetsPlay/docs/layout.md`。
 
 ### 已知限制

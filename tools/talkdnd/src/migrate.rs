@@ -611,19 +611,23 @@ pub fn detect(save: &Path) -> Result<u32> {
     Ok(2)
 }
 
-/// Write the current schema for a brand-new save.
+/// Write the save schema for a brand-new save (see [`init_with_deviation`]).
 pub fn init(save: &Path) -> Result<()> {
     init_with_deviation(save, &Deviation::default())
 }
 
-/// Write the current schema and the deviation chosen at save creation.
+/// Write the save schema for a brand-new save and the deviation chosen at
+/// creation. A new save starts at [`CHAIN_SCHEMA`]: schema 11 means every
+/// party character carries a reviewed identity binding, and the only entry
+/// that binds is the DM-confirmed migration, so a fresh save must not claim
+/// 11 before it has anything to bind.
 pub fn init_with_deviation(save: &Path, deviation: &Deviation) -> Result<()> {
     if path(save).is_file() {
         return Ok(());
     }
     deviation.check()?;
     let meta = SaveMeta {
-        schema: CURRENT_SCHEMA,
+        schema: CHAIN_SCHEMA,
         tool: env!("CARGO_PKG_VERSION").to_string(),
         deviation: deviation.clone(),
         settings: Settings::default(),

@@ -93,14 +93,14 @@ fn older_schema_checkpoint(save: &Path) -> String {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 11", "schema: 6"),
+        meta.replace("schema: 10", "schema: 6"),
     )
     .unwrap();
     let id = snapshot(save, None);
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 6", "schema: 11"),
+        meta.replace("schema: 6", "schema: 10"),
     )
     .unwrap();
     id
@@ -241,7 +241,7 @@ fn snapshot_writes_manifest_and_covered_copies() {
     assert_eq!(m.version, 1);
     assert_eq!(m.id, id);
     assert_eq!(m.reason.as_deref(), Some("Before the boss"));
-    assert_eq!(m.schema, migrate::CURRENT_SCHEMA);
+    assert_eq!(m.schema, migrate::CHAIN_SCHEMA);
     assert_eq!(m.log_file, "2030-01-02-session-00-setup.md");
     assert_eq!(m.log_lines, 3);
     // Every covered file is copied and hashed.
@@ -523,7 +523,7 @@ fn restore_of_an_older_schema_runs_the_normal_migration() {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 11", "schema: 6"),
+        meta.replace("schema: 10", "schema: 6"),
     )
     .unwrap();
     let id = snapshot(&save, None);
@@ -533,7 +533,7 @@ fn restore_of_an_older_schema_runs_the_normal_migration() {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 6", "schema: 11"),
+        meta.replace("schema: 6", "schema: 10"),
     )
     .unwrap();
     restore(&save, &id, true).unwrap();

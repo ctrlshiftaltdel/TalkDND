@@ -87,7 +87,7 @@ const CATEGORIES: [&str; 6] = [
 fn defaults_follow_the_charter_and_show_their_source() {
     let (r, save) = new_save("defaults");
     let text = meta(&save);
-    assert!(text.contains("schema: 11"), "{text}");
+    assert!(text.contains("schema: 10"), "{text}");
     for want in [
         "automation:",
         "version: 1",

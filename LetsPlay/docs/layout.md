@@ -25,7 +25,7 @@
 
 角色卡的结构化数据 `sheets/<id>.yaml` 在 `save-meta.yaml` 的 `schema: 10` 起多一个 `spells` 块：职业施法模式（`mode: known|prepared|spellbook`）、施法属性与 `cantrips` / `prepared` / `known` / `book` / `always_prepared` / `arcanum` / `legacy` 列表（全部存法术 id）。它是法术列表的唯一数据源，角色卡 Markdown 的 `## 法术` 段只是展示。旧存档迁移（schema 9→10）先整份备份到 `Saves/_backups/`，再从 `chargen.json` 或正文精确对号入座，对不上的进 `legacy`；手改过的角色卡不会被重写。字段与校验规则见 `docs/character-data.md`「法术列表」。
 
-`schema: 11` 起每名队伍角色带严格 v1 成长身份：有结构化卡的载体在 `sheets/<id>.yaml` 末尾多一个顶层 `talkdnd_identity` 字段，仅有 Markdown 的老卡在卡末尾多一行 `<!-- talkdnd-identity: … -->` 注释；两者都与 `advancement/<id>.yaml` 成长记录（`version: 1`、`history: unknown`、同一 128 位非秘密标识）成对。10→11 迁移不重写 DM 手改：先 `talkdnd migrate --dry-run` 只读核对每张未绑定卡的前像摘要，再带 `--confirm-binding PATH=DIGEST`（可重复）重跑完成入籍；整个步骤走成长协议 D 流程（写入前复查准入——首批为已验证的本地 Linux ext4，整份备份含 ACL/xattr 元数据，意图记录与显式恢复）。未确认、未准入或失败时存档停在 schema 10。`advancement/<id>.yaml` 已存在（包括空文件）时拒绝自动入籍，走人工核对或显式恢复；旧历史一律 `unknown`，同 ID 重绑不在本批。契约与交付边界见 `docs/ADVANCEMENT-IDENTITY-CONTRACT.md` §6。
+`schema: 11` 起每名队伍角色带严格 v1 成长身份：有结构化卡的载体在 `sheets/<id>.yaml` 末尾多一个顶层 `talkdnd_identity` 字段，仅有 Markdown 的老卡在卡末尾多一行 `<!-- talkdnd-identity: … -->` 注释；两者都与 `advancement/<id>.yaml` 成长记录（`version: 1`、`history: unknown`、同一 128 位非秘密标识）成对。10→11 迁移不重写 DM 手改：先 `talkdnd migrate --dry-run` 只读核对每张未绑定卡的前像摘要，再带 `--confirm-binding PATH=DIGEST`（可重复）重跑完成入籍；整个步骤走成长协议 D 流程（写入前复查准入——首批为已验证的本地 Linux ext4，整份备份含 ACL/xattr 元数据，意图记录与显式恢复）。未确认、未准入或失败时存档停在 schema 10。新开存档也从 schema 10 起：建角色后按同一确认流程入籍到 11，避免 11 档出现无绑定角色。`advancement/<id>.yaml` 已存在（包括空文件）时拒绝自动入籍，走人工核对或显式恢复；旧历史一律 `unknown`，同 ID 重绑不在本批。契约与交付边界见 `docs/ADVANCEMENT-IDENTITY-CONTRACT.md` §6。
 
 采用整秒计时的存档将长施法进度写入 `world-time.yaml` v2。`combat/party-state.yaml` v2 将扣费凭据与资源余额保存在同一文件。使用精确计时的检查点也保存世界时间。见 [战役连续性](campaign-continuity.md)。
 
