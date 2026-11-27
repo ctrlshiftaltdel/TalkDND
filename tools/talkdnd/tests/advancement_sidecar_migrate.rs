@@ -404,8 +404,7 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
         // Fail closed everywhere this environment is not the admitted one:
         // no bytes change, the save keeps schema 10, and the refusal says so.
         let applied =
-            migrate::ensure_with_bindings(&fixture.save, &fixture.root, false, &confirms)
-                .unwrap();
+            migrate::ensure_with_bindings(&fixture.save, &fixture.root, false, &confirms).unwrap();
         assert_eq!((applied.from, applied.to), (10, 10));
         assert!(
             applied

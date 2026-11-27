@@ -319,7 +319,9 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
             } else {
                 // A sheet locator can only be confirmed here when the sheet
                 // was read above, so its digest exists.
-                sheet_digest.as_deref().expect("confirmed sheet has a digest")
+                sheet_digest
+                    .as_deref()
+                    .expect("confirmed sheet has a digest")
             };
             if group[0].digest != expected {
                 plan.refused
