@@ -1482,7 +1482,10 @@ fn apply_repoint(plan: &[(PathBuf, String)]) -> Result<()> {
 /// refresh the integrity fingerprints of files that were clean before.
 /// `dry_run` only reports. Returns digest lines (empty when nothing changed).
 pub fn repoint_books(save: &Path, root: &Path, dry_run: bool) -> Result<Vec<String>> {
-    if detect(save)? < CURRENT_SCHEMA {
+    // Book repointing only needs the structural chain done; a save at
+    // [`CHAIN_SCHEMA`] whose identity step (11) is still pending must not be
+    // silently skipped.
+    if detect(save)? < CHAIN_SCHEMA {
         return Ok(Vec::new());
     }
     let plan = crate::library::plan_repoint(root, save);
@@ -1500,7 +1503,7 @@ pub fn repoint_books(save: &Path, root: &Path, dry_run: bool) -> Result<Vec<Stri
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "save".into());
-    let backup = backup_save(save, root, &slot, CURRENT_SCHEMA)?;
+    let backup = backup_save(save, root, &slot, CHAIN_SCHEMA)?;
     apply_repoint(&plan)?;
     let text = format!(
         "[{}] 书本路径更新（书库整理后，备份：{backup}）：{names}",
