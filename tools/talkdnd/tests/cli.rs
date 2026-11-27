@@ -313,7 +313,7 @@ fn deviation_is_validated_locked_and_tamper_checked() {
     let save = r.join("Saves/2030-01-03-01");
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     assert!(
-        meta.contains("schema: 10") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
+        meta.contains("schema: 11") && meta.contains("scope: 2") && meta.contains("ratio: 15"),
         "{meta}"
     );
     let out = ok(&r, &["original", "status"]);
@@ -416,7 +416,13 @@ fn start_migrates_a_v1_save_once_and_checks_clean() {
     let log = fs::read_to_string(save.join("Sessions/2030-06-07-session-00-setup.md")).unwrap();
     assert!(log.contains("存档结构迁移 schema 1→10"), "{log}");
     assert!(ok(&r, &["check"]).contains("integrity: OK"));
-    assert!(ok(&r, &["start"]).contains("无需迁移"));
+    // The save reached schema 10, but hero is still unbound: no further
+    // migration writes happen, and the report says identity work is pending.
+    let again = ok(&r, &["start"]);
+    assert!(
+        again.contains("无需迁移") || again.contains("成长身份未完成"),
+        "{again}"
+    );
     assert_eq!(fs::read_dir(r.join("Saves/_backups")).unwrap().count(), 1);
     let after = fs::read_to_string(save.join("Sessions/2030-06-07-session-00-setup.md")).unwrap();
     assert_eq!(after.lines().count(), log.lines().count());
@@ -450,7 +456,11 @@ fn migrate_command_dry_run_writes_nothing_then_applies_once() {
     assert!(out.contains("迁移完成"), "{out}");
     assert!(save.join("save-meta.yaml").is_file());
     assert!(save.join("sheets/hero.yaml").is_file());
-    assert!(ok(&r, &["migrate"]).contains("无需迁移"));
+    let again = ok(&r, &["migrate"]);
+    assert!(
+        again.contains("无需迁移") || again.contains("成长身份未完成"),
+        "{again}"
+    );
     let _ = fs::remove_dir_all(&r);
 }
 

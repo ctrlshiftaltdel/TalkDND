@@ -57,7 +57,7 @@ fn style_show_defaults_and_set_writes_meta_and_log() {
         assert!(out.contains(want), "missing {want}: {out}");
     }
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
-    assert!(meta.contains("schema: 10"), "{meta}");
+    assert!(meta.contains("schema: 11"), "{meta}");
 
     // A set writes the field, keeps the others, and logs the reason.
     let out = ok(
@@ -169,7 +169,7 @@ fn an_old_save_migrates_on_first_style_use_and_starts() {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 10", "schema: 7"),
+        meta.replace("schema: 11", "schema: 7"),
     )
     .unwrap();
     let out = ok(&r, &["settings", "style", "show"]);

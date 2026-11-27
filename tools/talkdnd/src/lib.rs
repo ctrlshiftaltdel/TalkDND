@@ -10,6 +10,7 @@ pub mod advancement_inner_lock;
 pub mod advancement_lock;
 mod advancement_preview;
 pub mod advancement_recovery;
+pub mod advancement_sidecar;
 pub mod advancement_validation;
 pub mod adventure;
 pub mod audit;
@@ -115,10 +116,18 @@ enum Cmd {
     /// Migrate an old save's on-disk schema (backs the whole save up first)
     ///
     /// 存档启用成长协议后，非 --dry-run 的迁移以退出码 1 拒绝且不写目标文件。
+    /// schema 10→11 的成长身份绑定额外要求 DM 确认：先跑 `migrate --dry-run`
+    /// 只读核对每张未绑定角色卡的前像摘要，再带 `--confirm-binding PATH=DIGEST`
+    /// 重跑完成入籍；无确认时存档停在 schema 10。首个可写环境是已通过准入
+    /// （#344）的本地 Linux ext4；未准入平台拒绝身份写入，存档保持 schema 10。
     Migrate {
         /// Only report what would be migrated; write nothing
         #[arg(long)]
         dry_run: bool,
+        /// DM-reviewed preimage confirmation for one carrier, `PATH=DIGEST`
+        /// (repeatable; digest from `migrate --dry-run`'s identity report)
+        #[arg(long = "confirm-binding")]
+        confirm_binding: Vec<String>,
     },
     /// Inspect future character advancement without editing the save.
     Advancement {
@@ -846,7 +855,7 @@ fn gate_entry(cli: &Cli) -> &'static str {
     match &cli.cmd {
         Cmd::Start { .. } => "talkdnd:start",
         Cmd::New { .. } => "talkdnd:new",
-        Cmd::Migrate { dry_run } => {
+        Cmd::Migrate { dry_run, .. } => {
             if *dry_run {
                 "talkdnd:migrate-dry-run"
             } else {
@@ -1212,7 +1221,7 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
                 cmd: Some(checkpoint::Cmd::Snapshot { .. } | checkpoint::Cmd::Restore { .. }),
                 ..
             }
-            | Cmd::Migrate { dry_run: false }
+            | Cmd::Migrate { dry_run: false, .. }
     ) {
         gate_save
             .as_deref()
@@ -1230,7 +1239,7 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
                 Cmd::Checkpoint {
                     cmd: Some(checkpoint::Cmd::Restore { .. }),
                     ..
-                } | Cmd::Migrate { dry_run: false }
+                } | Cmd::Migrate { dry_run: false, .. }
             );
             if restores
                 && clock
@@ -1257,7 +1266,7 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
                             cmd: Some(checkpoint::Cmd::Restore { .. }),
                             ..
                         }
-                        | Cmd::Migrate { dry_run: false }
+                        | Cmd::Migrate { dry_run: false, .. }
                 )
             {
                 return Err(combat_sim::playtest::classified_error(
@@ -1722,7 +1731,10 @@ fn dispatch(
             let d = start::digest(&root, &s, &start::Options { pdf2md: !no_pdf2md })?;
             print!("{d}");
         }
-        Cmd::Migrate { dry_run } => {
+        Cmd::Migrate {
+            dry_run,
+            confirm_binding,
+        } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
             // AC-1: non-dry-run migrate writes only after SAVE (held by
             // `run` for AdoptedWrite) and checkpoint `.talkdnd.lock`.
@@ -1736,7 +1748,13 @@ fn dispatch(
                     println!("{line}");
                 }
             }
-            let report = migrate::ensure(&s, &root, dry_run)?;
+            // Each confirmation must name a real reviewed carrier: parsing
+            // fails closed before anything is written.
+            let confirms = confirm_binding
+                .iter()
+                .map(|spec| advancement_sidecar::BindingConfirm::parse(spec))
+                .collect::<Result<Vec<_>, _>>()?;
+            let report = migrate::ensure_with_bindings(&s, &root, dry_run, &confirms)?;
             for line in report.lines() {
                 println!("{line}");
             }

@@ -812,7 +812,7 @@ fn group_c_writers_succeed_under_an_initialized_protocol() {
         "list:\n{listed}"
     );
 
-    downgrade_schema(&save, "10", "8");
+    downgrade_schema(&save, "11", "8");
     let migrated = ok_slot(&root, &["migrate"]);
     assert!(
         migrated.contains("schema") || migrated.contains("迁移") || migrated.contains("无需迁移"),
@@ -838,7 +838,7 @@ fn checkpoint_list_show_and_migrate_dry_run_are_tree_identical_under_the_protoco
     init_protocol(&root, &save);
     ok_slot(&root, &["checkpoint", "snapshot"]);
     let id = latest_checkpoint_id(&save);
-    downgrade_schema(&save, "10", "8");
+    downgrade_schema(&save, "11", "8");
     let before = snapshot(&save);
     let protocol_lock = fs::read(save.join(adv::LOCK_FILE)).unwrap();
     let protocol_state = fs::read(save.join(adv::STATE_FILE)).unwrap();
@@ -895,7 +895,7 @@ fn group_c_writers_without_the_protocol_keep_working_and_do_not_init() {
     assert!(!save.join(adv::STATE_FILE).exists());
     ok_slot(&root, &["checkpoint", "snapshot"]);
     let id = latest_checkpoint_id(&save);
-    downgrade_schema(&save, "10", "8");
+    downgrade_schema(&save, "11", "8");
     let dry_before = snapshot(&save);
     ok_slot(&root, &["migrate", "--dry-run"]);
     assert_eq!(

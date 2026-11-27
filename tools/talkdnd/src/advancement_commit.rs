@@ -15,8 +15,11 @@
 //! The inner integrity lock is acquired only through
 //! [`acquire_inner_integrity_lock`]. This does not make the whole commit
 //! path bounded: the old `integrity::lock()` API remains unbounded. There
-//! is still no player commit CLI and no schema 11 / sidecar. Explicit
-//! recovery is a separate library API in [`crate::advancement_recovery`].
+//! is still no player commit CLI; the schema 11 identity migration
+//! (`migrate::ensure_with_bindings`) is the first production caller, and it
+//! registers its sidecars and `save-meta.yaml` through
+//! [`Request::extra_targets`]. Explicit recovery is a separate library API
+//! in [`crate::advancement_recovery`].
 
 use crate::advancement_backup_metadata::Inventory;
 pub use crate::advancement_identity::{
@@ -163,6 +166,12 @@ pub struct Request<'a> {
     pub instance_tag: &'a str,
     pub hooks: PublishHooks<'a>,
     pub inner_lock: crate::advancement_inner_lock::InnerLockOptions,
+    /// Capture, verify and restore Linux ext4 ACL/xattr metadata in the
+    /// backup inventory. Set only after #344 admission passed: the ext4
+    /// inventory fail-closes on any xattr that cannot be read back, which is
+    /// exactly the migration contract (unrecoverable metadata stops the run
+    /// before a target is written).
+    pub ext4_metadata: bool,
 }
 
 /// Hook after a specific target's intent or recheck.
@@ -456,8 +465,12 @@ fn build_backup(lock: &mut AdvancementLock, req: &Request<'_>) -> Result<PathBuf
     let name = instance_dir_name(req, "d-backup");
     let dest = exclusive_create_dir(req.backup_parent, &name)
         .with_context(|| "独占创建用户数据备份目录")?;
-    let metadata = Inventory::capture(req.save_dir)
-        .with_context(|| format!("检查原始元数据；不完整备份保留在 {}", dest.display()))?;
+    let metadata = if req.ext4_metadata {
+        Inventory::capture_ext4(req.save_dir)
+    } else {
+        Inventory::capture(req.save_dir)
+    }
+    .with_context(|| format!("检查原始元数据；不完整备份保留在 {}", dest.display()))?;
 
     if req.fault == Some(Fault::BackupCopy) {
         // Start the copy so an incomplete backup exists, then stop.
@@ -1246,7 +1259,7 @@ fn validate_save_meta(path: &Path, errors: &mut Vec<String>) -> Result<()> {
         Some(n) if n == u64::from(CURRENT_SCHEMA) => Ok(()),
         Some(n) => {
             errors.push(format!(
-                "save-meta.yaml schema {n} 不被本块接受（CURRENT_SCHEMA 仍为 {CURRENT_SCHEMA}；不新增 schema 11 或 sidecar）"
+                "save-meta.yaml schema {n} 不被本块接受（本块要求 CURRENT_SCHEMA {CURRENT_SCHEMA}）"
             ));
             Ok(())
         }
@@ -1656,6 +1669,13 @@ pub fn registered_replace_targets(candidate: &Path, extra: &[String]) -> Result<
     targets.extend(list_dir_files(candidate, "Characters", "md")?);
     if candidate.join("progress.yaml").is_file() {
         targets.push("progress.yaml".to_string());
+    }
+    // Schema 11 (identity migration): the strict v1 sidecars and the schema
+    // metadata are registered targets in their own right, so publish and
+    // explicit recovery cover them without relying on caller-supplied extras.
+    targets.extend(list_dir_files(candidate, "advancement", "yaml")?);
+    if candidate.join("save-meta.yaml").is_file() {
+        targets.push("save-meta.yaml".to_string());
     }
     for rel in extra {
         if rel.contains('\\') || rel.is_empty() {

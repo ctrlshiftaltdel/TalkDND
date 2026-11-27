@@ -124,7 +124,7 @@ fn migrates_a_v9_save_from_chargen_json_and_is_idempotent() {
 
     // Dry-run: reports the plan, writes nothing.
     let dry = migrate::ensure(&save, &root, true).unwrap();
-    assert!((dry.from, dry.to) == (9, migrate::CURRENT_SCHEMA));
+    assert!((dry.from, dry.to) == (9, migrate::CHAIN_SCHEMA));
     assert_eq!(dry.spell_sheets, vec!["hero".to_string()]);
     assert!(
         dry.spell_legacy.iter().any(|l| l.contains("远程治疗术")),

@@ -73,7 +73,7 @@ fn write_synthetic_save(save: &Path) {
     .unwrap();
     fs::write(save.join("Sessions/2030-01-02.md"), "- session start\n").unwrap();
     fs::write(save.join("rolls.log"), "1d20=7\n").unwrap();
-    fs::write(save.join("save-meta.yaml"), "schema: 10\ntool: talkdnd\n").unwrap();
+    fs::write(save.join("save-meta.yaml"), "schema: 11\ntool: talkdnd\n").unwrap();
     fs::write(
         save.join("checkpoints/cp-1/Characters/Aria.md"),
         "# Aria checkpoint\n",
@@ -152,6 +152,7 @@ fn request<'a>(
         instance_tag: "",
         hooks: PublishHooks::default(),
         inner_lock: InnerLockOptions::default(),
+        ext4_metadata: false,
     }
 }
 
@@ -632,7 +633,7 @@ fn integrity_update_preserves_dirty_and_accepted_marks() {
     let (root, save, evr, evd, bp, cp) = setup("dirty");
     fs::write(
         save.join("save-meta.yaml"),
-        "schema: 10\ntool: talkdnd\nnote: hand-edit\n",
+        "schema: 11\ntool: talkdnd\nnote: hand-edit\n",
     )
     .unwrap();
     let dirty = combat_sim::integrity::changes(&save).unwrap();
@@ -659,7 +660,7 @@ fn integrity_update_preserves_dirty_and_accepted_marks() {
     assert_eq!(manifest.accepted, accepted_before);
     assert_eq!(
         fs::read_to_string(save.join("save-meta.yaml")).unwrap(),
-        "schema: 10\ntool: talkdnd\nnote: hand-edit\n"
+        "schema: 11\ntool: talkdnd\nnote: hand-edit\n"
     );
 }
 

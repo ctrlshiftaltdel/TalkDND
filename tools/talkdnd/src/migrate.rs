@@ -18,7 +18,19 @@
 //! spell lists (`spells` block on every `sheets/<id>.yaml`, adopted precisely
 //! from `chargen.json` or the Markdown `## 法术` section, unmatched names kept
 //! in `legacy`; hand-edited (dirty) sheets are never rewritten — see
-//! `migrate_spells_10` and docs/SPELLCASTING.md §3.6). `talkdnd start` and
+//! `migrate_spells_10` and docs/SPELLCASTING.md §3.6), 11 = every party
+//! character carries a strict v1 advancement identity: a `talkdnd-identity`
+//! marker on the Markdown card or a `talkdnd_identity` field on the
+//! structured sheet, paired with an `advancement/<id>.yaml` sidecar record
+//! (`history: unknown`; see `advancement_sidecar` and
+//! docs/ADVANCEMENT-IDENTITY-CONTRACT.md §6). 10→11 never rewrites bytes the
+//! DM already edited: the binding appends a marker to the reviewed preimage
+//! only after the DM confirms its digest via `migrate --confirm-binding`, and
+//! the whole step publishes through the D protocol (admission, verified
+//! backup with ext4 ACL/xattr metadata, intent, explicit recovery). Without
+//! confirmations — or on a platform that fails admission — the save stays at
+//! schema 10 and the report lists the pending preimage digests.
+//! `talkdnd start` and
 //! `talkdnd migrate` back the whole save up into `Saves/_backups/` before
 //! writing, then run the migrations in order. A save from a newer talkdnd is
 //! refused: this binary cannot know its format.
@@ -40,7 +52,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "save-meta.yaml";
-pub const CURRENT_SCHEMA: u32 = 10;
+pub const CURRENT_SCHEMA: u32 = 11;
 pub const BACKUP_DIR: &str = "_backups";
 
 /// How far this save may deviate from the published adventure.
@@ -620,6 +632,18 @@ pub fn init_with_deviation(save: &Path, deviation: &Deviation) -> Result<()> {
     write_meta(save, &meta)
 }
 
+/// The exact `save-meta.yaml` bytes for `meta`, shared by every writer so the
+/// file layout never forks.
+pub(crate) fn meta_bytes(meta: &SaveMeta) -> Result<Vec<u8>> {
+    // Fail closed on any programmatic write too, not only on serde load.
+    meta.settings.automation.check()?;
+    let text = format!(
+        "# TalkDND save schema metadata (written by talkdnd; do not edit).\n# Backups from migrations live in Saves/_backups/.\n{}",
+        serde_norway::to_string(meta)?
+    );
+    Ok(text.into_bytes())
+}
+
 /// Write `save-meta.yaml`. On a protocol-enabled save the caller must already
 /// hold SAVE; this helper fails closed before rewriting the file. Saves
 /// without the protocol (including `talkdnd new` / [`init`] /
@@ -630,13 +654,7 @@ pub(crate) fn write_meta(save: &Path, meta: &SaveMeta) -> Result<()> {
             "协议违规：在取得 SAVE 锁之前写入 save-meta.yaml；总序必须是先持有 SAVE 再写 schema 元数据。未写入任何目标文件"
         );
     }
-    // Fail closed on any programmatic write too, not only on serde load.
-    meta.settings.automation.check()?;
-    let text = format!(
-        "# TalkDND save schema metadata (written by talkdnd; do not edit).\n# Backups from migrations live in Saves/_backups/.\n{}",
-        serde_norway::to_string(meta)?
-    );
-    atomic_write(path(save), text.as_bytes())
+    atomic_write(path(save), &meta_bytes(meta)?)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -673,6 +691,18 @@ pub struct Report {
     pub spell_dirty: Vec<String>,
     /// 9→10: free-text entries that could not be mapped to ids ("id=名字").
     pub spell_legacy: Vec<String>,
+    /// 10→11: carriers that got a strict v1 binding (save-relative paths).
+    pub identity_bound: Vec<String>,
+    /// 10→11: unbound characters the DM has not confirmed yet. Each line is a
+    /// `PATH=DIGEST` review pair; run `migrate --confirm-binding` with them.
+    pub identity_pending: Vec<String>,
+    /// 10→11: fail-closed reasons. When non-empty, no binding happened.
+    pub identity_refused: Vec<String>,
+    /// 10→11: whether the save's environment passed #344 admission.
+    pub identity_admitted: Option<bool>,
+    /// 10→11: D-protocol backup directory (absolute), verified with ext4
+    /// ACL/xattr metadata.
+    pub identity_d_backup: Option<PathBuf>,
     pub log_text: Option<String>,
 }
 
@@ -682,14 +712,24 @@ impl Report {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        if self.already_current() {
+        if self.already_current()
+            && self.identity_pending.is_empty()
+            && self.identity_refused.is_empty()
+        {
             return vec![format!("存档 schema {}：无需迁移", self.to)];
         }
         if self.dry_run {
-            let mut v = vec![format!(
-                "dry-run：存档 schema {} → {}；会先把整份存档备份到 Saves/{BACKUP_DIR}/，再迁移（未写入任何文件）",
-                self.from, self.to
-            )];
+            let mut v = vec![if self.already_current() {
+                format!(
+                    "dry-run：存档 schema {} 本体已就绪；只读核对成长身份（未写入任何文件）",
+                    self.to
+                )
+            } else {
+                format!(
+                    "dry-run：存档 schema {} → {}；会先把整份存档备份到 Saves/{BACKUP_DIR}/，再迁移（未写入任何文件）",
+                    self.from, self.to
+                )
+            }];
             if !self.sheets.is_empty() {
                 v.push(format!("会迁移角色卡：{}", self.sheets.join(", ")));
             }
@@ -759,9 +799,35 @@ impl Report {
             for w in &self.warnings {
                 v.push(format!("注意：{w}"));
             }
+            if !self.identity_pending.is_empty() {
+                v.push("会绑定成长身份（需 DM 先只读核对并确认以下前像摘要）：".into());
+                for pending in &self.identity_pending {
+                    v.push(format!("  {pending}"));
+                }
+            }
+            if !self.identity_refused.is_empty() {
+                v.push("以下情况拒绝自动绑定，迁移会停在 schema 10：".into());
+                for refused in &self.identity_refused {
+                    v.push(format!("  {refused}"));
+                }
+            }
+            if let Some(admitted) = self.identity_admitted {
+                v.push(if admitted {
+                    "环境已通过 #344 准入（本地 Linux ext4）".into()
+                } else {
+                    "环境未通过 #344 准入：schema 10→11 的身份写入会被拒绝，存档保持 schema 10".into()
+                });
+            }
             return v;
         }
-        let mut v = vec![format!("存档 schema {} → {}：迁移完成", self.from, self.to)];
+        let mut v = vec![if self.already_current() {
+            format!(
+                "存档 schema {}：本体已就绪；成长身份未完成，存档保持 schema {}",
+                self.to, self.to
+            )
+        } else {
+            format!("存档 schema {} → {}：迁移完成", self.from, self.to)
+        }];
         if let Some(b) = &self.backup {
             v.push(format!("迁移前整份备份：`{b}`"));
         }
@@ -835,6 +901,30 @@ impl Report {
         for w in &self.warnings {
             v.push(format!("注意：{w}"));
         }
+        if !self.identity_bound.is_empty() {
+            v.push(format!(
+                "已绑定成长身份（严格 v1，旧历史 unknown）：{}",
+                self.identity_bound.join("，")
+            ));
+        }
+        if let Some(backup) = &self.identity_d_backup {
+            v.push(format!(
+                "10→11 走 D 协议，已验证整份备份（含 ACL/xattr 元数据）：{}",
+                backup.display()
+            ));
+        }
+        if !self.identity_pending.is_empty() {
+            v.push("以下角色未确认前像，本次未绑定（存档保持 schema 10）：".into());
+            for pending in &self.identity_pending {
+                v.push(format!("  {pending}"));
+            }
+        }
+        if !self.identity_refused.is_empty() {
+            v.push("以下情况拒绝自动绑定（存档保持 schema 10）：".into());
+            for refused in &self.identity_refused {
+                v.push(format!("  {refused}"));
+            }
+        }
         if let Some(log) = &self.log_text {
             v.push(format!("已写入会话日志：{log}"));
         }
@@ -842,9 +932,32 @@ impl Report {
     }
 }
 
+/// The schema the legacy chain lands on. The 10→11 identity step then lifts a
+/// confirmed, admitted save to [`CURRENT_SCHEMA`]; a refused or failed step
+/// leaves the save here, never at 11 without complete bindings.
+pub const CHAIN_SCHEMA: u32 = CURRENT_SCHEMA - 1;
+
 /// Migrate `save` to [`CURRENT_SCHEMA`]. `dry_run` reports only and writes
 /// nothing. Idempotent: a save already at the current schema is left untouched.
+///
+/// This entry never binds identities: without the DM's reviewed
+/// confirmations a schema 9/10 save migrates to [`CHAIN_SCHEMA`] and the
+/// report lists the pending preimage digests.
 pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
+    ensure_with_bindings(save, root, dry_run, &[])
+}
+
+/// [`ensure`] plus the DM's reviewed preimage confirmations for the 10→11
+/// identity step. Confirmed characters get a strict v1 first enrollment
+/// published through the D protocol (admission gate, verified whole-save
+/// backup with ext4 ACL/xattr metadata, intent, explicit recovery); a save
+/// that is not confirmed, refused or not admitted stops at [`CHAIN_SCHEMA`].
+pub fn ensure_with_bindings(
+    save: &Path,
+    root: &Path,
+    dry_run: bool,
+    confirms: &[crate::advancement_sidecar::BindingConfirm],
+) -> Result<Report> {
     let from = detect(save)?;
     if from >= CURRENT_SCHEMA {
         return Ok(Report {
@@ -854,14 +967,60 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
             ..Default::default()
         });
     }
+    // The identity plan runs on the stable schema-10 bytes: a schema-9 save
+    // must finish the legacy chain first (it rewrites sheets and moves
+    // companions), so digests the DM reviewed can never be invalidated by
+    // this same run rewriting the reviewed files.
+    let mut identity = if from == CHAIN_SCHEMA {
+        Some(crate::advancement_sidecar::plan(save, from, confirms)?)
+    } else {
+        None
+    };
+    // Admission is read-only and gates the identity write before anything
+    // else in this run touches the save.
+    let admitted = identity
+        .as_ref()
+        .filter(|plan| plan.ready_for_schema_11())
+        .map(|_| admission_verdict(save, root));
+    if let (Some(plan), Some((false, reason))) = (&mut identity, admitted.as_ref()) {
+        plan.refused.push(format!(
+            "环境未通过 #344 准入（{reason}）；schema 10→11 的身份写入被拒绝"
+        ));
+    }
+    let pending_lines = identity
+        .as_ref()
+        .map(|plan| {
+            plan.pending
+                .iter()
+                .flat_map(|pending| pending.confirm_args())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+    // A confirmed, admitted plan targets 11; anything else stops at 10. A
+    // non-dry-run that fails on the way to 11 returns an error, so the
+    // report never claims a schema the save did not reach.
+    let identity_target = identity
+        .as_ref()
+        .is_some_and(|plan| plan.ready_for_schema_11())
+        && admitted.as_ref().is_some_and(|(admitted, _)| *admitted);
     let mut report = Report {
         from,
-        to: CURRENT_SCHEMA,
+        to: if identity_target {
+            CURRENT_SCHEMA
+        } else {
+            CHAIN_SCHEMA
+        },
         dry_run,
         deviation_default: from < 4,
         settings_default: from < 5,
         style_default: from < 8,
         automation_default: from < 9,
+        identity_pending: pending_lines,
+        identity_refused: identity
+            .as_ref()
+            .map(|plan| plan.refused.clone())
+            .unwrap_or_default(),
+        identity_admitted: admitted.map(|(ok, _)| ok),
         ..Default::default()
     };
     if dry_run {
@@ -900,6 +1059,53 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         return Ok(report);
     }
 
+    let slot = save
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "save".into());
+    // The legacy chain only runs when it has work: a schema-10 save is never
+    // rewritten just because its identity step is still pending.
+    if from < CHAIN_SCHEMA {
+        run_legacy_chain(save, root, from, &slot, &mut report)?;
+        report.warnings.push(
+            "本体已到 schema 10：成长身份（schema 11）需另跑 `migrate --dry-run` 只读核对并逐张确认".into(),
+        );
+    }
+
+    // 10→11: the identity step lifts the save to CURRENT_SCHEMA only when the
+    // plan is confirmed and admitted. On any failure the save stays at
+    // CHAIN_SCHEMA with complete recovery materials; there is no partial 11.
+    if let Some(plan) = identity.as_ref().filter(|plan| plan.ready_for_schema_11()) {
+        let step = identity_step_11(save, root, plan, &slot)?;
+        report.identity_bound = step.bound;
+        report.identity_d_backup = Some(step.backup);
+        report.to = CURRENT_SCHEMA;
+        let note = format!(
+            "[{}] 成长身份入籍 schema {CHAIN_SCHEMA}→{CURRENT_SCHEMA}（严格 v1，旧历史 unknown；D 协议发布）",
+            chrono::Local::now().format("%H:%M")
+        );
+        if let Some(log) = save::latest_log(save) {
+            save::append(&log, &format!("- {note}"))?;
+        }
+        report.log_text = Some(match report.log_text.take() {
+            Some(chain) => format!("{chain}\n{note}"),
+            None => note,
+        });
+    }
+    Ok(report)
+}
+
+/// The ordered steps 1→[`CHAIN_SCHEMA`]: whole-save backup, sheet moves and
+/// rewrites, and the `save-meta.yaml` stamp. Called only when `from` is
+/// below [`CHAIN_SCHEMA`]; every step guards itself with `from < N`, so the
+/// function performs exactly the pending steps.
+fn run_legacy_chain(
+    save: &Path,
+    root: &Path,
+    from: u32,
+    slot: &str,
+    report: &mut Report,
+) -> Result<()> {
     // Snapshot before any write: after the migration only files that were
     // clean before are recorded, so pre-existing hand edits stay flagged.
     let before = combat_sim::integrity::snapshot(save);
@@ -923,11 +1129,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         // (a serde round-trip would drop unknown fields and comments).
         dirty.extend(sheet_yaml_paths(save));
     }
-    let slot = save
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "save".into());
-    let backup = backup_save(save, root, &slot, from)?;
+    let backup = backup_save(save, root, slot, from)?;
     report.backup = Some(backup.clone());
 
     if from < 2 {
@@ -968,7 +1170,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
     }
 
     let mut meta = load(save)?.unwrap_or_default();
-    meta.schema = CURRENT_SCHEMA;
+    meta.schema = CHAIN_SCHEMA;
     meta.tool = env!("CARGO_PKG_VERSION").to_string();
     if from < 4 {
         // Old saves never had the setting: they are plain adventure runs.
@@ -1088,7 +1290,7 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
         ""
     };
     let text = format!(
-        "[{}] 存档结构迁移 schema {from}→{CURRENT_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{style_note}{automation_note}{companion_note}{books_note}{spells_note}",
+        "[{}] 存档结构迁移 schema {from}→{CHAIN_SCHEMA}（备份：{backup}）{deviation_note}{settings_note}{style_note}{automation_note}{companion_note}{books_note}{spells_note}",
         chrono::Local::now().format("%H:%M")
     );
     if let Some(log) = save::latest_log(save) {
@@ -1098,7 +1300,167 @@ pub fn ensure(save: &Path, root: &Path, dry_run: bool) -> Result<Report> {
 
     combat_sim::integrity::after_write(save, &before)?;
     carry_dirty_flags(save, &moved, &dirty)?;
-    Ok(report)
+    Ok(())
+}
+
+/// One #344 admission observation for the identity step: (admitted, reason).
+/// The backup parent is inspected where it will actually be created; the
+/// approved roots are the play folder's `Saves/` tree. Read-only.
+fn admission_verdict(save: &Path, root: &Path) -> (bool, String) {
+    let saves_root = root.join("Saves");
+    let backups_root = saves_root.join(BACKUP_DIR);
+    let inspected = if backups_root.is_dir() {
+        &backups_root
+    } else {
+        &saves_root
+    };
+    let roots = crate::advancement_admission::ApprovedRoots {
+        saves: &saves_root,
+        // The backups live under `Saves/_backups`, so `Saves/` is the trusted
+        // ancestor when that directory has not been created yet.
+        backups: &saves_root,
+        synchronized: &[],
+    };
+    match crate::advancement_admission::inspect(save, inspected, &roots) {
+        crate::advancement_admission::Admission::Admitted => (true, "本地 Linux ext4 已准入".into()),
+        verdict => (false, format!("{verdict:?}")),
+    }
+}
+
+/// What the 10→11 identity step published.
+struct IdentityStep {
+    /// Save-relative carrier paths that got a strict v1 binding.
+    bound: Vec<String>,
+    /// The D protocol's verified backup directory.
+    backup: PathBuf,
+}
+
+/// Run the schema 10→11 identity step through the D protocol. The plan is
+/// already confirmed; admission was observed before the legacy chain ran and
+/// is re-observed here immediately before any write (`inspect` is an
+/// observation, not a lasting grant).
+///
+/// On failure this returns an error and the save is left at [`CHAIN_SCHEMA`]:
+/// the D state machine stops with its recovery materials (verified backup,
+/// candidate, intent list) and never auto-resumes; explicit recovery goes
+/// through `advancement_recovery`.
+fn identity_step_11(
+    save: &Path,
+    root: &Path,
+    plan: &crate::advancement_sidecar::BindingPlan,
+    slot: &str,
+) -> Result<IdentityStep> {
+    let (admitted, reason) = admission_verdict(save, root);
+    anyhow::ensure!(
+        admitted,
+        "写入前复查 #344 准入失败（{reason}）；存档保持 schema {CHAIN_SCHEMA}，未做任何身份写入"
+    );
+
+    let candidates = crate::advancement_sidecar::prepare(plan, save)?;
+    let mut overlays = crate::advancement_sidecar::overlays(&candidates);
+
+    // `save-meta.yaml` reaches schema 11 in the same D publish as the
+    // bindings, so a failure can never leave a save that claims 11 without
+    // its identity pairs.
+    let mut meta = load(save)?.unwrap_or_default();
+    meta.schema = CURRENT_SCHEMA;
+    meta.tool = env!("CARGO_PKG_VERSION").to_string();
+    let date = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    meta.migrations.push(Migration {
+        from: CHAIN_SCHEMA,
+        to: CURRENT_SCHEMA,
+        date: date.clone(),
+        backup: "D 协议已验证整份备份（目录见本条迁移输出与 D 操作记录）".to_string(),
+    });
+    overlays.insert(FILE.to_string(), meta_bytes(&meta)?);
+
+    // Reuse the plan's extra targets: the sidecars plus `save-meta.yaml`.
+    let extra_targets = plan.extra_targets();
+    let preview_id = crate::advancement_commit::binding_preview_id(save, &extra_targets)?;
+
+    let backups_root = root.join("Saves").join(BACKUP_DIR);
+    fs::create_dir_all(&backups_root)?;
+    let evidence_root = backups_root.join(".operations");
+    let evidence_dir = evidence_root.join(slot);
+    fs::create_dir_all(&evidence_dir)?;
+
+    // The D protocol needs its control files; normal operation never creates
+    // them silently, but this step is exactly the approved migration gate.
+    if !save.join(crate::advancement_lock::LOCK_FILE).is_file() {
+        crate::advancement_lock::init(
+            root,
+            save,
+            &crate::advancement_lock::InitOptions::new(),
+        )
+        .with_context(|| "为 schema 10→11 初始化成长协议控制文件失败；未做任何身份写入")?;
+    }
+
+    let operation_id = format!(
+        "schema11-{}",
+        chrono::Local::now().format("%Y%m%d-%H%M%S%.6f")
+    );
+    let request = crate::advancement_commit::Request {
+        root,
+        save_dir: save,
+        operation_id: &operation_id,
+        evidence_root: &evidence_root,
+        evidence_dir: &evidence_dir,
+        backup_parent: &backups_root,
+        candidate_parent: &backups_root,
+        overlays,
+        fault: None,
+        extra_targets,
+        preview_id: Some(preview_id),
+        instance_tag: "",
+        hooks: Default::default(),
+        inner_lock: Default::default(),
+        // The admission gate above established the ext4 environment; the
+        // backup inventory must preserve and verify ACL/xattr, not merely
+        // observe that the process could see them.
+        ext4_metadata: true,
+    };
+    match crate::advancement_commit::run_to_complete(&request) {
+        Ok(report) => Ok(IdentityStep {
+            bound: candidates
+                .iter()
+                .map(|candidate| {
+                    candidate
+                        .carrier_path
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                })
+                .collect(),
+            backup: report
+                .backup_dir
+                .context("D 协议完成但报告缺少备份目录，拒绝无声通过")?,
+        }),
+        Err(failed) => {
+            let recovery = &failed.report.recovery;
+            bail!(
+                "schema 10→11 的 D 协议停止：{failed}。\n\
+                 恢复材料：阶段 {:?}；备份 {}（已验证：{}）；候选 {}（已验证：{}）；操作前快照 {}。\n\
+                 不自动续跑；按 D 协议走显式恢复（advancement_recovery），存档保持 schema {CHAIN_SCHEMA}。",
+                recovery.interrupt_stage,
+                recovery
+                    .backup_dir
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "（无）".into()),
+                recovery.backup_verified,
+                recovery
+                    .candidate_dir
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "（无）".into()),
+                recovery.candidate_verified,
+                recovery
+                    .prestate
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "（无）".into()),
+            )
+        }
+    }
 }
 
 // ---------- 6→7: book paths follow the one-folder-per-book library ----------
@@ -1882,11 +2244,11 @@ mod tests {
         let root = root("v1");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (1, CURRENT_SCHEMA));
+        assert_eq!((report.from, report.to), (1, CHAIN_SCHEMA));
         assert!(report.deviation_default);
         assert_eq!(report.sheets, vec!["hero".to_string()]);
         assert!(charsheet::path(&save, "hero").is_file());
-        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
+        assert_eq!(meta(&save).schema, CHAIN_SCHEMA);
         assert_eq!(meta(&save).deviation.scope, 0);
         assert_eq!(meta(&save).deviation.ratio, None);
         assert!(meta(&save)
@@ -1913,7 +2275,7 @@ mod tests {
 
         let log = fs::read_to_string(save.join("Sessions/2030-01-01-session-00.md")).unwrap();
         assert!(
-            log.contains(&format!("存档结构迁移 schema 1→{CURRENT_SCHEMA}")),
+            log.contains(&format!("存档结构迁移 schema 1→{CHAIN_SCHEMA}")),
             "{log}"
         );
         assert!(log.contains("Saves/_backups/"), "{log}");
@@ -1939,7 +2301,7 @@ mod tests {
         let root = root("dry");
         let save = save_with_sheet(&root);
         let report = ensure(&save, &root, true).unwrap();
-        assert_eq!((report.from, report.to), (1, CURRENT_SCHEMA));
+        assert_eq!((report.from, report.to), (1, CHAIN_SCHEMA));
         assert!(report.dry_run && report.sheets == vec!["hero".to_string()]);
         assert!(!path(&save).is_file());
         assert!(!charsheet::path(&save, "hero").is_file());
@@ -1968,8 +2330,8 @@ mod tests {
         fs::write(save.join("progress.yaml"), edited).unwrap();
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (2, CURRENT_SCHEMA));
-        assert!(meta(&save).schema == CURRENT_SCHEMA);
+        assert_eq!((report.from, report.to), (2, CHAIN_SCHEMA));
+        assert!(meta(&save).schema == CHAIN_SCHEMA);
         let changes = combat_sim::integrity::changes(&save).unwrap();
         assert!(
             changes
@@ -2062,20 +2424,20 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (3, CURRENT_SCHEMA));
+        assert_eq!((report.from, report.to), (3, CHAIN_SCHEMA));
         assert!(report.deviation_default);
         assert!(report
             .lines()
             .iter()
             .any(|l| l.contains("scope 0") && l.contains("偏离度")));
         let m = meta(&save);
-        assert_eq!(m.schema, CURRENT_SCHEMA);
+        assert_eq!(m.schema, CHAIN_SCHEMA);
         assert_eq!(m.deviation.scope, 0);
         assert_eq!(m.deviation.ratio, None);
         assert!(m.migrations.iter().any(|x| x.from == 3 && x.to == 4));
         assert!(m.migrations.iter().any(|x| x.from == 4 && x.to == 5));
         let log = fs::read_to_string(save.join("Sessions/2030-04-05-session-00.md")).unwrap();
-        assert!(log.contains(&format!("schema 3→{CURRENT_SCHEMA}")), "{log}");
+        assert!(log.contains(&format!("schema 3→{CHAIN_SCHEMA}")), "{log}");
         assert!(log.contains("scope 0"), "{log}");
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
             .unwrap()
@@ -2127,12 +2489,12 @@ mod tests {
         )
         .unwrap();
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (4, CURRENT_SCHEMA));
+        assert_eq!((report.from, report.to), (4, CHAIN_SCHEMA));
         assert!(!report.deviation_default);
         assert!(report.settings_default);
         assert!(report.style_default);
         let m = meta(&save);
-        assert_eq!(m.schema, CURRENT_SCHEMA);
+        assert_eq!(m.schema, CHAIN_SCHEMA);
         assert_eq!(m.deviation.scope, 2);
         assert_eq!(m.deviation.ratio, Some(15));
         assert!(m.settings.dice_display);
@@ -2147,7 +2509,7 @@ mod tests {
         assert_eq!(m.settings.automation, Automation::default());
         let log = fs::read_to_string(save.join("Sessions/2030-04-06-session-00.md")).unwrap();
         assert!(
-            log.contains(&format!("schema 4→{CURRENT_SCHEMA}")) && log.contains("骰子显示默认开"),
+            log.contains(&format!("schema 4→{CHAIN_SCHEMA}")) && log.contains("骰子显示默认开"),
             "{log}"
         );
         let backups: Vec<PathBuf> = fs::read_dir(root.join("Saves").join(BACKUP_DIR))
@@ -2232,13 +2594,13 @@ mod tests {
         let kel_before = fs::read_to_string(save.join("NPCs/Kel-Stone.md")).unwrap();
 
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (5, CURRENT_SCHEMA));
+        assert_eq!((dry.from, dry.to), (5, CHAIN_SCHEMA));
         assert_eq!(dry.companions.len(), 3, "{:?}", dry.companions);
         assert!(save.join("NPCs/Kel-Stone.md").is_file());
         assert!(!root.join("Saves").join(BACKUP_DIR).exists());
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (5, CURRENT_SCHEMA));
+        assert_eq!((report.from, report.to), (5, CHAIN_SCHEMA));
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         for f in ["Kel-Stone.md", "mo.md", "_party.md"] {
             assert!(save.join("Characters").join(f).is_file(), "{f}");
@@ -2271,7 +2633,7 @@ mod tests {
         // The structured file still loads and resolves.
         let cf: charsheet::CharFile = serde_norway::from_str(&sheet).unwrap();
         assert_eq!(cf.controller(), charsheet::DM);
-        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
+        assert_eq!(meta(&save).schema, CHAIN_SCHEMA);
         assert!(meta(&save)
             .migrations
             .iter()
@@ -2285,7 +2647,7 @@ mod tests {
         assert!(backups[0].join("NPCs/Kel-Stone.md").is_file());
         let log = fs::read_to_string(save.join("Sessions/2030-05-01-session-00.md")).unwrap();
         assert!(
-            log.contains(&format!("schema 5→{CURRENT_SCHEMA}"))
+            log.contains(&format!("schema 5→{CHAIN_SCHEMA}"))
                 && log.contains("Characters/Kel-Stone.md"),
             "{log}"
         );
@@ -2358,7 +2720,7 @@ mod tests {
         )
         .unwrap();
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (6, CURRENT_SCHEMA));
+        assert_eq!((dry.from, dry.to), (6, CHAIN_SCHEMA));
         assert_eq!(dry.books, vec!["dm-plan.md".to_string()]);
         let report = ensure(&save, &root, false).unwrap();
         assert_eq!(report.books, vec!["dm-plan.md".to_string()]);
@@ -2373,7 +2735,7 @@ mod tests {
         assert!(fs::read_to_string(save.join("combat/campaign.yaml"))
             .unwrap()
             .contains("Adventures/keys-from-the-golden-vault/combat"));
-        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
+        assert_eq!(meta(&save).schema, CHAIN_SCHEMA);
         assert!(meta(&save)
             .migrations
             .iter()
@@ -2417,20 +2779,20 @@ mod tests {
         let save = v7_save(&root, "2030-06-01-01");
 
         let dry = ensure(&save, &root, true).unwrap();
-        assert_eq!((dry.from, dry.to), (7, CURRENT_SCHEMA));
+        assert_eq!((dry.from, dry.to), (7, CHAIN_SCHEMA));
         assert!(dry.style_default);
         assert!(!path(&save).is_file() || meta(&save).schema == 7);
         assert!(!root.join("Saves").join(BACKUP_DIR).exists());
 
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (7, CURRENT_SCHEMA));
+        assert_eq!((report.from, report.to), (7, CHAIN_SCHEMA));
         assert!(report.style_default);
         assert!(report
             .backup
             .as_deref()
             .is_some_and(|b| b.starts_with("Saves/_backups/")));
         let m = meta(&save);
-        assert_eq!(m.schema, CURRENT_SCHEMA);
+        assert_eq!(m.schema, CHAIN_SCHEMA);
         // The rest of settings is untouched by the schema bump.
         assert!(!m.settings.dice_display);
         // The style fields arrive with the contract defaults.
@@ -2460,7 +2822,7 @@ mod tests {
 
         // The backup path and the style default are written to the log.
         let log = fs::read_to_string(save.join("Sessions/2030-06-01-session-00.md")).unwrap();
-        assert!(log.contains(&format!("schema 7→{CURRENT_SCHEMA}")), "{log}");
+        assert!(log.contains(&format!("schema 7→{CHAIN_SCHEMA}")), "{log}");
         assert!(log.contains("Saves/_backups/"), "{log}");
         assert!(log.contains("桌面风格默认"), "{log}");
         assert!(log.contains("自动化设置默认"), "{log}");
@@ -2492,8 +2854,8 @@ mod tests {
         assert_eq!(meta(&save).settings.style, Style::default());
         // And the old save is still usable: the retry migrates normally.
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (7, CURRENT_SCHEMA));
-        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
+        assert_eq!((report.from, report.to), (7, CHAIN_SCHEMA));
+        assert_eq!(meta(&save).schema, CHAIN_SCHEMA);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2530,8 +2892,8 @@ mod tests {
         assert!(backup_meta.contains("schema: 8"), "{backup_meta}");
         // Retry on the repaired save completes the migration.
         let report = ensure(&save, &root, false).unwrap();
-        assert_eq!((report.from, report.to), (8, CURRENT_SCHEMA));
-        assert_eq!(meta(&save).schema, CURRENT_SCHEMA);
+        assert_eq!((report.from, report.to), (8, CHAIN_SCHEMA));
+        assert_eq!(meta(&save).schema, CHAIN_SCHEMA);
         let _ = fs::remove_dir_all(&root);
     }
 

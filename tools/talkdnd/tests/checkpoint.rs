@@ -93,14 +93,14 @@ fn older_schema_checkpoint(save: &Path) -> String {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 10", "schema: 6"),
+        meta.replace("schema: 11", "schema: 6"),
     )
     .unwrap();
     let id = snapshot(save, None);
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 6", "schema: 10"),
+        meta.replace("schema: 6", "schema: 11"),
     )
     .unwrap();
     id
@@ -523,7 +523,7 @@ fn restore_of_an_older_schema_runs_the_normal_migration() {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 10", "schema: 6"),
+        meta.replace("schema: 11", "schema: 6"),
     )
     .unwrap();
     let id = snapshot(&save, None);
@@ -533,7 +533,7 @@ fn restore_of_an_older_schema_runs_the_normal_migration() {
     let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
     fs::write(
         save.join("save-meta.yaml"),
-        meta.replace("schema: 6", "schema: 10"),
+        meta.replace("schema: 6", "schema: 11"),
     )
     .unwrap();
     restore(&save, &id, true).unwrap();

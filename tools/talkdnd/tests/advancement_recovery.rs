@@ -74,7 +74,7 @@ fn write_synthetic_save(save: &Path) {
     .unwrap();
     fs::write(save.join("Sessions/2030-01-02.md"), "- session start\n").unwrap();
     fs::write(save.join("rolls.log"), "1d20=7\n").unwrap();
-    fs::write(save.join("save-meta.yaml"), "schema: 10\ntool: talkdnd\n").unwrap();
+    fs::write(save.join("save-meta.yaml"), "schema: 11\ntool: talkdnd\n").unwrap();
     fs::write(
         save.join("checkpoints/cp-1/Characters/Aria.md"),
         "# Aria checkpoint\n",
@@ -170,6 +170,7 @@ fn request<'a>(
         instance_tag: "",
         hooks: PublishHooks::default(),
         inner_lock: InnerLockOptions::default(),
+        ext4_metadata: false,
     }
 }
 
@@ -701,7 +702,7 @@ fn rollback_to_preimage_restores_published_files_including_extension() {
     assert_eq!(marker_count(&fx.save, "op-p1-5"), 0);
     assert_eq!(
         bytes_at(&fx.save, "save-meta.yaml"),
-        b"schema: 10\ntool: talkdnd\n"
+        b"schema: 11\ntool: talkdnd\n"
     );
     let lock = open_fast(&fx.root, &fx.save);
     assert!(
