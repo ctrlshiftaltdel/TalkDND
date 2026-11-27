@@ -245,7 +245,7 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
 
         // Every observed token counts as occupied even when its record side
         // is broken: uniqueness must hold over everything observed.
-        for token in [markdown_token.as_deref(), sheet_token.as_deref()]
+        for token in [markdown_token, sheet_token.as_deref()]
             .into_iter()
             .flatten()
         {

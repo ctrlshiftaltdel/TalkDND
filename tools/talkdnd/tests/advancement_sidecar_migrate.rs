@@ -71,8 +71,9 @@ impl Fixture {
         self.plan(&[])
             .pending
             .iter()
-            .map(|line| {
-                let spec = line
+            .flat_map(|pending| pending.confirm_args())
+            .map(|arg| {
+                let spec = arg
                     .strip_prefix("--confirm-binding ")
                     .expect("pending line is a confirm argument");
                 BindingConfirm::parse(spec).unwrap()
