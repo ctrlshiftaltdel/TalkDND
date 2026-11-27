@@ -432,6 +432,30 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
         return;
     }
 
+    // A real POSIX ACL alongside the user xattr, seeded only now that the
+    // admitted branch is selected and before the migration writes. Linux
+    // stores the access ACL as a little-endian u32 version 2 header followed
+    // by tag u16 / perm u16 / id u32 entries. The named-user entry (id 65534)
+    // keeps the ACL nontrivial, so the kernel cannot collapse it to the
+    // minimal owner/group/other form.
+    let mut acl = 2u32.to_le_bytes().to_vec();
+    for (tag, perm, id) in [
+        (0x01u16, 6u16, u32::MAX), // owner
+        (0x02, 4, 65534),          // named user
+        (0x04, 4, u32::MAX),       // group owner
+        (0x10, 4, u32::MAX),       // mask
+        (0x20, 4, u32::MAX),       // other
+    ] {
+        acl.extend_from_slice(&tag.to_le_bytes());
+        acl.extend_from_slice(&perm.to_le_bytes());
+        acl.extend_from_slice(&id.to_le_bytes());
+    }
+    set_fixture_xattr(
+        &fixture.save.join(CARD_PATH),
+        b"system.posix_acl_access",
+        &acl,
+    );
+
     let applied =
         migrate::ensure_with_bindings(&fixture.save, &fixture.root, false, &confirms).unwrap();
     assert_eq!(
@@ -488,6 +512,13 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
         get_fixture_xattr(&backed_card, b"user.talkdnd-330"),
         Some(b"across-the-migration".to_vec()),
         "the ext4 backup inventory must preserve ACL/xattr"
+    );
+    // The POSIX ACL travels through the same inventory path; assert the exact
+    // parsed bytes, independently of the user xattr above.
+    assert_eq!(
+        get_fixture_xattr(&backed_card, b"system.posix_acl_access"),
+        Some(acl.clone()),
+        "the ext4 backup inventory must preserve the POSIX ACL byte for byte"
     );
     assert_eq!(
         fs::read_to_string(backup.join("checkpoints/cp-1/Characters/Fixture.md")).unwrap(),
@@ -585,7 +616,18 @@ fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
     }
 
     let failed = run_to_complete(&request).unwrap_err();
-    assert!(!failed.report.published, "{failed}");
+    // The stop lands after every registered replace target (sidecar and
+    // save-meta included) was published, so publication did happen: the
+    // report must say so and name the sidecar, not claim nothing was written.
+    assert!(failed.report.published, "{failed}");
+    assert!(
+        failed
+            .report
+            .published_paths
+            .iter()
+            .any(|path| path == SIDECAR),
+        "{failed:?}"
+    );
     assert_eq!(
         failed.report.recovery.interrupt_stage,
         talkdnd::advancement_commit::InterruptStage::Logs,
