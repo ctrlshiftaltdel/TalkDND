@@ -714,12 +714,12 @@ fn a_newer_schema_is_still_refused() {
     let (r, save) = new_save("newer");
     fs::write(
         save.join("save-meta.yaml"),
-        "schema: 11\ntool: future\nsettings: {automation: {version: 1}}\n",
+        "schema: 12\ntool: future\nsettings: {automation: {version: 1}}\n",
     )
     .unwrap();
     let (good, out) = run(&r, &["settings", "automation", "show"]);
     assert!(
-        !good && out.contains("11") && out.contains("update talkdnd"),
+        !good && out.contains("12") && out.contains("update talkdnd"),
         "{out}"
     );
     let _ = fs::remove_dir_all(&r);

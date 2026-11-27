@@ -43,7 +43,7 @@ impl Fixture {
                     fs::write(root.join("AGENTS.md"), "Synthetic play root\n").unwrap();
                     fs::write(
                         save.join("combat/campaign.yaml"),
-                        "name: fixture\nruleset: 5.5e-srd\nparty: [fixture]\n",
+                        "name: fixture\nruleset: 5.5e-srd\nparty: [fixture]\nstate_dir: .\n",
                     )
                     .unwrap();
                     fs::write(
