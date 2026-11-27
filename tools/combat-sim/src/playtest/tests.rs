@@ -202,6 +202,26 @@ fn known_remote_fingerprint_skips_creation_even_without_local_link() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn worker_releases_lock_even_if_a_duplicate_descriptor_stays_open() {
+    let fixture = Fixture::new();
+    let queue = fixture.queue();
+    let worker = queue.lock("worker.lock", 1).unwrap();
+    // A forked child can retain the same open file description until exec.
+    let inherited = worker.0.try_clone().unwrap();
+    let contention = queue.lock("worker.lock", 1).unwrap_err();
+    assert!(matches!(
+        contention.downcast_ref::<fs::TryLockError>(),
+        Some(fs::TryLockError::WouldBlock)
+    ));
+    drop(worker);
+
+    let transport = Fake::new(Creation::Created(76));
+    deliver(&queue, &transport).unwrap();
+    drop(inherited);
+}
+
 #[test]
 fn concurrent_worker_is_excluded_but_recording_continues_during_request() {
     struct WaitingTransport<'a> {
