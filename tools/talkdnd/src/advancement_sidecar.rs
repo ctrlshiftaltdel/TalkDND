@@ -46,9 +46,7 @@ impl BindingConfirm {
             "确认路径必须是存档内的 POSIX 相对路径"
         );
         let digest_text = digest_text.trim();
-        let bare = digest_text
-            .strip_prefix("sha256:")
-            .unwrap_or(digest_text);
+        let bare = digest_text.strip_prefix("sha256:").unwrap_or(digest_text);
         ensure!(
             bare.len() == 64
                 && bare

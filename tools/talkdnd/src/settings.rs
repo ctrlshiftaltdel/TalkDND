@@ -942,10 +942,7 @@ mod tests {
         let r = root("toggle");
         let save = r.join("Saves/2030-01-01-01");
         assert!(dice_display(&save));
-        assert_eq!(
-            migrate::load(&save).unwrap().unwrap().schema,
-            CHAIN_SCHEMA
-        );
+        assert_eq!(migrate::load(&save).unwrap().unwrap().schema, CHAIN_SCHEMA);
         assert!(lines(&save).unwrap()[0].contains("开"));
         let out = set_dice(&r, &save, false, Some("table vote")).unwrap();
         assert!(out[0].contains("关") && out[0].contains("table vote"));

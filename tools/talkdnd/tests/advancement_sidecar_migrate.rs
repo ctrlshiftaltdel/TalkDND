@@ -326,19 +326,28 @@ fn a_future_or_corrupt_save_schema_is_refused_by_the_normal_entry() {
     );
 }
 
+/// The authoritative gate is #344's own admission inspection, not a
+/// re-implementation: the e2e takes its success branch exactly when the
+/// migration's own pre-write check would admit the environment.
 #[cfg(target_os = "linux")]
-fn writable_ext4(path: &Path) -> bool {
-    let output = std::process::Command::new("findmnt")
-        .args(["-no", "FSTYPE,OPTIONS"])
-        .arg(path)
-        .output();
-    match output {
-        Ok(output) if output.status.success() => {
-            let text = String::from_utf8_lossy(&output.stdout);
-            text.contains("ext4") && text.contains("rw")
-        }
-        _ => false,
-    }
+fn writable_ext4(save: &Path, root: &Path) -> bool {
+    use talkdnd::advancement_admission::{Admission, ApprovedRoots};
+    let saves_root = root.join("Saves");
+    let backups_root = saves_root.join("advancement-backups-probe");
+    let inspected = if backups_root.is_dir() {
+        &backups_root
+    } else {
+        &saves_root
+    };
+    let roots = ApprovedRoots {
+        saves: &saves_root,
+        backups: &saves_root,
+        synchronized: &[],
+    };
+    matches!(
+        talkdnd::advancement_admission::inspect(save, inspected, &roots),
+        Admission::Admitted
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -405,7 +414,7 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
     let confirms = fixture.confirm_args();
     let before = fixture.snapshot_tree();
 
-    if !writable_ext4(&fixture.save) {
+    if !writable_ext4(&fixture.save, &fixture.root) {
         // Fail closed everywhere this environment is not the admitted one:
         // no bytes change, the save keeps schema 10, and the refusal says so.
         let applied =
