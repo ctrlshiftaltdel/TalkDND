@@ -733,6 +733,8 @@ fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
         b"# later sidecar hand edit\n"
     );
 
+    // Restore the recorded target so this scenario reaches the after-intent hook.
+    fs::write(fixture.save.join(SIDECAR), &published_sidecar).unwrap();
     // The intent is persisted before the after-intent hook, so a hook that
     // rewrites the sidecar is caught by the final type/byte re-check: the
     // replaced entry is left untouched and the conflict is reported.
