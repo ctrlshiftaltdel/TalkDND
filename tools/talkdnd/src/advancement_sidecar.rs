@@ -162,11 +162,16 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
     // Multiple confirms for one path are allowed only when identical.
     let mut grouped: BTreeMap<&str, Vec<&BindingConfirm>> = BTreeMap::new();
     for confirm in confirms {
-        grouped.entry(confirm.path.as_str()).or_default().push(confirm);
+        grouped
+            .entry(confirm.path.as_str())
+            .or_default()
+            .push(confirm);
     }
     for (path, group) in &grouped {
         ensure!(
-            group.iter().all(|confirm| confirm.digest == group[0].digest),
+            group
+                .iter()
+                .all(|confirm| confirm.digest == group[0].digest),
             "同一路径给出多个不同摘要：{path}"
         );
     }
@@ -203,7 +208,8 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
         let markdown = match read_regular(&save.join(character.markdown_path())) {
             Ok(bytes) => bytes,
             Err(err) => {
-                plan.refused.push(format!("无法读取 {markdown_rel}（{err}）"));
+                plan.refused
+                    .push(format!("无法读取 {markdown_rel}（{err}）"));
                 continue;
             }
         };
@@ -246,10 +252,10 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
             plan.occupied.push(token.to_owned());
         }
 
-        let carrier_token = sheet_rel
-            .as_ref()
-            .zip(sheet_token.as_deref())
-            .map_or_else(|| markdown_token.clone(), |(_sheet, token)| Some(token.to_owned()));
+        let carrier_token = sheet_rel.as_ref().zip(sheet_token.as_deref()).map_or_else(
+            || markdown_token.clone(),
+            |(_sheet, token)| Some(token.to_owned()),
+        );
         let record = match records.remove(&format!("{}.yaml", character.id())) {
             Some(path) => match load_record(&path) {
                 Ok(record) => Some(record),
@@ -265,10 +271,7 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
             let expected_carrier = sheet_rel.as_deref().unwrap_or(&markdown_rel);
             let strictly_matched = record.is_some_and(|rec| {
                 rec.token == *token
-                    && matches!(
-                        rec.history,
-                        crate::advancement_identity::History::Unknown
-                    )
+                    && matches!(rec.history, crate::advancement_identity::History::Unknown)
                     && rec.card == markdown_rel
                     && rec.carrier.as_deref().unwrap_or(&rec.card) == expected_carrier
             });
@@ -294,7 +297,8 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                plan.refused.push(format!("无法检查 {sidecar_rel}（{error}）"));
+                plan.refused
+                    .push(format!("无法检查 {sidecar_rel}（{error}）"));
                 continue;
             }
         }
@@ -399,11 +403,11 @@ pub fn prepare(plan: &BindingPlan, save: &Path) -> Result<Vec<EnrollmentCandidat
             .transpose()?;
         let sheet_rel = character.sheet();
         let markdown_digest = digest(&markdown).as_str().to_owned();
-        let sheet_digest = sheet.as_deref().map(|bytes| digest(bytes).as_str().to_owned());
-        let sidecar_path = save.join(Path::new("advancement").join(format!(
-            "{}.yaml",
-            character.id()
-        )));
+        let sheet_digest = sheet
+            .as_deref()
+            .map(|bytes| digest(bytes).as_str().to_owned());
+        let sidecar_path =
+            save.join(Path::new("advancement").join(format!("{}.yaml", character.id())));
         let sidecar_exists = match fs::symlink_metadata(&sidecar_path) {
             Ok(_) => true,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,

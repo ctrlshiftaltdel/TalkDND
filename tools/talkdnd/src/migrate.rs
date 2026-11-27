@@ -815,7 +815,8 @@ impl Report {
                 v.push(if admitted {
                     "环境已通过 #344 准入（本地 Linux ext4）".into()
                 } else {
-                    "环境未通过 #344 准入：schema 10→11 的身份写入会被拒绝，存档保持 schema 10".into()
+                    "环境未通过 #344 准入：schema 10→11 的身份写入会被拒绝，存档保持 schema 10"
+                        .into()
                 });
             }
             return v;
@@ -1322,7 +1323,9 @@ fn admission_verdict(save: &Path, root: &Path) -> (bool, String) {
         synchronized: &[],
     };
     match crate::advancement_admission::inspect(save, inspected, &roots) {
-        crate::advancement_admission::Admission::Admitted => (true, "本地 Linux ext4 已准入".into()),
+        crate::advancement_admission::Admission::Admitted => {
+            (true, "本地 Linux ext4 已准入".into())
+        }
         verdict => (false, format!("{verdict:?}")),
     }
 }
@@ -1387,12 +1390,8 @@ fn identity_step_11(
     // The D protocol needs its control files; normal operation never creates
     // them silently, but this step is exactly the approved migration gate.
     if !save.join(crate::advancement_lock::LOCK_FILE).is_file() {
-        crate::advancement_lock::init(
-            root,
-            save,
-            &crate::advancement_lock::InitOptions::new(),
-        )
-        .with_context(|| "为 schema 10→11 初始化成长协议控制文件失败；未做任何身份写入")?;
+        crate::advancement_lock::init(root, save, &crate::advancement_lock::InitOptions::new())
+            .with_context(|| "为 schema 10→11 初始化成长协议控制文件失败；未做任何身份写入")?;
     }
 
     let operation_id = format!(
@@ -1423,12 +1422,7 @@ fn identity_step_11(
         Ok(report) => Ok(IdentityStep {
             bound: candidates
                 .iter()
-                .map(|candidate| {
-                    candidate
-                        .carrier_path
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                })
+                .map(|candidate| candidate.carrier_path.to_string_lossy().replace('\\', "/"))
                 .collect(),
             backup: report
                 .backup_dir

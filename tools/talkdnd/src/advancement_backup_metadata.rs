@@ -153,7 +153,10 @@ impl Entry {
         ensure!(before.directory == self.directory, "备份文件类型不匹配");
         let file = open_copy(path)?;
         if before.posix.uid != self.posix.uid || before.posix.gid != self.posix.gid {
-            ensure!(inspection == AttributeInspection::LinuxExt4, "无法保留备份所有者或组");
+            ensure!(
+                inspection == AttributeInspection::LinuxExt4,
+                "无法保留备份所有者或组"
+            );
             set_ext4_owner(&file, self.posix.uid, self.posix.gid)?;
         }
         #[cfg(unix)]
@@ -276,16 +279,18 @@ impl Inventory {
         // installed after walking their contents.
         for entry in self.entries.iter().rev() {
             let path = root.join(&entry.path);
-            entry.restore_copy(&path, self.attribute_inspection).with_context(|| {
-                format!(
-                    "验收备份元数据 {}",
-                    if entry.path.is_empty() {
-                        "."
-                    } else {
-                        &entry.path
-                    }
-                )
-            })?;
+            entry
+                .restore_copy(&path, self.attribute_inspection)
+                .with_context(|| {
+                    format!(
+                        "验收备份元数据 {}",
+                        if entry.path.is_empty() {
+                            "."
+                        } else {
+                            &entry.path
+                        }
+                    )
+                })?;
         }
         Ok(())
     }
@@ -299,9 +304,8 @@ fn collect(
     inspection: AttributeInspection,
     entries: &mut Vec<Entry>,
 ) -> Result<()> {
-    let entry =
-        Entry::read(root, path, inspection)
-            .with_context(|| format!("检查备份源元数据 {}", path.display()))?;
+    let entry = Entry::read(root, path, inspection)
+        .with_context(|| format!("检查备份源元数据 {}", path.display()))?;
     ensure!(
         entry.posix.device == dev,
         "备份源条目跨文件系统：{}",
@@ -347,26 +351,40 @@ fn read_ext4_attributes(path: &Path) -> Result<Vec<Attribute>> {
     // SAFETY: the descriptor is live; each output buffer stays live and is
     // writable for the specified length. Size zero queries the required size.
     let names = read_xattr_bytes(|ptr, len| unsafe { libc::flistxattr(fd, ptr.cast(), len) })?;
-    ensure!(names.is_empty() || names.last() == Some(&0), "ACL/xattr 列表不完整");
+    ensure!(
+        names.is_empty() || names.last() == Some(&0),
+        "ACL/xattr 列表不完整"
+    );
     let mut attributes = Vec::new();
     for name_with_nul in names.split_inclusive(|byte| *byte == 0) {
-        let name = name_with_nul.strip_suffix(&[0]).context("ACL/xattr 名称不完整")?;
+        let name = name_with_nul
+            .strip_suffix(&[0])
+            .context("ACL/xattr 名称不完整")?;
         ensure!(!name.is_empty(), "ACL/xattr 名称为空");
         let native = CString::new(name)?;
         // SAFETY: the descriptor and NUL-terminated name are live throughout
         // the call and the output buffer is writable for the supplied length.
-        let value = read_xattr_bytes(|ptr, len| unsafe {
-            libc::fgetxattr(fd, native.as_ptr(), ptr, len)
-        })?;
-        attributes.push(Attribute { name: name.to_vec(), value });
+        let value =
+            read_xattr_bytes(|ptr, len| unsafe { libc::fgetxattr(fd, native.as_ptr(), ptr, len) })?;
+        attributes.push(Attribute {
+            name: name.to_vec(),
+            value,
+        });
     }
     attributes.sort_by(|a, b| a.name.cmp(&b.name));
-    ensure!(attributes.windows(2).all(|pair| pair[0].name != pair[1].name), "重复的 ACL/xattr 名称");
+    ensure!(
+        attributes
+            .windows(2)
+            .all(|pair| pair[0].name != pair[1].name),
+        "重复的 ACL/xattr 名称"
+    );
     Ok(attributes)
 }
 
 #[cfg(target_os = "linux")]
-fn read_xattr_bytes(mut read: impl FnMut(*mut libc::c_void, usize) -> libc::ssize_t) -> Result<Vec<u8>> {
+fn read_xattr_bytes(
+    mut read: impl FnMut(*mut libc::c_void, usize) -> libc::ssize_t,
+) -> Result<Vec<u8>> {
     let size = read(std::ptr::null_mut(), 0);
     if size < 0 {
         return Err(std::io::Error::last_os_error()).context("无法读取 ACL/xattr 长度");
@@ -401,7 +419,8 @@ fn set_ext4_attributes(file: &File, before: &[Attribute], desired: &[Attribute])
             let name = CString::new(old.name.as_slice())?;
             // SAFETY: the descriptor and NUL-terminated name stay live for the call.
             if unsafe { libc::fremovexattr(fd, name.as_ptr()) } != 0 {
-                return Err(std::io::Error::last_os_error()).context("无法清除备份继承的 ACL/xattr");
+                return Err(std::io::Error::last_os_error())
+                    .context("无法清除备份继承的 ACL/xattr");
             }
         }
     }
@@ -410,7 +429,13 @@ fn set_ext4_attributes(file: &File, before: &[Attribute], desired: &[Attribute])
             let name = CString::new(attr.name.as_slice())?;
             // SAFETY: the descriptor, NUL-terminated name and value bytes stay live.
             let result = unsafe {
-                libc::fsetxattr(fd, name.as_ptr(), attr.value.as_ptr().cast(), attr.value.len(), 0)
+                libc::fsetxattr(
+                    fd,
+                    name.as_ptr(),
+                    attr.value.as_ptr().cast(),
+                    attr.value.len(),
+                    0,
+                )
             };
             if result != 0 {
                 return Err(std::io::Error::last_os_error()).context("无法保留 ACL/xattr");

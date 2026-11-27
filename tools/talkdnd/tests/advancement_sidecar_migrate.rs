@@ -31,10 +31,8 @@ struct Fixture {
 impl Fixture {
     fn new(tag: &str) -> Self {
         for n in 0..64 {
-            let root = std::env::temp_dir().join(format!(
-                "talkdnd-330-{tag}-{}-{n}",
-                std::process::id()
-            ));
+            let root =
+                std::env::temp_dir().join(format!("talkdnd-330-{tag}-{}-{n}", std::process::id()));
             match fs::create_dir(&root) {
                 Ok(()) => {
                     fs::create_dir_all(root.join("Saves")).unwrap();
@@ -105,7 +103,10 @@ fn collect_files(dir: &Path, root: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) 
         if path.is_dir() {
             collect_files(&path, root, out);
         } else if path.is_file() {
-            out.insert(path.strip_prefix(root).unwrap().to_path_buf(), fs::read(&path).unwrap());
+            out.insert(
+                path.strip_prefix(root).unwrap().to_path_buf(),
+                fs::read(&path).unwrap(),
+            );
         }
     }
 }
@@ -128,18 +129,27 @@ fn dry_run_lists_exact_confirm_arguments_and_plain_migrate_writes_nothing() {
     assert!(
         dry.identity_pending
             .iter()
-            .any(|line| line == &format!("--confirm-binding {SHEET_PATH}={}", digest(SHEET).as_str())),
+            .any(|line| line
+                == &format!("--confirm-binding {SHEET_PATH}={}", digest(SHEET).as_str())),
         "{:?}",
         dry.identity_pending
     );
-    assert!(dry.identity_refused.is_empty(), "{:?}", dry.identity_refused);
+    assert!(
+        dry.identity_refused.is_empty(),
+        "{:?}",
+        dry.identity_refused
+    );
     assert_eq!(fixture.snapshot_tree(), before, "dry-run must not write");
 
     // Without confirmations the plain entry stops at schema 10 and writes
     // nothing: no legacy-chain churn, no backup, no marker.
     let applied = migrate::ensure_with_bindings(&fixture.save, &fixture.root, false, &[]).unwrap();
     assert_eq!((applied.from, applied.to), (10, 10));
-    assert_eq!(fixture.snapshot_tree(), before, "unconfirmed run must not write");
+    assert_eq!(
+        fixture.snapshot_tree(),
+        before,
+        "unconfirmed run must not write"
+    );
     assert!(!fixture.root.join("Saves/_backups").exists());
     assert!(!fixture.save.join(SIDECAR).exists());
 }
@@ -152,8 +162,7 @@ fn a_stale_or_wrong_confirm_digest_is_refused_not_ignored() {
     let stale = vec![
         BindingConfirm {
             path: CARD_PATH.to_string(),
-            digest: "1111111111111111111111111111111111111111111111111111111111111111"
-                .to_string(),
+            digest: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
         },
         BindingConfirm {
             path: SHEET_PATH.to_string(),
@@ -169,13 +178,8 @@ fn a_stale_or_wrong_confirm_digest_is_refused_not_ignored() {
         "{:?}",
         plan.refused
     );
-    let applied = migrate::ensure_with_bindings(
-        &fixture.save,
-        &fixture.root,
-        false,
-        &stale,
-    )
-    .unwrap();
+    let applied =
+        migrate::ensure_with_bindings(&fixture.save, &fixture.root, false, &stale).unwrap();
     assert_eq!((applied.from, applied.to), (10, 10));
     assert_eq!(fixture.snapshot_tree(), before);
 }
@@ -187,7 +191,10 @@ fn an_existing_sidecar_blocks_enrollment_even_when_the_file_is_empty() {
 
     // Missing sidecar: the character is pending, not refused.
     let plan = fixture.plan(&[]);
-    assert!(plan.pending.len() == 1 && plan.refused.is_empty(), "{plan:?}");
+    assert!(
+        plan.pending.len() == 1 && plan.refused.is_empty(),
+        "{plan:?}"
+    );
 
     // An EMPTY sidecar file is "exists", never "missing": no enrollment and
     // no silent overwrite of what may be an interrupted run's evidence.
@@ -229,15 +236,23 @@ fn an_unmatched_orphan_record_is_refused_and_invalid_records_fail_closed() {
         "version: 1\ncard: Characters/Ghost.md\ntoken: 11111111111111111111111111111112\nhistory: unknown\n",
     )
     .unwrap();
-    fs::write(fixture.save.join("advancement/broken.yaml"), "not: a record\n").unwrap();
+    fs::write(
+        fixture.save.join("advancement/broken.yaml"),
+        "not: a record\n",
+    )
+    .unwrap();
     let plan = fixture.plan(&[]);
     assert!(
-        plan.refused.iter().any(|reason| reason.contains("孤儿成长记录 advancement/ghost.yaml")),
+        plan.refused
+            .iter()
+            .any(|reason| reason.contains("孤儿成长记录 advancement/ghost.yaml")),
         "{:?}",
         plan.refused
     );
     assert!(
-        plan.refused.iter().any(|reason| reason.contains("advancement/broken.yaml")),
+        plan.refused
+            .iter()
+            .any(|reason| reason.contains("advancement/broken.yaml")),
         "{:?}",
         plan.refused
     );
@@ -252,8 +267,16 @@ fn an_already_bound_save_is_ready_without_new_confirmations() {
     let candidates = advancement_sidecar::prepare(&fixture.plan(&confirms), &fixture.save).unwrap();
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
-    fs::write(fixture.save.join(&candidate.carrier_path), &candidate.carrier_bytes).unwrap();
-    fs::write(fixture.save.join(&candidate.sidecar_path), &candidate.sidecar_bytes).unwrap();
+    fs::write(
+        fixture.save.join(&candidate.carrier_path),
+        &candidate.carrier_bytes,
+    )
+    .unwrap();
+    fs::write(
+        fixture.save.join(&candidate.sidecar_path),
+        &candidate.sidecar_bytes,
+    )
+    .unwrap();
 
     // The bound pair is strictly matched, so completing to 11 needs no new
     // DM decision; the plan is ready with an empty confirm list.
@@ -264,12 +287,13 @@ fn an_already_bound_save_is_ready_without_new_confirmations() {
     // refusal, not a no-op.
     let stale = vec![BindingConfirm {
         path: CARD_PATH.to_string(),
-        digest: "1111111111111111111111111111111111111111111111111111111111111111"
-            .to_string(),
+        digest: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
     }];
     let plan = fixture.plan(&stale);
     assert!(
-        plan.refused.iter().any(|reason| reason.contains("确认摘要与当前字节不符")),
+        plan.refused
+            .iter()
+            .any(|reason| reason.contains("确认摘要与当前字节不符")),
         "{:?}",
         plan.refused
     );
@@ -288,7 +312,13 @@ fn a_future_or_corrupt_save_schema_is_refused_by_the_normal_entry() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("12"), "{err}");
-    assert!(err.contains("无法支持") || err.contains("refuse") || err.contains("不支持") || err.contains("更新"), "{err}");
+    assert!(
+        err.contains("无法支持")
+            || err.contains("refuse")
+            || err.contains("不支持")
+            || err.contains("更新"),
+        "{err}"
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -312,7 +342,15 @@ fn set_fixture_xattr(path: &Path, name: &[u8], value: &[u8]) {
     use std::os::unix::ffi::OsStrExt;
     let name = CString::new(name).unwrap();
     let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
-    let rc = unsafe { libc::setxattr(c_path.as_ptr(), name.as_ptr(), value.as_ptr().cast(), value.len(), 0) };
+    let rc = unsafe {
+        libc::setxattr(
+            c_path.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    };
     assert_eq!(rc, 0, "seeding xattr on {}", path.display());
 }
 
@@ -324,7 +362,12 @@ fn get_fixture_xattr(path: &Path, name: &[u8]) -> Option<Vec<u8>> {
     let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
     let mut buffer = vec![0u8; 256];
     let len = unsafe {
-        libc::getxattr(c_path.as_ptr(), name.as_ptr(), buffer.as_mut_ptr().cast(), buffer.len())
+        libc::getxattr(
+            c_path.as_ptr(),
+            name.as_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
     };
     if len < 0 {
         return None;
@@ -360,13 +403,9 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
     if !writable_ext4(&fixture.save) {
         // Fail closed everywhere this environment is not the admitted one:
         // no bytes change, the save keeps schema 10, and the refusal says so.
-        let applied = migrate::ensure_with_bindings(
-            &fixture.save,
-            &fixture.root,
-            false,
-            &confirms,
-        )
-        .unwrap();
+        let applied =
+            migrate::ensure_with_bindings(&fixture.save, &fixture.root, false, &confirms)
+                .unwrap();
         assert_eq!((applied.from, applied.to), (10, 10));
         assert!(
             applied
@@ -388,7 +427,12 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
         "{:?}",
         applied.identity_refused
     );
-    assert_eq!(applied.identity_bound.len(), 1, "{:?}", applied.identity_bound);
+    assert_eq!(
+        applied.identity_bound.len(),
+        1,
+        "{:?}",
+        applied.identity_bound
+    );
 
     // The structured carrier is the old bytes plus one appended field; the
     // Markdown card is untouched (both sides keep their hand edits).
@@ -418,7 +462,10 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
     // migration record appended.
     let meta = fs::read_to_string(fixture.save.join("save-meta.yaml")).unwrap();
     assert!(meta.contains("schema: 11"), "{meta}");
-    assert!(meta.contains("from: 10") && meta.contains("to: 11"), "{meta}");
+    assert!(
+        meta.contains("from: 10") && meta.contains("to: 11"),
+        "{meta}"
+    );
 
     // The D backup verified the whole save, preserved the seeded xattr and
     // carried the existing user backup along.
@@ -433,7 +480,10 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
         fs::read_to_string(backup.join("checkpoints/cp-1/Characters/Fixture.md")).unwrap(),
         "# old checkpoint card\n"
     );
-    assert!(fixture.save.join("checkpoints/cp-1/Characters/Fixture.md").is_file());
+    assert!(fixture
+        .save
+        .join("checkpoints/cp-1/Characters/Fixture.md")
+        .is_file());
     assert_eq!(
         get_fixture_xattr(&fixture.save.join(CARD_PATH), b"user.talkdnd-330"),
         Some(b"across-the-migration".to_vec()),
@@ -452,9 +502,7 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
 #[cfg(unix)]
 #[test]
 fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
-    use talkdnd::advancement_commit::{
-        binding_preview_id, run_to_complete, Fault, Request,
-    };
+    use talkdnd::advancement_commit::{binding_preview_id, run_to_complete, Fault, Request};
     use talkdnd::advancement_lock as adv;
     use talkdnd::advancement_recovery::{self, RecoveryHooks, RecoveryRequest};
 
@@ -463,12 +511,13 @@ fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
     adv::init(&fixture.root, &fixture.save, &adv::InitOptions::new()).unwrap();
 
     let confirms = fixture.confirm_args();
-    let candidates =
-        advancement_sidecar::prepare(&fixture.plan(&confirms), &fixture.save).unwrap();
+    let candidates = advancement_sidecar::prepare(&fixture.plan(&confirms), &fixture.save).unwrap();
     let mut overlays = advancement_sidecar::overlays(&candidates);
     let mut meta_text = fs::read_to_string(fixture.save.join("save-meta.yaml")).unwrap();
     meta_text = meta_text.replace("schema: 10", "schema: 11");
-    meta_text.push_str("migrations:\n  - from: 10\n    to: 11\n    date: synthetic\n    backup: synthetic\n");
+    meta_text.push_str(
+        "migrations:\n  - from: 10\n    to: 11\n    date: synthetic\n    backup: synthetic\n",
+    );
     overlays.insert("save-meta.yaml".to_string(), meta_text.into_bytes());
     let extra_targets = fixture.plan(&confirms).extra_targets();
 
