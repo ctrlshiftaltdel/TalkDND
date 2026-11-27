@@ -2079,7 +2079,10 @@ fn confirmed_schema10_migration_cli_is_admitted_or_fails_closed() {
         fs::read(save.join("Characters/Fixture.md")).unwrap(),
         snapshot.2
     );
-    assert_eq!(fs::read(save.join("sheets/fixture.yaml")).unwrap(), snapshot.3);
+    assert_eq!(
+        fs::read(save.join("sheets/fixture.yaml")).unwrap(),
+        snapshot.3
+    );
     assert_eq!(
         fs::read(&log).unwrap(),
         snapshot.4,
@@ -2106,7 +2109,10 @@ fn confirmed_schema9_migration_refuses_before_ordinary_migration() {
     let campaign = fs::read_to_string(save.join("combat/campaign.yaml")).unwrap();
 
     // Malformed confirmation: fail closed before anything is touched.
-    let (good, out) = run(&r, &["migrate", "--confirm-binding", "not-a-path-or-digest"]);
+    let (good, out) = run(
+        &r,
+        &["migrate", "--confirm-binding", "not-a-path-or-digest"],
+    );
     assert!(!good, "{out}");
     assert_same_tree(
         &before,

@@ -1531,10 +1531,7 @@ fn remove_created_sidecar(
     // Only the sidecar itself is removed; no sibling or directory cleanup.
     if let Some(parent) = dest.parent() {
         if let Err(err) = sync_dir(parent) {
-            return Err(fail(
-                format!("同步 {} 所在目录失败：{err}", file.rel),
-                true,
-            ));
+            return Err(fail(format!("同步 {} 所在目录失败：{err}", file.rel), true));
         }
     }
     if let Err(err) = record_work_done(req, work, &file.rel) {

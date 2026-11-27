@@ -1208,9 +1208,9 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
         Cmd::Migrate {
             dry_run: false,
             confirm_binding,
-        } if !confirm_binding.is_empty() => gate_save.as_deref().is_some_and(|s| {
-            matches!(migrate::detect(s), Ok(schema) if schema == migrate::CHAIN_SCHEMA)
-        }),
+        } if !confirm_binding.is_empty() => gate_save.as_deref().is_some_and(
+            |s| matches!(migrate::detect(s), Ok(schema) if schema == migrate::CHAIN_SCHEMA),
+        ),
         _ => false,
     };
     // ADV-P1-1a / 1c / 1d: adopted writers take the SAVE lock before any
@@ -1241,8 +1241,7 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
                     ..
                 }
                 | Cmd::Migrate { dry_run: false, .. }
-        )
-    {
+        ) {
         gate_save
             .as_deref()
             .map(combat_sim::campaign_time::lock_if_present)
