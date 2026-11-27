@@ -1065,12 +1065,11 @@ pub fn ensure_with_bindings(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "save".into());
     // The legacy chain only runs when it has work: a schema-10 save is never
-    // rewritten just because its identity step is still pending.
+    // rewritten just because its identity step is still pending. A follow-up
+    // `migrate --dry-run` on the schema-10 bytes reports the pending identity
+    // preimages; this report does not add noise for that next step.
     if from < CHAIN_SCHEMA {
         run_legacy_chain(save, root, from, &slot, &mut report)?;
-        report.warnings.push(
-            "本体已到 schema 10：成长身份（schema 11）需另跑 `migrate --dry-run` 只读核对并逐张确认".into(),
-        );
     }
 
     // 10→11: the identity step lifts the save to CURRENT_SCHEMA only when the

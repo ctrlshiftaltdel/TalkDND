@@ -466,9 +466,11 @@ mod tests {
         assert!(BindingConfirm::parse("a\\b.md=0").is_err());
         assert!(BindingConfirm::parse("../x.md=0").is_err());
         assert!(BindingConfirm::parse("Characters/A.md=XYZ").is_err());
-        let ok = BindingConfirm::parse("Characters/A.md=0123abcd").unwrap();
+        assert!(BindingConfirm::parse("Characters/A.md=0123").is_err());
+        let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let ok = BindingConfirm::parse(&format!("Characters/A.md={digest}")).unwrap();
         assert_eq!(ok.path, "Characters/A.md");
-        assert_eq!(ok.digest, "0123abcd");
+        assert_eq!(ok.digest, digest);
     }
 
     #[test]
