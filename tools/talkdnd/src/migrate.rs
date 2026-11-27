@@ -826,10 +826,14 @@ impl Report {
             return v;
         }
         let mut v = vec![if self.already_current() {
-            format!(
-                "存档 schema {}：本体已就绪；成长身份未完成，存档保持 schema {}",
-                self.to, self.to
-            )
+            if self.identity_pending.is_empty() {
+                format!("存档 schema {}：无需迁移", self.to)
+            } else {
+                format!(
+                    "存档 schema {}：本体已就绪；成长身份未完成（另跑 `migrate --dry-run` 核对并确认）",
+                    self.to
+                )
+            }
         } else {
             format!("存档 schema {} → {}：迁移完成", self.from, self.to)
         }];
@@ -918,7 +922,7 @@ impl Report {
                 backup.display()
             ));
         }
-        if !self.identity_pending.is_empty() {
+        if !self.identity_pending.is_empty() && !self.already_current() {
             // The full digest list belongs to the dry-run review entry; an
             // applied run only points there, keeping `start`'s digest small.
             v.push(

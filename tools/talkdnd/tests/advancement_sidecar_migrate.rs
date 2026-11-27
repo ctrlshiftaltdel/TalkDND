@@ -21,7 +21,7 @@ const CARD_PATH: &str = "Characters/Fixture.md";
 const SHEET_PATH: &str = "sheets/fixture.yaml";
 const SIDECAR: &str = "advancement/fixture.yaml";
 const CARD: &[u8] = b"\xef\xbb\xbf# Fixture\r\n\r\n```combat yaml\r\nid: fixture\r\nname: Fixture\r\n```\r\n\r\nDM note";
-const SHEET: &[u8] = b"\xef\xbb\xbf# DM note\r\nversion: 1\r\nid: fixture\r\nname: Fixture\r\nfile: Characters/Fixture.md\r\ncustom: {old: [4, 8], present: true}";
+const SHEET: &[u8] = b"\xef\xbb\xbf# DM note\r\nversion: 1\r\nid: fixture\r\nname: Fixture\r\nfile: Characters/Fixture.md\r\nruleset: \"2024\"\r\ncustom: {old: [4, 8], present: true}";
 
 struct Fixture {
     root: PathBuf,
