@@ -8,6 +8,15 @@
 //! lock, and writes `complete` only after candidate comparison, logs, and
 //! integrity are done with no pending intent.
 //!
+//! On the schema-11 ext4 route (`Request::ext4_metadata`) the staged temp
+//! file is created exclusively with owner-only permissions and the verified
+//! backup entry for that path is applied and re-read *before* the rename.
+//! Permissions, owner/group, ACL/xattr and the recoverable atime/mtime must
+//! match; a failure stops the publish with the live target untouched. `ctime`
+//! is audit-only and no Linux creation time is claimed. A target the verified
+//! preimage did not contain (a new sidecar) gets no invented owner or ACL.
+//! Requests without `ext4_metadata` keep the previous replace helper.
+//!
 //! Admit reuses [`AdvancementLock::begin_operation`] (and its pre-state
 //! snapshot). The D path uses [`AdvancementLock::check_writable`], never
 //! [`AdvancementLock::check_ordinary_write`].
@@ -1020,7 +1029,19 @@ fn backup_source_name(source: &Path) -> Result<String> {
         .replace('\\', "/"))
 }
 
-pub(crate) fn verify_recovery_backup(backup: &Path, source: &Path, operation: &str) -> Result<()> {
+/// Verify a D backup's manifest, file tree and recorded source metadata.
+///
+/// Returns the backing ext4 inventory only when this backup captured one and
+/// its metadata verified against the backup tree. `Ok(None)` means the
+/// manifest has no ext4 inventory (an older operation, or a platform whose
+/// capture did not record ACL/xattr). Old backup callers keep working
+/// unchanged; callers that need the inventory consume the returned value
+/// instead of re-reading and re-decoding the manifest a second time.
+pub(crate) fn verify_recovery_backup(
+    backup: &Path,
+    source: &Path,
+    operation: &str,
+) -> Result<Option<Inventory>> {
     require_outside(source, backup, "恢复备份目录")?;
     require_outside(backup, source, "存档目录")?;
     if !fs::symlink_metadata(backup)?.is_dir() {
@@ -1052,8 +1073,11 @@ pub(crate) fn verify_recovery_backup(backup: &Path, source: &Path, operation: &s
         bail!("恢复备份存在清单未列出的条目");
     }
     match (manifest.schema, manifest.source_metadata) {
-        (1, None) => Ok(()),
-        (2, Some(metadata)) => metadata.verify_backup(backup),
+        (1, None) => Ok(None),
+        (2, Some(metadata)) => {
+            metadata.verify_backup(backup)?;
+            Ok(metadata.is_ext4().then_some(metadata))
+        }
         _ => bail!("恢复备份清单版本不受支持或元数据缺失"),
     }
 }
@@ -1544,6 +1568,43 @@ fn publish_verified_candidate(
         return Err(stop_before_publish_held(&mut lock, req, &err, &prepared));
     }
 
+    // The ext4 route must publish with the metadata captured and verified in
+    // this operation's backup. Loading it is read-only and happens before any
+    // intent or target write; a missing or unsupported inventory is a
+    // refusal, never a silent downgrade to the old replace.
+    let verified_metadata = if req.ext4_metadata {
+        let Some(backup_dir) = backup.as_deref() else {
+            return Err(stop_before_publish_held(
+                &mut lock,
+                req,
+                "ext4 发布缺少已验证的 D 备份目录，拒绝发布；未写任何目标文件",
+                &prepared,
+            ));
+        };
+        match verify_recovery_backup(backup_dir, req.save_dir, req.operation_id) {
+            Ok(Some(inventory)) => Some(inventory),
+            Ok(None) => {
+                return Err(stop_before_publish_held(
+                    &mut lock,
+                    req,
+                    "D 备份清单缺少 ext4 元数据清单，拒绝发布；未写任何目标文件",
+                    &prepared,
+                ));
+            }
+            Err(err) => {
+                return Err(stop_before_publish_held(
+                    &mut lock,
+                    req,
+                    &format!("读取 D 备份元数据清单失败：{err}。未写任何目标文件"),
+                    &prepared,
+                ));
+            }
+        }
+    } else {
+        None
+    };
+    let verified_metadata = verified_metadata.as_ref();
+
     if let Some(hook) = req.hooks.before_any_publish {
         hook(req.save_dir);
     }
@@ -1568,7 +1629,9 @@ fn publish_verified_candidate(
 
     let snapshot_before = combat_sim::integrity::snapshot(req.save_dir);
 
-    if let Err(err) = publish_registered_targets(req, &mut lock, &candidate, &mut ctx) {
+    if let Err(err) =
+        publish_registered_targets(req, &mut lock, &candidate, &mut ctx, verified_metadata)
+    {
         return Err(stop_after_publish_started(
             &mut lock,
             req,
@@ -1579,7 +1642,7 @@ fn publish_verified_candidate(
         ));
     }
 
-    if let Err(err) = publish_logs(req, &mut lock, &mut ctx) {
+    if let Err(err) = publish_logs(req, &mut lock, &mut ctx, verified_metadata) {
         return Err(stop_after_publish_started(
             &mut lock,
             req,
@@ -1591,7 +1654,13 @@ fn publish_verified_candidate(
     }
     ctx.logs_recorded = true;
 
-    if let Err(err) = publish_integrity(req, &mut lock, &snapshot_before, &mut ctx) {
+    if let Err(err) = publish_integrity(
+        req,
+        &mut lock,
+        &snapshot_before,
+        &mut ctx,
+        verified_metadata,
+    ) {
         return Err(stop_after_publish_started(
             &mut lock,
             req,
@@ -1672,6 +1741,7 @@ fn publish_registered_targets(
     lock: &mut AdvancementLock,
     candidate: &Path,
     ctx: &mut PublishCtx,
+    verified_metadata: Option<&Inventory>,
 ) -> Result<()> {
     for rel in registered_replace_targets(candidate, &req.extra_targets)? {
         let dest = candidate.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -1679,7 +1749,15 @@ fn publish_registered_targets(
             bail!("候选缺少发布目标 {rel}，停止且不跳过");
         }
         let after = fs::read(&dest)?;
-        publish_replace(req, lock, &rel, &after, ctx, TargetKind::Replace)?;
+        publish_replace(
+            req,
+            lock,
+            &rel,
+            &after,
+            ctx,
+            TargetKind::Replace,
+            verified_metadata,
+        )?;
     }
     Ok(())
 }
@@ -1749,6 +1827,7 @@ fn publish_replace(
     after: &[u8],
     ctx: &mut PublishCtx,
     kind: TargetKind,
+    verified_metadata: Option<&Inventory>,
 ) -> Result<()> {
     let path = req
         .save_dir
@@ -1797,9 +1876,12 @@ fn publish_replace(
             }
             append_log_line(&path, &after[before.len()..], req.fault)?;
         }
-        TargetKind::Replace | TargetKind::Integrity => {
-            replace_file_atomically(&path, after, req.fault)?;
-        }
+        TargetKind::Replace | TargetKind::Integrity => match verified_metadata {
+            Some(inventory) => {
+                replace_file_atomically_verified(&path, after, req.fault, inventory, rel)?
+            }
+            None => replace_file_atomically(&path, after, req.fault)?,
+        },
     }
     if req.hooks.after_recheck_before_publish.is_some() {
         // A hook ran in the recheck→rename window. We can observe our
@@ -1815,6 +1897,35 @@ fn publish_replace(
 }
 
 pub fn replace_file_atomically(path: &Path, bytes: &[u8], fault: Option<Fault>) -> Result<()> {
+    replace_file_staged(path, bytes, fault, false, None)
+}
+
+/// Replace an existing target for an ext4-inventory-backed operation.
+///
+/// The staged temp file is created exclusively with owner-only permissions,
+/// the verified backup entry for `rel` is applied to it and re-read, and only
+/// then is it renamed over the target. Because every check runs before the
+/// rename, a failure leaves the live target — including its restrictive
+/// access and metadata — exactly as it was. A target the verified preimage
+/// did not contain (a new sidecar) gets no invented owner or ACL; it keeps
+/// the owner-only staging permissions.
+pub(crate) fn replace_file_atomically_verified(
+    path: &Path,
+    bytes: &[u8],
+    fault: Option<Fault>,
+    inventory: &Inventory,
+    rel: &str,
+) -> Result<()> {
+    replace_file_staged(path, bytes, fault, true, Some((inventory, rel)))
+}
+
+fn replace_file_staged(
+    path: &Path,
+    bytes: &[u8],
+    fault: Option<Fault>,
+    restrictive: bool,
+    metadata: Option<(&Inventory, &str)>,
+) -> Result<()> {
     if fault == Some(Fault::PublishWrite) {
         bail!(
             "注入失败：目标文件写入失败，未完成 {} 的发布",
@@ -1834,14 +1945,31 @@ pub fn replace_file_atomically(path: &Path, bytes: &[u8], fault: Option<Fault>) 
         .parent()
         .map(|p| p.join(&tmp_name))
         .unwrap_or_else(|| PathBuf::from(&tmp_name));
+
+    // The ext4 route refuses to reuse a staged path: `create_new` means a
+    // leftover temp file or a planted symlink is never truncated or followed.
+    // Owner-only mode keeps the staged bytes unreadable to others.
+    let mut file = match open_staged(&tmp, restrictive) {
+        Ok(file) => file,
+        Err(err) => {
+            return Err(err.context(if restrictive {
+                format!(
+                    "独占创建暂存文件 {}（ext4 路径不复用已存在的暂存路径）",
+                    tmp.display()
+                )
+            } else {
+                format!("create {}", tmp.display())
+            }))
+        }
+    };
     let write = (|| -> Result<()> {
-        let mut file = File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
         file.write_all(bytes)
             .with_context(|| format!("write {}", tmp.display()))?;
         file.sync_all()
             .with_context(|| format!("sync {}", tmp.display()))?;
         Ok(())
     })();
+    drop(file);
     if let Err(err) = write {
         let _ = fs::remove_file(&tmp);
         return Err(err);
@@ -1853,6 +1981,15 @@ pub fn replace_file_atomically(path: &Path, bytes: &[u8], fault: Option<Fault>) 
             path.display()
         );
     }
+    if let Some((inventory, rel)) = metadata {
+        if let Err(err) = inventory.apply_to_staged(rel, &tmp) {
+            let _ = fs::remove_file(&tmp);
+            return Err(err.context(format!(
+                "在 rename 前无法应用或核验 {} 的备份元数据；目标未替换",
+                rel
+            )));
+        }
+    }
     fs::rename(&tmp, path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     let published = File::open(path).with_context(|| format!("open {}", path.display()))?;
@@ -1863,6 +2000,22 @@ pub fn replace_file_atomically(path: &Path, bytes: &[u8], fault: Option<Fault>) 
         sync_dir(parent)?;
     }
     Ok(())
+}
+
+fn open_staged(tmp: &Path, restrictive: bool) -> Result<File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true);
+    if restrictive {
+        opts.create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+    } else {
+        opts.create(true).truncate(true);
+    }
+    Ok(opts.open(tmp)?)
 }
 
 pub fn append_log_line(path: &Path, new_bytes: &[u8], fault: Option<Fault>) -> Result<()> {
@@ -1893,7 +2046,12 @@ pub fn append_log_line(path: &Path, new_bytes: &[u8], fault: Option<Fault>) -> R
     Ok(())
 }
 
-fn publish_logs(req: &Request<'_>, lock: &mut AdvancementLock, ctx: &mut PublishCtx) -> Result<()> {
+fn publish_logs(
+    req: &Request<'_>,
+    lock: &mut AdvancementLock,
+    ctx: &mut PublishCtx,
+    verified_metadata: Option<&Inventory>,
+) -> Result<()> {
     let mut logs = vec!["rolls.log".to_string()];
     logs.extend(list_dir_files(req.save_dir, "Sessions", "md")?);
 
@@ -1927,7 +2085,15 @@ fn publish_logs(req: &Request<'_>, lock: &mut AdvancementLock, ctx: &mut Publish
         }
         let mut after = existing;
         after.extend_from_slice(line.as_bytes());
-        publish_replace(req, lock, &rel, &after, ctx, TargetKind::Log)?;
+        publish_replace(
+            req,
+            lock,
+            &rel,
+            &after,
+            ctx,
+            TargetKind::Log,
+            verified_metadata,
+        )?;
         // For logs we pass the full desired file bytes so intent after-digest
         // is correct, but TargetKind::Log appends only the new line (the
         // function writes `after` as if it were the new line...).
@@ -1945,6 +2111,7 @@ fn publish_integrity(
     lock: &mut AdvancementLock,
     snapshot_before: &BTreeMap<String, String>,
     ctx: &mut PublishCtx,
+    verified_metadata: Option<&Inventory>,
 ) -> Result<()> {
     if req.fault == Some(Fault::IntegrityUpdate) {
         bail!("注入失败：完整性更新失败");
@@ -1961,6 +2128,7 @@ fn publish_integrity(
         &after,
         ctx,
         TargetKind::Integrity,
+        verified_metadata,
     )?;
     Ok(())
 }

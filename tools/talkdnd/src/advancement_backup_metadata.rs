@@ -1,4 +1,14 @@
 //! Metadata captured before a D backup reads the source tree.
+//!
+//! The same per-entry record is reused twice. `restore_and_verify_copy`
+//! installs it on the backup copy; [`Inventory::apply_to_staged`] installs it
+//! on the exclusive temp file a publish or explicit recovery renames over an
+//! existing target. Both verify mode, owner/group, ACL/xattr and the
+//! recoverable atime/mtime by re-reading the entry before the rename. The
+//! POSIX status-change timestamp (`ctime`) is captured for audit only: a
+//! rename or any metadata write changes it, so it is never compared or
+//! claimed as restored. Linux creation time is not available, so no
+//! creation-time claim is made either (macOS keeps its own birth-time check).
 
 use std::fs::{self, File, FileTimes, Metadata};
 use std::path::Path;
@@ -159,11 +169,17 @@ impl Entry {
             );
             set_ext4_owner(&file, self.posix.uid, self.posix.gid)?;
         }
-        #[cfg(unix)]
-        file.set_permissions(fs::Permissions::from_mode(self.posix.mode))?;
         if inspection == AttributeInspection::LinuxExt4 {
+            // Install the actual POSIX ACL first. The staged file is still
+            // mode 0600 here, and chmod derives its group bits from the ACL
+            // mask; setting the mode before the ACL could transiently expose
+            // the staged bytes to the owning group when the original ACL
+            // excludes it. Running chmod afterwards reconciles the ACL mask
+            // to the already verified original mode.
             set_ext4_attributes(&file, &read_ext4_attributes(path)?, &self.attributes)?;
         }
+        #[cfg(unix)]
+        file.set_permissions(fs::Permissions::from_mode(self.posix.mode))?;
         let times = FileTimes::new()
             .set_accessed(self.accessed.system_time()?)
             .set_modified(self.modified.system_time()?);
@@ -219,6 +235,31 @@ impl Inventory {
             attribute_inspection: inspection,
             entries,
         })
+    }
+
+    /// True when this inventory carries the Linux ext4 ACL/xattr record set.
+    pub(crate) fn is_ext4(&self) -> bool {
+        self.attribute_inspection == AttributeInspection::LinuxExt4
+    }
+
+    /// Apply the verified metadata for `rel` to the already-staged file at
+    /// `path`, before the caller renames it over the target. The per-entry
+    /// restore and re-read check is the same one used for the backup copy:
+    /// mode, owner/group, ACL/xattr and the recoverable atime/mtime must
+    /// match, and any failure stops the caller with the target untouched.
+    ///
+    /// Returns `Ok(false)` when the verified preimage had no entry for `rel`
+    /// (a target the operation created, such as a new sidecar). No owner,
+    /// ACL or xattr is invented for a path that had no original.
+    pub(crate) fn apply_to_staged(&self, rel: &str, path: &Path) -> Result<bool> {
+        let Some(entry) = self.entries.iter().find(|entry| entry.path == rel) else {
+            return Ok(false);
+        };
+        ensure!(!entry.directory, "备份条目 {rel} 是目录，不能作为替换目标");
+        if let Err(err) = entry.restore_copy(path, self.attribute_inspection) {
+            return Err(err.context(format!("应用并核验备份元数据 {rel}")));
+        }
+        Ok(true)
     }
 
     pub(crate) fn verify_backup(&self, root: &Path) -> Result<()> {

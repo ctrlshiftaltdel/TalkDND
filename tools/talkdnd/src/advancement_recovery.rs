@@ -11,11 +11,13 @@
 //! real saves; #264 is still unsolved. Recoverability after evidence is
 //! cleaned is not guaranteed.
 
+use crate::advancement_backup_metadata::Inventory;
 use crate::advancement_commit::acquire_inner_integrity_lock;
 use crate::advancement_commit::{
     append_log_line, copy_user_data, digest_bytes, exclusive_create_dir, is_root_excluded,
     list_dir_files, log_contains_marker, op_marker, posix_rel, read_or_empty,
-    registered_replace_targets, replace_file_atomically, sync_dir, sync_tree, write_synced, Fault,
+    registered_replace_targets, replace_file_atomically, replace_file_atomically_verified,
+    sync_dir, sync_tree, write_synced, Fault,
 };
 use crate::advancement_inner_lock::InnerLockOptions;
 use crate::advancement_lock::{
@@ -831,6 +833,10 @@ struct RecoveryPlan {
     files: Vec<PlannedFile>,
     scope_limited: Vec<String>,
     conflicts: Vec<String>,
+    /// The verified ext4 inventory from the original backup, when that
+    /// operation captured one. Recovery applies it through the same staged
+    /// temp file + verify-before-rename path as the original publish.
+    verified_metadata: Option<Inventory>,
 }
 
 fn recovery_plan(
@@ -840,8 +846,17 @@ fn recovery_plan(
     candidate: Option<&Path>,
 ) -> Result<RecoveryPlan> {
     let backup = backup.ok_or_else(|| anyhow!("缺少原操作备份位置，无法取得前像，停止"))?;
-    crate::advancement_commit::verify_recovery_backup(backup, req.save_dir, &leftover.operation_id)
-        .map_err(|err| anyhow!("重新验收原操作备份 {}：{err:#}", backup.display()))?;
+    // An ext4-inventory-backed operation restores its verified metadata with
+    // the bytes. An older backup has no such inventory and keeps the legacy
+    // replace semantics exactly as before. The verified call decodes the
+    // manifest once; its result is the inventory used below, so there is no
+    // second, unverified read.
+    let verified_metadata = crate::advancement_commit::verify_recovery_backup(
+        backup,
+        req.save_dir,
+        &leftover.operation_id,
+    )
+    .map_err(|err| anyhow!("重新验收原操作备份 {}：{err:#}", backup.display()))?;
 
     // Registered replace targets are defined from the candidate if present,
     // otherwise from the backup (rollback still has to cover every registered
@@ -915,6 +930,7 @@ fn recovery_plan(
         files,
         scope_limited,
         conflicts,
+        verified_metadata,
     })
 }
 
@@ -1210,13 +1226,29 @@ fn apply_recovery(
             // can recompute it from the recovered tree.
             continue;
         }
-        match apply_one(req, work, file, choice, &mut written, &mut already_done) {
+        match apply_one(
+            req,
+            work,
+            file,
+            choice,
+            &mut written,
+            &mut already_done,
+            plan.verified_metadata.as_ref(),
+        ) {
             Ok(()) => {}
             Err(err) => return Err(err),
         }
     }
 
-    match apply_integrity(req, work, plan, choice, &mut written, &mut already_done) {
+    match apply_integrity(
+        req,
+        work,
+        plan,
+        choice,
+        &mut written,
+        &mut already_done,
+        plan.verified_metadata.as_ref(),
+    ) {
         Ok(()) => {}
         Err(err) => return Err(err),
     }
@@ -1256,6 +1288,7 @@ fn apply_one(
     choice: RecoveryChoice,
     written: &mut Vec<String>,
     already_done: &mut Vec<String>,
+    verified_metadata: Option<&Inventory>,
 ) -> std::result::Result<(), ApplyStop> {
     if work_file(work, &file.rel).is_some_and(|f| f.done) {
         already_done.push(file.rel.clone());
@@ -1357,7 +1390,12 @@ fn apply_one(
         {
             append_log_line(&dest, &desired[live.len()..], None::<Fault>).err()
         }
-        _ => replace_file_atomically(&dest, desired, None).err(),
+        _ => match verified_metadata {
+            Some(inventory) => {
+                replace_file_atomically_verified(&dest, desired, None, inventory, &file.rel).err()
+            }
+            None => replace_file_atomically(&dest, desired, None).err(),
+        },
     };
     if let Some(err) = write_err {
         return Err(ApplyStop::Failed {
@@ -1557,6 +1595,7 @@ fn apply_integrity(
     choice: RecoveryChoice,
     written: &mut Vec<String>,
     already_done: &mut Vec<String>,
+    verified_metadata: Option<&Inventory>,
 ) -> std::result::Result<(), ApplyStop> {
     let Some(file) = plan.files.iter().find(|f| f.kind == RecoverKind::Integrity) else {
         return Ok(());
@@ -1603,7 +1642,15 @@ fn apply_integrity(
             ));
         }
     }
-    apply_one(req, work, &file, choice, written, already_done)
+    apply_one(
+        req,
+        work,
+        &file,
+        choice,
+        written,
+        already_done,
+        verified_metadata,
+    )
 }
 
 fn compute_integrity_target(req: &RecoveryRequest<'_>, work: &WorkRecord) -> Result<Vec<u8>> {

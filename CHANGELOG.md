@@ -14,6 +14,7 @@
 
 - 普通 `talkdnd migrate` / `talkdnd start` 在身份未确认或环境未准入时停在 schema 10 并报告原因与待确认摘要，不再产生无谓重写；存档结构变化按 `docs/versioning.md` 升次版本，四个 crate 同步 1.7.1 → 1.8.0（#352）。
 - `advancement_commit` 的登记发布/恢复目标纳入 `advancement/*.yaml` 与 `save-meta.yaml`；D 备份清单在准入通过后使用 ext4 元数据清单（捕获/恢复/复验 ACL 与 xattr、fchown 保所有者）（#352）。
+- ext4 发布路径不再用默认权限的临时文件 rename 覆盖原文件：在替换既有文件前，把已验证 D 备份中该条目的权限、所有者/组、ACL/xattr 与可恢复的 atime/mtime 应用到独占创建（0600）的暂存文件并重新读回核验，通过后才 rename；无法应用或核验时在目标被替换前停止并保留证据。显式恢复（回滚或继续到目标）对带 ext4 清单的原操作采用同一路径。`ctime` 仍只作审计，Linux 不作创建时间声明；没有前像的新 sidecar 不虚构所有者或 ACL。旧 D 请求、旧格式备份与非准入平台保持原有行为（#330 跟进，#352）。
 - `talkdnd migrate --confirm-binding` 先解析并核对确认，再走 D 协议：已确认的 schema 10→11 路径不再先取得普通迁移的 checkpoint 锁或改写 ruleset；已启用协议的存档不再开第二个 SAVE 描述符。首次迁移只有在完整确认、准入与复制前置条件（存档与备份同设备、遭遇间隙）通过后才创建协议控制文件（#330，#352）。
 
 ### 修复
@@ -29,6 +30,7 @@
 ### 已知限制
 
 - 端到端取证在 GitHub Actions Ubuntu（ext4）上以合成存档覆盖：绑定发布、ACL/xattr 保真、幂等重跑、未来/损坏版本拒绝与中断后的显式恢复；真实 ENOSPC（磁盘写满）只以 D 协议故障注入等价覆盖（复制/清单失败目标字节原样），真实设备的写满取证待首个准入环境实测时补记。
+- ext4 元数据保留（发布与显式恢复）在准入 Linux ext4 的合成 fixture 上验证**被实际替换的** `sheets/<id>.yaml`：0600 起始权限、用户 xattr、真实 POSIX ACL、uid/gid 与 mtime 在发布前后逐项相等，回滚在人为改动元数据后恢复原值；另一条故障注入证明 rename 前的失败不改动活动目标的字节与元数据。`ctime` 与 Linux 创建时间不作恢复声明；CI 结果待本次 head 运行，真实存档未验证。
 - macOS/Windows 上的 10→11 按准入失败关闭（存档保持 schema 10）；macOS 的可写准入证据待后续任务。
 
 ## v1.7.1 — 2026-11-26

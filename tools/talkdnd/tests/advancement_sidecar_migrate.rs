@@ -6,7 +6,10 @@
 //! The end-to-end and recovery tests observe the live filesystem and only
 //! run their write assertions on a writable ext4 mount; on any other
 //! filesystem they assert the fail-closed refusal instead, so the suite
-//! stays honest on tmpfs/macOS/Windows CI.
+//! stays honest on tmpfs/macOS/Windows CI. The ext4 publish path is expected
+//! to preserve the verified metadata of the file it actually replaces, not
+//! merely to keep it in the backup, so those tests compare the replaced
+//! sheet before and after.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -390,6 +393,56 @@ fn get_fixture_xattr(path: &Path, name: &[u8]) -> Option<Vec<u8>> {
     Some(buffer)
 }
 
+#[cfg(target_os = "linux")]
+fn remove_fixture_xattr(path: &Path, name: &[u8]) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let name = CString::new(name).unwrap();
+    let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+    let rc = unsafe { libc::removexattr(c_path.as_ptr(), name.as_ptr()) };
+    assert_eq!(rc, 0, "removing xattr on {}", path.display());
+}
+
+#[cfg(target_os = "linux")]
+fn set_fixture_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// The live mode, ownership and recoverable modification time of a fixture
+/// path, in the order the migration must preserve them.
+#[cfg(target_os = "linux")]
+fn fixture_metadata(path: &Path) -> (u32, u32, u32, std::time::SystemTime) {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(path).unwrap();
+    (
+        meta.mode() & 0o7777,
+        meta.uid(),
+        meta.gid(),
+        meta.modified().unwrap(),
+    )
+}
+
+/// A nontrivial Linux POSIX ACL (version 2 header, owner, named user 65534,
+/// group owner, mask, other) that the kernel cannot collapse to the minimal
+/// owner/group/other form.
+#[cfg(target_os = "linux")]
+fn fixture_acl() -> Vec<u8> {
+    let mut acl = 2u32.to_le_bytes().to_vec();
+    for (tag, perm, id) in [
+        (0x01u16, 6u16, u32::MAX), // owner
+        (0x02, 4, 65534),          // named user
+        (0x04, 4, u32::MAX),       // group owner
+        (0x10, 4, u32::MAX),       // mask
+        (0x20, 4, u32::MAX),       // other
+    ] {
+        acl.extend_from_slice(&tag.to_le_bytes());
+        acl.extend_from_slice(&perm.to_le_bytes());
+        acl.extend_from_slice(&id.to_le_bytes());
+    }
+    acl
+}
+
 /// AC-2 / AC-1 / AC-4 end to end on the first admitted environment: a
 /// synthetic schema-10 save with seeded ACL/xattr and an existing user
 /// backup migrates 10→11 through the D protocol; a second run is a no-op.
@@ -433,27 +486,26 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
     }
 
     // A real POSIX ACL alongside the user xattr, seeded only now that the
-    // admitted branch is selected and before the migration writes. Linux
-    // stores the access ACL as a little-endian u32 version 2 header followed
-    // by tag u16 / perm u16 / id u32 entries. The named-user entry (id 65534)
-    // keeps the ACL nontrivial, so the kernel cannot collapse it to the
-    // minimal owner/group/other form.
-    let mut acl = 2u32.to_le_bytes().to_vec();
-    for (tag, perm, id) in [
-        (0x01u16, 6u16, u32::MAX), // owner
-        (0x02, 4, 65534),          // named user
-        (0x04, 4, u32::MAX),       // group owner
-        (0x10, 4, u32::MAX),       // mask
-        (0x20, 4, u32::MAX),       // other
-    ] {
-        acl.extend_from_slice(&tag.to_le_bytes());
-        acl.extend_from_slice(&perm.to_le_bytes());
-        acl.extend_from_slice(&id.to_le_bytes());
-    }
+    // admitted branch is selected and before the migration writes. This is
+    // the sheet the migration actually replaces: the live mode, owner/group,
+    // user xattr, POSIX ACL and recoverable modification time must survive
+    // the staged temp + rename, not merely live on in the backup.
+    let acl = fixture_acl();
+    // Keep the pre-existing card ACL/xattr coverage as well.
     set_fixture_xattr(
         &fixture.save.join(CARD_PATH),
         b"system.posix_acl_access",
         &acl,
+    );
+    let sheet_path = fixture.save.join(SHEET_PATH);
+    set_fixture_mode(&sheet_path, 0o600);
+    set_fixture_xattr(&sheet_path, b"user.talkdnd-330-sheet", b"replaced-sheet");
+    set_fixture_xattr(&sheet_path, b"system.posix_acl_access", &acl);
+    let sheet_before = fixture_metadata(&sheet_path);
+    assert!(
+        sheet_before.0 & 0o077 != 0o077,
+        "fixture sheet must start restrictive: {:o}",
+        sheet_before.0
     );
 
     let applied =
@@ -487,12 +539,30 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
     assert_eq!(token.len(), 32);
 
     // The sidecar is strict v1 with the same token on both sides.
-    let sidecar_text = fs::read_to_string(fixture.save.join(SIDECAR)).unwrap();
+    let sidecar_path = fixture.save.join(SIDECAR);
+    let sidecar_text = fs::read_to_string(&sidecar_path).unwrap();
     assert!(
         sidecar_text.contains("version: 1")
             && sidecar_text.contains("history: unknown")
             && sidecar_text.contains(&token),
         "{sidecar_text}"
+    );
+    // A new sidecar had no verified preimage: it keeps the owner-only
+    // staging permissions and must not inherit an invented ACL/xattr.
+    let sidecar_mode = fixture_metadata(&sidecar_path).0;
+    assert_eq!(
+        sidecar_mode & 0o077,
+        0,
+        "a new sidecar must keep restrictive staging access: {sidecar_mode:o}"
+    );
+    assert_eq!(
+        sidecar_mode & 0o600,
+        0o600,
+        "a new sidecar must not be created inaccessible to its owner: {sidecar_mode:o}"
+    );
+    assert!(
+        get_fixture_xattr(&sidecar_path, b"system.posix_acl_access").is_none(),
+        "no ACL may be invented for a path the preimage did not contain"
     );
 
     // Schema metadata reached 11 through the same D publish, with the
@@ -513,10 +583,22 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
         Some(b"across-the-migration".to_vec()),
         "the ext4 backup inventory must preserve ACL/xattr"
     );
-    // The POSIX ACL travels through the same inventory path; assert the exact
-    // parsed bytes, independently of the user xattr above.
     assert_eq!(
         get_fixture_xattr(&backed_card, b"system.posix_acl_access"),
+        Some(acl.clone()),
+        "the ext4 backup inventory must preserve the card POSIX ACL byte for byte"
+    );
+    // The replaced sheet's user xattr and POSIX ACL travel through the same
+    // inventory path; assert the exact parsed bytes, independently of the
+    // card above.
+    let backed_sheet = backup.join(SHEET_PATH);
+    assert_eq!(
+        get_fixture_xattr(&backed_sheet, b"user.talkdnd-330-sheet"),
+        Some(b"replaced-sheet".to_vec()),
+        "the ext4 backup inventory must preserve the sheet xattr"
+    );
+    assert_eq!(
+        get_fixture_xattr(&backed_sheet, b"system.posix_acl_access"),
         Some(acl.clone()),
         "the ext4 backup inventory must preserve the POSIX ACL byte for byte"
     );
@@ -528,10 +610,30 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
         .save
         .join("checkpoints/cp-1/Characters/Fixture.md")
         .is_file());
-    // Note: republishing a registered target goes through temp + rename, so
-    // an xattr on a *live* republished target does not survive; the verified
-    // backup above is what preserves it for recovery. That boundary is
-    // recorded in the PR description rather than asserted here.
+
+    // The live target the D publish actually replaced keeps the verified
+    // metadata: mode, owner/group, user xattr, POSIX ACL and the recoverable
+    // modification time (ctime is audit-only and is not asserted).
+    let sheet_after = fixture_metadata(&sheet_path);
+    assert_eq!(
+        (sheet_after.0, sheet_after.1, sheet_after.2),
+        (sheet_before.0, sheet_before.1, sheet_before.2),
+        "live replaced sheet must keep mode and owner/group"
+    );
+    assert_eq!(
+        sheet_after.3, sheet_before.3,
+        "live replaced sheet must keep the recoverable modification time"
+    );
+    assert_eq!(
+        get_fixture_xattr(&sheet_path, b"user.talkdnd-330-sheet"),
+        Some(b"replaced-sheet".to_vec()),
+        "live replaced sheet must keep its user xattr"
+    );
+    assert_eq!(
+        get_fixture_xattr(&sheet_path, b"system.posix_acl_access"),
+        Some(acl.clone()),
+        "live replaced sheet must keep its POSIX ACL byte for byte"
+    );
 
     // Idempotent: a second run changes nothing.
     let second = migrate::ensure_with_bindings(&fixture.save, &fixture.root, false, &[]).unwrap();
@@ -810,4 +912,247 @@ fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
     let meta = fs::read_to_string(fixture.save.join("save-meta.yaml")).unwrap();
     assert!(meta.contains("schema: 10"), "{meta}");
     assert!(!meta.contains("schema: 11"), "{meta}");
+}
+
+/// Shared D-request inputs for the ext4 publish/recovery tests below: the
+/// reviewed confirmations, candidate overlays, the schema-11 metadata
+/// overlay and the registered extra targets.
+#[cfg(target_os = "linux")]
+fn ext4_request_inputs(
+    fixture: &Fixture,
+) -> (
+    String,
+    BTreeMap<String, Vec<u8>>,
+    Vec<String>,
+    Vec<talkdnd::advancement_commit::EnrollmentCandidate>,
+) {
+    let confirms = fixture.confirm_args();
+    let plan = fixture.plan(&confirms);
+    let candidates = advancement_sidecar::prepare(&plan, &fixture.save).unwrap();
+    let mut overlays = advancement_sidecar::overlays(&candidates);
+    let mut meta_text = fs::read_to_string(fixture.save.join("save-meta.yaml")).unwrap();
+    meta_text = meta_text.replace("schema: 10", "schema: 11");
+    meta_text.push_str(
+        "migrations:\n  - from: 10\n    to: 11\n    date: synthetic\n    backup: synthetic\n",
+    );
+    overlays.insert("save-meta.yaml".to_string(), meta_text.into_bytes());
+    let extra_targets = plan.extra_targets();
+    let preview =
+        talkdnd::advancement_commit::binding_preview_id(&fixture.save, &extra_targets).unwrap();
+    (preview, overlays, extra_targets, candidates)
+}
+
+/// A deterministic publish failure must stop before the rename and leave
+/// both the live bytes and the restrictive metadata of the target it was
+/// about to replace exactly as they were, with no staged temp left behind.
+#[cfg(target_os = "linux")]
+#[test]
+fn ext4_publish_failure_before_rename_leaves_live_target_unmodified() {
+    use talkdnd::advancement_commit::{run_to_complete, Fault, Request};
+    use talkdnd::advancement_lock as adv;
+
+    let fixture = Fixture::new("ext4-fail");
+    fixture.seed_card();
+    if !writable_ext4(&fixture.save, &fixture.root) {
+        // Keep independent fail-closed coverage instead of silently skipping
+        // on a runner that is not the admitted Linux ext4 environment.
+        let confirms = fixture.confirm_args();
+        let before = fixture.snapshot_tree();
+        let applied =
+            migrate::ensure_with_bindings(&fixture.save, &fixture.root, false, &confirms).unwrap();
+        assert_eq!((applied.from, applied.to), (10, 10));
+        assert!(
+            applied
+                .identity_refused
+                .iter()
+                .any(|reason| reason.contains("准入")),
+            "{:?}",
+            applied.identity_refused
+        );
+        assert_eq!(fixture.snapshot_tree(), before);
+        return;
+    }
+    adv::init(&fixture.root, &fixture.save, &adv::InitOptions::new()).unwrap();
+    let (preview, overlays, extra_targets, _candidates) = ext4_request_inputs(&fixture);
+
+    let sheet_path = fixture.save.join(SHEET_PATH);
+    set_fixture_mode(&sheet_path, 0o600);
+    set_fixture_xattr(&sheet_path, b"user.talkdnd-330-fail", b"must-stay");
+    let before_bytes = fs::read(&sheet_path).unwrap();
+    let before = fixture_metadata(&sheet_path);
+
+    let backup_parent = fixture.root.join("Saves/_backups");
+    fs::create_dir_all(&backup_parent).unwrap();
+    let evidence_root = backup_parent.join(".operations");
+    let evidence_dir = evidence_root.join("2030-01-01-01");
+    fs::create_dir_all(&evidence_dir).unwrap();
+
+    // The first registered replace target is `sheets/fixture.yaml`; the
+    // injected sync failure lands after the staged write and before the
+    // metadata apply and rename.
+    let request = Request {
+        root: &fixture.root,
+        save_dir: &fixture.save,
+        operation_id: "ext4-publish-fail",
+        evidence_root: &evidence_root,
+        evidence_dir: &evidence_dir,
+        backup_parent: &backup_parent,
+        candidate_parent: &backup_parent,
+        overlays,
+        fault: Some(Fault::PublishSync),
+        extra_targets,
+        preview_id: Some(preview),
+        instance_tag: "",
+        hooks: Default::default(),
+        inner_lock: Default::default(),
+        ext4_metadata: true,
+    };
+    let failed = run_to_complete(&request).unwrap_err();
+    assert!(!failed.report.published, "{failed}");
+    assert!(failed.report.published_paths.is_empty(), "{failed:?}");
+    assert_eq!(fs::read(&sheet_path).unwrap(), before_bytes);
+    assert_eq!(
+        fixture_metadata(&sheet_path),
+        before,
+        "a pre-rename failure must not alter live mode/ownership/timestamps"
+    );
+    assert_eq!(
+        get_fixture_xattr(&sheet_path, b"user.talkdnd-330-fail"),
+        Some(b"must-stay".to_vec())
+    );
+    assert!(
+        !fixture.save.join(".fixture.yaml.adv-pub-tmp").exists(),
+        "the failed staged temp file must be removed"
+    );
+}
+
+/// Explicit rollback of an ext4-inventory-backed operation restores both the
+/// verified preimage bytes and that preimage's metadata on the real replaced
+/// sheet, even after the live target's metadata was changed after the
+/// interrupted publish.
+#[cfg(target_os = "linux")]
+#[test]
+fn explicit_rollback_restores_verified_ext4_metadata_for_a_replaced_sheet() {
+    use talkdnd::advancement_commit::{run_to_complete, Fault, Request};
+    use talkdnd::advancement_lock as adv;
+    use talkdnd::advancement_recovery::{self, RecoveryChoice, RecoveryHooks, RecoveryRequest};
+
+    let fixture = Fixture::new("ext4-recover");
+    fixture.seed_card();
+    if !writable_ext4(&fixture.save, &fixture.root) {
+        // Explicit recovery is only claimed for an ext4-inventory-backed
+        // operation on the admitted environment; elsewhere the migration
+        // itself must refuse and write nothing (no false-positive skip).
+        let confirms = fixture.confirm_args();
+        let before = fixture.snapshot_tree();
+        let applied =
+            migrate::ensure_with_bindings(&fixture.save, &fixture.root, false, &confirms).unwrap();
+        assert_eq!((applied.from, applied.to), (10, 10));
+        assert!(
+            applied
+                .identity_refused
+                .iter()
+                .any(|reason| reason.contains("准入")),
+            "{:?}",
+            applied.identity_refused
+        );
+        assert_eq!(fixture.snapshot_tree(), before);
+        return;
+    }
+    adv::init(&fixture.root, &fixture.save, &adv::InitOptions::new()).unwrap();
+    let (preview, overlays, extra_targets, _candidates) = ext4_request_inputs(&fixture);
+
+    // Metadata seeded before the D operation, so the verified inventory has
+    // an original entry for the sheet the operation will replace.
+    let sheet_path = fixture.save.join(SHEET_PATH);
+    let acl = fixture_acl();
+    set_fixture_mode(&sheet_path, 0o600);
+    set_fixture_xattr(&sheet_path, b"user.talkdnd-330-recover", b"original");
+    set_fixture_xattr(&sheet_path, b"system.posix_acl_access", &acl);
+    let original = fixture_metadata(&sheet_path);
+
+    let backup_parent = fixture.root.join("Saves/_backups");
+    fs::create_dir_all(&backup_parent).unwrap();
+    let evidence_root = backup_parent.join(".operations");
+    let evidence_dir = evidence_root.join("2030-01-01-01");
+    fs::create_dir_all(&evidence_dir).unwrap();
+
+    let request = Request {
+        root: &fixture.root,
+        save_dir: &fixture.save,
+        operation_id: "ext4-recover",
+        evidence_root: &evidence_root,
+        evidence_dir: &evidence_dir,
+        backup_parent: &backup_parent,
+        candidate_parent: &backup_parent,
+        overlays,
+        // Publish the registered targets (the sheet included) and stop at
+        // integrity, leaving a recoverable in_doubt operation.
+        fault: Some(Fault::IntegrityUpdate),
+        extra_targets,
+        preview_id: Some(preview),
+        instance_tag: "",
+        hooks: Default::default(),
+        inner_lock: Default::default(),
+        ext4_metadata: true,
+    };
+    let failed = run_to_complete(&request).unwrap_err();
+    assert!(failed.report.published, "{failed}");
+    assert!(
+        failed
+            .report
+            .published_paths
+            .iter()
+            .any(|p| p == SHEET_PATH),
+        "{failed:?}"
+    );
+    // The successful replace already preserved the metadata.
+    assert_eq!(fixture_metadata(&sheet_path), original);
+
+    // A later change to the live target's metadata is reversed by the
+    // verified rollback (the bytes still equal the operation's target).
+    set_fixture_mode(&sheet_path, 0o644);
+    remove_fixture_xattr(&sheet_path, b"user.talkdnd-330-recover");
+    remove_fixture_xattr(&sheet_path, b"system.posix_acl_access");
+    let mutated = fixture_metadata(&sheet_path);
+    assert_ne!(mutated, original, "the mutation must be observable");
+
+    let report = advancement_recovery::recover(&RecoveryRequest {
+        root: &fixture.root,
+        save_dir: &fixture.save,
+        recovery_id: "ext4-recover",
+        evidence_root: &evidence_root,
+        evidence_dir: &evidence_dir,
+        choice: Some(RecoveryChoice::RollbackToPreimage),
+        confirm_choice: true,
+        extra_targets: Vec::new(),
+        fault: None,
+        hooks: RecoveryHooks::default(),
+        inner_lock: Default::default(),
+    })
+    .unwrap();
+    assert_eq!(report.protocol_state, adv::State::Failed, "{report:?}");
+    assert!(!report.needs_human_merge, "{report:?}");
+    assert!(
+        report.written_paths.iter().any(|p| p == SHEET_PATH),
+        "{report:?}"
+    );
+
+    // Bytes and metadata of the real replaced sheet are the verified
+    // preimage again; ctime is audit-only and is not compared.
+    assert_eq!(fs::read(&sheet_path).unwrap(), SHEET);
+    assert_eq!(
+        fixture_metadata(&sheet_path),
+        original,
+        "rollback must restore mode, owner/group and mtime"
+    );
+    assert_eq!(
+        get_fixture_xattr(&sheet_path, b"user.talkdnd-330-recover"),
+        Some(b"original".to_vec())
+    );
+    assert_eq!(
+        get_fixture_xattr(&sheet_path, b"system.posix_acl_access"),
+        Some(acl),
+        "rollback must restore the POSIX ACL byte for byte"
+    );
 }
