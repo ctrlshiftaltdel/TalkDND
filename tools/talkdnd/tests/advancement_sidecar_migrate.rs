@@ -425,16 +425,22 @@ fn fixture_metadata(path: &Path) -> (u32, u32, u32, std::time::SystemTime) {
 
 /// A nontrivial Linux POSIX ACL (version 2 header, owner, named user 65534,
 /// group owner, mask, other) that the kernel cannot collapse to the minimal
-/// owner/group/other form.
+/// owner/group/other form. The owner, group/mask and other permissions come
+/// from `mode`, so applying the ACL yields exactly that `st_mode` (the kernel
+/// derives the group permission bits from the ACL mask). The named user entry
+/// keeps the ACL genuinely nontrivial even when the mask is restrictive.
 #[cfg(target_os = "linux")]
-fn fixture_acl() -> Vec<u8> {
+fn fixture_acl(mode: u32) -> Vec<u8> {
+    let owner = ((mode >> 6) & 0o7) as u16;
+    let group = ((mode >> 3) & 0o7) as u16;
+    let other = (mode & 0o7) as u16;
     let mut acl = 2u32.to_le_bytes().to_vec();
     for (tag, perm, id) in [
-        (0x01u16, 6u16, u32::MAX), // owner
-        (0x02, 4, 65534),          // named user
-        (0x04, 4, u32::MAX),       // group owner
-        (0x10, 4, u32::MAX),       // mask
-        (0x20, 4, u32::MAX),       // other
+        (0x01u16, owner, u32::MAX), // owner
+        (0x02, 4u16, 65534),        // named user, read-only
+        (0x04, group, u32::MAX),    // group owner
+        (0x10, group, u32::MAX),    // mask
+        (0x20, other, u32::MAX),    // other
     ] {
         acl.extend_from_slice(&tag.to_le_bytes());
         acl.extend_from_slice(&perm.to_le_bytes());
@@ -485,23 +491,30 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
         return;
     }
 
-    // A real POSIX ACL alongside the user xattr, seeded only now that the
-    // admitted branch is selected and before the migration writes. This is
-    // the sheet the migration actually replaces: the live mode, owner/group,
+    // Real POSIX ACLs alongside the user xattrs, seeded only now that the
+    // admitted branch is selected and before the migration writes. The sheet
+    // is the file the migration actually replaces: its live mode, owner/group,
     // user xattr, POSIX ACL and recoverable modification time must survive
     // the staged temp + rename, not merely live on in the backup.
-    let acl = fixture_acl();
+    let card_acl = fixture_acl(0o644);
     // Keep the pre-existing card ACL/xattr coverage as well.
     set_fixture_xattr(
         &fixture.save.join(CARD_PATH),
         b"system.posix_acl_access",
-        &acl,
+        &card_acl,
     );
     let sheet_path = fixture.save.join(SHEET_PATH);
+    let sheet_acl = fixture_acl(0o600);
     set_fixture_mode(&sheet_path, 0o600);
     set_fixture_xattr(&sheet_path, b"user.talkdnd-330-sheet", b"replaced-sheet");
-    set_fixture_xattr(&sheet_path, b"system.posix_acl_access", &acl);
+    set_fixture_xattr(&sheet_path, b"system.posix_acl_access", &sheet_acl);
     let sheet_before = fixture_metadata(&sheet_path);
+    assert_eq!(
+        sheet_before.0 & 0o777,
+        0o600,
+        "seeding the restrictive ACL must leave the sheet at 0600: {:o}",
+        sheet_before.0
+    );
     assert!(
         sheet_before.0 & 0o077 != 0o077,
         "fixture sheet must start restrictive: {:o}",
@@ -585,7 +598,7 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
     );
     assert_eq!(
         get_fixture_xattr(&backed_card, b"system.posix_acl_access"),
-        Some(acl.clone()),
+        Some(card_acl.clone()),
         "the ext4 backup inventory must preserve the card POSIX ACL byte for byte"
     );
     // The replaced sheet's user xattr and POSIX ACL travel through the same
@@ -599,7 +612,7 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
     );
     assert_eq!(
         get_fixture_xattr(&backed_sheet, b"system.posix_acl_access"),
-        Some(acl.clone()),
+        Some(sheet_acl.clone()),
         "the ext4 backup inventory must preserve the POSIX ACL byte for byte"
     );
     assert_eq!(
@@ -631,7 +644,7 @@ fn schema11_end_to_end_on_admitted_linux_ext4() {
     );
     assert_eq!(
         get_fixture_xattr(&sheet_path, b"system.posix_acl_access"),
-        Some(acl.clone()),
+        Some(sheet_acl.clone()),
         "live replaced sheet must keep its POSIX ACL byte for byte"
     );
 
@@ -1065,11 +1078,17 @@ fn explicit_rollback_restores_verified_ext4_metadata_for_a_replaced_sheet() {
     // Metadata seeded before the D operation, so the verified inventory has
     // an original entry for the sheet the operation will replace.
     let sheet_path = fixture.save.join(SHEET_PATH);
-    let acl = fixture_acl();
+    let sheet_acl = fixture_acl(0o600);
     set_fixture_mode(&sheet_path, 0o600);
     set_fixture_xattr(&sheet_path, b"user.talkdnd-330-recover", b"original");
-    set_fixture_xattr(&sheet_path, b"system.posix_acl_access", &acl);
+    set_fixture_xattr(&sheet_path, b"system.posix_acl_access", &sheet_acl);
     let original = fixture_metadata(&sheet_path);
+    assert_eq!(
+        original.0 & 0o777,
+        0o600,
+        "seeding the restrictive ACL must leave the sheet at 0600: {:o}",
+        original.0
+    );
 
     let backup_parent = fixture.root.join("Saves/_backups");
     fs::create_dir_all(&backup_parent).unwrap();
@@ -1115,6 +1134,20 @@ fn explicit_rollback_restores_verified_ext4_metadata_for_a_replaced_sheet() {
     remove_fixture_xattr(&sheet_path, b"user.talkdnd-330-recover");
     remove_fixture_xattr(&sheet_path, b"system.posix_acl_access");
     let mutated = fixture_metadata(&sheet_path);
+    assert_eq!(
+        mutated.0 & 0o777,
+        0o644,
+        "the mutated sheet mode must be 0644: {:o}",
+        mutated.0
+    );
+    assert!(
+        get_fixture_xattr(&sheet_path, b"user.talkdnd-330-recover").is_none(),
+        "the mutation must remove the sheet xattr"
+    );
+    assert!(
+        get_fixture_xattr(&sheet_path, b"system.posix_acl_access").is_none(),
+        "the mutation must remove the sheet POSIX ACL"
+    );
     assert_ne!(mutated, original, "the mutation must be observable");
 
     let report = advancement_recovery::recover(&RecoveryRequest {
@@ -1152,7 +1185,7 @@ fn explicit_rollback_restores_verified_ext4_metadata_for_a_replaced_sheet() {
     );
     assert_eq!(
         get_fixture_xattr(&sheet_path, b"system.posix_acl_access"),
-        Some(acl),
+        Some(sheet_acl),
         "rollback must restore the POSIX ACL byte for byte"
     );
 }
