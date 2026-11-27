@@ -5,7 +5,7 @@
 ## 项目身份
 
 - 项目名称：`TalkDND`
-- 一句话目标：让 AI 在聊天里按玩家自备的 D&D 规则书主持冒险，并用 combat-sim 结算战斗；受版权保护的书和冒险、以及个人存档，永不进入仓库或公开记录。
+- 一句话目标：让 AI DM 按玩家自备的 D&D 规则书主持冒险，并用 combat-sim 结算战斗；当前交付是 `LetsPlay/` 本地 CLI，已确认方向是独立的、手机优先的 Web RPG（[#351](https://github.com/ctrlshiftaltdel/TalkDND/issues/351)）；受版权保护的书和冒险、以及个人存档，永不进入仓库或公开记录。
 - 现有项目 / 新项目：`现有项目`
 - 本地主分支：`main`
 - 语言 / 框架 / 运行方式：项目自己的程序、工具和脚本一律用 Rust（`tools/combat-sim` 战斗引擎，`tools/talkdnd` 游玩助手（开局摘要、建卡、同伴、存档点），`tools/talkdnd-dev` 开发工具）与 Markdown/YAML 规则数据。玩家在 `LetsPlay/` 里开局。**TECH STACK** 的接受例外只有下面三项，不得再扩大：
@@ -13,7 +13,7 @@
   - CI YAML（`.github/workflows/`，含其中的 shell 步骤）；
   - `LetsPlay/tools/pdf2md/`：游玩所需的 Python PDF → Markdown 转换工具。
   所有 Python 一律经 uv 运行（`uv sync` / `uv run`），不用裸 `pip`、`venv` 或 `python3`。套件文档里出现的裸 `python` 在本仓库一律按 `uv run --no-project python` 执行。
-- 重要设计 / 需求文件：项目章程是 `docs/PROJECT-CHARTER.md`（决策记录与活章程）；设计目标是 `docs/PLAN.md`。套件入口（`kit/orchestration.md`）判断「章程缺失」时只看 `docs/PROJECT-CHARTER.md`：文件存在且没有占位符，即章程已建立。玩家说明是 `LetsPlay/README.md`；DM 手册是 `LetsPlay/AGENTS.md`（核心，≤150 行，开头是玩家指令表）与按需读的 `LetsPlay/docs/*.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。根目录 `README.md` 只给开发者。
+- 重要设计 / 需求文件：项目章程是 `docs/PROJECT-CHARTER.md`（决策记录与活章程）；设计目标是 `docs/PLAN.md`。套件入口（`kit/orchestration.md`）判断「章程缺失」时只看 `docs/PROJECT-CHARTER.md`：文件存在且没有占位符，即章程已建立。玩家说明是 `LetsPlay/README.md`；DM 手册是 `LetsPlay/AGENTS.md`（核心，≤150 行，开头是玩家指令表）与按需读的 `LetsPlay/docs/*.md`；引擎说明是 `tools/combat-sim/README.md` 与 `tools/combat-sim/docs/`。根目录 `README.md` 只给开发者。章程与 `docs/PLAN.md` 同时记录 #351 已确认的独立 Web 游玩、专用 DM Harness 与可配置多模型方向，以及仍待所有者决定的技术栈、部署认证、事务/事件权威、建议数量与版本编号。
 
 ## 范围与安全
 

@@ -2,6 +2,8 @@
 
 > 本文定义产品要解决的问题、设计边界和验收方式。审阅基准为 2026-11-25 的 GitHub `main`，提交 [`5f112b1`](https://github.com/ctrlshiftaltdel/TalkDND/commit/5f112b16324b0761dc8ea7d43f43faaff8cb4846)，公开发布基准为 [v1.6.0](https://github.com/ctrlshiftaltdel/TalkDND/releases/tag/v1.6.0)。产品决定以[项目章程](PROJECT-CHARTER.md)的 Decision Log 为准。文末索引记录每条 Issue 和 PR 对本文的影响，实时状态和取证细节见 GitHub 原记录。
 
+2026-11-27 起，[#351](https://github.com/ctrlshiftaltdel/TalkDND/issues/351) 确认的独立 Web 游玩、专用 DM Harness 与可配置多模型方向已同步到本文（[#353](https://github.com/ctrlshiftaltdel/TalkDND/issues/353)，基线 `35f8478`）。原有审阅基准、章节与 Issue/PR 索引保留为历史快照，不回写。
+
 ## 设计目标
 
 玩家在 `LetsPlay/` 启动本地 Agent，在聊天中从开局、建卡、探索和战斗走到存档，并能换一个会话继续。AI DM 管叙述、NPC、选项、自定义行动和规则裁定的表达。玩家决定角色行动、成长选择和反应。程序负责掷骰、引擎已支持的机械结算、校验和存档。DM 应能说清用了哪版规则、查到了什么依据，以及哪些结果需要人工裁定。
@@ -14,6 +16,9 @@
 | DM 知识、保密与自动化 | 知识查询读本地来源，默认只显示玩家已知内容。每档固定类别的自动化设置只改变何时提示、询问或代结算。玩家选择和反应始终由玩家决定。 | `knowledge` 五个入口和存档默认、场景/遭遇覆盖已交付。部分其他表面只读命令的完整性审计或缓存行为仍需逐入口核对。[#219](https://github.com/ctrlshiftaltdel/TalkDND/pull/219) [#223](https://github.com/ctrlshiftaltdel/TalkDND/pull/223) [#280](https://github.com/ctrlshiftaltdel/TalkDND/pull/280) [#284](https://github.com/ctrlshiftaltdel/TalkDND/pull/284) [#285](https://github.com/ctrlshiftaltdel/TalkDND/issues/285) |
 | 施法 | 用结构化法术、角色法术列表和一条战斗执行路径。保留旧自由文本，明确程序与 DM 的处理边界。 | v1.6.0 已发布 schema 10、列表 CLI、战斗施法和两版手写法术数据。随包的 300 多个 SRD 法术仍缺结构化元数据，高级效果与若干施法限制仍需人工裁定。[#241](https://github.com/ctrlshiftaltdel/TalkDND/pull/241) [#243](https://github.com/ctrlshiftaltdel/TalkDND/pull/243) [#245](https://github.com/ctrlshiftaltdel/TalkDND/pull/245) [#249](https://github.com/ctrlshiftaltdel/TalkDND/pull/249) [#251](https://github.com/ctrlshiftaltdel/TalkDND/pull/251) |
 | 单职业成长 | 让玩家看见可选机会、了解资格并显式选择。可靠更新派生数值，保留手改和未知历史，提供可恢复的迁移与提交。 | 主分支已有三态校验库、身份诊断、写者保护、提交与显式恢复的库级实现。当前主 schema 仍为 10。schema 11、玩家预览、选择、派生重算和成长提交 CLI 尚需交付。[#261](https://github.com/ctrlshiftaltdel/TalkDND/pull/261) [#276](https://github.com/ctrlshiftaltdel/TalkDND/pull/276) [#310](https://github.com/ctrlshiftaltdel/TalkDND/pull/310) [#312](https://github.com/ctrlshiftaltdel/TalkDND/pull/312) [阶段计划](ADVANCEMENT-PHASE-1-PLAN.md) |
+| 独立 Web 游玩与 DM Harness | 专用 DM Harness 把 `LetsPlay/AGENTS.md` 的可执行纪律变成状态机、类型化工具、权限和验证，不依赖通用 Agent 的 Shell 或文件写入。手机为主要游玩平台，竖屏为默认基线。模型按任务配置和路由，复用 Rust `talkdnd`/`combat-sim`、四规则集、知识和存档。 | 方向已确认，尚无 Web、Harness 或模型路由交付。用例、权限、玩家投影、恢复契约和技术选型待 P0 冻结。首批子任务与分期见 [#351](https://github.com/ctrlshiftaltdel/TalkDND/issues/351)，规则总路线见 [#183](https://github.com/ctrlshiftaltdel/TalkDND/issues/183)。 |
+
+上表的「截至审阅基准的交付与缺口」列是 2026-11-25 的历史快照，不回写。#330 已验证 schema 11 的身份迁移及其自身的恢复。玩家成长提交与恢复依赖 [#333](https://github.com/ctrlshiftaltdel/TalkDND/issues/333)，主机平台支持依赖 [#334](https://github.com/ctrlshiftaltdel/TalkDND/issues/334)。已批准的决定与证据以[章程 Decision Log](PROJECT-CHARTER.md) 及 #330、#333、#334 的记录为准。新增的 Web 行是 2026-11-27 方向，尚未交付。
 
 ## 设计逻辑
 
@@ -52,10 +57,22 @@
 
 ## 范围与约束
 
-- 本地 CLI 支持 Linux x86_64、Windows x86_64、macOS arm64。发布游玩包只含可公开的已跟踪游玩文件、许可和二进制。无账号、托管游戏或网络服务。在引擎和 Git 跟踪数据中只收公开 SRD 或其可分发衍生内容。
+- 本地 CLI 支持 Linux x86_64、Windows x86_64、macOS arm64。发布游玩包只含可公开的已跟踪游玩文件、许可和二进制。当前本地 CLI 无账号、托管游戏或网络服务。已确认的 Web 方向可以增加游戏服务器和显式启用的远程访问，但其部署、认证与托管范围尚未批准（见[章程](PROJECT-CHARTER.md)）。在引擎和 Git 跟踪数据中只收公开 SRD 或其可分发衍生内容。
 - 玩家规则书、冒险书、存档、角色卡、会话日志、DM 秘密和凭据不得进入仓库、公开任务记录或 CI 日志。已授权的 PHB/DMG/MM pack 从本地索引构建，独立于游玩包和 Git 发布。托管 CI 用合成 fixture，既不构建也不获取真实 FULL pack。授权范围变更时按所有者决定撤换资产。
 - 语言为 Rust。既有例外是经 uv 运行的 AgentOrch Python 套件与 pdf2md，以及 CI YAML。原有套件校验、上游基线、漂移核查和内容检查继续覆盖仓库。`tools/combat-sim/src` 维持默认只读的约定。四个 Rust crate 版本同步，`advancement-lock` 为不单独发布的内部库。主存档 schema 变更附自动迁移并升次版本或主版本，发布标签有对应 CHANGELOG 小节。
 - 配置、规则集、schema、完整性、身份或资格发生无法判定的错误时，给出可定位的原因与恢复路径，防止猜测或静默降级。产品边界变更回写项目章程，任务细节与实际 CI 证据回链 GitHub。
+
+## 独立 Web 游玩方向（#351）
+
+本节记录所有者于 2026-11-27 确认的方向，是设计目标，不是已交付功能。具体技术、界面和数值仍按 P0 核实，候选技术不等于已批准；完整决定见[章程的 Decision Log](PROJECT-CHARTER.md)。
+
+- **首个闭环复用既有 CLI 语义。** 首个合成 SRD 竖屏闭环（P1）复用 `combat-sim` 已持久化的待决反应和原骰值续跑，不重新掷骰、不重复扣资源。在其上增加类型化命令入口、按角色与可见性校验的权限、以及玩家投影；只有通过校验的游戏命令才能写入权威状态。CLI 与 Web 共用首个场景所需的回合与权限校验、反应续跑和持久化入口，临时适配必须限定命令与结构化输入输出。
+- **恢复证据先于可写入口。** P1 至少注入并核对两个故障窗口：遭遇已写而队伍未写，以及结算已完成而响应丢失。对每个窗口记录骰值、遭遇、队伍、资源、日志与玩家事件的最终状态；已完成请求可查回原结果，无法确定提交结果时暂停并提供显式恢复路径。刷新、重连或服务重启后，同一待决反应由玩家明确确认或放弃，原骰值只结算一次。通过 [#351](https://github.com/ctrlshiftaltdel/TalkDND/issues/351) AC-3 与 AC-4 的故障与恢复验收，以及 AC-7 的传输、认证、授权与请求防护验收后，才开放手机可写入口。
+- **复用既有机制，不另建一套。** 自动化沿用 [#218](https://github.com/ctrlshiftaltdel/TalkDND/issues/218) 的分级、审计和玩家选择/反应不得为 `auto` 的边界，按遭遇 > 场景 > 存档解析，并区分等待、拒绝和未分类结果。知识语义沿用 [#222](https://github.com/ctrlshiftaltdel/TalkDND/issues/222) 的稳定 ID、来源标签、`known` 默认视图和秘密过滤，为玩家 API、事件流、行动建议与地图提供同一份字段投影和公开事实快照；首段叙事推给玩家前也受同一可见性约束。空间规则沿用 [#174](https://github.com/ctrlshiftaltdel/TalkDND/issues/174) 的内核，战役上下文化沿用现有固定记忆、实体关系、世界时间和原创台账。
+- **能力和规则取证按原 Issue。** 身份迁移及其自身恢复按 [#330](https://github.com/ctrlshiftaltdel/TalkDND/issues/330) 取证，玩家成长提交与恢复按 [#333](https://github.com/ctrlshiftaltdel/TalkDND/issues/333) 取证，主机平台支持按 [#334](https://github.com/ctrlshiftaltdel/TalkDND/issues/334) 取证。高级法术按 [#335](https://github.com/ctrlshiftaltdel/TalkDND/issues/335) 与 [#336](https://github.com/ctrlshiftaltdel/TalkDND/issues/336) 的数据与规则设计取证，Web 只在相关实现经验证后声明支持该规则。未实现规则继续明确标记为 DM 裁定。P5 战术地图复用已交付的空间规则，默认战术 AI 保持现行路线。
+- **分期与任务状态。** 阶段顺序与每阶段验收门以 [#351](https://github.com/ctrlshiftaltdel/TalkDND/issues/351) 为准：P0 架构与移动竖屏原型，P1 合成闭环，P2 专用 Harness 与单模型，P3 完整 Mobile-first 游玩，P4 多模型路由，P5 二维战术地图，P6 长战役与 PWA/私有部署候选，P7 Web 发布（版本号待定）。移动交互不延后到 P5/P7。任务状态只在 GitHub Issues，本文不建立第二套任务清单；规则完善沿 [#183](https://github.com/ctrlshiftaltdel/TalkDND/issues/183) 推进，Web 只把已验证能力接入游玩入口。
+- **P1 合成档的 schema。** P1 使用 v1.7.1 的 schema 10 合成 SRD 档作为刻意选择的兼容 fixture。schema 11 的身份迁移及其自身恢复由 [#330](https://github.com/ctrlshiftaltdel/TalkDND/issues/330) 验证，玩家成长提交与恢复依赖 [#333](https://github.com/ctrlshiftaltdel/TalkDND/issues/333)，主机平台支持依赖 [#334](https://github.com/ctrlshiftaltdel/TalkDND/issues/334)。本文不改写该历史。
+- **未决事项。** 具体 Web 技术栈（前端框架、地图库、服务端框架）、PWA 交付、网络部署与认证、命令/领域状态/玩家事件的事务权威、部分写入的核对与重试判定、建议数量是否可变及是否同步修改共用桌规、以及版本编号，均待所有者决定；见[章程的 Open decisions](PROJECT-CHARTER.md)。
 
 ## 推进顺序
 
@@ -69,6 +86,8 @@
 步骤 1 的回归与平台调查可以独立推进。Linux、macOS 和 Windows 都已从改名后的 Release 游玩包完成两版 SRD 的合成回归，覆盖包外建档、掷骰、战斗、跨进程处理护盾术、玩家视图名称遮蔽和重复确认拒绝。Linux 和 macOS 的继续恢复与回滚锁竞争用例均已通过。[三平台游玩包及恢复测试](https://github.com/ctrlshiftaltdel/TalkDND/actions/runs/45580891809)
 
 先取得可用的只读体验，写入只覆盖有证据支持的边界。高级法术、怪物与遭遇、探索与危险、社交和经济、可选规则沿 [#183](https://github.com/ctrlshiftaltdel/TalkDND/issues/183) 的主题推进，每组以具体场景和实测覆盖定发布范围。该 Epic 的旧版本编号和多职业范围需与后续决定对齐。当前成长以[首阶段计划](ADVANCEMENT-PHASE-1-PLAN.md)和章程为准。
+
+独立 Web 游玩方向的分期、依赖和验收门见 [#351](https://github.com/ctrlshiftaltdel/TalkDND/issues/351)，其任务拆分为子 Issue；本表继续服务现有本地 CLI 交付，不建立第二套任务状态。两者冲突时，以[章程](PROJECT-CHARTER.md) 的范围和本文的设计目标为准。
 
 ### 两版规则核对后的实施顺序
 
@@ -101,6 +120,8 @@
 以下为基线快照，共 **159 条 Issue、157 条 PR**。对应的需求、决定与实现尽量并排。调查、重复条目、测试和发布维护保留其实际影响。全部 157 个 PR 的合并提交均可从本基线追溯。已合并的库、调查或文档不自动记为玩家功能。撤销或被后续决定替换的行为保留历史出处。
 
 基线后的草稿 [PR #317](https://github.com/ctrlshiftaltdel/TalkDND/pull/317) 汇总独立分支的规则核对和实现。它增加玩家反应、护盾术对魔法飞弹的触发、两版同回合施法、手动确认、跨探索与战斗的长施法，以及为成长提交提供依据的显式遭遇登记与结束。发布入口使用三平台游玩包复核。
+
+[#351](https://github.com/ctrlshiftaltdel/TalkDND/issues/351)（独立 Web 游玩 Epic）、[#353](https://github.com/ctrlshiftaltdel/TalkDND/issues/353)（本文档同步）与后续拆分的子 Issue 晚于该快照，不并入上列历史索引；其状态以 GitHub Issues 为准。
 
 <details>
 <summary>1–85｜游玩入口、规则基础与本地书籍</summary>
