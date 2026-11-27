@@ -790,7 +790,17 @@ fn interrupted_schema11_publish_rolls_back_and_protects_later_hand_edits() {
         &evidence_dir,
     ))
     .unwrap();
-    assert!(report.error.is_none(), "{:?}", report.error);
+    // A successful rollback returns its positive note through the report's
+    // legacy `error` field (see advancement_recovery::finish_terminal), so
+    // `report.error` is not an error signal here. Assert the protocol outcome
+    // the rollback must reach instead.
+    assert_eq!(report.protocol_state, adv::State::Failed, "{report:?}");
+    assert_eq!(report.stage, adv::Stage::StoppedBeforeWrite, "{report:?}");
+    assert!(!report.needs_human_merge, "{report:?}");
+    assert!(
+        report.written_paths.iter().any(|path| path == SIDECAR),
+        "{report:?}"
+    );
     assert!(
         !fixture.save.join(SIDECAR).exists(),
         "rollback must restore true path absence, not write empty bytes"
