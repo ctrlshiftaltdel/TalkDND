@@ -4,6 +4,27 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v1.8.0 — 2026-11-27
+
+### 新功能
+
+- **schema 11：成长身份受控迁移（#330，#352）**：schema 9/10 → 11 为每名队伍角色建立严格 v1 身份——结构化卡末尾的顶层 `talkdnd_identity` 字段（或纯 Markdown 卡末尾的独立注释行）与 `advancement/<id>.yaml` 成长记录（`version: 1`、`history: unknown`）保存同一 128 位非秘密标识。首次绑定需 DM 确认前像：`talkdnd migrate --dry-run` 列出每张未绑定卡的前像摘要与确认参数，`talkdnd migrate --confirm-binding PATH=DIGEST` 完成入籍。整个 10→11 步骤走成长协议 D 流程：写入前复查 #344 准入（首批可写环境为已验证的本地 Linux ext4）、整份备份并验证 ACL/xattr 元数据、意图记录与显式恢复；`save-meta.yaml` 与 sidecar 与载体同轮发布，失败时存档停在 schema 10，不存在半迁移。sidecar 已存在（包括空文件）时拒绝自动入籍，走人工核对或显式恢复；孤儿/无效记录、双侧已有标识、摘要不符的确认均失败关闭。同 ID 重绑不在本批。
+
+### 变更
+
+- 普通 `talkdnd migrate` / `talkdnd start` 在身份未确认或环境未准入时停在 schema 10 并报告原因与待确认摘要，不再产生无谓重写；存档结构变化按 `docs/versioning.md` 升次版本，四个 crate 同步 1.7.1 → 1.8.0（#352）。
+- `advancement_commit` 的登记发布/恢复目标纳入 `advancement/*.yaml` 与 `save-meta.yaml`；D 备份清单在准入通过后使用 ext4 元数据清单（捕获/恢复/复验 ACL 与 xattr、fchown 保所有者）（#352）。
+
+### 更新说明 / 迁移
+
+- 旧存档（schema ≤ 10）第一次运行新版本时行为不变：先整份备份到 `Saves/_backups/` 再迁移到 schema 10；schema 10 → 11 需按上述确认流程单独完成。schema 11 存档在旧版二进制下按既有语义拒绝打开（`update talkdnd`）。
+- 契约与交付边界见 `docs/ADVANCEMENT-IDENTITY-CONTRACT.md` §6「迁移交付记录」；存档目录变化见 `LetsPlay/docs/layout.md`。
+
+### 已知限制
+
+- 端到端取证在 GitHub Actions Ubuntu（ext4）上以合成存档覆盖：绑定发布、ACL/xattr 保真、幂等重跑、未来/损坏版本拒绝与中断后的显式恢复；真实 ENOSPC（磁盘写满）只以 D 协议故障注入等价覆盖（复制/清单失败目标字节原样），真实设备的写满取证待首个准入环境实测时补记。
+- macOS/Windows 上的 10→11 按准入失败关闭（存档保持 schema 10）；macOS 的可写准入证据待后续任务。
+
 ## v1.7.1 — 2026-11-26
 
 ### 新功能
