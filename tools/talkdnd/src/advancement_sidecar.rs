@@ -258,6 +258,36 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
             plan.occupied.push(token.to_owned());
         }
 
+        let markdown_digest = digest(&markdown).as_str().to_owned();
+        let sheet_digest = sheet_bytes
+            .as_ref()
+            .map(|bytes| digest(bytes).as_str().to_owned());
+
+        // A confirm naming this carrier without matching its current bytes is
+        // a refusal in every state — bound or pending: the DM reviewed
+        // something else, and "already bound" must not swallow that.
+        for rel in [Some(markdown_rel.as_str()), sheet_rel.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            let Some(group) = grouped.get(rel) else {
+                continue;
+            };
+            let expected = if rel == markdown_rel {
+                markdown_digest.as_str()
+            } else {
+                // A sheet locator can only be confirmed here when the sheet
+                // was read above, so its digest exists.
+                sheet_digest
+                    .as_deref()
+                    .expect("confirmed sheet has a digest")
+            };
+            if group[0].digest != expected {
+                plan.refused
+                    .push(format!("{rel} 的确认摘要与当前字节不符；请先重新只读核对"));
+            }
+        }
+
         let carrier_token = match sheet_rel.as_deref().zip(sheet_token.as_deref()) {
             Some((_sheet, token)) => Some(token.to_owned()),
             None => markdown_token.map(str::to_owned),
@@ -306,35 +336,6 @@ pub fn plan(save: &Path, schema: u32, confirms: &[BindingConfirm]) -> Result<Bin
                 plan.refused
                     .push(format!("无法检查 {sidecar_rel}（{error}）"));
                 continue;
-            }
-        }
-
-        let markdown_digest = digest(&markdown).as_str().to_owned();
-        let sheet_digest = sheet_bytes
-            .as_ref()
-            .map(|bytes| digest(bytes).as_str().to_owned());
-
-        // A confirm naming this carrier without matching its current bytes is
-        // a refusal: the DM reviewed something else.
-        for rel in [Some(markdown_rel.as_str()), sheet_rel.as_deref()]
-            .into_iter()
-            .flatten()
-        {
-            let Some(group) = grouped.get(rel) else {
-                continue;
-            };
-            let expected = if rel == markdown_rel {
-                markdown_digest.as_str()
-            } else {
-                // A sheet locator can only be confirmed here when the sheet
-                // was read above, so its digest exists.
-                sheet_digest
-                    .as_deref()
-                    .expect("confirmed sheet has a digest")
-            };
-            if group[0].digest != expected {
-                plan.refused
-                    .push(format!("{rel} 的确认摘要与当前字节不符；请先重新只读核对"));
             }
         }
 

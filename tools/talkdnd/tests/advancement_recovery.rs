@@ -310,9 +310,11 @@ fn tree_unchanged(save: &Path, before: &(BTreeMap<String, Vec<u8>>, Vec<u8>, Vec
 }
 
 fn assert_scope_reported(paths: &[String]) {
+    // Schema 11 made `save-meta.yaml` a registered replace target, so it is
+    // inside the recovery target set and must NOT be scope-limited anymore.
     assert!(
-        paths.iter().any(|p| p == "save-meta.yaml"),
-        "save-meta.yaml is outside the registered target set and must be reported, got {paths:?}"
+        !paths.iter().any(|p| p == "save-meta.yaml"),
+        "save-meta.yaml is a registered target, must not be scope-limited, got {paths:?}"
     );
     assert!(
         paths
