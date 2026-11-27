@@ -110,9 +110,10 @@ fn parse_selection(args: &SelectionArgs<'_>) -> Result<ParsedSelection> {
                 "来源声明必须为非空且不带首尾空白的精确值"
             );
             ensure!(
-                raw.chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'),
-                "来源声明格式错误：只接受小写字母、数字、连字符或下划线"
+                raw.chars().all(|c| {
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '.'
+                }),
+                "来源声明格式错误：只接受小写字母、数字、点号、连字符或下划线"
             );
             Some(raw.to_owned())
         }
@@ -1041,7 +1042,10 @@ fn canonical_spec(pairs: &[(String, i32)]) -> String {
 // ---------------------------------------------------------------- helpers --
 
 fn score_of(preview: &Preview, ability: &str) -> Option<i32> {
-    if preview.abilities_with_conflicting_sources.contains(&ability) {
+    if preview
+        .abilities_with_conflicting_sources
+        .contains(&ability)
+    {
         return None;
     }
     preview
