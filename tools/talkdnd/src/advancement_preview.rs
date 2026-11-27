@@ -15,56 +15,60 @@ use crate::advancement_validation::{self, ConditionCheck, ConditionStatus, Valid
 use crate::{advancement_identity, charsheet, classdata, data, identity_diag, library, migrate};
 
 #[derive(Serialize)]
-struct Preview {
-    consistency: &'static str,
-    write_capability: &'static str,
-    submission_binding: &'static str,
-    identity: &'static str,
-    encounter: &'static str,
-    ruleset: Ruleset,
-    class: String,
-    class_source: &'static str,
-    current_level: i32,
-    target_level: i32,
-    proficiency_bonus: i32,
-    xp_threshold: i64,
-    opportunity: Option<&'static str>,
-    opportunity_source: &'static str,
-    class_features: Vec<String>,
-    abilities: Vec<AbilityPotential>,
-    abilities_with_conflicting_sources: Vec<&'static str>,
-    candidates: Vec<Candidate>,
-    unknowns: Vec<&'static str>,
-    dm_review: &'static str,
+pub(crate) struct Preview {
+    pub(crate) consistency: &'static str,
+    pub(crate) write_capability: &'static str,
+    pub(crate) submission_binding: &'static str,
+    pub(crate) identity: &'static str,
+    pub(crate) encounter: &'static str,
+    pub(crate) ruleset: Ruleset,
+    pub(crate) class: String,
+    pub(crate) class_source: &'static str,
+    pub(crate) current_level: i32,
+    pub(crate) target_level: i32,
+    pub(crate) proficiency_bonus: i32,
+    pub(crate) xp_threshold: i64,
+    pub(crate) opportunity: Option<&'static str>,
+    pub(crate) opportunity_source: &'static str,
+    pub(crate) class_features: Vec<String>,
+    pub(crate) abilities: Vec<AbilityPotential>,
+    pub(crate) abilities_with_conflicting_sources: Vec<&'static str>,
+    pub(crate) candidates: Vec<Candidate>,
+    pub(crate) unknowns: Vec<&'static str>,
+    pub(crate) dm_review: &'static str,
 }
 
 #[derive(Serialize)]
-struct AbilityPotential {
-    ability: &'static str,
-    current_score: i32,
-    current_modifier: i32,
-    modifier_after_plus_one: Option<i32>,
-    modifier_after_plus_two: Option<i32>,
+pub(crate) struct AbilityPotential {
+    pub(crate) ability: &'static str,
+    pub(crate) current_score: i32,
+    pub(crate) current_modifier: i32,
+    pub(crate) modifier_after_plus_one: Option<i32>,
+    pub(crate) modifier_after_plus_two: Option<i32>,
 }
 
 #[derive(Serialize)]
-struct Candidate {
-    id: String,
-    name: String,
-    source: String,
-    category: Option<String>,
-    minimum_level: Option<i64>,
-    eligibility: &'static str,
+pub(crate) struct Candidate {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) source: String,
+    pub(crate) category: Option<String>,
+    pub(crate) minimum_level: Option<i64>,
+    pub(crate) eligibility: &'static str,
 }
 
-struct CharacterFacts {
-    class: String,
-    class_source: &'static str,
-    structured_combat: Option<Value>,
+pub(crate) struct CharacterFacts {
+    pub(crate) class: String,
+    pub(crate) class_source: &'static str,
+    pub(crate) structured_combat: Option<Value>,
+    /// The structured sheet when one exists; legacy Markdown-only cards have
+    /// none, so recorded feats and the subclass stay unknown to selection.
+    pub(crate) sheet: Option<charsheet::CharFile>,
 }
 
 pub(crate) fn run(root: &Path, save: &Path, who: &str, json: bool) -> Result<()> {
-    let preview = inspect(root, save, who)?;
+    let inspection = inspect(root, save, who)?;
+    let preview = inspection.preview;
     if json {
         println!("{}", serde_json::to_string(&preview)?);
     } else {
@@ -73,7 +77,15 @@ pub(crate) fn run(root: &Path, save: &Path, who: &str, json: bool) -> Result<()>
     Ok(())
 }
 
-fn inspect(root: &Path, save: &Path, who: &str) -> Result<Preview> {
+/// What one inspection produced: the player-facing preview plus the character
+/// facts (including the structured sheet, when one exists) that read-only
+/// selection validation reuses.
+pub(crate) struct Inspection {
+    pub(crate) preview: Preview,
+    pub(crate) facts: CharacterFacts,
+}
+
+pub(crate) fn inspect(root: &Path, save: &Path, who: &str) -> Result<Inspection> {
     let saves = root.join("Saves");
     ensure!(
         save.parent() == Some(saves.as_path()),
@@ -189,31 +201,34 @@ fn inspect(root: &Path, save: &Path, who: &str) -> Result<Preview> {
     } else {
         "active_or_unknown"
     };
-    Ok(Preview {
-        consistency: "unverified",
-        write_capability: "unverified",
-        submission_binding: "unavailable_in_read_only_preview",
-        identity: advancement_identity::binding_status(save, &diagnostic, character),
-        encounter,
-        ruleset,
-        class: character_facts.class,
-        class_source: character_facts.class_source,
-        current_level,
-        target_level,
-        proficiency_bonus: crate::progress::prof_for_level(target_level),
-        xp_threshold: crate::progress::XP_TABLE[current_level as usize],
-        opportunity,
-        opportunity_source: if edition == "2014" {
-            "SRD 5.1 class progression"
-        } else {
-            "SRD 5.2.1 class progression"
+    Ok(Inspection {
+        preview: Preview {
+            consistency: "unverified",
+            write_capability: "unverified",
+            submission_binding: "unavailable_in_read_only_preview",
+            identity: advancement_identity::binding_status(save, &diagnostic, character),
+            encounter,
+            ruleset,
+            class: character_facts.class.clone(),
+            class_source: character_facts.class_source,
+            current_level,
+            target_level,
+            proficiency_bonus: crate::progress::prof_for_level(target_level),
+            xp_threshold: crate::progress::XP_TABLE[current_level as usize],
+            opportunity,
+            opportunity_source: if edition == "2014" {
+                "SRD 5.1 class progression"
+            } else {
+                "SRD 5.2.1 class progression"
+            },
+            class_features,
+            abilities,
+            abilities_with_conflicting_sources,
+            candidates,
+            unknowns,
+            dm_review: "专长前置、能力值分配、HP 与其他衍生效果需由玩家和 DM 核对",
         },
-        class_features,
-        abilities,
-        abilities_with_conflicting_sources,
-        candidates,
-        unknowns,
-        dm_review: "专长前置、能力值分配、HP 与其他衍生效果需由玩家和 DM 核对",
+        facts: character_facts,
     })
 }
 
@@ -261,6 +276,7 @@ fn character_facts(
             class: class.to_ascii_lowercase(),
             class_source: "generated_card",
             structured_combat: None,
+            sheet: None,
         });
     };
     let text = regular_text(&save.join(path), "结构化角色卡不可读取")?;
@@ -288,11 +304,12 @@ fn character_facts(
     Ok(CharacterFacts {
         class: class.to_ascii_lowercase(),
         class_source: "structured_sheet",
-        structured_combat: Some(sheet.combat),
+        structured_combat: Some(sheet.combat.clone()),
+        sheet: Some(sheet),
     })
 }
 
-fn ability_potential(
+pub(crate) fn ability_potential(
     markdown: &Value,
     structured: Option<&Value>,
 ) -> (Vec<AbilityPotential>, Vec<&'static str>) {
@@ -325,7 +342,7 @@ fn ability_potential(
     (values, conflicts)
 }
 
-fn candidates(
+pub(crate) fn candidates(
     root: &Path,
     ruleset: Ruleset,
     target_level: i32,

@@ -68,6 +68,37 @@ combat-sim 仍从角色卡的 `combat yaml` 块读数据，从 `party-state.yaml
 
 预览每次读取当前资料。结果显示 `consistency: unverified` 和 `write_capability: unverified`，绑定不可用于提交。未登记或不明的遭遇只显示状态提示，身份未核对时也可查看有可信来源的升级资料。缺少可信职业或等级时会说明原因并停止。
 
+### 只读选择校验
+
+玩家显式给出本次机会和唯一候选后，同一条命令用三态内核出具可解释的资格结果：
+
+```sh
+# 专长候选（目录里的精确 ID）
+talkdnd advancement identity-preview --level-up <角色> \
+  --select-opportunity ability_score_improvement_or_optional_feat \
+  --select-feat <专长 ID>
+
+# 属性提升候选（恰好 +2：一项 +2 或两项各 +1）
+talkdnd advancement identity-preview --level-up <角色> \
+  --select-opportunity ability_score_improvement_feat_or_other_qualified_feat \
+  --select-abilities str+1,dex+1
+
+# 未知条件由 DM 单独确认（依据非空；确认不能替代玩家选择）
+… --dm-confirm "DM 核对：该角色此前未取过专长"
+
+# 未识别专长声明来源（授权目录的包 ID）
+… --select-feat <专长 ID> --select-source srd-5.1-feats
+```
+
+规则与边界：
+
+- 每个资格条件逐条给出 `met` / `not_met` / `unknown`，并附来源与版别（2014/2024）。机会 ID 按精确字符串比对；专长 ID 只接受目录的精确小写 ID，别名、显示名与越界数值一律拒绝。
+- 已知非法优先拒绝：错版、未授权来源、已知重复（结构化角色卡已记录）、前提等级、属性上限、机会不授予该候选形式。已知非法与未知并存时同样拒绝。
+- 未知条件（历史选择、子职特性、目录外内容等）只有在 DM 用 `--dm-confirm` 单独给出非空依据时才继续，结果标 `not_program_verified: true`，不会转为已验证。
+- 目录里找不到的专长只有在机会、声明授权与重复三项条件各自通过后才标 `unverified_effects_manual`（未验证、效果手动）；声明错版或未授权来源仍然拒绝。
+- 校验全程只读：成功、输入错误与拒绝都不写任何文件；属性提升与专长效果都不由本入口应用，派生数值、提交与回退由后续任务接线。旧档（仅 Markdown 角色卡）的历史选择保持未知，由 DM 确认后继续。
+- 遭遇状态、身份绑定与一致性边界沿用预览的输出；提交前的重新校验由成长提交任务负责。
+
 - **AC**：装备中的护甲（基础值 + 敏捷，按上限）+ 盾牌 +2 + 物品 `ac_bonus` + 防御风格 +1（穿护甲时）；不穿护甲时用 `ac_base`（无甲公式或迁移时的原 AC）。
 - **攻击**：每件装备中的武器生成一条攻击（熟练按职业武器熟练、灵巧取高、远程用敏捷、魔法加值），可双手武器另生成 `<id>-2h`。非武器攻击（徒手、法术、天生攻击）原样保留。
 - **战斗风格**：箭术 +2 命中（远程）；对决 +2 伤害（单手近战）；巨武器战斗在双手近战攻击上写 `reroll_damage_below: 2`（2014）或 `damage_die_min: 3`（2024），combat-sim 掷伤害时自动执行。
