@@ -254,6 +254,9 @@ fn happy_path_publishes_once_in_order_and_completes() {
             "combat/party-state.yaml".to_string(),
             "Characters/Aria.md".to_string(),
             "progress.yaml".to_string(),
+            // Schema 11: the save metadata is a registered target in its own
+            // right, published after the data files and before the logs.
+            "save-meta.yaml".to_string(),
             "rolls.log".to_string(),
             "Sessions/2030-01-02.md".to_string(),
             "integrity.yaml".to_string(),

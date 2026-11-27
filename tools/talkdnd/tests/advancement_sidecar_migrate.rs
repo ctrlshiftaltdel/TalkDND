@@ -198,14 +198,18 @@ fn an_existing_sidecar_blocks_enrollment_even_when_the_file_is_empty() {
     );
 
     // An EMPTY sidecar file is "exists", never "missing": no enrollment and
-    // no silent overwrite of what may be an interrupted run's evidence.
+    // no silent overwrite of what may be an interrupted run's evidence. The
+    // record reader refuses it (an unparsable record), which is the same
+    // fail-closed signal; the pending list must be empty either way.
     fs::write(fixture.save.join(SIDECAR), b"").unwrap();
     let plan = fixture.plan(&[]);
     assert!(!plan.ready_for_schema_11());
     assert!(
-        plan.refused.iter().any(|reason| {
-            reason.contains(SIDECAR) && reason.contains("空文件同样视为存在")
-        }),
+        plan.pending.is_empty(),
+        "an existing (empty) sidecar must not read as pending: {plan:?}"
+    );
+    assert!(
+        plan.refused.iter().any(|reason| reason.contains(SIDECAR)),
         "{:?}",
         plan.refused
     );

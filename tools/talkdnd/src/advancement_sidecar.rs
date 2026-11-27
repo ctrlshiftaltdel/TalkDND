@@ -34,6 +34,9 @@ pub struct BindingConfirm {
 
 impl BindingConfirm {
     /// Parse `PATH=DIGEST`. The path is a locator, never character content.
+    /// The digest is the project's `save_lock::digest` string; a bare 64-hex
+    /// value is accepted and normalized to the `sha256:` form every plan
+    /// compares against.
     pub fn parse(spec: &str) -> Result<Self> {
         let (path, digest_text) = spec
             .split_once('=')
@@ -43,16 +46,19 @@ impl BindingConfirm {
             "确认路径必须是存档内的 POSIX 相对路径"
         );
         let digest_text = digest_text.trim();
+        let bare = digest_text
+            .strip_prefix("sha256:")
+            .unwrap_or(digest_text);
         ensure!(
-            digest_text.len() == 64
-                && digest_text
+            bare.len() == 64
+                && bare
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
             "确认摘要必须是 64 位十六进制 SHA-256"
         );
         Ok(Self {
             path: path.to_string(),
-            digest: digest_text.to_string(),
+            digest: format!("sha256:{bare}"),
         })
     }
 }
@@ -467,10 +473,12 @@ mod tests {
         assert!(BindingConfirm::parse("../x.md=0").is_err());
         assert!(BindingConfirm::parse("Characters/A.md=XYZ").is_err());
         assert!(BindingConfirm::parse("Characters/A.md=0123").is_err());
-        let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let ok = BindingConfirm::parse(&format!("Characters/A.md={digest}")).unwrap();
+        let bare = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let ok = BindingConfirm::parse(&format!("Characters/A.md={bare}")).unwrap();
         assert_eq!(ok.path, "Characters/A.md");
-        assert_eq!(ok.digest, digest);
+        assert_eq!(ok.digest, format!("sha256:{bare}"));
+        let prefixed = BindingConfirm::parse(&format!("Characters/A.md=sha256:{bare}")).unwrap();
+        assert_eq!(prefixed.digest, ok.digest);
     }
 
     #[test]
