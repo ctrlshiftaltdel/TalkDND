@@ -4,6 +4,35 @@
 
 每个版本分为：**新功能**、**变更**、**修复**、**更新说明 / 迁移**、**已知限制**。括号里的 `#N` 是合并的 PR。
 
+## v1.8.0 — 2026-11-27
+
+### 新功能
+
+- **schema 11：成长身份受控迁移（#330，#352）**：schema 9/10 → 11 为每名队伍角色建立严格 v1 身份——结构化卡末尾的顶层 `talkdnd_identity` 字段（或纯 Markdown 卡末尾的独立注释行）与 `advancement/<id>.yaml` 成长记录（`version: 1`、`history: unknown`）保存同一 128 位非秘密标识。首次绑定需 DM 确认前像：`talkdnd migrate --dry-run` 列出每张未绑定卡的前像摘要与确认参数，`talkdnd migrate --confirm-binding PATH=DIGEST` 完成入籍。整个 10→11 步骤走成长协议 D 流程：写入前复查 #344 准入（首批可写环境为已验证的本地 Linux ext4）、整份备份并验证 ACL/xattr 元数据、意图记录与显式恢复；`save-meta.yaml` 与 sidecar 与载体同轮发布，失败时存档停在 schema 10，不存在半迁移。sidecar 已存在（包括空文件）时拒绝自动入籍，走人工核对或显式恢复；孤儿/无效记录、双侧已有标识、摘要不符的确认均失败关闭。同 ID 重绑不在本批。
+
+### 变更
+
+- 普通 `talkdnd migrate` / `talkdnd start` 在身份未确认或环境未准入时停在 schema 10 并报告原因与待确认摘要，不再产生无谓重写；存档结构变化按 `docs/versioning.md` 升次版本，四个 crate 同步 1.7.1 → 1.8.0（#352）。
+- `advancement_commit` 的登记发布/恢复目标纳入 `advancement/*.yaml` 与 `save-meta.yaml`；D 备份清单在准入通过后使用 ext4 元数据清单（捕获/恢复/复验 ACL 与 xattr、fchown 保所有者）（#352）。
+- ext4 发布路径不再用默认权限的临时文件 rename 覆盖原文件：在替换既有文件前，把已验证 D 备份中该条目的权限、所有者/组、ACL/xattr 与可恢复的 atime/mtime 应用到独占创建（0600）的暂存文件并重新读回核验，通过后才 rename；无法应用或核验时在目标被替换前停止并保留证据。显式恢复（回滚或继续到目标）对带 ext4 清单的原操作采用同一路径。`ctime` 仍只作审计，Linux 不作创建时间声明；没有前像的新 sidecar 不虚构所有者或 ACL。旧 D 请求、旧格式备份与非准入平台保持原有行为（#330 跟进，#352）。
+- `talkdnd migrate --confirm-binding` 先解析并核对确认，再走 D 协议：已确认的 schema 10→11 路径不再先取得普通迁移的 checkpoint 锁或改写 ruleset；已启用协议的存档不再开第二个 SAVE 描述符。首次迁移只有在完整确认、准入与复制前置条件（存档与备份同设备、遭遇间隙）通过后才创建协议控制文件（#330，#352）。
+
+### 修复
+
+- 已确认迁移不再在 D 提交成功后再追加会话日志：D 的 `publish_logs` 是提交内的唯一日志步骤，避免数据已发布却因事后追加失败而报告错误（#352）。
+- 确认摘要现在绑定到规划时 DM 核对的前像；在只读核对与候选构建之间修改过的载体（含结构化卡）会被拒绝并要求重新核对，而不会用新字节覆盖旧确认（#352）。
+
+### 更新说明 / 迁移
+
+- 旧存档（schema ≤ 10）第一次运行新版本时行为不变：先整份备份到 `Saves/_backups/` 再迁移到 schema 10；schema 10 → 11 需按上述确认流程单独完成。新开存档也从 schema 10 起，建角色后经同一确认流程入籍到 11。schema 11 存档在旧版二进制下按既有语义拒绝打开（`update talkdnd`）。
+- 契约与交付边界见 `docs/ADVANCEMENT-IDENTITY-CONTRACT.md` §6「迁移交付记录」；存档目录变化见 `LetsPlay/docs/layout.md`。
+
+### 已知限制
+
+- 端到端取证在 GitHub Actions Ubuntu（ext4）上以合成存档覆盖：绑定发布、ACL/xattr 保真、幂等重跑、未来/损坏版本拒绝与中断后的显式恢复；真实 ENOSPC（磁盘写满）只以 D 协议故障注入等价覆盖（复制/清单失败目标字节原样），真实设备的写满取证待首个准入环境实测时补记。
+- ext4 元数据保留（发布与显式恢复）在准入 Linux ext4 的合成 fixture 上验证**被实际替换的** `sheets/<id>.yaml`：0600 起始权限、用户 xattr、真实 POSIX ACL、uid/gid 与 mtime 在发布前后逐项相等，回滚在人为改动元数据后恢复原值；另一条故障注入证明 rename 前的失败不改动活动目标的字节与元数据。`ctime` 与 Linux 创建时间不作恢复声明；CI 结果待本次 head 运行，真实存档未验证。
+- macOS/Windows 上的 10→11 按准入失败关闭（存档保持 schema 10）；macOS 的可写准入证据待后续任务。
+
 ## v1.7.1 — 2026-11-26
 
 ### 新功能

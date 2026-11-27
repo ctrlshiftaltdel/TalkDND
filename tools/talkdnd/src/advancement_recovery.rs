@@ -11,11 +11,13 @@
 //! real saves; #264 is still unsolved. Recoverability after evidence is
 //! cleaned is not guaranteed.
 
+use crate::advancement_backup_metadata::Inventory;
 use crate::advancement_commit::acquire_inner_integrity_lock;
 use crate::advancement_commit::{
     append_log_line, copy_user_data, digest_bytes, exclusive_create_dir, is_root_excluded,
     list_dir_files, log_contains_marker, op_marker, posix_rel, read_or_empty,
-    registered_replace_targets, replace_file_atomically, sync_dir, sync_tree, write_synced, Fault,
+    registered_replace_targets, replace_file_atomically, replace_file_atomically_verified,
+    sync_dir, sync_tree, write_synced, Fault,
 };
 use crate::advancement_inner_lock::InnerLockOptions;
 use crate::advancement_lock::{
@@ -814,6 +816,10 @@ struct PlannedFile {
     preimage: Vec<u8>,
     target: Vec<u8>,
     class: FileClass,
+    /// True only when rollback must delete this path instead of writing empty
+    /// bytes. Presence comes from the verified backup, not from bytes: a
+    /// missing preimage and an existing empty file are different things.
+    remove_on_rollback: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -827,6 +833,10 @@ struct RecoveryPlan {
     files: Vec<PlannedFile>,
     scope_limited: Vec<String>,
     conflicts: Vec<String>,
+    /// The verified ext4 inventory from the original backup, when that
+    /// operation captured one. Recovery applies it through the same staged
+    /// temp file + verify-before-rename path as the original publish.
+    verified_metadata: Option<Inventory>,
 }
 
 fn recovery_plan(
@@ -836,8 +846,17 @@ fn recovery_plan(
     candidate: Option<&Path>,
 ) -> Result<RecoveryPlan> {
     let backup = backup.ok_or_else(|| anyhow!("缺少原操作备份位置，无法取得前像，停止"))?;
-    crate::advancement_commit::verify_recovery_backup(backup, req.save_dir, &leftover.operation_id)
-        .map_err(|err| anyhow!("重新验收原操作备份 {}：{err:#}", backup.display()))?;
+    // An ext4-inventory-backed operation restores its verified metadata with
+    // the bytes. An older backup has no such inventory and keeps the legacy
+    // replace semantics exactly as before. The verified call decodes the
+    // manifest once; its result is the inventory used below, so there is no
+    // second, unverified read.
+    let verified_metadata = crate::advancement_commit::verify_recovery_backup(
+        backup,
+        req.save_dir,
+        &leftover.operation_id,
+    )
+    .map_err(|err| anyhow!("重新验收原操作备份 {}：{err:#}", backup.display()))?;
 
     // Registered replace targets are defined from the candidate if present,
     // otherwise from the backup (rollback still has to cover every registered
@@ -911,6 +930,7 @@ fn recovery_plan(
         files,
         scope_limited,
         conflicts,
+        verified_metadata,
     })
 }
 
@@ -922,8 +942,9 @@ fn plan_file(
     rel: &str,
     kind: RecoverKind,
 ) -> Result<PlannedFile> {
-    let current = read_rel(save, rel)?;
+    let (current, current_present, current_regular) = read_rel_presence(save, rel)?;
     let preimage = read_rel(backup, rel)?;
+    let preimage_present = path_exists(backup, rel)?;
     let target = match kind {
         RecoverKind::Log => log_target(&preimage, &leftover.operation_id, &current),
         RecoverKind::Integrity | RecoverKind::Replace => match candidate {
@@ -931,7 +952,28 @@ fn plan_file(
             None => Vec::new(),
         },
     };
-    let class = classify(kind, &current, &preimage, &target, candidate.is_some());
+    let target_present = match (kind, candidate) {
+        (RecoverKind::Replace, Some(dir)) => path_is_regular_file(dir, rel)?,
+        _ => false,
+    };
+    let mut class = classify(kind, &current, &preimage, &target, candidate.is_some());
+    let sidecar = kind == RecoverKind::Replace && is_advancement_sidecar(rel);
+    let remove_on_rollback = sidecar
+        && !preimage_present
+        && target_present
+        && !target.is_empty()
+        && current_present
+        && current_regular
+        && current == target
+        && operation_created_target(leftover, rel, &preimage, &target);
+    if sidecar && !preimage_present && current_present && !remove_on_rollback {
+        // Bytes alone cannot tell "was absent" from "was empty": the verified
+        // backup says this sidecar had no preimage, so an existing file is
+        // unproven until every removal-proof gate above passes. Writing the
+        // empty preimage over it would overwrite bytes the operation cannot
+        // be shown to have created, so this is a conflict, not MatchesTarget.
+        class = FileClass::Neither;
+    }
     Ok(PlannedFile {
         rel: rel.to_string(),
         kind,
@@ -939,6 +981,72 @@ fn plan_file(
         preimage,
         target,
         class,
+        remove_on_rollback,
+    })
+}
+
+/// A strictly recognized advancement sidecar: `advancement/<id>.yaml`, one
+/// normal path component, no nested directories or backslashes.
+fn is_advancement_sidecar(rel: &str) -> bool {
+    let Some(name) = rel.strip_prefix("advancement/") else {
+        return false;
+    };
+    name.len() > ".yaml".len()
+        && name.ends_with(".yaml")
+        && !name.contains('/')
+        && !name.contains('\\')
+        && name != ".yaml"
+}
+
+/// Presence of the preimage path, whatever its type: absence must be a real
+/// `NotFound`, never the result of treating a non-regular entry as missing.
+fn path_exists(root: &Path, rel: &str) -> Result<bool> {
+    let path = root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+    match fs::symlink_metadata(&path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
+fn path_is_regular_file(root: &Path, rel: &str) -> Result<bool> {
+    let path = root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+    match fs::symlink_metadata(&path) {
+        Ok(meta) => Ok(meta.file_type().is_file()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
+fn read_rel_presence(root: &Path, rel: &str) -> Result<(Vec<u8>, bool, bool)> {
+    let path = root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_file() => Ok((
+            fs::read(&path).with_context(|| format!("read {}", path.display()))?,
+            true,
+            true,
+        )),
+        Ok(_) => Ok((Vec::new(), true, false)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok((Vec::new(), false, false)),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
+/// The original operation's own state must prove it wrote this exact target
+/// over this exact preimage before rollback may un-create the path.
+fn operation_created_target(
+    leftover: &advancement_lock::StateRecord,
+    rel: &str,
+    preimage: &[u8],
+    target: &[u8],
+) -> bool {
+    let before = digest_bytes(preimage);
+    let after = digest_bytes(target);
+    if leftover.pending.iter().any(|pending| pending.path == rel) {
+        return false;
+    }
+    leftover.published.iter().any(|entry| {
+        entry.path == rel && entry.done && entry.before == before && entry.after == after
     })
 }
 
@@ -1118,13 +1226,29 @@ fn apply_recovery(
             // can recompute it from the recovered tree.
             continue;
         }
-        match apply_one(req, work, file, choice, &mut written, &mut already_done) {
+        match apply_one(
+            req,
+            work,
+            file,
+            choice,
+            &mut written,
+            &mut already_done,
+            plan.verified_metadata.as_ref(),
+        ) {
             Ok(()) => {}
             Err(err) => return Err(err),
         }
     }
 
-    match apply_integrity(req, work, plan, choice, &mut written, &mut already_done) {
+    match apply_integrity(
+        req,
+        work,
+        plan,
+        choice,
+        &mut written,
+        &mut already_done,
+        plan.verified_metadata.as_ref(),
+    ) {
         Ok(()) => {}
         Err(err) => return Err(err),
     }
@@ -1164,10 +1288,15 @@ fn apply_one(
     choice: RecoveryChoice,
     written: &mut Vec<String>,
     already_done: &mut Vec<String>,
+    verified_metadata: Option<&Inventory>,
 ) -> std::result::Result<(), ApplyStop> {
     if work_file(work, &file.rel).is_some_and(|f| f.done) {
         already_done.push(file.rel.clone());
         return Ok(());
+    }
+
+    if choice == RecoveryChoice::RollbackToPreimage && file.remove_on_rollback {
+        return remove_created_sidecar(req, work, file, written, already_done);
     }
 
     let desired = match choice {
@@ -1261,7 +1390,12 @@ fn apply_one(
         {
             append_log_line(&dest, &desired[live.len()..], None::<Fault>).err()
         }
-        _ => replace_file_atomically(&dest, desired, None).err(),
+        _ => match verified_metadata {
+            Some(inventory) => {
+                replace_file_atomically_verified(&dest, desired, None, inventory, &file.rel).err()
+            }
+            None => replace_file_atomically(&dest, desired, None).err(),
+        },
     };
     if let Some(err) = write_err {
         return Err(ApplyStop::Failed {
@@ -1293,6 +1427,167 @@ fn apply_one(
     Ok(())
 }
 
+/// Roll back a sidecar the interrupted operation created: the verified
+/// backup has no such path, so restore absence (delete the file) rather than
+/// writing an empty file. Only reached for a present regular file whose live
+/// bytes still equal the operation's recorded target; every mismatch stops
+/// without deleting anything.
+fn remove_created_sidecar(
+    req: &RecoveryRequest<'_>,
+    work: &mut WorkRecord,
+    file: &PlannedFile,
+    written: &mut Vec<String>,
+    already_done: &mut Vec<String>,
+) -> std::result::Result<(), ApplyStop> {
+    let dest = req
+        .save_dir
+        .join(file.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let fail = |error: String, merge: bool| ApplyStop::Failed {
+        error,
+        written: written.clone(),
+        already_done: already_done.clone(),
+        merge,
+    };
+
+    match fs::symlink_metadata(&dest) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Absence is the desired rollback state; record progress again
+            // (idempotent re-entry) without recreating the file.
+            if let Err(err) = record_work_intent(req, work, file, &file.preimage) {
+                return Err(fail(format!("{err}"), false));
+            }
+            if let Some(hook) = req.hooks.after_intent {
+                if let Err(msg) = hook(&file.rel, req.save_dir) {
+                    return Err(ApplyStop::Hook {
+                        message: msg,
+                        written: written.clone(),
+                        already_done: already_done.clone(),
+                    });
+                }
+            }
+            if let Err(err) = record_work_done(req, work, &file.rel) {
+                return Err(fail(format!("{err}"), false));
+            }
+            already_done.push(file.rel.clone());
+            if let Some(hook) = req.hooks.after_done {
+                if let Err(msg) = hook(&file.rel, req.save_dir) {
+                    return Err(ApplyStop::Hook {
+                        message: msg,
+                        written: written.clone(),
+                        already_done: already_done.clone(),
+                    });
+                }
+            }
+            return Ok(());
+        }
+        Err(err) => {
+            return Err(fail(
+                format!("恢复复核 {} 失败：{err}。停止且不删除", file.rel),
+                true,
+            ))
+        }
+    }
+
+    // Persist the intent first, then let the after-intent hook run. The
+    // type and byte checks are deliberately last: the hook (or anything
+    // else) may replace the entry after the plan was made, and only a file
+    // that still is the same regular target may be deleted.
+    if let Err(err) = record_work_intent(req, work, file, &file.preimage) {
+        return Err(fail(format!("{err}"), false));
+    }
+    if let Some(hook) = req.hooks.after_intent {
+        if let Err(msg) = hook(&file.rel, req.save_dir) {
+            return Err(ApplyStop::Hook {
+                message: msg,
+                written: written.clone(),
+                already_done: already_done.clone(),
+            });
+        }
+    }
+
+    let meta = match fs::symlink_metadata(&dest) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Someone else restored absence; that is the rollback result, so
+            // record it without recreating the file.
+            if let Err(err) = record_work_done(req, work, &file.rel) {
+                return Err(fail(format!("{err}"), false));
+            }
+            already_done.push(file.rel.clone());
+            if let Some(hook) = req.hooks.after_done {
+                if let Err(msg) = hook(&file.rel, req.save_dir) {
+                    return Err(ApplyStop::Hook {
+                        message: msg,
+                        written: written.clone(),
+                        already_done: already_done.clone(),
+                    });
+                }
+            }
+            return Ok(());
+        }
+        Err(err) => {
+            return Err(fail(
+                format!("恢复复核 {} 失败：{err}。停止且不删除", file.rel),
+                true,
+            ))
+        }
+    };
+    if !meta.file_type().is_file() {
+        return Err(fail(
+            format!(
+                "恢复复核不符：{} 不再是普通文件，拒绝删除，要求人工合并",
+                file.rel
+            ),
+            true,
+        ));
+    }
+    let live = match fs::read(&dest) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Err(fail(
+                format!("恢复复核读取 {} 失败：{err}。停止且不删除", file.rel),
+                true,
+            ))
+        }
+    };
+    if live != file.target {
+        return Err(fail(
+            format!(
+                "恢复复核不符：{} 在意图之后已变化，停止且不删除，要求人工合并",
+                file.rel
+            ),
+            true,
+        ));
+    }
+    if let Err(err) = fs::remove_file(&dest) {
+        return Err(fail(
+            format!("删除 {} 失败：{err}。停止，不自动重试", file.rel),
+            true,
+        ));
+    }
+    // Only the sidecar itself is removed; no sibling or directory cleanup.
+    if let Some(parent) = dest.parent() {
+        if let Err(err) = sync_dir(parent) {
+            return Err(fail(format!("同步 {} 所在目录失败：{err}", file.rel), true));
+        }
+    }
+    if let Err(err) = record_work_done(req, work, &file.rel) {
+        return Err(fail(format!("{err}"), true));
+    }
+    written.push(file.rel.clone());
+    if let Some(hook) = req.hooks.after_done {
+        if let Err(msg) = hook(&file.rel, req.save_dir) {
+            return Err(ApplyStop::Hook {
+                message: msg,
+                written: written.clone(),
+                already_done: already_done.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn apply_integrity(
     req: &RecoveryRequest<'_>,
     work: &mut WorkRecord,
@@ -1300,6 +1595,7 @@ fn apply_integrity(
     choice: RecoveryChoice,
     written: &mut Vec<String>,
     already_done: &mut Vec<String>,
+    verified_metadata: Option<&Inventory>,
 ) -> std::result::Result<(), ApplyStop> {
     let Some(file) = plan.files.iter().find(|f| f.kind == RecoverKind::Integrity) else {
         return Ok(());
@@ -1329,6 +1625,7 @@ fn apply_integrity(
         preimage: file.preimage.clone(),
         target: file.target.clone(),
         class: file.class,
+        remove_on_rollback: file.remove_on_rollback,
     };
     if choice == RecoveryChoice::ContinueToTarget {
         file.target = compute_integrity_target(req, work).map_err(|err| stop(format!("{err}")))?;
@@ -1345,7 +1642,15 @@ fn apply_integrity(
             ));
         }
     }
-    apply_one(req, work, &file, choice, written, already_done)
+    apply_one(
+        req,
+        work,
+        &file,
+        choice,
+        written,
+        already_done,
+        verified_metadata,
+    )
 }
 
 fn compute_integrity_target(req: &RecoveryRequest<'_>, work: &WorkRecord) -> Result<Vec<u8>> {

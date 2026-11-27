@@ -74,7 +74,7 @@ fn write_synthetic_save(save: &Path) {
     .unwrap();
     fs::write(save.join("Sessions/2030-01-02.md"), "- session start\n").unwrap();
     fs::write(save.join("rolls.log"), "1d20=7\n").unwrap();
-    fs::write(save.join("save-meta.yaml"), "schema: 10\ntool: talkdnd\n").unwrap();
+    fs::write(save.join("save-meta.yaml"), "schema: 11\ntool: talkdnd\n").unwrap();
     fs::write(
         save.join("checkpoints/cp-1/Characters/Aria.md"),
         "# Aria checkpoint\n",
@@ -170,6 +170,7 @@ fn request<'a>(
         instance_tag: "",
         hooks: PublishHooks::default(),
         inner_lock: InnerLockOptions::default(),
+        ext4_metadata: false,
     }
 }
 
@@ -309,9 +310,11 @@ fn tree_unchanged(save: &Path, before: &(BTreeMap<String, Vec<u8>>, Vec<u8>, Vec
 }
 
 fn assert_scope_reported(paths: &[String]) {
+    // Schema 11 made `save-meta.yaml` a registered replace target, so it is
+    // inside the recovery target set and must NOT be scope-limited anymore.
     assert!(
-        paths.iter().any(|p| p == "save-meta.yaml"),
-        "save-meta.yaml is outside the registered target set and must be reported, got {paths:?}"
+        !paths.iter().any(|p| p == "save-meta.yaml"),
+        "save-meta.yaml is a registered target, must not be scope-limited, got {paths:?}"
     );
     assert!(
         paths
@@ -701,7 +704,7 @@ fn rollback_to_preimage_restores_published_files_including_extension() {
     assert_eq!(marker_count(&fx.save, "op-p1-5"), 0);
     assert_eq!(
         bytes_at(&fx.save, "save-meta.yaml"),
-        b"schema: 10\ntool: talkdnd\n"
+        b"schema: 11\ntool: talkdnd\n"
     );
     let lock = open_fast(&fx.root, &fx.save);
     assert!(

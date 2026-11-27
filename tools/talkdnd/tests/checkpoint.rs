@@ -241,7 +241,7 @@ fn snapshot_writes_manifest_and_covered_copies() {
     assert_eq!(m.version, 1);
     assert_eq!(m.id, id);
     assert_eq!(m.reason.as_deref(), Some("Before the boss"));
-    assert_eq!(m.schema, migrate::CURRENT_SCHEMA);
+    assert_eq!(m.schema, migrate::CHAIN_SCHEMA);
     assert_eq!(m.log_file, "2030-01-02-session-00-setup.md");
     assert_eq!(m.log_lines, 3);
     // Every covered file is copied and hashed.

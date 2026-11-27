@@ -18,18 +18,18 @@ pub(crate) const SHEET_FIELD: &str = "talkdnd_identity";
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Record {
-    version: u32,
-    card: String,
+pub(crate) struct Record {
+    pub(crate) version: u32,
+    pub(crate) card: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    carrier: Option<String>,
-    token: String,
-    history: History,
+    pub(crate) carrier: Option<String>,
+    pub(crate) token: String,
+    pub(crate) history: History,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum History {
+pub(crate) enum History {
     Unknown,
 }
 
@@ -270,14 +270,14 @@ struct Card {
     added_bytes: Option<usize>,
 }
 
-fn valid_token(token: &str) -> bool {
+pub(crate) fn valid_token(token: &str) -> bool {
     token.len() == 32
         && token
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn card_token(original: &[u8]) -> Result<Option<&str>> {
+pub(crate) fn card_token(original: &[u8]) -> Result<Option<&str>> {
     let text = std::str::from_utf8(original)?;
     let mut markers = text
         .lines()
@@ -331,7 +331,7 @@ fn append_line(original: &[u8], line: &str, separate_paragraph: bool) -> Vec<u8>
     candidate
 }
 
-fn sheet_identity(original: &[u8]) -> Result<(serde_norway::Mapping, Option<String>)> {
+pub(crate) fn sheet_identity(original: &[u8]) -> Result<(serde_norway::Mapping, Option<String>)> {
     let mut sheet: serde_norway::Mapping = serde_norway::from_slice(original)
         .map_err(|_| anyhow::anyhow!("invalid structured character card"))?;
     let Some(token) = sheet.remove(SHEET_FIELD) else {
@@ -357,7 +357,7 @@ fn appended_sheet(original: &[u8], token: &str) -> Result<Vec<u8>> {
     Ok(candidate)
 }
 
-fn read_regular(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn read_regular(path: &Path) -> Result<Vec<u8>> {
     ensure!(
         fs::symlink_metadata(path)?.file_type().is_file(),
         "expected a regular file"
@@ -365,7 +365,10 @@ fn read_regular(path: &Path) -> Result<Vec<u8>> {
     Ok(fs::read(path)?)
 }
 
-fn collect_records(save: &Path) -> Result<BTreeMap<String, PathBuf>> {
+// Crate-internal view for the schema-11 migration planner: sidecars by
+// filename under `advancement/`. Existence (including an empty file) is the
+// fail-closed signal; the caller never treats an existing file as absent.
+pub(crate) fn collect_records(save: &Path) -> Result<BTreeMap<String, PathBuf>> {
     let directory = save.join("advancement");
     match fs::symlink_metadata(&directory) {
         Ok(metadata) if metadata.file_type().is_dir() => {}
@@ -385,7 +388,7 @@ fn collect_records(save: &Path) -> Result<BTreeMap<String, PathBuf>> {
         .collect()
 }
 
-fn load_record(path: &Path) -> Result<Record> {
+pub(crate) fn load_record(path: &Path) -> Result<Record> {
     let data = read_regular(path)?;
     let record: Record = serde_norway::from_slice(&data)
         .map_err(|_| anyhow::anyhow!("invalid advancement record"))?;

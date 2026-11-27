@@ -48,7 +48,7 @@ fn write_synthetic_save(save: &Path) {
     fs::write(save.join("Characters/Aria.md"), "# Aria\n").unwrap();
     fs::write(save.join("progress.yaml"), "version: 1\nxp:\n  aria: 0\n").unwrap();
     fs::write(save.join("integrity.yaml"), "version: 1\nfiles: {}\n").unwrap();
-    fs::write(save.join("save-meta.yaml"), "schema: 10\ntool: talkdnd\n").unwrap();
+    fs::write(save.join("save-meta.yaml"), "schema: 11\ntool: talkdnd\n").unwrap();
 }
 
 fn init_protocol(root: &Path, save: &Path) {

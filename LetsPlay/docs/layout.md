@@ -25,6 +25,8 @@
 
 角色卡的结构化数据 `sheets/<id>.yaml` 在 `save-meta.yaml` 的 `schema: 10` 起多一个 `spells` 块：职业施法模式（`mode: known|prepared|spellbook`）、施法属性与 `cantrips` / `prepared` / `known` / `book` / `always_prepared` / `arcanum` / `legacy` 列表（全部存法术 id）。它是法术列表的唯一数据源，角色卡 Markdown 的 `## 法术` 段只是展示。旧存档迁移（schema 9→10）先整份备份到 `Saves/_backups/`，再从 `chargen.json` 或正文精确对号入座，对不上的进 `legacy`；手改过的角色卡不会被重写。字段与校验规则见 `docs/character-data.md`「法术列表」。
 
+`schema: 11` 起每名队伍角色带严格 v1 成长身份：有结构化卡的载体在 `sheets/<id>.yaml` 末尾多一个顶层 `talkdnd_identity` 字段，仅有 Markdown 的老卡在卡末尾多一行 `<!-- talkdnd-identity: … -->` 注释；两者都与 `advancement/<id>.yaml` 成长记录（`version: 1`、`history: unknown`、同一 128 位非秘密标识）成对。10→11 迁移不重写 DM 手改：先 `talkdnd migrate --dry-run` 只读核对每张未绑定卡的前像摘要，再带 `--confirm-binding PATH=DIGEST`（可重复）重跑完成入籍；整个步骤走成长协议 D 流程（写入前复查准入——首批为已验证的本地 Linux ext4，整份备份含 ACL/xattr 元数据，意图记录与显式恢复）。未确认、未准入或失败时存档停在 schema 10。首次迁移创建协议控制文件是唯一例外，且必须在完整确认、准入与复制前置条件（存档与备份同设备、遭遇间隙）通过之后；确认摘要绑定 DM 核对时的前像，核对后修改过的载体（含结构化卡）会被拒绝并要求重新核对。新开存档也从 schema 10 起：建角色后按同一确认流程入籍到 11，避免 11 档出现无绑定角色。`advancement/<id>.yaml` 已存在（包括空文件）时拒绝自动入籍，走人工核对或显式恢复；旧历史一律 `unknown`，同 ID 重绑不在本批。契约与交付边界见 `docs/ADVANCEMENT-IDENTITY-CONTRACT.md` §6。
+
 采用整秒计时的存档将长施法进度写入 `world-time.yaml` v2。`combat/party-state.yaml` v2 将扣费凭据与资源余额保存在同一文件。使用精确计时的检查点也保存世界时间。见 [战役连续性](campaign-continuity.md)。
 
 登记后的 `combat/*.state.json` 保存遭遇 ID 和 DM 的结束原因，使用 v5–v8。旧遭遇的 v1–v4 仍可读取。待确认反应或未结清的计时交接会阻止结束。见 [战斗与遭遇](combat.md)。
@@ -33,9 +35,9 @@
 
 存档根目录出现 `.talkdnd.advancement.lock` 或 `.talkdnd.advancement.state` 时，说明这份存档已启用**成长协议**（角色成长提交使用的协作锁）。
 
-- 程序**不会**自己创建这两个文件；没有它们的存档与以前完全一样，也不会自动初始化。
+- 程序**不会**自己创建这两个文件；没有它们的存档与以前完全一样，也不会自动初始化。唯一例外是经所有者批准的首次 schema 10→11 迁移：只有在完整 DM 确认（`--confirm-binding` 摘要与当前载体一致）、#344 准入与复制前置条件（存档与备份同设备、遭遇间隙）都通过后，`talkdnd migrate --confirm-binding` 才允许创建这两个控制文件；未确认、确认失效、被拒绝或未准入时不写任何控制或目标文件，存档停在 schema 10。没有通用、无约束的 `init` 命令。
 - 有这两个文件时，已接入的 `talkdnd` 与 `combat-sim` 写命令（例如 `talkdnd xp add`、`talkdnd char`、`talkdnd start`、`talkdnd level-up`，以及 `combat-sim init|attack|…`、`combat-sim party rest|set-hp|sync`、`combat-sim roll`）会在写目标前取得 SAVE 锁。SAVE state 缺失、不可写、`active` 或 `in_doubt` 时以退出码 1 拒绝且不写任何目标文件（接入期对缺失 state 的保守处理）。`combat-sim content import-*` 与 `content pack build|release` 只在 `--out` 指向已启用协议的存档内时取 SAVE 锁；`--out` 在存档外时按存档外写入允许；`pack build|release --dry-run` 只读。不要删除或改写这两个文件。
-- 尚未接入的写命令（例如 `talkdnd log`、`talkdnd checkpoint "<内容>"`、`talkdnd migrate`、`talkdnd check`、`talkdnd handout build`）仍会**以退出码 1 拒绝执行**，并说明“已启用成长协议、该入口尚未接入、未写入任何目标文件”。不要当成临时错误反复重试。
+- 尚未接入的写命令（例如 `talkdnd log`、`talkdnd checkpoint "<内容>"`、`talkdnd check`、`talkdnd handout build`）仍会**以退出码 1 拒绝执行**，并说明“已启用成长协议、该入口尚未接入、未写入任何目标文件”。不要当成临时错误反复重试。`talkdnd migrate` 只在带完整 `--confirm-binding` 的 schema 10→11 已确认路径上接入 D 协议（由 D 自己取 SAVE），其余普通迁移仍按未接入拒绝；确认路径不先跑普通迁移的 checkpoint 锁或 ruleset 改写。
 - 只读命令（`known`、`xp show`、`log rolls`、`checkpoint list`、`char <who> spells` 普通视图、`combat-sim status`/`scene`/`log`/`simulate`、`combat-sim party show` 等）照常可用，不取 SAVE 锁；`guard` 与 `secret list` 的缓存仍会写入，它属于控制元数据，不算用户数据，也不取 SAVE 锁。
 - `start` 的用户数据与迁移写入取 SAVE 锁；它的 `digest.md`/缓存仍是控制元数据，不单独取 SAVE 锁。锁不可用时整条命令拒绝，也不写 digest/缓存。
 - `talkdnd new` 仍可创建新存档；新存档默认不启用协议，也不会去写已启用协议的存档。

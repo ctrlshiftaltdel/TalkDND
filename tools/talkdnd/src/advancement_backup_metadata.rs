@@ -1,4 +1,14 @@
 //! Metadata captured before a D backup reads the source tree.
+//!
+//! The same per-entry record is reused twice. `restore_and_verify_copy`
+//! installs it on the backup copy; [`Inventory::apply_to_staged`] installs it
+//! on the exclusive temp file a publish or explicit recovery renames over an
+//! existing target. Both verify mode, owner/group, ACL/xattr and the
+//! recoverable atime/mtime by re-reading the entry before the rename. The
+//! POSIX status-change timestamp (`ctime`) is captured for audit only: a
+//! rename or any metadata write changes it, so it is never compared or
+//! claimed as restored. Linux creation time is not available, so no
+//! creation-time claim is made either (macOS keeps its own birth-time check).
 
 use std::fs::{self, File, FileTimes, Metadata};
 use std::path::Path;
@@ -17,11 +27,18 @@ pub(crate) struct Inventory {
     entries: Vec<Entry>,
 }
 
-#[derive(Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum AttributeInspection {
     LinuxProcessVisible,
+    LinuxExt4,
     DarwinAclAndXattr,
+}
+
+#[derive(Deserialize, PartialEq, Eq, Serialize)]
+struct Attribute {
+    name: Vec<u8>,
+    value: Vec<u8>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -32,6 +49,8 @@ struct Entry {
     modified: Timestamp,
     birth_time: Option<Timestamp>,
     posix: Posix,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attributes: Vec<Attribute>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -101,7 +120,7 @@ impl Posix {
 }
 
 impl Entry {
-    fn read(root: &Path, path: &Path) -> Result<Self> {
+    fn read(root: &Path, path: &Path, inspection: AttributeInspection) -> Result<Self> {
         let metadata = fs::symlink_metadata(path)?;
         ensure!(
             metadata.is_file() || metadata.is_dir(),
@@ -115,7 +134,12 @@ impl Entry {
                 "无法安全复制硬链接"
             );
         }
-        inspect_attributes(path, &metadata)?;
+        let attributes = if inspection == AttributeInspection::LinuxExt4 {
+            read_ext4_attributes(path)?
+        } else {
+            inspect_attributes(path, &metadata)?;
+            Vec::new()
+        };
         let birth_time = match metadata.created() {
             Ok(value) => Some(Timestamp::from_system_time(value)?),
             Err(error) if error.kind() == std::io::ErrorKind::Unsupported => None,
@@ -128,19 +152,32 @@ impl Entry {
             modified: Timestamp::from_system_time(metadata.modified()?)?,
             birth_time,
             posix: Posix::read(&metadata)?,
+            attributes,
         })
     }
 
-    fn restore_copy(&self, path: &Path) -> Result<()> {
+    fn restore_copy(&self, path: &Path, inspection: AttributeInspection) -> Result<()> {
         #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
-        let before = Self::read(path, path)?;
+        let before = Self::read(path, path, inspection)?;
         ensure!(before.directory == self.directory, "备份文件类型不匹配");
-        ensure!(
-            before.posix.uid == self.posix.uid && before.posix.gid == self.posix.gid,
-            "无法保留备份所有者或组"
-        );
         let file = open_copy(path)?;
+        if before.posix.uid != self.posix.uid || before.posix.gid != self.posix.gid {
+            ensure!(
+                inspection == AttributeInspection::LinuxExt4,
+                "无法保留备份所有者或组"
+            );
+            set_ext4_owner(&file, self.posix.uid, self.posix.gid)?;
+        }
+        if inspection == AttributeInspection::LinuxExt4 {
+            // Install the actual POSIX ACL first. The staged file is still
+            // mode 0600 here, and chmod derives its group bits from the ACL
+            // mask; setting the mode before the ACL could transiently expose
+            // the staged bytes to the owning group when the original ACL
+            // excludes it. Running chmod afterwards reconciles the ACL mask
+            // to the already verified original mode.
+            set_ext4_attributes(&file, &read_ext4_attributes(path)?, &self.attributes)?;
+        }
         #[cfg(unix)]
         file.set_permissions(fs::Permissions::from_mode(self.posix.mode))?;
         let times = FileTimes::new()
@@ -157,13 +194,14 @@ impl Entry {
         file.set_times(times)?;
         file.sync_all()?;
 
-        let actual = Self::read(path, path)?;
+        let actual = Self::read(path, path, inspection)?;
         ensure!(
             actual.posix.mode == self.posix.mode
                 && actual.posix.uid == self.posix.uid
                 && actual.posix.gid == self.posix.gid
                 && actual.accessed == self.accessed
-                && actual.modified == self.modified,
+                && actual.modified == self.modified
+                && actual.attributes == self.attributes,
             "备份权限、所有者或时间戳校验失败"
         );
         #[cfg(target_os = "macos")]
@@ -174,25 +212,58 @@ impl Entry {
 
 impl Inventory {
     pub(crate) fn capture(root: &Path) -> Result<Self> {
-        Self::capture_tree(root, false)
-    }
-
-    fn capture_tree(root: &Path, backup: bool) -> Result<Self> {
-        let mut entries = Vec::new();
-        let dev = Posix::read(&fs::symlink_metadata(root)?)?.device;
-        collect(root, root, dev, backup, &mut entries)?;
-        Ok(Self {
-            attribute_inspection: if cfg!(target_os = "linux") {
+        Self::capture_tree(
+            root,
+            false,
+            if cfg!(target_os = "linux") {
                 AttributeInspection::LinuxProcessVisible
             } else {
                 AttributeInspection::DarwinAclAndXattr
             },
+        )
+    }
+
+    pub(crate) fn capture_ext4(root: &Path) -> Result<Self> {
+        Self::capture_tree(root, false, AttributeInspection::LinuxExt4)
+    }
+
+    fn capture_tree(root: &Path, backup: bool, inspection: AttributeInspection) -> Result<Self> {
+        let mut entries = Vec::new();
+        let dev = Posix::read(&fs::symlink_metadata(root)?)?.device;
+        collect(root, root, dev, backup, inspection, &mut entries)?;
+        Ok(Self {
+            attribute_inspection: inspection,
             entries,
         })
     }
 
+    /// True when this inventory carries the Linux ext4 ACL/xattr record set.
+    pub(crate) fn is_ext4(&self) -> bool {
+        self.attribute_inspection == AttributeInspection::LinuxExt4
+    }
+
+    /// Apply the verified metadata for `rel` to the already-staged file at
+    /// `path`, before the caller renames it over the target. The per-entry
+    /// restore and re-read check is the same one used for the backup copy:
+    /// mode, owner/group, ACL/xattr and the recoverable atime/mtime must
+    /// match, and any failure stops the caller with the target untouched.
+    ///
+    /// Returns `Ok(false)` when the verified preimage had no entry for `rel`
+    /// (a target the operation created, such as a new sidecar). No owner,
+    /// ACL or xattr is invented for a path that had no original.
+    pub(crate) fn apply_to_staged(&self, rel: &str, path: &Path) -> Result<bool> {
+        let Some(entry) = self.entries.iter().find(|entry| entry.path == rel) else {
+            return Ok(false);
+        };
+        ensure!(!entry.directory, "备份条目 {rel} 是目录，不能作为替换目标");
+        if let Err(err) = entry.restore_copy(path, self.attribute_inspection) {
+            return Err(err.context(format!("应用并核验备份元数据 {rel}")));
+        }
+        Ok(true)
+    }
+
     pub(crate) fn verify_backup(&self, root: &Path) -> Result<()> {
-        let current = Self::capture_tree(root, true)?;
+        let current = Self::capture_tree(root, true, self.attribute_inspection)?;
         ensure!(
             self.attribute_inspection == current.attribute_inspection
                 && self.entries.len() == current.entries.len(),
@@ -208,6 +279,7 @@ impl Inventory {
                     && expected.posix.uid == actual.posix.uid
                     && expected.posix.gid == actual.posix.gid
                     && expected.modified == actual.modified
+                    && expected.attributes == actual.attributes
                     && (!cfg!(target_os = "macos") || expected.birth_time == actual.birth_time),
                 "备份条目元数据与清单不一致：{}",
                 if expected.path.is_empty() {
@@ -221,7 +293,7 @@ impl Inventory {
     }
 
     pub(crate) fn verify_source(&self, root: &Path) -> Result<()> {
-        let current = Self::capture(root)?;
+        let current = Self::capture_tree(root, false, self.attribute_inspection)?;
         ensure!(
             self.entries.len() == current.entries.len(),
             "备份源树已变化"
@@ -234,6 +306,7 @@ impl Inventory {
                     && before.directory == after.directory
                     && before.posix == after.posix
                     && before.modified == after.modified
+                    && before.attributes == after.attributes
                     && before.birth_time == after.birth_time,
                 "备份源条目在复制期间变化：{}",
                 before.path
@@ -247,16 +320,18 @@ impl Inventory {
         // installed after walking their contents.
         for entry in self.entries.iter().rev() {
             let path = root.join(&entry.path);
-            entry.restore_copy(&path).with_context(|| {
-                format!(
-                    "验收备份元数据 {}",
-                    if entry.path.is_empty() {
-                        "."
-                    } else {
-                        &entry.path
-                    }
-                )
-            })?;
+            entry
+                .restore_copy(&path, self.attribute_inspection)
+                .with_context(|| {
+                    format!(
+                        "验收备份元数据 {}",
+                        if entry.path.is_empty() {
+                            "."
+                        } else {
+                            &entry.path
+                        }
+                    )
+                })?;
         }
         Ok(())
     }
@@ -267,10 +342,11 @@ fn collect(
     path: &Path,
     dev: u64,
     backup: bool,
+    inspection: AttributeInspection,
     entries: &mut Vec<Entry>,
 ) -> Result<()> {
-    let entry =
-        Entry::read(root, path).with_context(|| format!("检查备份源元数据 {}", path.display()))?;
+    let entry = Entry::read(root, path, inspection)
+        .with_context(|| format!("检查备份源元数据 {}", path.display()))?;
     ensure!(
         entry.posix.device == dev,
         "备份源条目跨文件系统：{}",
@@ -286,7 +362,7 @@ fn collect(
             if path == root && (is_root_excluded(&name) || (backup && name == BACKUP_MANIFEST)) {
                 continue;
             }
-            collect(root, &child.path(), dev, backup, entries)?;
+            collect(root, &child.path(), dev, backup, inspection, entries)?;
         }
     }
     Ok(())
@@ -304,6 +380,125 @@ fn open_copy(path: &Path) -> Result<File> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn open_copy(_path: &Path) -> Result<File> {
     bail!("this platform has no verified metadata writer")
+}
+
+#[cfg(target_os = "linux")]
+fn read_ext4_attributes(path: &Path) -> Result<Vec<Attribute>> {
+    use std::ffi::CString;
+    use std::os::fd::AsRawFd;
+
+    let file = open_copy(path)?;
+    let fd = file.as_raw_fd();
+    // SAFETY: the descriptor is live; each output buffer stays live and is
+    // writable for the specified length. Size zero queries the required size.
+    let names = read_xattr_bytes(|ptr, len| unsafe { libc::flistxattr(fd, ptr.cast(), len) })?;
+    ensure!(
+        names.is_empty() || names.last() == Some(&0),
+        "ACL/xattr 列表不完整"
+    );
+    let mut attributes = Vec::new();
+    for name_with_nul in names.split_inclusive(|byte| *byte == 0) {
+        let name = name_with_nul
+            .strip_suffix(&[0])
+            .context("ACL/xattr 名称不完整")?;
+        ensure!(!name.is_empty(), "ACL/xattr 名称为空");
+        let native = CString::new(name)?;
+        // SAFETY: the descriptor and NUL-terminated name are live throughout
+        // the call and the output buffer is writable for the supplied length.
+        let value =
+            read_xattr_bytes(|ptr, len| unsafe { libc::fgetxattr(fd, native.as_ptr(), ptr, len) })?;
+        attributes.push(Attribute {
+            name: name.to_vec(),
+            value,
+        });
+    }
+    attributes.sort_by(|a, b| a.name.cmp(&b.name));
+    ensure!(
+        attributes
+            .windows(2)
+            .all(|pair| pair[0].name != pair[1].name),
+        "重复的 ACL/xattr 名称"
+    );
+    Ok(attributes)
+}
+
+#[cfg(target_os = "linux")]
+fn read_xattr_bytes(
+    mut read: impl FnMut(*mut libc::c_void, usize) -> libc::ssize_t,
+) -> Result<Vec<u8>> {
+    let size = read(std::ptr::null_mut(), 0);
+    if size < 0 {
+        return Err(std::io::Error::last_os_error()).context("无法读取 ACL/xattr 长度");
+    }
+    let mut bytes = vec![0; usize::try_from(size)?];
+    let actual = read(bytes.as_mut_ptr().cast(), bytes.len());
+    if actual < 0 {
+        return Err(std::io::Error::last_os_error()).context("无法读取 ACL/xattr 内容");
+    }
+    ensure!(actual == size, "ACL/xattr 读取期间已变化");
+    Ok(bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn set_ext4_owner(file: &File, uid: u32, gid: u32) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: file owns a live descriptor for this call.
+    if unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("无法保留备份所有者或组");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn set_ext4_attributes(file: &File, before: &[Attribute], desired: &[Attribute]) -> Result<()> {
+    use std::ffi::CString;
+    use std::os::fd::AsRawFd;
+
+    let fd = file.as_raw_fd();
+    for old in before {
+        if !desired.iter().any(|new| old.name == new.name) {
+            let name = CString::new(old.name.as_slice())?;
+            // SAFETY: the descriptor and NUL-terminated name stay live for the call.
+            if unsafe { libc::fremovexattr(fd, name.as_ptr()) } != 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("无法清除备份继承的 ACL/xattr");
+            }
+        }
+    }
+    for attr in desired {
+        if !before.iter().any(|old| old == attr) {
+            let name = CString::new(attr.name.as_slice())?;
+            // SAFETY: the descriptor, NUL-terminated name and value bytes stay live.
+            let result = unsafe {
+                libc::fsetxattr(
+                    fd,
+                    name.as_ptr(),
+                    attr.value.as_ptr().cast(),
+                    attr.value.len(),
+                    0,
+                )
+            };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error()).context("无法保留 ACL/xattr");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_ext4_attributes(_path: &Path) -> Result<Vec<Attribute>> {
+    bail!("ext4 backup attributes require Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_ext4_attributes(_file: &File, _before: &[Attribute], _desired: &[Attribute]) -> Result<()> {
+    bail!("ext4 backup attributes require Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_ext4_owner(_file: &File, _uid: u32, _gid: u32) -> Result<()> {
+    bail!("ext4 backup ownership requires Linux")
 }
 
 #[cfg(target_os = "linux")]

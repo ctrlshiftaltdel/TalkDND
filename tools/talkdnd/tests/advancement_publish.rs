@@ -73,7 +73,7 @@ fn write_synthetic_save(save: &Path) {
     .unwrap();
     fs::write(save.join("Sessions/2030-01-02.md"), "- session start\n").unwrap();
     fs::write(save.join("rolls.log"), "1d20=7\n").unwrap();
-    fs::write(save.join("save-meta.yaml"), "schema: 10\ntool: talkdnd\n").unwrap();
+    fs::write(save.join("save-meta.yaml"), "schema: 11\ntool: talkdnd\n").unwrap();
     fs::write(
         save.join("checkpoints/cp-1/Characters/Aria.md"),
         "# Aria checkpoint\n",
@@ -152,6 +152,7 @@ fn request<'a>(
         instance_tag: "",
         hooks: PublishHooks::default(),
         inner_lock: InnerLockOptions::default(),
+        ext4_metadata: false,
     }
 }
 
@@ -253,6 +254,9 @@ fn happy_path_publishes_once_in_order_and_completes() {
             "combat/party-state.yaml".to_string(),
             "Characters/Aria.md".to_string(),
             "progress.yaml".to_string(),
+            // Schema 11: the save metadata is a registered target in its own
+            // right, published after the data files and before the logs.
+            "save-meta.yaml".to_string(),
             "rolls.log".to_string(),
             "Sessions/2030-01-02.md".to_string(),
             "integrity.yaml".to_string(),
@@ -632,7 +636,7 @@ fn integrity_update_preserves_dirty_and_accepted_marks() {
     let (root, save, evr, evd, bp, cp) = setup("dirty");
     fs::write(
         save.join("save-meta.yaml"),
-        "schema: 10\ntool: talkdnd\nnote: hand-edit\n",
+        "schema: 11\ntool: talkdnd\nnote: hand-edit\n",
     )
     .unwrap();
     let dirty = combat_sim::integrity::changes(&save).unwrap();
@@ -659,7 +663,7 @@ fn integrity_update_preserves_dirty_and_accepted_marks() {
     assert_eq!(manifest.accepted, accepted_before);
     assert_eq!(
         fs::read_to_string(save.join("save-meta.yaml")).unwrap(),
-        "schema: 10\ntool: talkdnd\nnote: hand-edit\n"
+        "schema: 11\ntool: talkdnd\nnote: hand-edit\n"
     );
 }
 

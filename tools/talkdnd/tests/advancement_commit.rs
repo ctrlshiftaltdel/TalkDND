@@ -72,7 +72,7 @@ fn write_synthetic_save(save: &Path) {
     fs::write(save.join("Sessions/2030-01-02.md"), "- session start\n").unwrap();
     fs::write(save.join("rolls.log"), "1d20=7\n").unwrap();
     fs::write(save.join("integrity.yaml"), "version: 1\nfiles: {}\n").unwrap();
-    fs::write(save.join("save-meta.yaml"), "schema: 10\ntool: talkdnd\n").unwrap();
+    fs::write(save.join("save-meta.yaml"), "schema: 11\ntool: talkdnd\n").unwrap();
     fs::write(
         save.join("checkpoints/cp-1/Characters/Aria.md"),
         "# Aria checkpoint\n",
@@ -120,6 +120,7 @@ fn request<'a>(
         instance_tag: "",
         hooks: Default::default(),
         inner_lock: Default::default(),
+        ext4_metadata: false,
     }
 }
 
@@ -605,27 +606,24 @@ fn candidate_rejects_schema_and_missing_identity_without_forging() {
     let after = protected_target_bytes(&save).unwrap();
     assert!(targets_unchanged(&before, &after));
 
-    // Schema 11 save-meta is refused; CURRENT_SCHEMA stays 10.
-    let (root, save, evr, evd, bp, cp, before) = setup("schema11");
+    // A future save-meta schema is refused; only CURRENT_SCHEMA verifies.
+    let (root, save, evr, evd, bp, cp, before) = setup("schema12");
     let mut overlays = BTreeMap::new();
     overlays.insert(
         "save-meta.yaml".to_string(),
-        b"schema: 11\ntool: talkdnd\n".to_vec(),
+        b"schema: 12\ntool: talkdnd\n".to_vec(),
     );
     let err =
         run_to_verified_candidate(&request(&root, &save, &evr, &evd, &bp, &cp, overlays, None))
-            .expect_err("schema 11");
+            .expect_err("schema 12");
     let msg = err.to_string();
-    assert!(msg.contains("11"), "{msg}");
-    assert!(
-        msg.contains("CURRENT_SCHEMA") || msg.contains("10"),
-        "{msg}"
-    );
+    assert!(msg.contains("12"), "{msg}");
+    assert!(msg.contains("CURRENT_SCHEMA"), "{msg}");
     let after = protected_target_bytes(&save).unwrap();
     assert!(targets_unchanged(&before, &after));
     assert_eq!(
         fs::read_to_string(save.join("save-meta.yaml")).unwrap(),
-        "schema: 10\ntool: talkdnd\n"
+        "schema: 11\ntool: talkdnd\n"
     );
 }
 
