@@ -1547,7 +1547,7 @@ fn dispatch(
                     {
                         anyhow::bail!("缺少玩家选择：请同时给出 --select-opportunity 与候选");
                     }
-                    advancement_preview::run(&root, &save, &who, json)?;
+                    advancement_preview::run(&root, &save, who, json)?;
                 }
                 (None, _) => {
                     if select_opportunity.is_some()

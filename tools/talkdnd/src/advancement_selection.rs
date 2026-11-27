@@ -1041,11 +1041,7 @@ fn canonical_spec(pairs: &[(String, i32)]) -> String {
 // ---------------------------------------------------------------- helpers --
 
 fn score_of(preview: &Preview, ability: &str) -> Option<i32> {
-    if preview
-        .abilities_with_conflicting_sources
-        .iter()
-        .any(|conflict| *conflict == ability)
-    {
+    if preview.abilities_with_conflicting_sources.contains(&ability) {
         return None;
     }
     preview

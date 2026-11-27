@@ -225,7 +225,14 @@ fn feat(id: &str, category: &str, minimum: u32) -> DomainEntity {
     )
 }
 
-fn feat_with(id: &str, category: &str, data: Value) -> DomainEntity {
+fn feat_with(id: &str, category: &str, mut data: Value) -> DomainEntity {
+    // 2024-style packs carry `type`; 2014-style entries pass "" and keep the
+    // bare prerequisite shape.
+    if !category.is_empty() {
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("type".to_owned(), Value::String(category.to_owned()));
+        }
+    }
     DomainEntity {
         id: id.into(),
         name: Some(format!("Fixture {id}")),
@@ -236,7 +243,7 @@ fn feat_with(id: &str, category: &str, data: Value) -> DomainEntity {
     }
 }
 
-fn row_status(report: &Value, id: &str) -> &str {
+fn row_status<'a>(report: &'a Value, id: &str) -> &'a str {
     Fixture::condition(report, id)["status"].as_str().unwrap()
 }
 
@@ -255,7 +262,7 @@ fn explicit_selections_verify_with_condition_sources_on_both_editions() {
             feat("brave-strike", "general", 4),
             feat_with(
                 "tough-grip",
-                "general",
+                "",
                 json!({ "prerequisites": [
                     {"ability_score": {"index": "str"}, "minimum_score": 13},
                 ]}),
