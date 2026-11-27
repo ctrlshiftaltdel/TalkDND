@@ -1916,3 +1916,232 @@ fn non_caster_gets_a_clear_error() {
     assert!(out.contains("不是施法职业"), "{out}");
     let _ = fs::remove_dir_all(&r);
 }
+
+// ---------------------------------------------------------------------------
+// #330: the schema 10→11 identity migration at the real binary boundary.
+// Synthetic fixtures only (no real saves, books or secrets).
+// ---------------------------------------------------------------------------
+
+const CARD_330: &str = "# Fixture\n\n```combat yaml\nid: fixture\nname: Fixture\n```\n\nDM note\n";
+const SHEET_330: &str = "# DM note\nversion: 1\nid: fixture\nname: Fixture\nfile: Characters/Fixture.md\nruleset: \"2024\"\ncustom: {old: [4, 8], present: true}\n";
+
+/// A minimal synthetic save used only by `migrate` (`schema` 9 or 10).
+fn save_330(r: &Path, schema: u32, ruleset: &str) -> PathBuf {
+    let save = r.join("Saves/2030-01-01-01");
+    for dir in ["Characters", "sheets", "advancement", "combat", "Sessions"] {
+        fs::create_dir_all(save.join(dir)).unwrap();
+    }
+    fs::write(
+        save.join("combat/campaign.yaml"),
+        format!("name: fixture\nruleset: \"{ruleset}\"\nparty: [fixture]\nstate_dir: .\n"),
+    )
+    .unwrap();
+    fs::write(
+        save.join("progress.yaml"),
+        "version: 1\nxp:\n  fixture: 0\npurses:\n  fixture:\n    cp: 0\n",
+    )
+    .unwrap();
+    fs::write(save.join("integrity.yaml"), "version: 1\nfiles: {}\n").unwrap();
+    fs::write(
+        save.join("save-meta.yaml"),
+        format!("schema: {schema}\ntool: talkdnd\n"),
+    )
+    .unwrap();
+    fs::write(save.join("Characters/Fixture.md"), CARD_330).unwrap();
+    fs::write(save.join("sheets/fixture.yaml"), SHEET_330).unwrap();
+    fs::write(
+        save.join("Sessions/2030-01-01-session-00-setup.md"),
+        "# live log\n",
+    )
+    .unwrap();
+    save
+}
+
+/// The exact `PATH=DIGEST` pairs from a `migrate --dry-run` review block.
+fn confirm_pairs(out: &str) -> Vec<String> {
+    out.lines()
+        .filter_map(|line| line.trim().strip_prefix("--confirm-binding "))
+        .map(str::to_string)
+        .collect()
+}
+
+/// #344 admission, observed the same way the migration's pre-write gate does:
+/// the success branch only runs where the real environment is admitted.
+fn admitted_330(save: &Path, root: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use talkdnd::advancement_admission::{inspect, Admission, ApprovedRoots};
+        let saves_root = root.join("Saves");
+        let backups_root = saves_root.join("advancement-backups-probe");
+        let inspected = if backups_root.is_dir() {
+            &backups_root
+        } else {
+            &saves_root
+        };
+        let roots = ApprovedRoots {
+            saves: &saves_root,
+            backups: &saves_root,
+            synchronized: &[],
+        };
+        matches!(inspect(save, inspected, &roots), Admission::Admitted)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (save, root);
+        false
+    }
+}
+
+#[test]
+fn confirmed_schema10_migration_cli_is_admitted_or_fails_closed() {
+    let r = root("cli-330-admit");
+    let save = save_330(&r, 10, "5.5e-srd");
+    let dry = ok(&r, &["migrate", "--dry-run"]);
+    let pairs = confirm_pairs(&dry);
+    assert_eq!(pairs.len(), 2, "card + sheet must be confirmed: {dry}");
+
+    let mut args = vec!["migrate".to_string()];
+    for pair in &pairs {
+        args.push("--confirm-binding".to_string());
+        args.push(pair.clone());
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+
+    if !admitted_330(&save, &r) {
+        // Not the admitted local-ext4 environment: the binary must refuse and
+        // write nothing. This is a real assertion, not a skipped success.
+        let before = tree(&save);
+        let out = ok(&r, &args);
+        assert!(out.contains("准入"), "expected a #344 refusal: {out}");
+        assert!(
+            !save.join("advancement/fixture.yaml").exists(),
+            "no identity write: {out}"
+        );
+        let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
+        assert!(meta.contains("schema: 10"), "{meta}");
+        assert_same_tree(
+            &before,
+            &tree(&save),
+            "an unadmitted confirmed migration must write nothing",
+        );
+        let _ = fs::remove_dir_all(&r);
+        return;
+    }
+
+    // Admitted (CI Linux ext4): the real binary completes 10→11.
+    let out = ok(&r, &args);
+    assert!(
+        out.contains("schema 10 → 11") || out.contains("已绑定成长身份"),
+        "{out}"
+    );
+    let meta = fs::read_to_string(save.join("save-meta.yaml")).unwrap();
+    assert!(meta.contains("schema: 11"), "{meta}");
+    let sidecar = fs::read_to_string(save.join("advancement/fixture.yaml")).unwrap();
+    assert!(
+        sidecar.contains("version: 1") && sidecar.contains("history: unknown"),
+        "{sidecar}"
+    );
+    assert_eq!(
+        fs::read(save.join("Characters/Fixture.md")).unwrap(),
+        CARD_330.as_bytes(),
+        "a structured carrier leaves the reviewed card untouched"
+    );
+    let sheet = fs::read(save.join("sheets/fixture.yaml")).unwrap();
+    assert!(
+        sheet.starts_with(SHEET_330.as_bytes()),
+        "the reviewed preimage is preserved"
+    );
+
+    // Same normal CLI rerun: no second enrollment and no second log write.
+    let log = save.join("Sessions/2030-01-01-session-00-setup.md");
+    let campaign = fs::read(save.join("combat/campaign.yaml")).unwrap();
+    let snapshot = (
+        meta,
+        sidecar,
+        fs::read(save.join("Characters/Fixture.md")).unwrap(),
+        fs::read(save.join("sheets/fixture.yaml")).unwrap(),
+        fs::read(&log).unwrap(),
+    );
+    let again = ok(&r, &["migrate"]);
+    assert!(
+        again.contains("无需迁移") || again.contains("成长身份未完成"),
+        "{again}"
+    );
+    assert_eq!(
+        fs::read_to_string(save.join("save-meta.yaml")).unwrap(),
+        snapshot.0
+    );
+    assert_eq!(
+        fs::read_to_string(save.join("advancement/fixture.yaml")).unwrap(),
+        snapshot.1
+    );
+    assert_eq!(
+        fs::read(save.join("Characters/Fixture.md")).unwrap(),
+        snapshot.2
+    );
+    assert_eq!(fs::read(save.join("sheets/fixture.yaml")).unwrap(), snapshot.3);
+    assert_eq!(
+        fs::read(&log).unwrap(),
+        snapshot.4,
+        "a rerun must not append a second operation line"
+    );
+    assert_eq!(
+        fs::read(save.join("combat/campaign.yaml")).unwrap(),
+        campaign,
+        "a rerun must not rewrite the canonical ruleset"
+    );
+    assert_eq!(
+        fs::read_dir(save.join("advancement")).unwrap().count(),
+        1,
+        "exactly one sidecar: no duplicate enrollment"
+    );
+    let _ = fs::remove_dir_all(&r);
+}
+
+#[test]
+fn confirmed_schema9_migration_refuses_before_ordinary_migration() {
+    let r = root("cli-330-schema9");
+    let save = save_330(&r, 9, "2024");
+    let before = tree(&save);
+    let campaign = fs::read_to_string(save.join("combat/campaign.yaml")).unwrap();
+
+    // Malformed confirmation: fail closed before anything is touched.
+    let (good, out) = run(&r, &["migrate", "--confirm-binding", "not-a-path-or-digest"]);
+    assert!(!good, "{out}");
+    assert_same_tree(
+        &before,
+        &tree(&save),
+        "a malformed confirmation must write nothing",
+    );
+
+    // Owner decision (#330 comment 7212185560): the ordinary pre-write ruleset
+    // migration must not run for an explicit confirmed invocation on schema 9.
+    // The old spelling "2024" would be rewritten if it did. Refuse, then let
+    // the caller run the ordinary migration and re-review the schema 10 bytes.
+    let stale = format!("Characters/Fixture.md={}", "1".repeat(64));
+    let (good, out) = run(&r, &["migrate", "--confirm-binding", &stale]);
+    assert!(!good, "a schema-9 confirmed run must refuse: {out}");
+    assert!(
+        out.contains("schema 10") && (out.contains("先运行") || out.contains("普通迁移")),
+        "{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(save.join("combat/campaign.yaml")).unwrap(),
+        campaign,
+        "the old ruleset spelling must not be rewritten before the ordinary migration"
+    );
+    assert_same_tree(
+        &before,
+        &tree(&save),
+        "a confirmed schema-9 run must write nothing",
+    );
+    assert!(
+        !save.join("advancement/fixture.yaml").exists(),
+        "no identity write"
+    );
+    assert!(
+        !r.join("Saves/_backups").exists(),
+        "no legacy backup or checkpoint side effect"
+    );
+    let _ = fs::remove_dir_all(&r);
+}

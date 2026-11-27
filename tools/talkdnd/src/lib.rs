@@ -1772,9 +1772,20 @@ fn dispatch(
             // would touch the save before the confirmation/admission/preflight
             // gates. Ordinary `start` / `migrate` (no confirmations, or a
             // legacy chain below schema 10) keeps the old behaviour.
-            let identity_only = !dry_run
-                && !confirms.is_empty()
-                && migrate::detect(&s)? == migrate::CHAIN_SCHEMA;
+            let schema = migrate::detect(&s)?;
+            // Owner decision (Issue #330 comment 7212185560): an explicit
+            // confirmed invocation is only for the stable schema-10 preimages.
+            // A save below that must finish the ordinary migration first,
+            // because those writes (sheets, companions, ruleset) would
+            // invalidate any digest the DM just reviewed. Refuse before the
+            // ordinary pre-write checkpoint/ruleset step mutates anything.
+            if !dry_run && !confirms.is_empty() && schema < migrate::CHAIN_SCHEMA {
+                let chain = migrate::CHAIN_SCHEMA;
+                bail!(
+                    "带 --confirm-binding 的 schema 10→11 迁移只能用于 schema {chain} 存档（当前 schema {schema}）。请先运行 `talkdnd migrate`（不要带确认）完成普通迁移，再运行 `talkdnd migrate --dry-run` 只读核对 schema {chain} 的前像摘要并重新确认；本次未写入任何文件"
+                );
+            }
+            let identity_only = !dry_run && !confirms.is_empty() && schema == migrate::CHAIN_SCHEMA;
             let _checkpoint = if dry_run || identity_only {
                 None
             } else {

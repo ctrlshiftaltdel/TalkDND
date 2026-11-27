@@ -1406,18 +1406,31 @@ fn identity_step_11(
     } else {
         root.join("Saves")
     };
-    // The device probe is advisory only where the platform cannot expose a
-    // usable key (Windows reports a constant); the D backup step re-checks
-    // against the real backup parent afterwards.
-    if let (Ok(here), Ok(there)) = (
-        crate::advancement_commit::device_key(save),
-        crate::advancement_commit::device_key(&device_probe),
-    ) {
-        anyhow::ensure!(
-            crate::advancement_commit::devices_match(here, there),
-            "初始化成长协议前拒绝：存档与备份目录不在同一设备；未写入任何协议或目标文件"
-        );
-    }
+    // Fail closed on a probe error too: this branch only runs after the #344
+    // admission gate established the local ext4 environment, so an unreadable
+    // device key is a real refusal, not a platform limitation to skip.
+    let here = crate::advancement_commit::device_key(save).map_err(|err| {
+        anyhow::anyhow!(
+            "初始化成长协议前拒绝：无法探测存档所在设备（{err}）；未写入任何协议或目标文件"
+        )
+    })?;
+    let there = crate::advancement_commit::device_key(&device_probe).map_err(|err| {
+        anyhow::anyhow!(
+            "初始化成长协议前拒绝：无法探测备份目录所在设备（{err}）；未写入任何协议或目标文件"
+        )
+    })?;
+    anyhow::ensure!(
+        crate::advancement_commit::devices_match(here, there),
+        "初始化成长协议前拒绝：存档与备份目录不在同一设备；未写入任何协议或目标文件"
+    );
+    // Recompute the D preview from the live preimages before any protocol
+    // control file exists. The D publish rechecks this too, but a stale
+    // approval must not even initialize controls.
+    let live_preview = crate::advancement_commit::binding_preview_id(save, &extra_targets)?;
+    anyhow::ensure!(
+        live_preview == preview_id,
+        "初始化成长协议前拒绝：确认摘要对应的是旧前像（核对后又改过），请重新 --dry-run 并确认；未写入任何协议或目标文件"
+    );
     fs::create_dir_all(&backups_root)?;
     let evidence_root = backups_root.join(".operations");
     let evidence_dir = evidence_root.join(slot);
