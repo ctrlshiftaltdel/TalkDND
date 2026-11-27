@@ -922,7 +922,7 @@ fn apply_adventure_meta(meta: &AdventureCombatMeta, known: &mut KnownIds) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrate::{Automation, CURRENT_SCHEMA};
+    use crate::migrate::{Automation, CHAIN_SCHEMA};
 
     fn root(tag: &str) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("talkdnd-settings-{tag}-{}", std::process::id()));
@@ -944,7 +944,7 @@ mod tests {
         assert!(dice_display(&save));
         assert_eq!(
             migrate::load(&save).unwrap().unwrap().schema,
-            CURRENT_SCHEMA
+            CHAIN_SCHEMA
         );
         assert!(lines(&save).unwrap()[0].contains("开"));
         let out = set_dice(&r, &save, false, Some("table vote")).unwrap();
