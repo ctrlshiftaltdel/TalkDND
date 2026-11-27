@@ -185,14 +185,14 @@ struct ConditionRow {
 
 impl ConditionRow {
     fn new(
-        id: &str,
+        id: impl Into<String>,
         status: ConditionStatus,
         source: impl Into<String>,
         edition: &str,
         detail: impl Into<String>,
     ) -> Self {
         Self {
-            id: id.to_owned(),
+            id: id.into(),
             status,
             source: source.into(),
             edition: edition.to_owned(),
@@ -385,9 +385,16 @@ fn validate(
     // AC-3: an unrecognized feat is marked 未验证、效果手动 only when the
     // opportunity, authorization and duplicate conditions each independently
     // passed; DM confirmations of unknowns cannot substitute for them.
-    let marking_required = ["opportunity_matches", "candidate_authorized", "known_duplicate"];
+    let marking_required = [
+        "opportunity_matches",
+        "candidate_authorized",
+        "known_duplicate",
+    ];
     let unrecognized_marking = if unrecognized
-        && !matches!(decision, advancement_validation::ValidationDecision::Rejected { .. })
+        && !matches!(
+            decision,
+            advancement_validation::ValidationDecision::Rejected { .. }
+        )
         && rows
             .iter()
             .all(|row| !marking_required.contains(&row.id.as_str()) || row.status == Met)
@@ -482,13 +489,9 @@ fn feat_outcome(
             format!("专长来自已授权目录 {}", candidate.source),
             Some(candidate.source.clone()),
         ),
-        None => unrecognized_authorization(
-            root,
-            preview.ruleset,
-            feat_id,
-            declared_source,
-            &statuses,
-        )?,
+        None => {
+            unrecognized_authorization(root, preview.ruleset, feat_id, declared_source, &statuses)?
+        }
     };
     rows.push(ConditionRow::new(
         "candidate_authorized",
@@ -501,7 +504,14 @@ fn feat_outcome(
     let (echo, unrecognized) = match &recognized {
         Some(candidate) => {
             let entity = load_feat(root, preview.ruleset, &candidate.source, feat_id, &statuses)?;
-            append_prereq_rows(&mut rows, preview, facts, edition, &candidate.source, &entity);
+            append_prereq_rows(
+                &mut rows,
+                preview,
+                facts,
+                edition,
+                &candidate.source,
+                &entity,
+            );
             append_category_row(&mut rows, preview, edition, entity.data.as_ref());
             let (duplicate, duplicate_detail) =
                 duplicate_status(facts, entity.id.as_str(), entity.name.as_deref());
@@ -555,7 +565,11 @@ fn feat_outcome(
             )
         }
     };
-    Ok(CandidateOutcome { rows, echo, unrecognized })
+    Ok(CandidateOutcome {
+        rows,
+        echo,
+        unrecognized,
+    })
 }
 
 /// Authorization verdict for a feat the authorized catalog does not contain.
@@ -752,7 +766,9 @@ fn parse_prereqs(data: Option<&serde_json::Value>) -> Vec<ParsedPrereq> {
                         .get("ability_score")
                         .and_then(|score| score.get("index"))
                         .and_then(serde_json::Value::as_str);
-                    let minimum = item.get("minimum_score").and_then(serde_json::Value::as_i64);
+                    let minimum = item
+                        .get("minimum_score")
+                        .and_then(serde_json::Value::as_i64);
                     match (ability, minimum) {
                         (Some(ability), Some(minimum))
                             if data::ABILITIES.contains(&ability)
@@ -809,16 +825,14 @@ fn append_prereq_rows(
                     edition,
                     match status {
                         Met => format!("职业特性表包含 {name}（目标等级前）"),
-                        _ => format!(
-                            "基础职业特性表没有 {name}；子职或本地资料可能提供，保持未知"
-                        ),
+                        _ => format!("基础职业特性表没有 {name}；子职或本地资料可能提供，保持未知"),
                     },
                 ));
             }
             ParsedPrereq::AbilityScore { ability, minimum } => {
                 let score = score_of(preview, &ability);
                 let status = match score {
-                    Some(score) if score >= minimum => Met,
+                    Some(score) if i64::from(score) >= minimum => Met,
                     Some(_) => NotMet,
                     None => Unknown,
                 };

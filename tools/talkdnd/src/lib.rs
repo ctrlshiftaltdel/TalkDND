@@ -9,8 +9,8 @@ mod advancement_identity;
 pub mod advancement_inner_lock;
 pub mod advancement_lock;
 mod advancement_preview;
-mod advancement_selection;
 pub mod advancement_recovery;
+mod advancement_selection;
 pub mod advancement_sidecar;
 pub mod advancement_validation;
 pub mod adventure;
@@ -1523,15 +1523,15 @@ fn dispatch(
                 },
         } => {
             let save = save::resolve_slot(&root, cli.save.as_deref())?;
-            match (level_up, select_opportunity) {
+            match (level_up.as_ref(), select_opportunity.as_ref()) {
                 (Some(who), Some(opportunity)) => {
                     advancement_selection::run(
                         &root,
                         &save,
-                        &who,
+                        who,
                         json,
                         advancement_selection::SelectionArgs {
-                            opportunity: &opportunity,
+                            opportunity,
                             feat: select_feat.as_deref(),
                             abilities: select_abilities.as_deref(),
                             declared_source: select_source.as_deref(),

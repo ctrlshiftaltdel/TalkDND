@@ -47,7 +47,7 @@ pub(crate) struct AbilityPotential {
     pub(crate) modifier_after_plus_two: Option<i32>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct Candidate {
     pub(crate) id: String,
     pub(crate) name: String,

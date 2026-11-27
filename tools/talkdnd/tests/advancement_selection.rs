@@ -277,7 +277,10 @@ fn explicit_selections_verify_with_condition_sources_on_both_editions() {
     assert!(ok);
     assert_eq!(report["selection"]["decision"], "verified");
     assert_eq!(report["selection"]["not_program_verified"], false);
-    assert_eq!(report["selection"]["application"], "not_applied_read_only_validation");
+    assert_eq!(
+        report["selection"]["application"],
+        "not_applied_read_only_validation"
+    );
     assert!(report["selection"]["unrecognized_marking"].is_null());
     let matches = Fixture::condition(&report, "opportunity_matches");
     assert_eq!(matches["status"], "met");
@@ -288,7 +291,10 @@ fn explicit_selections_verify_with_condition_sources_on_both_editions() {
     assert_eq!(authorized["source"], "srd-5.1-feats");
     assert_eq!(row_status(&report, "prerequisite_minimum_level"), "met");
     assert_eq!(row_status(&report, "known_duplicate"), "met");
-    assert_eq!(report["selection"]["candidate"]["name"], "Fixture brave-strike");
+    assert_eq!(
+        report["selection"]["candidate"]["name"],
+        "Fixture brave-strike"
+    );
 
     let (ok, report) = fixture.select(&[
         "--select-opportunity",
@@ -321,12 +327,21 @@ fn explicit_selections_verify_with_condition_sources_on_both_editions() {
     ]);
     assert!(ok);
     assert_eq!(report["selection"]["decision"], "verified");
-    assert_eq!(row_status(&report, "opportunity_grants_ability_increase"), "met");
+    assert_eq!(
+        row_status(&report, "opportunity_grants_ability_increase"),
+        "met"
+    );
     assert_eq!(row_status(&report, "increase_total_matches_grant"), "met");
     assert_eq!(row_status(&report, "str_increase_within_cap"), "met");
     let cap = Fixture::condition(&report, "str_increase_within_cap");
-    assert_eq!(cap["source"], "SRD 5.1 class progression (Ability Score Improvement)");
-    assert_eq!(report["selection"]["candidate"]["increases"][0]["score_after"], 19);
+    assert_eq!(
+        cap["source"],
+        "SRD 5.1 class progression (Ability Score Improvement)"
+    );
+    assert_eq!(
+        report["selection"]["candidate"]["increases"][0]["score_after"],
+        19
+    );
 
     // 2024: the same shape against its own catalog and edition labels.
     let fixture = Fixture::new(9, "5.5e-srd");
@@ -345,7 +360,10 @@ fn explicit_selections_verify_with_condition_sources_on_both_editions() {
     ]);
     assert!(ok);
     assert_eq!(report["selection"]["decision"], "verified");
-    assert_eq!(Fixture::condition(&report, "opportunity_matches")["edition"], "2024");
+    assert_eq!(
+        Fixture::condition(&report, "opportunity_matches")["edition"],
+        "2024"
+    );
     assert_eq!(
         Fixture::condition(&report, "candidate_authorized")["source"],
         "srd-5.2.1-feats"
@@ -502,7 +520,10 @@ fn known_illegal_candidates_reject_with_condition_rows() {
         "con+1",
     ]);
     assert!(!ok);
-    assert_eq!(row_status(&report, "increase_total_matches_grant"), "not_met");
+    assert_eq!(
+        row_status(&report, "increase_total_matches_grant"),
+        "not_met"
+    );
     assert_eq!(row_status(&report, "con_increase_within_cap"), "met");
 
     // A bare ability increase is not a candidate under the Epic Boon grant.
@@ -719,23 +740,50 @@ fn unrecognized_feats_mark_manual_only_after_the_three_rules_pass() {
 
     // Aliases, display names and malformed specs are input errors.
     for args in [
-        vec!["--select-opportunity", ASI_2014, "--select-feat", "Brave-Strike"],
-        vec!["--select-opportunity", ASI_2014, "--select-feat", " brave-strike"],
-        vec!["--select-opportunity", ASI_2014, "--select-abilities", "strength+2"],
-        vec!["--select-opportunity", ASI_2014, "--select-abilities", "str+2;"],
-        vec!["--select-opportunity", ASI_2014, "--select-abilities", "str+3"],
-        vec!["--select-opportunity", ASI_2014, "--select-abilities", "str+1,str+1"],
+        vec![
+            "--select-opportunity",
+            ASI_2014,
+            "--select-feat",
+            "Brave-Strike",
+        ],
+        vec![
+            "--select-opportunity",
+            ASI_2014,
+            "--select-feat",
+            " brave-strike",
+        ],
+        vec![
+            "--select-opportunity",
+            ASI_2014,
+            "--select-abilities",
+            "strength+2",
+        ],
+        vec![
+            "--select-opportunity",
+            ASI_2014,
+            "--select-abilities",
+            "str+2;",
+        ],
+        vec![
+            "--select-opportunity",
+            ASI_2014,
+            "--select-abilities",
+            "str+3",
+        ],
+        vec![
+            "--select-opportunity",
+            ASI_2014,
+            "--select-abilities",
+            "str+1,str+1",
+        ],
         vec!["--select-opportunity", ASI_2014],
     ] {
-        let output = fixture.command(&[
-            "advancement",
-            "identity-preview",
-            "--level-up",
-            "hero",
-        ]
-        .into_iter()
-        .chain(args)
-        .collect::<Vec<_>>());
+        let output = fixture.command(
+            &["advancement", "identity-preview", "--level-up", "hero"]
+                .into_iter()
+                .chain(args.iter().copied())
+                .collect::<Vec<_>>(),
+        );
         assert!(!output.status.success(), "args {args:?} must be rejected");
     }
 }
