@@ -385,10 +385,14 @@ fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
                 for fd in fds.flatten() {
                     if let Ok(target) = fs::read_link(fd.path()) {
                         if target == lock_file {
+                            let cmdline = fs::read_to_string(format!("/proc/{pid}/cmdline"))
+                                .unwrap_or_default()
+                                .replace(' ', " ");
                             holders.push(format!(
-                                "pid {pid} holds {} -> {}",
+                                "pid {pid} holds {} -> {} (cmdline: {})",
                                 fd.path().display(),
-                                target.display()
+                                target.display(),
+                                cmdline.trim()
                             ));
                         }
                     }
