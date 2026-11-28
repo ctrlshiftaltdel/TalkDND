@@ -243,6 +243,14 @@ fn feat_with(id: &str, category: &str, mut data: Value) -> DomainEntity {
     }
 }
 
+/// A pack entry whose description was not retained: the duplicate rule must
+/// treat its extraction completeness as unknown.
+fn feat_without_text(id: &str, category: &str, data: Value) -> DomainEntity {
+    let mut feat = feat_with(id, category, data);
+    feat.text = None;
+    feat
+}
+
 fn row_status<'a>(report: &'a Value, id: &str) -> &'a str {
     Fixture::condition(report, id)["status"].as_str().unwrap()
 }
@@ -615,6 +623,13 @@ fn repeatable_grants_split_known_conditional_and_unproven() {
             feat_with("silent-strike", "general", json!({
                 "prerequisites": {"minimum_level": 4},
             })),
+            feat_without_text(
+                "unextracted-strike",
+                "general",
+                json!({
+                    "prerequisites": {"minimum_level": 4},
+                }),
+            ),
         ],
     );
     fixture.sheet(
@@ -664,8 +679,9 @@ fn repeatable_grants_split_known_conditional_and_unproven() {
     assert_eq!(report["selection"]["decision"], "confirmed_unknown");
     assert_eq!(report["selection"]["not_program_verified"], true);
 
-    // No repeatability statement: absence never becomes a known-illegal
-    // duplicate; the duplicate condition stays unknown.
+    // Both SRDs default each feat to a single taking; this entry retains its
+    // description with no repeat exception, so the recorded earlier taking is
+    // a known-illegal duplicate that even a DM confirmation cannot override.
     let (ok, report) = fixture.select(&[
         "--select-opportunity",
         ASI_2024,
@@ -673,11 +689,12 @@ fn repeatable_grants_split_known_conditional_and_unproven() {
         "silent-strike",
     ]);
     assert!(!ok);
-    assert_eq!(row_status(&report, "known_duplicate"), "unknown");
+    assert_eq!(report["selection"]["decision"], "rejected");
+    assert_eq!(row_status(&report, "known_duplicate"), "not_met");
     assert!(Fixture::condition(&report, "known_duplicate")["detail"]
         .as_str()
         .unwrap()
-        .contains("重复性表述"));
+        .contains("缺省每项专长只能选取一次"));
     let (ok, report) = fixture.select(&[
         "--select-opportunity",
         ASI_2024,
@@ -686,8 +703,36 @@ fn repeatable_grants_split_known_conditional_and_unproven() {
         "--dm-confirm",
         "DM 核对未重复选取",
     ]);
+    assert!(!ok);
+    assert_eq!(report["selection"]["decision"], "rejected");
+    assert_eq!(row_status(&report, "known_duplicate"), "not_met");
+
+    // A pack entry whose description was not retained has unknown extraction
+    // completeness: the recorded duplicate stays unknown and a non-empty DM
+    // basis continues it as not-program-verified.
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2024,
+        "--select-feat",
+        "unextracted-strike",
+    ]);
+    assert!(!ok);
+    assert_eq!(row_status(&report, "known_duplicate"), "unknown");
+    assert!(Fixture::condition(&report, "known_duplicate")["detail"]
+        .as_str()
+        .unwrap()
+        .contains("提取完整性未知"));
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2024,
+        "--select-feat",
+        "unextracted-strike",
+        "--dm-confirm",
+        "DM 核对未重复选取",
+    ]);
     assert!(ok);
     assert_eq!(report["selection"]["decision"], "confirmed_unknown");
+    assert_eq!(report["selection"]["not_program_verified"], true);
 
     // A feat not recorded on the sheet never trips the duplicate rule.
     fixture.sheet("2024", 3, &[]);

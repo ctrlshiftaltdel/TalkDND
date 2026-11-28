@@ -18,9 +18,11 @@
 //!
 //! Unrecognized feats are marked 未验证、效果手动 only after the opportunity,
 //! declared authorization and duplicate conditions independently pass, and the
-//! duplicate rule follows the pack's repeatability evidence: an explicit
-//! repeatable grant passes, a conditional grant stays unknown, and the absence
-//! of a repeatability statement never becomes a known-illegal duplicate.
+//! duplicate rule follows the pack's repeatability evidence: both cited SRDs
+//! default each feat to a single taking, so a retained catalog description
+//! without a repeat exception makes a recorded duplicate a known-illegal
+//! rejection, an explicit repeatable grant passes, and a conditional grant or
+//! a description that was not retained stays unknown.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -532,7 +534,7 @@ fn feat_outcome(
                 &entity,
             );
             append_category_row(&mut rows, preview, edition, entity.data.as_ref());
-            let repeatability = repeatability_of(entity.data.as_ref());
+            let repeatability = repeatability_of(entity.data.as_ref(), entity.text.as_deref());
             let (duplicate, duplicate_detail) = duplicate_status(
                 facts,
                 entity.id.as_str(),
@@ -568,7 +570,7 @@ fn feat_outcome(
                 edition,
                 "未识别专长没有可核对的前提数据；效果与前提保持未验证",
             ));
-            let repeatability = Repeatability::NoEvidence;
+            let repeatability = Repeatability::DescriptionMissing;
             let (duplicate, duplicate_detail) =
                 duplicate_status(facts, feat_id, None, &repeatability);
             rows.push(ConditionRow::new(
@@ -932,63 +934,82 @@ fn append_category_row(
     ));
 }
 
-/// What the tracked pack data says about taking the same feat again. The SRD
-/// packs carry a `repeatable` field exactly where the SRD text grants
-/// repeatability; its absence is not evidence of a once-only rule, so it must
-/// not become a known-illegal duplicate.
+/// What the tracked pack data says about taking the same feat again. Both
+/// cited SRDs default each feat to a single taking and allow exceptions only
+/// from the feat's own description; the extraction keeps that description and
+/// records a `repeatable` field exactly where the description grants another
+/// taking. An entry whose description was not retained has unknown extraction
+/// completeness and must not be judged once-only.
 enum Repeatability {
-    /// The pack states the feat can be taken only once.
-    OnceOnly,
+    /// The entry's own statement limits the feat to one taking.
+    StatedOnceOnly,
+    /// The entry retains its description and states no repeat exception, so
+    /// the SRD default makes the feat once-only.
+    DefaultOnceOnly,
     /// `repeatable` grants another taking with no extra terms.
     Repeatable,
     /// `repeatable` grants another taking subject to terms the sheet cannot
     /// verify (for example a different spell list each time).
     ConditionalRepeat(String),
-    /// No repeatability statement in the tracked data.
-    NoEvidence,
+    /// The entry's description was not retained (or there is no entry), so
+    /// extraction completeness is unknown.
+    DescriptionMissing,
 }
 
-/// Classifies the tracked `repeatable` text: an explicit once-only statement
-/// is known non-repeatable; wording beyond the plain "take this feat more than
-/// once" grant means extra terms; unrecognized wording also stays conditional
-/// rather than being guessed either way.
-fn repeatability_of(data: Option<&serde_json::Value>) -> Repeatability {
-    let Some(text) = data
+/// Classifies one authorized-catalog entry. A `repeatable` field is the
+/// extraction of the description's repeat exception: an explicit once-only
+/// statement is known non-repeatable, the plain grant is repeatable, and
+/// wording beyond the plain grant means extra terms. Without the field, a
+/// retained description falls under the SRD once-only default; a missing
+/// description stays unknown.
+fn repeatability_of(data: Option<&serde_json::Value>, text: Option<&str>) -> Repeatability {
+    let statement = data
         .and_then(|data| data.get("repeatable"))
-        .and_then(serde_json::Value::as_str)
-    else {
-        return Repeatability::NoEvidence;
-    };
-    let normalized = text.to_lowercase();
-    const ONCE_ONLY_MARKERS: [&str; 3] = [
-        "only once",
-        "can't take this feat more than once",
-        "cannot take this feat more than once",
-    ];
-    if ONCE_ONLY_MARKERS
-        .iter()
-        .any(|marker| normalized.contains(marker))
-    {
-        return Repeatability::OnceOnly;
-    }
-    const GRANT: &str = "you can take this feat more than once";
-    let remainder = match normalized.strip_prefix(GRANT) {
-        Some(remainder) => remainder,
-        None => return Repeatability::ConditionalRepeat(text.to_owned()),
-    };
-    let remainder = remainder.trim_matches(|c: char| {
-        matches!(c, '.' | ',' | ';' | '。' | '，' | '；' | '！') || c.is_whitespace()
-    });
-    if remainder.is_empty() {
-        Repeatability::Repeatable
-    } else {
-        Repeatability::ConditionalRepeat(text.to_owned())
+        .and_then(serde_json::Value::as_str);
+    match statement {
+        Some(statement) => {
+            let normalized = statement.to_lowercase();
+            const ONCE_ONLY_MARKERS: [&str; 3] = [
+                "only once",
+                "can't take this feat more than once",
+                "cannot take this feat more than once",
+            ];
+            if ONCE_ONLY_MARKERS
+                .iter()
+                .any(|marker| normalized.contains(marker))
+            {
+                return Repeatability::StatedOnceOnly;
+            }
+            const GRANT: &str = "you can take this feat more than once";
+            let remainder = match normalized.strip_prefix(GRANT) {
+                Some(remainder) => remainder,
+                None => return Repeatability::ConditionalRepeat(statement.to_owned()),
+            };
+            let remainder = remainder.trim_matches(|c: char| {
+                matches!(c, '.' | ',' | ';' | '。' | '，' | '；' | '！') || c.is_whitespace()
+            });
+            if remainder.is_empty() {
+                Repeatability::Repeatable
+            } else {
+                Repeatability::ConditionalRepeat(statement.to_owned())
+            }
+        }
+        None => {
+            let retained = text.is_some_and(|text| !text.trim().is_empty());
+            if retained {
+                Repeatability::DefaultOnceOnly
+            } else {
+                Repeatability::DescriptionMissing
+            }
+        }
     }
 }
 
 /// Known duplicates come from the structured sheet's feat list, judged against
-/// the pack's repeatability evidence; legacy Markdown-only cards keep their
-/// selection history unknown.
+/// the entry's repeatability evidence. Legacy Markdown-only cards and entries
+/// whose description was not retained keep their evidence unknown; a verified
+/// once-only entry rejects a recorded duplicate and DM confirmation cannot
+/// override it (the kernel rejects any unmet condition first).
 fn duplicate_status(
     facts: &CharacterFacts,
     id: &str,
@@ -1009,9 +1030,13 @@ fn duplicate_status(
     });
     match (recorded, repeatability) {
         (false, _) => (Met, "结构化角色卡未记录该专长".to_owned()),
-        (true, Repeatability::OnceOnly) => (
+        (true, Repeatability::StatedOnceOnly) => (
             NotMet,
-            "规则数据明示该专长只能选取一次；角色卡已记录此前选取，已知重复".to_owned(),
+            "该专长的描述明示只能选取一次；角色卡已记录此前选取，已知重复".to_owned(),
+        ),
+        (true, Repeatability::DefaultOnceOnly) => (
+            NotMet,
+            "两版 SRD 缺省每项专长只能选取一次，例外须来自该专长描述；目录条目已保留描述且无重复例外，角色卡已记录此前选取，已知重复".to_owned(),
         ),
         (true, Repeatability::Repeatable) => (
             Met,
@@ -1021,10 +1046,9 @@ fn duplicate_status(
             Unknown,
             format!("该专长的重复受条件限制（{text}）；条件满足情况无法从角色卡核对，保持未知"),
         ),
-        (true, Repeatability::NoEvidence) => (
+        (true, Repeatability::DescriptionMissing) => (
             Unknown,
-            "角色卡已记录该专长，但跟踪数据没有重复性表述；不能据此判定已知非法，保持未知"
-                .to_owned(),
+            "角色卡已记录该专长，但目录条目未保留描述，提取完整性未知；保持未知".to_owned(),
         ),
     }
 }
