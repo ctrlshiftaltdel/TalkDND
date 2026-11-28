@@ -466,18 +466,36 @@ fn build_overlays(
     cf.tail_md = append_level_record(&cf.tail_md, &note);
 
     let mut overlays = BTreeMap::new();
-    // sheets/<id>.yaml — the same byte format `charsheet::store` writes.
+    // sheets/<id>.yaml — refresh the computed fields on top of the sheet's
+    // own mapping. A wholesale `charsheet::store`-style round-trip through
+    // `CharFile` would silently drop every key the struct does not model —
+    // the schema-11 `talkdnd_identity` field among them — and break the
+    // strict binding the next advancement reads. Unknown keys keep their
+    // position and value; leading header comments are preserved (other
+    // comments are not: the existing program write path drops them too).
+    let sheet_path = charsheet::path(save, &cf.id);
+    let original_text = fs::read_to_string(&sheet_path)
+        .with_context(|| format!("读取结构化角色卡 {} 失败", sheet_path.display()))?;
+    let mut mapping: serde_norway::Mapping = serde_norway::from_str(&original_text)
+        .with_context(|| format!("结构化角色卡 {} 不是有效 YAML", sheet_path.display()))?;
     let mut stored = cf.clone();
     stored.version = 1;
+    let fresh = serde_norway::to_value(&stored)?;
+    let fresh_mapping = fresh
+        .as_mapping()
+        .context("内部错误：角色卡序列化不是映射，拒绝构建覆盖")?;
+    for (key, value) in fresh_mapping {
+        mapping.insert(key.clone(), value.clone());
+    }
+    let header: String = original_text
+        .lines()
+        .take_while(|line| line.starts_with('#'))
+        .map(|line| format!("{line}\n"))
+        .collect();
     let sheet_rel = format!("sheets/{}.yaml", cf.id);
     overlays.insert(
         sheet_rel,
-        format!(
-            "# TalkDND character data (source of truth). Change it with `talkdnd char {} …`; never by hand.\n{}",
-            cf.id,
-            serde_norway::to_string(&stored)?
-        )
-        .into_bytes(),
+        format!("{header}{}", serde_norway::to_string(&mapping)?).into_bytes(),
     );
     // Characters/<name>.md — the same render `charsheet::commit` writes.
     let ps = charsheet::party(save, &cf)?;

@@ -195,9 +195,9 @@ impl Fixture {
     }
 
     /// Runs the read-only derive chain through the real CLI and returns the
-    /// submission binding digest from the report.
-    fn derive_binding(&self, extra: &[&str]) -> String {
-        let mut args = vec![
+    /// raw output; rejections print their report to stdout and exit 1.
+    fn derive_raw(&self) -> Output {
+        let args = [
             "advancement",
             "identity-preview",
             "--level-up",
@@ -209,8 +209,13 @@ impl Fixture {
             "--select-abilities",
             "str+2",
         ];
-        args.extend_from_slice(extra);
-        let output = self.command(&args);
+        self.command(&args)
+    }
+
+    /// Runs the read-only derive chain and returns the submission binding
+    /// digest from the report.
+    fn derive_binding(&self, _extra: &[&str]) -> String {
+        let output = self.derive_raw();
         assert!(
             output.status.success(),
             "derive failed: {}{}",
@@ -449,6 +454,13 @@ fn submit_applies_the_reviewed_candidate_once_and_a_repeat_is_refused() {
         show(&sheet["spells"])
     );
     assert_eq!(sheet["feats"].as_sequence().unwrap().len(), 0);
+    // The program write kept the migration's identity field (and every
+    // other key the CharFile struct does not model).
+    assert!(
+        sheet.get("talkdnd_identity").is_some(),
+        "unknown sheet keys must survive: {}",
+        serde_norway::to_string(&sheet).unwrap_or_default()
+    );
     // The level record the HP provenance chain reads next time.
     let tail = sheet["tail_md"].as_str().unwrap();
     assert!(
@@ -502,6 +514,14 @@ fn submit_applies_the_reviewed_candidate_once_and_a_repeat_is_refused() {
         after_first,
         "a refused repeat must not write"
     );
+
+    // The binding survived the program write: the next chain still reports
+    // a strictly matched identity (level 5 registers no opportunity for a
+    // 2014 fighter, so the chain rejects on the opportunity alone).
+    let next = fixture.derive_raw();
+    let report: Value = serde_json::from_slice(&next.stdout).unwrap();
+    assert_eq!(report["identity"], "matched", "{}", report);
+    assert_eq!(report["selection"]["decision"], "rejected");
     let _ = before;
 }
 
@@ -610,16 +630,28 @@ fn milestone_submit_raises_xp_to_the_floor_exactly_once() {
     assert_eq!(entry["level"].as_i64(), Some(4));
     assert_eq!(entry["to"][0].as_str(), Some("hero"));
 
-    // The same story beat cannot fund a second level-up.
-    let freshest = fixture.derive_binding(&[]);
-    let mut repeat = fixture.submit_args(&freshest);
-    repeat.push("--milestone".into());
-    repeat.push("--reason".into());
-    repeat.push("Found the forge".into());
-    let refs: Vec<&str> = repeat.iter().map(String::as_str).collect();
-    let again = fixture.command(&refs);
-    assert!(!again.status.success(), "{}", stdout(&again));
-    assert!(stderr(&again).contains("已在"), "{}", stderr(&again));
+    // The milestone submit also carried the identity binding through the
+    // rewrite: the sheet keeps its `talkdnd_identity` field.
+    let sheet: serde_norway::Value =
+        serde_norway::from_str(&fs::read_to_string(fixture.save.join("sheets/hero.yaml")).unwrap())
+            .unwrap();
+    assert!(
+        sheet.get("talkdnd_identity").is_some(),
+        "the program write must keep unknown sheet keys: {}",
+        serde_norway::to_string(&sheet).unwrap_or_default()
+    );
+
+    // The next level (5) registers no advancement opportunity for a 2014
+    // fighter, so the chain refuses before any submit material exists.
+    let next = fixture.derive_raw();
+    assert!(!next.status.success());
+    let report: Value = serde_json::from_slice(&next.stdout).unwrap();
+    assert_eq!(report["selection"]["decision"], "rejected");
+    assert!(
+        stdout(&next).contains("该等级没有登记的成长机会"),
+        "{}",
+        stdout(&next)
+    );
 }
 
 // --------------------------------------------------------------------- AC-2 --
