@@ -1165,9 +1165,56 @@ fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
 /// materials, names the leftover operation, writes nothing, and does not
 /// auto-replay. An in_doubt leftover inspects with exit 1 (attention
 /// required).
+/// Runs one recovery scenario in a re-executed child process of this test
+/// binary. The recovery body performs in-process D runs and spawns CLI
+/// children that contend on the fixture's lock file; ten CI rounds showed
+/// the parent test process can intermittently keep holding a flocked
+/// descriptor on that file (kernel FLOCK entry attributed to the test pid,
+/// with an owned File wrapper that cannot be closed from outside), which
+/// fail-closes the recovery children. Running the whole scenario body in a
+/// child process makes any such handle die with the child, so the scenario
+/// is deterministic; the parent asserts only the child's exit status and
+/// captured output.
+#[cfg(target_os = "linux")]
+fn recovery_scenario_child(name: &str, marker: &str) -> Output {
+    Command::new(std::env::current_exe().expect("current test exe"))
+        .arg(name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("TALKDND_ADV_RECOVERY_SCENARIO", marker)
+        .output()
+        .expect("spawn the recovery scenario child")
+}
+
+/// Child-side gate: returns true when this process was re-executed to run
+/// the named recovery scenario.
+#[cfg(target_os = "linux")]
+fn recovery_scenario_requested(marker: &str) -> bool {
+    std::env::var("TALKDND_ADV_RECOVERY_SCENARIO").as_deref() == Ok(marker)
+}
+
 #[cfg(target_os = "linux")]
 #[test]
-fn recovery_inspect_reports_materials_and_writes_nothing() {
+fn recovery_inspect_reports_materials_and_writes_nothing_parent() {
+    let output = recovery_scenario_child(
+        "recovery_inspect_reports_materials_and_writes_nothing_child",
+        "inspect",
+    );
+    assert!(
+        output.status.success(),
+        "recovery inspect child failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn recovery_inspect_reports_materials_and_writes_nothing_child() {
+    if !recovery_scenario_requested("inspect") {
+        return;
+    }
+    let _serial = serial();
     let _serial = serial();
     let fixture = leftover_in_doubt_fixture("recover-inspect", "adv-leftover-1");
     let leftover = fixture.snapshot_tree();
@@ -1189,7 +1236,27 @@ fn recovery_inspect_reports_materials_and_writes_nothing() {
 /// refused at the terminal write without re-applying anything.
 #[cfg(target_os = "linux")]
 #[test]
-fn recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply() {
+fn recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply_child_parent() {
+    let output = recovery_scenario_child(
+        "recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply_child",
+        "rollback",
+    );
+    assert!(
+        output.status.success(),
+        "recovery child rollback failed: {}
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply_child() {
+    if !recovery_scenario_requested("rollback") {
+        return;
+    }
+    let _serial = serial();
     let _serial = serial();
     let fixture = leftover_in_doubt_fixture("recover-rollback", "adv-leftover-1");
 
@@ -1248,7 +1315,27 @@ fn recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn recovery_can_continue_to_the_target_and_reports_manual_items() {
+fn recovery_can_continue_to_the_target_and_reports_manual_items_child_parent() {
+    let output = recovery_scenario_child(
+        "recovery_can_continue_to_the_target_and_reports_manual_items_child",
+        "continue",
+    );
+    assert!(
+        output.status.success(),
+        "recovery child continue failed: {}
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn recovery_can_continue_to_the_target_and_reports_manual_items_child() {
+    if !recovery_scenario_requested("continue") {
+        return;
+    }
+    let _serial = serial();
     let _serial = serial();
     let fixture = leftover_in_doubt_fixture("recover-continue", "adv-leftover-1");
     let recover = recover_command(
@@ -1278,7 +1365,24 @@ fn recovery_can_continue_to_the_target_and_reports_manual_items() {
 /// the target stops the recovery and keeps the edit for a human merge.
 #[cfg(target_os = "linux")]
 #[test]
-fn recovery_protects_later_manual_edits() {
+fn recovery_protects_later_manual_edits_child_parent() {
+    let output = recovery_scenario_child("recovery_protects_later_manual_edits_child", "manual");
+    assert!(
+        output.status.success(),
+        "recovery child manual failed: {}
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn recovery_protects_later_manual_edits_child() {
+    if !recovery_scenario_requested("manual") {
+        return;
+    }
+    let _serial = serial();
     let _serial = serial();
     let fixture = leftover_in_doubt_fixture("recover-manual", "adv-leftover-1");
     let session = fixture.save.join("Sessions/2030-01-02.md");
@@ -1313,7 +1417,25 @@ fn recovery_protects_later_manual_edits() {
 /// and reports in_doubt for manual handling only.
 #[cfg(target_os = "linux")]
 #[test]
-fn unknown_recovery_evidence_stops_in_doubt() {
+fn unknown_recovery_evidence_stops_in_doubt_child_parent() {
+    let output =
+        recovery_scenario_child("unknown_recovery_evidence_stops_in_doubt_child", "unknown");
+    assert!(
+        output.status.success(),
+        "recovery child unknown failed: {}
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unknown_recovery_evidence_stops_in_doubt_child() {
+    if !recovery_scenario_requested("unknown") {
+        return;
+    }
+    let _serial = serial();
     let _serial = serial();
     let fixture = leftover_in_doubt_fixture("recover-unknown", "adv-leftover-1");
     // A leftover operation plus a corrupt work record that claims to belong
