@@ -60,7 +60,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(tag: &str) -> Self {
+    fn new(_tag: &str) -> Self {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let root = loop {
             let path = std::env::temp_dir().join(format!(
@@ -558,7 +558,12 @@ fn milestone_submit_raises_xp_to_the_floor_exactly_once() {
     let progress: serde_norway::Value =
         serde_norway::from_str(&fs::read_to_string(fixture.save.join("progress.yaml")).unwrap())
             .unwrap();
-    assert_eq!(progress["xp"]["hero"].as_i64(), Some(2700), "{progress}");
+    assert_eq!(
+        progress["xp"]["hero"].as_i64(),
+        Some(2700),
+        "{}",
+        serde_norway::to_string(&progress).unwrap_or_default()
+    );
     let entry = &progress["xp_log"][0];
     assert_eq!(entry["category"].as_str(), Some("milestone-major"));
     assert_eq!(entry["reason"].as_str(), Some("Found the forge"));
