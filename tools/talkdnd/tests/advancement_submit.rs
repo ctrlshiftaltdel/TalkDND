@@ -191,6 +191,7 @@ impl Fixture {
         assert!(self.save.join(".talkdnd.advancement.lock").is_file());
         assert!(self.save.join(".talkdnd.advancement.state").is_file());
         assert!(self.save.join("advancement/hero.yaml").is_file());
+        leak_check(self, "after migration");
         true
     }
 
@@ -302,6 +303,32 @@ fn collect_files(dir: &Path, root: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) 
             );
         }
     }
+}
+
+/// Linux-only: fails the test immediately when this process still holds an
+/// open descriptor on the fixture's advancement lock file, naming the phase
+/// that leaked it. An unreleased lock handle would make every later lock
+/// acquisition in the same process fail closed, which is exactly the
+/// intermittent child-timeout pattern observed on CI.
+#[cfg(target_os = "linux")]
+fn leak_check(fixture: &Fixture, phase: &str) {
+    let lock_file = fixture.save.join(".talkdnd.advancement.lock");
+    let mut holders = Vec::new();
+    if let Ok(fds) = fs::read_dir("/proc/self/fd") {
+        for fd in fds.flatten() {
+            if let Ok(target) = fs::read_link(fd.path()) {
+                if target == lock_file {
+                    holders.push(format!("{} -> {}", fd.path().display(), target.display()));
+                }
+            }
+        }
+    }
+    assert!(
+        holders.is_empty(),
+        "the {phase} phase leaked a handle on {}:\n{}",
+        lock_file.display(),
+        holders.join("\n")
+    );
 }
 
 /// Runs one recovery CLI invocation. A previous child's lock release has
@@ -999,6 +1026,7 @@ fn leftover_in_doubt_operation(fixture: &Fixture, operation_id: &str) {
         ext4_metadata: true,
     };
     let failed = run_to_complete(&request).expect_err("the fault must leave a leftover");
+    leak_check(fixture, "after the leftover fault run");
     let error = failed.report.error.clone().unwrap_or_default();
     assert!(error.contains("日志") || error.contains("停止"), "{error}");
 }
