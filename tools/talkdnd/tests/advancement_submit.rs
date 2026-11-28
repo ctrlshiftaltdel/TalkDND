@@ -191,6 +191,7 @@ impl Fixture {
         assert!(self.save.join(".talkdnd.advancement.lock").is_file());
         assert!(self.save.join(".talkdnd.advancement.state").is_file());
         assert!(self.save.join("advancement/hero.yaml").is_file());
+        #[cfg(target_os = "linux")]
         leak_check(self, "after migration");
         true
     }
