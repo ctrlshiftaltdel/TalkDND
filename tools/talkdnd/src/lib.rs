@@ -10,6 +10,7 @@ pub mod advancement_inner_lock;
 pub mod advancement_lock;
 mod advancement_preview;
 pub mod advancement_recovery;
+mod advancement_selection;
 pub mod advancement_sidecar;
 pub mod advancement_validation;
 pub mod adventure;
@@ -845,6 +846,33 @@ enum AdvancementCmd {
         /// Preview the next level of one player character, by exact ID or name.
         #[arg(long, value_name = "CHARACTER")]
         level_up: Option<String>,
+        /// Validate one explicitly selected opportunity (exact id from the preview).
+        #[arg(long, value_name = "OPPORTUNITY", requires = "level_up")]
+        select_opportunity: Option<String>,
+        /// Feat candidate by exact catalog id; pair with --select-source when
+        /// the feat is not in the authorized catalog.
+        #[arg(
+            long,
+            value_name = "FEAT",
+            requires = "select_opportunity",
+            conflicts_with = "select_abilities"
+        )]
+        select_feat: Option<String>,
+        /// Ability-increase candidate, e.g. `str+2` or `str+1,dex+1` (exactly +2).
+        #[arg(
+            long,
+            value_name = "SPEC",
+            requires = "select_opportunity",
+            conflicts_with = "select_feat"
+        )]
+        select_abilities: Option<String>,
+        /// Declared source pack id for an unrecognized feat candidate.
+        #[arg(long, value_name = "SOURCE", requires = "select_feat")]
+        select_source: Option<String>,
+        /// Separate DM confirmation with a non-empty auditable basis for
+        /// unknown conditions; it never substitutes the player selection.
+        #[arg(long, value_name = "BASIS", requires = "select_opportunity")]
+        dm_confirm: Option<String>,
     },
 }
 
@@ -1483,13 +1511,55 @@ fn dispatch(
     let root = root.to_path_buf();
     match cli.cmd.clone() {
         Cmd::Advancement {
-            cmd: AdvancementCmd::IdentityPreview { json, level_up },
+            cmd:
+                AdvancementCmd::IdentityPreview {
+                    json,
+                    level_up,
+                    select_opportunity,
+                    select_feat,
+                    select_abilities,
+                    select_source,
+                    dm_confirm,
+                },
         } => {
             let save = save::resolve_slot(&root, cli.save.as_deref())?;
-            if let Some(who) = level_up {
-                advancement_preview::run(&root, &save, &who, json)?;
-            } else {
-                advancement_identity::run(&save, json)?;
+            match (level_up.as_ref(), select_opportunity.as_ref()) {
+                (Some(who), Some(opportunity)) => {
+                    advancement_selection::run(
+                        &root,
+                        &save,
+                        who,
+                        json,
+                        advancement_selection::SelectionArgs {
+                            opportunity,
+                            feat: select_feat.as_deref(),
+                            abilities: select_abilities.as_deref(),
+                            declared_source: select_source.as_deref(),
+                            dm_confirm: dm_confirm.as_deref(),
+                        },
+                    )?;
+                }
+                (Some(who), None) => {
+                    if select_feat.is_some()
+                        || select_abilities.is_some()
+                        || select_source.is_some()
+                        || dm_confirm.is_some()
+                    {
+                        anyhow::bail!("缺少玩家选择：请同时给出 --select-opportunity 与候选");
+                    }
+                    advancement_preview::run(&root, &save, who, json)?;
+                }
+                (None, _) => {
+                    if select_opportunity.is_some()
+                        || select_feat.is_some()
+                        || select_abilities.is_some()
+                        || select_source.is_some()
+                        || dm_confirm.is_some()
+                    {
+                        anyhow::bail!("玩家选择需要 --level-up 指定要校验的角色");
+                    }
+                    advancement_identity::run(&save, json)?;
+                }
             }
         }
         Cmd::Char { who, op } => {
