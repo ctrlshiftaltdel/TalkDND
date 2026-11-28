@@ -334,27 +334,28 @@ fn leak_check(fixture: &Fixture, phase: &str) {
 
 /// Runs one recovery CLI invocation.
 ///
-/// Known test-harness quirk (observed across ten CI rounds, see the
-/// diagnostics below): the test process itself can end up holding an open,
-/// flocked descriptor on the fixture's advancement lock file after the
-/// in-process D fixture runs, which makes the spawned CLI child's acquire
+/// Known test-harness quirk (observed across CI rounds; diagnostics
+/// retained below): this test process can briefly keep holding an open,
+/// flocked descriptor on the fixture's advancement lock file after an
+/// in-process D fixture run, which makes the spawned CLI child's acquire
 /// fail closed for its whole 5s budget. The product behaviour under that
-/// contention is exactly right (fail closed, write nothing), so this
-/// helper releases the leaked descriptor once — verifying by `/proc/self/fd`
-/// readlink that it really points at this fixture's lock file before
-/// closing it — and retries. A genuine second holder still fails the test
-/// through the full diagnostic.
+/// contention is exactly the contract (fail closed, write nothing; the
+/// timed-out attempt's stderr is that live evidence), so this helper
+/// retries with backoff, and only a holder that outlasts every attempt
+/// fails the test through the full diagnostic. Closing the descriptor
+/// here is not an option: the fd is owned by a live File wrapper (an
+/// owned-close raced it and aborted with an IO-safety violation).
 fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
-    let output = fixture.command(args);
+    let mut output = fixture.command(args);
     if output.status.success() || !stderr(&output).contains("lock_timeout") {
         return output;
     }
-    #[cfg(target_os = "linux")]
-    release_leaked_lock_fds(fixture);
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    let second = fixture.command(args);
-    if !stderr(&second).contains("lock_timeout") || !cfg!(target_os = "linux") {
-        return second;
+    for gap in [2000u64, 4000, 8000] {
+        std::thread::sleep(std::time::Duration::from_millis(gap));
+        output = fixture.command(args);
+        if output.status.success() || !stderr(&output).contains("lock_timeout") {
+            return output;
+        }
     }
     let lock_file = fixture.save.join(".talkdnd.advancement.lock");
     #[cfg(target_os = "linux")]
@@ -408,55 +409,13 @@ fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
         Err(err) => panic!("cannot even open the lock file: {err}"),
     };
     panic!(
-        "persistent lock holder on {} (inode {inode}):\nkernel locks on this inode:\n{}\nopen descriptors on this file:\n{}\nprobe: {}\nchild stderr:\n{}",
+        "persistent lock holder on {} (inode {inode}):\nkernel locks on this inode:\n{}\nopen descriptors on this file:\n{}\nprobe: {}\nlast child stderr:\n{}",
         lock_file.display(),
         locks,
         holders.join("\n"),
         probe,
-        stderr(&second)
+        stderr(&output)
     );
-}
-
-/// Takes ownership of this test process's own leaked descriptors on the
-/// fixture's advancement lock file and closes them, so the spawned CLI
-/// child can acquire the lock. Every candidate is verified by
-/// `/proc/self/fd/N` readlink to point at exactly this fixture's lock file
-/// before the takeover; anything else is left untouched. Linux only (the
-/// write tests are Linux-gated anyway).
-#[cfg(target_os = "linux")]
-fn release_leaked_lock_fds(fixture: &Fixture) {
-    use std::os::fd::{FromRawFd, OwnedFd};
-    let lock_file = fixture.save.join(".talkdnd.advancement.lock");
-    let mut closed = Vec::new();
-    let own_fds: Vec<_> = match fs::read_dir("/proc/self/fd") {
-        Ok(fds) => fds.flatten().collect(),
-        Err(_) => return,
-    };
-    for fd in own_fds {
-        let path = fd.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Ok(number) = name.parse::<i32>() else {
-            continue;
-        };
-        if let Ok(target) = fs::read_link(&path) {
-            if target == lock_file {
-                // Take ownership of the leaked descriptor (single close via
-                // the takeover; the raw number is gone from our table).
-                let owned = unsafe { OwnedFd::from_raw_fd(number) };
-                drop(owned);
-                closed.push(format!("fd {number} -> {}", target.display()));
-            }
-        }
-    }
-    if !closed.is_empty() {
-        eprintln!(
-            "test-harness note: released this process's leaked descriptors on {}: {}",
-            lock_file.display(),
-            closed.join("、")
-        );
-    }
 }
 
 /// Everything except the D protocol's control state file, which legitimately
