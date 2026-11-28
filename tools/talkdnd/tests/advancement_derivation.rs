@@ -118,16 +118,40 @@ impl Fixture {
         fixture
     }
 
+    /// Writes the save's existing chargen state (`chargen.json`): the record
+    /// of the skills the player actually chose, attributed by name.
+    fn chargen(&self, name: &str, class: &str, skills: &[&str]) {
+        let skills = skills
+            .iter()
+            .map(|skill| format!("\"{skill}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write(
+            &self.save,
+            "chargen.json",
+            format!(
+                "{{
+  \"name\": \"{name}\",
+  \"class\": \"{class}\",
+  \"skills\": [{skills}]
+}}
+"
+            )
+            .as_bytes(),
+        );
+    }
+
     /// Writes the Markdown card (combat block + level records) and, unless
-    /// `legacy`, the structured sheet mirroring it. `sheet_extra` carries the
-    /// optional `spells` block; `block_override` splices hand edits into
-    /// both carriers.
+    /// `legacy`, the structured sheet mirroring it. `info` is the sheet's
+    /// `info` mapping content; `sheet_extra` carries the optional `spells`
+    /// block; `block_override` splices hand edits into both carriers.
     fn card(
         &self,
         block: &str,
         records: &str,
         legacy: bool,
         ruleset: &str,
+        info: &str,
         sheet_extra: &str,
         block_override: Option<&(&str, &str)>,
     ) {
@@ -157,8 +181,7 @@ impl Fixture {
             &self.save,
             "sheets/hero.yaml",
             format!(
-                "version: 1\nid: hero\nname: Synthetic Hero\nfile: Characters/hero.md\nruleset: \"{ruleset}\"\ncontroller: player\ninfo: {{class: {}}}\nfeats: []\n{sheet_extra}combat:\n{indented}",
-                if block.contains("cleric") { "cleric" } else { "fighter" },
+                "version: 1\nid: hero\nname: Synthetic Hero\nfile: Characters/hero.md\nruleset: \"{ruleset}\"\ncontroller: player\ninfo: {{{info}}}\nfeats: []\n{sheet_extra}combat:\n{indented}",
             )
             .as_bytes(),
         );
@@ -327,9 +350,12 @@ fn derivation_auto_updates_reliable_values_on_2014_srd() {
         FIGHTER_2014_RECORDS,
         false,
         "2014",
+        "class: fighter",
         "",
         None,
     );
+    // The chargen state records the skill actually chosen at creation.
+    fixture.chargen("Synthetic Hero", "fighter", &["athletics"]);
     let (ok, report) = fixture.derive(&[
         "--select-opportunity",
         "ability_score_improvement_or_optional_feat",
@@ -373,9 +399,17 @@ fn derivation_auto_updates_reliable_values_on_2014_srd() {
     // Unchanged-but-proven values are keeps, not rewrites.
     assert_eq!(disposition(&report, "combat.prof"), "keep");
     assert_eq!(disposition(&report, "combat.saves.con"), "keep");
-    assert_eq!(disposition(&report, "combat.skills.perception"), "keep");
-    assert_eq!(disposition(&report, "combat.skills.history"), "keep");
-    assert_eq!(disposition(&report, "combat.skills.intimidation"), "keep");
+    // Class-choosable skills without a matching chargen record prove
+    // nothing, even though their values equal mod + proficiency.
+    assert_eq!(
+        disposition(&report, "combat.skills.perception"),
+        "dm_review"
+    );
+    assert_eq!(disposition(&report, "combat.skills.history"), "dm_review");
+    assert_eq!(
+        disposition(&report, "combat.skills.intimidation"),
+        "dm_review"
+    );
     assert_eq!(disposition(&report, "combat.abilities.other"), "keep");
 
     // Numeric collision without a provable source: sleight-of-hand is not in
@@ -409,9 +443,11 @@ fn derivation_auto_updates_reliable_values_on_2024_srd() {
         CLERIC_2024_RECORDS,
         false,
         "5.5e-srd",
+        "class: cleric, background: acolyte",
         "",
         None,
     );
+    fixture.chargen("Synthetic Hero", "cleric", &["insight", "medicine"]);
     let (ok, report) = fixture.derive(&[
         "--select-opportunity",
         "ability_score_improvement_feat_or_other_qualified_feat",
@@ -420,7 +456,8 @@ fn derivation_auto_updates_reliable_values_on_2024_srd() {
     ]);
     assert!(ok, "derive failed: {}", report);
     // Proven sources: spellcasting (class data), wis save (class table),
-    // insight/medicine (class choosable list), unarmed (generator rule).
+    // insight/medicine (chargen chosen-skill record), religion (acolyte
+    // background grant), unarmed (generator rule).
     assert_eq!(auto_values(&report, "combat.level"), (json!(3), json!(4)));
     assert_eq!(
         auto_values(&report, "combat.abilities.wis"),
@@ -510,6 +547,7 @@ fn derivation_covers_2014_full_ruleset() {
         FIGHTER_2014_RECORDS,
         false,
         "5e-full",
+        "class: fighter",
         "",
         None,
     );
@@ -547,6 +585,7 @@ fn derivation_covers_2024_full_ruleset() {
         CLERIC_2024_RECORDS,
         false,
         "5.5e-full",
+        "class: cleric, background: acolyte",
         "",
         None,
     );
@@ -577,9 +616,11 @@ fn derivation_applies_the_constitution_retroactive_rule() {
         FIGHTER_2014_RECORDS,
         false,
         "2014",
+        "class: fighter",
         "",
         None,
     );
+    fixture.chargen("Synthetic Hero", "fighter", &["athletics"]);
     let (ok, report) = fixture.derive(&[
         "--select-opportunity",
         "ability_score_improvement_or_optional_feat",
@@ -618,6 +659,7 @@ fn repeated_derivation_is_byte_identical() {
         FIGHTER_2014_RECORDS,
         false,
         "2014",
+        "class: fighter",
         "",
         None,
     );
@@ -652,6 +694,7 @@ fn hand_modified_hp_is_preserved_and_reported() {
         CLERIC_2024_RECORDS,
         false,
         "5.5e-srd",
+        "class: cleric, background: acolyte",
         "",
         Some(&("hp: 21", "hp: 30")),
     );
@@ -684,6 +727,7 @@ fn carrier_hp_conflict_stays_unproven() {
         CLERIC_2024_RECORDS,
         false,
         "5.5e-srd",
+        "class: cleric, background: acolyte",
         "",
         None,
     );
@@ -717,9 +761,11 @@ fn numeric_collisions_without_provable_sources_stay_dm_review() {
         CLERIC_2024_RECORDS,
         false,
         "5.5e-srd",
+        "class: cleric, background: acolyte",
         "",
         None,
     );
+    fixture.chargen("Synthetic Hero", "cleric", &["insight", "medicine"]);
     let (ok, report) = fixture.derive(&[
         "--select-opportunity",
         "ability_score_improvement_feat_or_other_qualified_feat",
@@ -764,6 +810,7 @@ fn mixed_or_incomplete_hp_history_stays_unproven() {
             &records_with(lines),
             false,
             "2014",
+            "class: fighter",
             "",
             None,
         )
@@ -839,7 +886,15 @@ fn mixed_or_incomplete_hp_history_stays_unproven() {
     // calculation has no provable base.
     let fixture = Fixture::new(10, "5e-srd");
     let hand_con = FIGHTER_2014_BLOCK.replace("con: 14", "con: 16");
-    fixture.card(&hand_con, FIGHTER_2014_RECORDS, false, "2014", "", None);
+    fixture.card(
+        &hand_con,
+        FIGHTER_2014_RECORDS,
+        false,
+        "2014",
+        "class: fighter",
+        "",
+        None,
+    );
     let (ok, report) = fixture.derive(&selection);
     assert!(ok, "derive failed: {}", report);
     assert_eq!(disposition(&report, "combat.hp"), "dm_review");
@@ -863,6 +918,7 @@ fn feat_candidates_apply_no_ability_or_feat_effects() {
         FIGHTER_2014_RECORDS,
         false,
         "5.5e-srd",
+        "class: fighter",
         "",
         None,
     );
@@ -897,6 +953,7 @@ fn rejected_selections_produce_no_candidate_and_no_writes() {
         CLERIC_2024_RECORDS,
         false,
         "5.5e-srd",
+        "class: cleric, background: acolyte",
         "",
         None,
     );
@@ -936,6 +993,7 @@ fn legacy_markdown_card_derives_from_the_card_block() {
         CLERIC_2024_RECORDS,
         true,
         "5.5e-srd",
+        "class: cleric, background: acolyte",
         "",
         None,
     );
@@ -968,6 +1026,7 @@ fn dm_confirmed_conflicts_still_keep_the_conflicted_score() {
         CLERIC_2024_RECORDS,
         false,
         "5.5e-srd",
+        "class: cleric, background: acolyte",
         "",
         None,
     );
@@ -1002,6 +1061,112 @@ fn dm_confirmed_conflicts_still_keep_the_conflicted_score() {
         .any(|item| item.as_str().unwrap().contains("not_program_verified")));
 }
 
+#[test]
+fn skill_choices_need_a_matching_record() {
+    let selection = [
+        "--select-opportunity",
+        "ability_score_improvement_or_optional_feat",
+        "--select-abilities",
+        "str+2",
+    ];
+    // (a) No chargen record: a class-choosable skill whose value happens to
+    // equal mod + proficiency is not a proven proficiency — the choosable
+    // list says what the character could pick, not what it picked.
+    let fixture = Fixture::new(10, "5e-srd");
+    fixture.card(
+        FIGHTER_2014_BLOCK,
+        FIGHTER_2014_RECORDS,
+        false,
+        "2014",
+        "class: fighter",
+        "",
+        None,
+    );
+    let (ok, report) = fixture.derive(&selection);
+    assert!(ok, "derive failed: {}", report);
+    assert_eq!(disposition(&report, "combat.skills.athletics"), "dm_review");
+    assert!(entry(&report, "combat.skills.athletics")["reason"]
+        .as_str()
+        .unwrap()
+        .contains("没有可核对的实际记录"));
+
+    // (b) The same skill with a matching chargen record (existing format,
+    // no schema change) is provable and derives normally.
+    let fixture = Fixture::new(10, "5e-srd");
+    fixture.card(
+        FIGHTER_2014_BLOCK,
+        FIGHTER_2014_RECORDS,
+        false,
+        "2014",
+        "class: fighter",
+        "",
+        None,
+    );
+    fixture.chargen("Synthetic Hero", "fighter", &["athletics"]);
+    let (ok, report) = fixture.derive(&selection);
+    assert!(ok, "derive failed: {}", report);
+    assert_eq!(
+        auto_values(&report, "combat.skills.athletics"),
+        (json!(5), json!(6))
+    );
+
+    // (c) A chargen record naming another character proves nothing here.
+    let fixture = Fixture::new(10, "5e-srd");
+    fixture.card(
+        FIGHTER_2014_BLOCK,
+        FIGHTER_2014_RECORDS,
+        false,
+        "2014",
+        "class: fighter",
+        "",
+        None,
+    );
+    fixture.chargen("Someone Else", "fighter", &["athletics"]);
+    let (ok, report) = fixture.derive(&selection);
+    assert!(ok, "derive failed: {}", report);
+    assert_eq!(disposition(&report, "combat.skills.athletics"), "dm_review");
+}
+
+#[test]
+fn non_hp_carrier_conflicts_stay_unproven() {
+    let fixture = Fixture::new(10, "5.5e-srd");
+    fixture.card(
+        CLERIC_2024_BLOCK,
+        CLERIC_2024_RECORDS,
+        false,
+        "5.5e-srd",
+        "class: cleric, background: acolyte",
+        "",
+        None,
+    );
+    fixture.chargen("Synthetic Hero", "cleric", &["insight", "medicine"]);
+    // Hand-edit only the Markdown card's wisdom save: the structured sheet
+    // says 6 (matching the class derivation), the card says 7. Neither side
+    // is trusted for that field.
+    let card_path = fixture.save.join("Characters/hero.md");
+    let card = fs::read_to_string(&card_path).unwrap();
+    fs::write(&card_path, card.replace("saves: {wis: 6", "saves: {wis: 7")).unwrap();
+    let (ok, report) = fixture.derive(&[
+        "--select-opportunity",
+        "ability_score_improvement_feat_or_other_qualified_feat",
+        "--select-abilities",
+        "wis+2",
+    ]);
+    assert!(ok, "derive failed: {}", report);
+    assert_eq!(disposition(&report, "combat.saves.wis"), "dm_review");
+    assert!(entry(&report, "combat.saves.wis")["reason"]
+        .as_str()
+        .unwrap()
+        .contains("两个载体的 wis 豁免不一致"));
+    // The conflict is field-local: everything else still derives.
+    assert_eq!(disposition(&report, "combat.skills.insight"), "auto");
+    assert_eq!(
+        auto_values(&report, "combat.spellcasting.dc"),
+        (json!(14), json!(15))
+    );
+    assert_eq!(auto_values(&report, "combat.hp"), (json!(21), json!(27)));
+}
+
 // ------------------------------------------------------------------- AC-3 --
 
 #[test]
@@ -1012,6 +1177,7 @@ fn active_encounters_write_nothing_and_are_reported() {
         CLERIC_2024_RECORDS,
         false,
         "5.5e-srd",
+        "class: cleric, background: acolyte",
         "",
         None,
     );
@@ -1058,6 +1224,7 @@ fn spent_currents_spell_lists_and_refs_stay_out_of_the_candidate() {
         CLERIC_2024_RECORDS,
         false,
         "5.5e-srd",
+        "class: cleric, background: acolyte",
         "spells: {version: 1, mode: prepared, ability: wis, prepared: [cure-wounds]}\n",
         None,
     );

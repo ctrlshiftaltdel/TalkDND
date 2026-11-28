@@ -266,6 +266,9 @@ fn derive(
         .clone()
         .unwrap_or_else(|| facts.markdown_combat.clone());
     let scores = block_scores(&block);
+    // Fields both carriers record but disagree on: neither side is trusted,
+    // so those entries stay at their current value for the DM.
+    let conflicts = carrier_conflicts(facts.structured_combat.as_ref(), &facts.markdown_combat);
     let increases = validated_increases(outcome);
     let prof_old = i64::from(progress::prof_for_level(preview.current_level));
     let prof_new = i64::from(progress::prof_for_level(preview.target_level));
@@ -318,15 +321,18 @@ fn derive(
 
     // Provable proficiency sources, per category:
     // - saving throws: the built-in class proficiency table;
-    // - skills: the class choosable list plus recorded background/species
-    //   grants (the sheet's structured options; exact ids only);
+    // - skills: only recorded facts from the save — the chargen state's
+    //   chosen/granted skills when its name matches this character, plus
+    //   background/species grants resolved from the sheet's exact option
+    //   ids. The class choosable list says what a character *could* pick, not
+    //   what it did, so it is not evidence by itself;
     // - attacks: the class weapon-proficiency data through
     //   `classdata::proficient` (unarmed is always proficient in the
     //   generator). A numeric match alone never proves proficiency.
     let class_data = data::class(&class);
     let mut provable_skills: BTreeSet<&str> = BTreeSet::new();
-    if let Some(class_data) = class_data {
-        provable_skills.extend(class_data.skills.iter().copied());
+    if let Some(recorded) = facts.chargen_skills.as_ref() {
+        provable_skills.extend(recorded.iter().map(|skill| skill.as_str()));
     }
     if let Some(sheet) = facts.sheet.as_ref() {
         // Structured options: exact ids resolve through the built-in tables;
@@ -362,47 +368,59 @@ fn derive(
     ));
 
     // Proficiency bonus.
-    match block.get("prof").and_then(Value::as_i64) {
-        Some(current) if current == prof_old => {
-            if prof_delta != 0 {
-                entries.push(Entry::auto(
-                    "combat.prof",
-                    "proficiency",
-                    "combat.prof",
-                    serde_json::json!(prof_old),
-                    serde_json::json!(prof_new),
-                    format!(
-                        "当前值与 {} 级标准熟练推导一致；{}→{} 级熟练 {prof_old}→{prof_new}",
-                        preview.current_level, preview.current_level, preview.target_level
-                    ),
-                    "SRD class table proficiency progression",
-                ));
-            } else {
-                entries.push(Entry::keep(
-                    "combat.prof",
-                    "proficiency",
-                    format!(
-                        "当前值与标准熟练推导一致，且 {}→{} 级熟练加值不变",
-                        preview.current_level, preview.target_level
-                    ),
-                ));
+    if conflicts.contains("combat.prof") {
+        entries.push(Entry::dm_review(
+            "combat.prof",
+            "proficiency",
+            block
+                .get("prof")
+                .and_then(Value::as_i64)
+                .map(|value| serde_json::json!(value)),
+            "两个载体的 prof 不一致；来源冲突，保持原值并交 DM 核对",
+        ));
+    } else {
+        match block.get("prof").and_then(Value::as_i64) {
+            Some(current) if current == prof_old => {
+                if prof_delta != 0 {
+                    entries.push(Entry::auto(
+                        "combat.prof",
+                        "proficiency",
+                        "combat.prof",
+                        serde_json::json!(prof_old),
+                        serde_json::json!(prof_new),
+                        format!(
+                            "当前值与 {} 级标准熟练推导一致；{}→{} 级熟练 {prof_old}→{prof_new}",
+                            preview.current_level, preview.current_level, preview.target_level
+                        ),
+                        "SRD class table proficiency progression",
+                    ));
+                } else {
+                    entries.push(Entry::keep(
+                        "combat.prof",
+                        "proficiency",
+                        format!(
+                            "当前值与标准熟练推导一致，且 {}→{} 级熟练加值不变",
+                            preview.current_level, preview.target_level
+                        ),
+                    ));
+                }
             }
+            Some(current) => entries.push(Entry::dm_review(
+                "combat.prof",
+                "proficiency",
+                Some(serde_json::json!(current)),
+                format!(
+                    "当前熟练加值 {current} 与 {} 级标准推导 {prof_old} 不一致；可能为手改或未知来源，保持原值",
+                    preview.current_level
+                ),
+            )),
+            None => entries.push(Entry::dm_review(
+                "combat.prof",
+                "proficiency",
+                None,
+                "战斗块没有 prof 字段；熟练加值来源无法证实，保持原样",
+            )),
         }
-        Some(current) => entries.push(Entry::dm_review(
-            "combat.prof",
-            "proficiency",
-            Some(serde_json::json!(current)),
-            format!(
-                "当前熟练加值 {current} 与 {} 级标准推导 {prof_old} 不一致；可能为手改或未知来源，保持原值",
-                preview.current_level
-            ),
-        )),
-        None => entries.push(Entry::dm_review(
-            "combat.prof",
-            "proficiency",
-            None,
-            "战斗块没有 prof 字段；熟练加值来源无法证实，保持原样",
-        )),
     }
 
     // Ability scores named by the validated selection. Scores with
@@ -486,6 +504,15 @@ fn derive(
                 continue;
             };
             let id = format!("combat.saves.{ability}");
+            if conflicts.contains(&id) {
+                entries.push(Entry::dm_review(
+                    id,
+                    "save",
+                    Some(serde_json::json!(actual)),
+                    format!("两个载体的 {ability} 豁免不一致；来源冲突，保持原值并交 DM 核对"),
+                ));
+                continue;
+            }
             let provable = class_data.is_some_and(|c| c.saves.contains(&ability));
             if !provable {
                 entries.push(Entry::dm_review(
@@ -560,6 +587,15 @@ fn derive(
                 continue;
             };
             let id = format!("combat.skills.{skill}");
+            if conflicts.contains(&id) {
+                entries.push(Entry::dm_review(
+                    id,
+                    "skill",
+                    Some(serde_json::json!(actual)),
+                    format!("两个载体的 {skill} 技能值不一致；来源冲突，保持原值并交 DM 核对"),
+                ));
+                continue;
+            }
             let Some(ability) = data::skill_ability(skill) else {
                 entries.push(Entry::dm_review(
                     id,
@@ -575,7 +611,7 @@ fn derive(
                     "skill",
                     Some(serde_json::json!(actual)),
                     format!(
-                        "技能 {skill} 不在职业/背景/种族的可核对熟练来源内；该条目来源无法证实（手改或自定义记录），数值 {actual} 保持原值"
+                        "技能 {skill} 没有可核对的实际记录（职业可选清单只说明能选什么，不说明选过什么；只有与角色匹配的 chargen 已选记录或背景/种族授予才算来源）；该条目来源无法证实（手改或自定义记录），数值 {actual} 保持原值"
                     ),
                 ));
                 continue;
@@ -651,6 +687,15 @@ fn derive(
                 .or_else(|| attack.get("name").and_then(Value::as_str))
                 .unwrap_or("unknown");
             let id = format!("combat.attacks.{name}.to_hit");
+            if conflicts.contains(&id) {
+                entries.push(Entry::dm_review(
+                    id,
+                    "attack",
+                    Some(serde_json::json!(to_hit)),
+                    format!("两个载体的 {name} to_hit 不一致；来源冲突，保持原值并交 DM 核对"),
+                ));
+                continue;
+            }
             let Some(ability) = attack.get("ability").and_then(Value::as_str) else {
                 entries.push(Entry::dm_review(
                     id,
@@ -723,7 +768,7 @@ fn derive(
     // Spellcasting attack/DC: recognized only when the block's ability
     // matches the class data and both numbers match the level derivation.
     entries.extend(derive_spellcasting(
-        &book, &class, &block, &mod_of, prof_old, prof_new,
+        &book, &class, &block, &conflicts, &mod_of, prof_old, prof_new,
     ));
 
     // Resources: only the `max` of a resource whose current max matches the
@@ -732,6 +777,7 @@ fn derive(
     entries.extend(derive_resources(
         preview,
         &block,
+        &conflicts,
         &generation_old,
         &generation_new,
     ));
@@ -1006,10 +1052,27 @@ fn derive_spellcasting(
     book: &classdata::Book,
     class: &str,
     block: &Value,
+    conflicts: &BTreeSet<String>,
     mod_of: &dyn Fn(&str, bool) -> Option<i64>,
     prof_old: i64,
     prof_new: i64,
 ) -> Vec<Entry> {
+    let conflicting: Vec<&str> = ["ability", "attack", "dc"]
+        .iter()
+        .filter(|field| conflicts.contains(&format!("combat.spellcasting.{field}")))
+        .copied()
+        .collect();
+    if !conflicting.is_empty() {
+        return vec![Entry::dm_review(
+            "combat.spellcasting",
+            "spellcasting",
+            None,
+            format!(
+                "两个载体的施法字段不一致（{}）；来源冲突，保持原值并交 DM 核对",
+                conflicting.join(", ")
+            ),
+        )];
+    }
     let Some(ability) = progress::spell_ability(book, class) else {
         return match block.get("spellcasting") {
             Some(_) => vec![Entry::keep(
@@ -1103,6 +1166,7 @@ fn derive_spellcasting(
 fn derive_resources(
     preview: &Preview,
     block: &Value,
+    conflicts: &BTreeSet<String>,
     generation_old: &classdata::Generated,
     generation_new: &classdata::Generated,
 ) -> Vec<Entry> {
@@ -1139,6 +1203,15 @@ fn derive_resources(
             continue;
         };
         let id = format!("combat.resources.{key}.max");
+        if conflicts.contains(&id) {
+            entries.push(Entry::dm_review(
+                id,
+                "resource",
+                Some(serde_json::json!(max)),
+                format!("两个载体的资源 {key} 最大值不一致；来源冲突，保持原值并交 DM 核对"),
+            ));
+            continue;
+        }
         if key == "hit-dice" {
             if max == i64::from(preview.current_level) {
                 entries.push(Entry::auto(
@@ -1371,6 +1444,111 @@ fn dm_items(
 }
 
 // ---------------------------------------------------------------- helpers --
+
+/// Field paths recorded by both carriers with disagreeing values. Operating
+/// on one carrier's value and calling it reliable would silently discard the
+/// other side, so every derived entry whose field is listed here keeps its
+/// current value and goes to the DM.
+fn carrier_conflicts(structured: Option<&Value>, markdown: &Value) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let Some(structured) = structured else {
+        return out;
+    };
+    // Scalars the candidate derives.
+    for key in ["prof", "hp"] {
+        let left = structured.get(key);
+        let right = markdown.get(key);
+        if let (Some(left), Some(right)) = (left, right) {
+            if left != right {
+                out.insert(format!("combat.{key}"));
+            }
+        }
+    }
+    // Per-ability mappings.
+    for (section, prefix) in [("saves", "combat.saves"), ("skills", "combat.skills")] {
+        let (Some(left), Some(right)) = (
+            structured.get(section).and_then(Value::as_mapping),
+            markdown.get(section).and_then(Value::as_mapping),
+        ) else {
+            continue;
+        };
+        for (key, left_value) in left {
+            let Some(key) = key.as_str() else {
+                continue;
+            };
+            if let Some((_, right_value)) =
+                right.iter().find(|(other, _)| other.as_str() == Some(key))
+            {
+                if left_value != right_value {
+                    out.insert(format!("{prefix}.{key}"));
+                }
+            }
+        }
+    }
+    // Resources: the candidate only proposes `max`, so only a `max` mismatch
+    // is a conflict for this step.
+    if let (Some(left), Some(right)) = (
+        structured.get("resources").and_then(Value::as_mapping),
+        markdown.get("resources").and_then(Value::as_mapping),
+    ) {
+        for (key, left_value) in left {
+            let Some(key) = key.as_str() else {
+                continue;
+            };
+            if let Some((_, right_value)) =
+                right.iter().find(|(other, _)| other.as_str() == Some(key))
+            {
+                if left_value.get("max") != right_value.get("max") {
+                    out.insert(format!("combat.resources.{key}.max"));
+                }
+            }
+        }
+    }
+    // Attacks: match by id (falling back to name) and compare to_hit.
+    if let (Some(left), Some(right)) = (
+        structured.get("attacks").and_then(Value::as_sequence),
+        markdown.get("attacks").and_then(Value::as_sequence),
+    ) {
+        for left_attack in left {
+            let Some(name) = attack_name(left_attack) else {
+                continue;
+            };
+            if let Some(right_attack) = right.iter().find(|other| attack_name(other) == Some(name))
+            {
+                if left_attack.get("to_hit") != right_attack.get("to_hit") {
+                    out.insert(format!("combat.attacks.{name}.to_hit"));
+                }
+            }
+        }
+    }
+    // Spellcasting fields.
+    if let (Some(left), Some(right)) = (
+        structured.get("spellcasting").and_then(Value::as_mapping),
+        markdown.get("spellcasting").and_then(Value::as_mapping),
+    ) {
+        for field in ["ability", "attack", "dc"] {
+            let left_value = left
+                .iter()
+                .find(|(key, _)| key.as_str() == Some(field))
+                .map(|(_, value)| value);
+            let right_value = right
+                .iter()
+                .find(|(key, _)| key.as_str() == Some(field))
+                .map(|(_, value)| value);
+            if left_value != right_value {
+                out.insert(format!("combat.spellcasting.{field}"));
+            }
+        }
+    }
+    out
+}
+
+fn attack_name(attack: &Value) -> Option<&str> {
+    attack
+        .get("id")
+        .and_then(Value::as_str)
+        .or_else(|| attack.get("name").and_then(Value::as_str))
+}
 
 fn block_scores(block: &Value) -> BTreeMap<&str, i64> {
     let mut scores = BTreeMap::new();

@@ -71,6 +71,11 @@ pub(crate) struct CharacterFacts {
     /// appends one line, so they are the provenance record for accumulated
     /// values such as max HP.
     pub(crate) level_records: Vec<String>,
+    /// The save's chargen state (the existing `chargen.json` file): the
+    /// skills the player actually chose, plus background/species grants.
+    /// Present only when the record's name matches this character; otherwise
+    /// none of its entries count as a skill-proficiency record.
+    pub(crate) chargen_skills: Option<Vec<String>>,
 }
 
 pub(crate) fn run(root: &Path, save: &Path, who: &str, json: bool) -> Result<()> {
@@ -270,6 +275,25 @@ fn character_facts(
     markdown: &str,
 ) -> Result<CharacterFacts> {
     let records = level_record_lines(markdown);
+    // The chargen state is the save's record of the skills the player chose
+    // at creation; it is only evidence when it names this same character.
+    let chargen_skills = crate::chargen::load(save)
+        .ok()
+        .filter(|creation| {
+            creation
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(character.name()))
+        })
+        .map(|creation| {
+            let mut skills: Vec<String> = creation.skills.clone();
+            for skill in creation.granted_skills() {
+                if !skills.contains(&skill) {
+                    skills.push(skill);
+                }
+            }
+            skills
+        });
     let inferred = charsheet::infer_controller(character.markdown(), combat);
     let Some(path) = character.sheet_path() else {
         ensure!(inferred == charsheet::PLAYER, "未找到该玩家角色");
@@ -292,6 +316,7 @@ fn character_facts(
             sheet: None,
             markdown_combat: combat.clone(),
             level_records: records,
+            chargen_skills,
         });
     };
     let text = regular_text(&save.join(path), "结构化角色卡不可读取")?;
@@ -323,6 +348,7 @@ fn character_facts(
         sheet: Some(sheet),
         markdown_combat: combat.clone(),
         level_records: records,
+        chargen_skills,
     })
 }
 
