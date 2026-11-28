@@ -1073,7 +1073,11 @@ fn advancement_fixture_migrate_producer() {
         fixture.try_migrate_to_schema_11(),
         "the producer environment must admit the migration"
     );
-    println!("PRODUCER_ROOT={}", fixture.root.display());
+    // Keep the fixture directory alive for the parent: dropping here would
+    // remove_dir_all the whole fixture before the parent's admission check.
+    let root_line = fixture.root.display().to_string();
+    std::mem::forget(fixture);
+    println!("PRODUCER_ROOT={root_line}");
 }
 
 /// A fixture at schema 11 in the admitted environment with one leftover
