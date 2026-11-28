@@ -6,8 +6,21 @@
 //! conditions reject first, and unknown conditions continue only with a
 //! separate non-empty DM confirmation that stays marked 未由程序验证.
 //! Nothing is written: no locks, no files, no application, no persistence.
+//!
+//! Source isolation follows the ruleset loading boundary: only the campaign
+//! edition's authorized catalogs (the SRD feats pack, plus unlocked same-
+//! edition FULL packs for FULL rulesets) are opened; unauthorized or foreign
+//! packs are never read, not even to prove that a candidate exists there.
+//! Attribution of an unrecognized candidate inside the authorized scope needs
+//! an explicit `--select-source` declaration; an authorization that cannot be
+//! proven stays unknown and rejects regardless of DM confirmation, and an
+//! explicit declaration that contradicts the authorized catalog rejects.
+//!
 //! Unrecognized feats are marked 未验证、效果手动 only after the opportunity,
-//! declared authorization and duplicate conditions independently pass.
+//! declared authorization and duplicate conditions independently pass, and the
+//! duplicate rule follows the pack's repeatability evidence: an explicit
+//! repeatable grant passes, a conditional grant stays unknown, and the absence
+//! of a repeatability statement never becomes a known-illegal duplicate.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -338,6 +351,7 @@ fn validate(
         rows: candidate_rows,
         echo: candidate,
         unrecognized,
+        unconfirmable_authorization,
     } = match (&selection.abilities, &selection.feat) {
         (Some(pairs), _) => ability_outcome(preview, edition, pairs, no_opportunity),
         (None, Some(feat)) => feat_outcome(
@@ -362,7 +376,15 @@ fn validate(
             status: row.status,
         })
         .collect();
-    let decision = advancement_validation::evaluate(&checks, selection.dm_confirm.as_deref())?;
+    // The authorization gate: when attribution cannot be proven inside the
+    // authorized scope, the DM basis is withheld from the kernel so unknown
+    // authorization can never be confirmed into a continuation.
+    let dm_for_kernel = if unconfirmable_authorization {
+        None
+    } else {
+        selection.dm_confirm.as_deref()
+    };
+    let decision = advancement_validation::evaluate(&checks, dm_for_kernel)?;
 
     let (decision_str, not_program_verified, rejection, dm_provided) = match &decision {
         advancement_validation::ValidationDecision::Verified => ("verified", false, None, false),
@@ -450,6 +472,10 @@ struct CandidateOutcome {
     rows: Vec<ConditionRow>,
     echo: CandidateEcho,
     unrecognized: bool,
+    /// True when the authorization condition stayed unknown: attribution
+    /// cannot be proven inside the authorized scope, so the selection is
+    /// rejected and DM confirmation cannot upgrade it.
+    unconfirmable_authorization: bool,
 }
 
 fn feat_outcome(
@@ -475,36 +501,28 @@ fn feat_outcome(
                 increases: None,
             },
             unrecognized: true,
+            unconfirmable_authorization: false,
         });
     }
-    let statuses = library::pack_status(root);
     let recognized = preview
         .candidates
         .iter()
         .find(|candidate| candidate.id == feat_id)
         .cloned();
     let mut rows = Vec::new();
-    let (authorized_status, authorized_detail, echo_source) = match &recognized {
-        Some(candidate) => (
-            Met,
-            format!("专长来自已授权目录 {}", candidate.source),
-            Some(candidate.source.clone()),
-        ),
-        None => {
-            unrecognized_authorization(root, preview.ruleset, feat_id, declared_source, &statuses)?
-        }
-    };
+    let (authorized_status, authorized_detail, echo_source) =
+        feat_authorization(preview.ruleset, feat_id, declared_source, recognized.as_ref(), root);
     rows.push(ConditionRow::new(
         "candidate_authorized",
         authorized_status,
-        echo_source.unwrap_or_else(|| "declared_source".to_owned()),
+        echo_source.unwrap_or_else(|| "no declared source".to_owned()),
         edition,
         authorized_detail,
     ));
 
-    let (echo, unrecognized) = match &recognized {
+    let (echo, unrecognized, unconfirmable) = match &recognized {
         Some(candidate) => {
-            let entity = load_feat(root, preview.ruleset, &candidate.source, feat_id, &statuses)?;
+            let entity = load_feat(root, preview.ruleset, &candidate.source, feat_id)?;
             append_prereq_rows(
                 &mut rows,
                 preview,
@@ -514,8 +532,9 @@ fn feat_outcome(
                 &entity,
             );
             append_category_row(&mut rows, preview, edition, entity.data.as_ref());
+            let repeatability = repeatability_of(entity.data.as_ref());
             let (duplicate, duplicate_detail) =
-                duplicate_status(facts, entity.id.as_str(), entity.name.as_deref());
+                duplicate_status(facts, entity.id.as_str(), entity.name.as_deref(), &repeatability);
             rows.push(ConditionRow::new(
                 "known_duplicate",
                 duplicate,
@@ -534,6 +553,7 @@ fn feat_outcome(
                     increases: None,
                 },
                 false,
+                false,
             )
         }
         None => {
@@ -544,7 +564,9 @@ fn feat_outcome(
                 edition,
                 "未识别专长没有可核对的前提数据；效果与前提保持未验证",
             ));
-            let (duplicate, duplicate_detail) = duplicate_status(facts, feat_id, None);
+            let repeatability = Repeatability::NoEvidence;
+            let (duplicate, duplicate_detail) =
+                duplicate_status(facts, feat_id, None, &repeatability);
             rows.push(ConditionRow::new(
                 "known_duplicate",
                 duplicate,
@@ -563,6 +585,7 @@ fn feat_outcome(
                     increases: None,
                 },
                 true,
+                authorized_status == Unknown,
             )
         }
     };
@@ -570,121 +593,104 @@ fn feat_outcome(
         rows,
         echo,
         unrecognized,
+        unconfirmable_authorization: unconfirmable,
     })
 }
 
-/// Authorization verdict for a feat the authorized catalog does not contain.
-/// A known-but-unauthorized source (other edition, locked FULL pack) rejects;
-/// a declared authorized source passes; anything else stays unknown.
-fn unrecognized_authorization(
-    root: &Path,
+/// Authorization verdict for a feat candidate, judged without reading any
+/// unauthorized pack: recognition comes from the authorized catalog only, and
+/// an unrecognized candidate is authorized solely by a `--select-source`
+/// declaration that lands inside the authorized scope.
+///
+/// An unknown verdict means attribution cannot be proven inside the authorized
+/// scope; it stays unknown and is not confirmable — DM confirmation cannot
+/// upgrade it (charter: registration cannot bypass content authorization).
+fn feat_authorization(
     ruleset: Ruleset,
     feat_id: &str,
     declared_source: Option<&str>,
-    statuses: &[library::PackStatus],
-) -> Result<(ConditionStatus, String, Option<String>)> {
-    let hits = scan_unauthorized_sources(root, ruleset, feat_id, statuses)?;
-    if !hits.is_empty() {
-        return Ok((
-            NotMet,
-            format!(
-                "专长只出现在未授权来源 {}；当前规则集不授权这些来源",
-                hits.join(", ")
+    recognized: Option<&advancement_preview::Candidate>,
+    root: &Path,
+) -> (ConditionStatus, String, Option<String>) {
+    match recognized {
+        Some(candidate) => match declared_source {
+            None => (
+                Met,
+                format!("专长来自已授权目录 {}", candidate.source),
+                Some(candidate.source.clone()),
             ),
-            Some(hits.join(", ")),
-        ));
-    }
-    let authorized = authorized_source_ids(ruleset, statuses);
-    let known = known_source_ids(ruleset, &authorized, statuses);
-    match declared_source {
-        Some(declared) if authorized.iter().any(|id| id == declared) => Ok((
-            Met,
-            format!("声明来源 {declared} 属于本规则集的授权目录；专长本身仍未经目录核对"),
-            Some(declared.to_owned()),
-        )),
-        Some(declared) if known.iter().any(|id| id == declared) => Ok((
-            NotMet,
-            format!("声明来源 {declared} 不在当前规则集的授权范围内"),
-            Some(declared.to_owned()),
-        )),
-        Some(declared) => Ok((
-            Unknown,
-            format!("声明来源 {declared} 无法在本机核对为已授权内容"),
-            Some(declared.to_owned()),
-        )),
-        None => Ok((
-            Unknown,
-            "未识别专长缺少 --select-source 来源声明；未授权内容不能由程序接受".to_owned(),
-            None,
-        )),
+            Some(declared) if declared == candidate.source => (
+                Met,
+                format!(
+                    "专长来自已授权目录 {}；显式声明的来源一致",
+                    candidate.source
+                ),
+                Some(candidate.source.clone()),
+            ),
+            Some(declared) => (
+                NotMet,
+                format!(
+                    "专长已识别为目录来源 {}；显式声明的来源 {declared} 与其不一致",
+                    candidate.source
+                ),
+                Some(declared.to_owned()),
+            ),
+        },
+        None => {
+            let authorized = authorized_source_ids(root, ruleset);
+            match declared_source {
+                Some(declared) if authorized.iter().any(|id| id == declared) => (
+                    Met,
+                    format!("声明来源 {declared} 属于本规则集的授权目录；专长本身仍未经目录核对"),
+                    Some(declared.to_owned()),
+                ),
+                Some(declared) if categorically_unauthorized(declared, ruleset) => (
+                    NotMet,
+                    format!("声明来源 {declared} 不在当前规则集的授权范围内"),
+                    Some(declared.to_owned()),
+                ),
+                Some(declared) => (
+                    Unknown,
+                    format!("声明来源 {declared} 无法在本机核对为已授权内容；DM 确认不能补足授权"),
+                    Some(declared.to_owned()),
+                ),
+                None => (
+                    Unknown,
+                    "未识别专长缺少 --select-source 来源声明；无法在授权范围内证明归属，DM 确认不能补足授权".to_owned(),
+                    None,
+                ),
+            }
+        }
     }
 }
 
-fn authorized_source_ids(ruleset: Ruleset, statuses: &[library::PackStatus]) -> Vec<String> {
+/// Sources that are never authorized for this campaign regardless of local
+/// files: the other edition's SRD pack id and any FULL pack id. SRD campaigns
+/// never load FULL content and the engine never loads the other edition's
+/// directory; a FULL campaign's authorized set already contains every unlocked
+/// pack it may use. Pure id knowledge — no foreign pack is opened.
+fn categorically_unauthorized(declared: &str, ruleset: Ruleset) -> bool {
+    let edition = ruleset.edition();
+    let other = if edition == "2014" { "2024" } else { "2014" };
+    declared == srd_pack_id(other) || declared.starts_with("full-")
+}
+
+fn authorized_source_ids(root: &Path, ruleset: Ruleset) -> Vec<String> {
     let edition = ruleset.edition();
     let mut ids = vec![srd_pack_id(edition).to_owned()];
     if ruleset.is_full() {
+        // Only a FULL campaign needs pack status; SRD campaigns never load
+        // FULL packs, so their authorization scope is the SRD catalog alone.
         ids.extend(
-            statuses
-                .iter()
+            library::pack_status(root)
+                .into_iter()
                 .filter(|status| {
                     status.edition == edition && status.state == library::PackState::Unlocked
                 })
-                .map(|status| status.id.clone()),
+                .map(|status| status.id),
         );
     }
     ids
-}
-
-fn known_source_ids(
-    ruleset: Ruleset,
-    authorized: &[String],
-    statuses: &[library::PackStatus],
-) -> Vec<String> {
-    let edition = ruleset.edition();
-    let other = if edition == "2014" { "2024" } else { "2014" };
-    let mut ids = vec![srd_pack_id(other).to_owned()];
-    ids.extend(
-        statuses
-            .iter()
-            .filter(|status| !authorized.contains(&status.id))
-            .map(|status| status.id.clone()),
-    );
-    ids
-}
-
-/// Search the packs this ruleset does not authorize for the feat id: the other
-/// edition's tracked SRD pack and every present FULL pack file.
-fn scan_unauthorized_sources(
-    root: &Path,
-    ruleset: Ruleset,
-    feat_id: &str,
-    statuses: &[library::PackStatus],
-) -> Result<Vec<String>> {
-    let edition = ruleset.edition();
-    let other = if edition == "2014" { "2024" } else { "2014" };
-    let other_id = srd_pack_id(other);
-    let mut hits = Vec::new();
-    let other_path = root
-        .join("Rules/combat")
-        .join(other)
-        .join("srd")
-        .join(format!("{other_id}.pack.json"));
-    if regular_file(&other_path) && find_in_pack(&other_path, feat_id)?.is_some() {
-        hits.push(other_id.to_owned());
-    }
-    let authorized = authorized_source_ids(ruleset, statuses);
-    for status in statuses {
-        if authorized.contains(&status.id) {
-            continue;
-        }
-        let Some(file) = &status.file else { continue };
-        let path = root.join(file);
-        if regular_file(&path) && find_in_pack(&path, feat_id)?.is_some() {
-            hits.push(status.id.clone());
-        }
-    }
-    Ok(hits)
 }
 
 fn find_in_pack(path: &Path, feat_id: &str) -> Result<Option<DomainEntity>> {
@@ -702,13 +708,7 @@ fn find_in_pack(path: &Path, feat_id: &str) -> Result<Option<DomainEntity>> {
         .find(|feat| feat.id == feat_id))
 }
 
-fn load_feat(
-    root: &Path,
-    ruleset: Ruleset,
-    source: &str,
-    feat_id: &str,
-    statuses: &[library::PackStatus],
-) -> Result<DomainEntity> {
+fn load_feat(root: &Path, ruleset: Ruleset, source: &str, feat_id: &str) -> Result<DomainEntity> {
     let edition = ruleset.edition();
     let path = if source == srd_pack_id(edition) {
         root.join("Rules/combat")
@@ -716,9 +716,15 @@ fn load_feat(
             .join("srd")
             .join(format!("{}.pack.json", srd_pack_id(edition)))
     } else {
-        let status = statuses
-            .iter()
-            .find(|status| status.id == source)
+        // Only unlocked same-edition FULL packs are authorized sources; their
+        // headers are read through the library status the preview also uses.
+        let status = library::pack_status(root)
+            .into_iter()
+            .find(|status| {
+                status.id == source
+                    && status.edition == edition
+                    && status.state == library::PackState::Unlocked
+            })
             .context("已授权内容包缺少来源记录")?;
         let file = status.file.as_ref().context("已授权内容包没有来源文件")?;
         root.join(file)
@@ -923,12 +929,54 @@ fn append_category_row(
     ));
 }
 
-/// Known duplicates come from the structured sheet's feat list; legacy
-/// Markdown-only cards keep their selection history unknown.
+/// What the tracked pack data says about taking the same feat again. The SRD
+/// packs carry a `repeatable` field exactly where the SRD text grants
+/// repeatability; its absence is not evidence of a once-only rule, so it must
+/// not become a known-illegal duplicate.
+enum Repeatability {
+    /// `repeatable` grants another taking with no extra terms.
+    Repeatable,
+    /// `repeatable` grants another taking subject to terms the sheet cannot
+    /// verify (for example a different spell list each time).
+    ConditionalRepeat(String),
+    /// No repeatability statement in the tracked data.
+    NoEvidence,
+}
+
+/// Classifies the tracked `repeatable` text: wording beyond the plain
+/// "take this feat more than once" grant means extra terms; unrecognized
+/// wording also stays conditional rather than being guessed either way.
+fn repeatability_of(data: Option<&serde_json::Value>) -> Repeatability {
+    let Some(text) = data
+        .and_then(|data| data.get("repeatable"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Repeatability::NoEvidence;
+    };
+    let normalized = text.to_lowercase();
+    const GRANT: &str = "you can take this feat more than once";
+    let remainder = match normalized.strip_prefix(GRANT) {
+        Some(remainder) => remainder,
+        None => return Repeatability::ConditionalRepeat(text.to_owned()),
+    };
+    let remainder = remainder.trim_matches(|c: char| {
+        matches!(c, '.' | ',' | ';' | '。' | '，' | '；' | '！') || c.is_whitespace()
+    });
+    if remainder.is_empty() {
+        Repeatability::Repeatable
+    } else {
+        Repeatability::ConditionalRepeat(text.to_owned())
+    }
+}
+
+/// Known duplicates come from the structured sheet's feat list, judged against
+/// the pack's repeatability evidence; legacy Markdown-only cards keep their
+/// selection history unknown.
 fn duplicate_status(
     facts: &CharacterFacts,
     id: &str,
     name: Option<&str>,
+    repeatability: &Repeatability,
 ) -> (ConditionStatus, String) {
     let Some(sheet) = facts.sheet.as_ref() else {
         return (
@@ -938,13 +986,24 @@ fn duplicate_status(
     };
     let id = id.trim().to_lowercase();
     let name = name.unwrap_or_default().trim().to_lowercase();
-    if sheet.feats.iter().any(|entry| {
+    let recorded = sheet.feats.iter().any(|entry| {
         let entry = entry.trim().to_lowercase();
         !entry.is_empty() && (entry == id || (!name.is_empty() && entry == name))
-    }) {
-        (NotMet, format!("结构化角色卡已记录 {id}，已知重复"))
-    } else {
-        (Met, "结构化角色卡未记录该专长".to_owned())
+    });
+    match (recorded, repeatability) {
+        (false, _) => (Met, "结构化角色卡未记录该专长".to_owned()),
+        (true, Repeatability::Repeatable) => (
+            Met,
+            "该专长在规则数据中明示可重复选取；角色卡已记录的此前选取不构成非法重复".to_owned(),
+        ),
+        (true, Repeatability::ConditionalRepeat(text)) => (
+            Unknown,
+            format!("该专长的重复受条件限制（{text}）；条件满足情况无法从角色卡核对，保持未知"),
+        ),
+        (true, Repeatability::NoEvidence) => (
+            Unknown,
+            "角色卡已记录该专长，但跟踪数据没有重复性表述；不能据此判定已知非法，保持未知",
+        ),
     }
 }
 

@@ -424,11 +424,15 @@ fn full_campaign_authorizes_only_unlocked_same_edition_packs() {
         "full-2024-phb"
     );
 
+    // A locked same-edition FULL source is categorically unauthorized when the
+    // player declares it; the pack entity is never read for the verdict.
     let (ok, report) = fixture.select(&[
         "--select-opportunity",
         ASI_2024,
         "--select-feat",
         "full-locked-strike",
+        "--select-source",
+        "full-2024-dmg",
     ]);
     assert!(!ok);
     assert_eq!(report["selection"]["decision"], "rejected");
@@ -436,9 +440,249 @@ fn full_campaign_authorizes_only_unlocked_same_edition_packs() {
         Fixture::condition(&report, "candidate_authorized")["status"],
         "not_met"
     );
+
+    // Without a declaration the attribution cannot be proven inside the
+    // authorized scope: rejected, and a DM basis cannot upgrade it.
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2024,
+        "--select-feat",
+        "full-locked-strike",
+        "--dm-confirm",
+        "reviewed",
+    ]);
+    assert!(!ok);
+    assert_eq!(report["selection"]["decision"], "rejected");
+    assert_eq!(
+        Fixture::condition(&report, "candidate_authorized")["status"],
+        "unknown"
+    );
+    assert!(report.to_string().contains("DM 确认不能补足授权"));
 }
 
 // ------------------------------------------------- AC-1 negative examples ----
+
+#[test]
+fn srd_verdicts_ignore_locked_full_pack_content() {
+    for (ruleset, edition, opportunity, srd_pack, srd_id, full_pack) in [
+        (
+            "5e-srd",
+            "2014",
+            ASI_2014,
+            "srd-5.1-feats",
+            "srd-only-strike",
+            "full-2014-phb",
+        ),
+        (
+            "5.5e-srd",
+            "2024",
+            ASI_2024,
+            "srd-5.2.1-feats",
+            "srd-only-strike-24",
+            "full-2024-phb",
+        ),
+    ] {
+        // Baseline: the SRD campaign sees only its own catalog.
+        let base = Fixture::new(10, ruleset);
+        base.pack(edition, Distribution::Srd, srd_pack, feat(srd_id, "general", 4));
+        base.sheet(edition, 3, &[]);
+        let args = vec!["--select-opportunity", opportunity, "--select-feat", srd_id];
+        let (ok, expected) = base.select(&args);
+        assert!(ok);
+        assert_eq!(expected["selection"]["decision"], "verified");
+
+        // A locked FULL pack whose private entry shares the id but carries
+        // conflicting data; an SRD campaign must never read it, so the
+        // verdict has to stay byte-identical.
+        let poisoned = Fixture::new(10, ruleset);
+        poisoned.pack(edition, Distribution::Srd, srd_pack, feat(srd_id, "general", 4));
+        poisoned.pack(
+            edition,
+            Distribution::Full,
+            full_pack,
+            feat_with(
+                srd_id,
+                "general",
+                json!({
+                    "prerequisites": {"minimum_level": 19},
+                    "repeatable": "never take this twice in the poisoned copy",
+                }),
+            ),
+        );
+        poisoned.sheet(edition, 3, &[]);
+        let (ok, actual) = poisoned.select(&args);
+        assert!(ok);
+        assert_eq!(expected["selection"]["decision"], actual["selection"]["decision"]);
+        assert_eq!(
+            expected["selection"]["conditions"],
+            actual["selection"]["conditions"]
+        );
+        assert!(!actual.to_string().contains("poisoned copy"));
+    }
+}
+
+#[test]
+fn declared_sources_are_checked_even_for_recognized_feats() {
+    let fixture = Fixture::new(10, "5e-srd");
+    fixture.pack(
+        "2014",
+        Distribution::Srd,
+        "srd-5.1-feats",
+        feat("brave-strike", "general", 4),
+    );
+    fixture.sheet("2014", 3, &[]);
+
+    // A declaration matching the authorized catalog is confirmed.
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2014,
+        "--select-feat",
+        "brave-strike",
+        "--select-source",
+        "srd-5.1-feats",
+    ]);
+    assert!(ok);
+    assert_eq!(report["selection"]["decision"], "verified");
+    let authorized = Fixture::condition(&report, "candidate_authorized");
+    assert_eq!(authorized["status"], "met");
+    assert!(authorized["detail"]
+        .as_str()
+        .unwrap()
+        .contains("显式声明的来源一致"));
+
+    // A conflicting declaration rejects even though the id is recognized.
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2014,
+        "--select-feat",
+        "brave-strike",
+        "--select-source",
+        "srd-5.2.1-feats",
+    ]);
+    assert!(!ok);
+    assert_eq!(report["selection"]["decision"], "rejected");
+    assert_eq!(row_status(&report, "candidate_authorized"), "not_met");
+
+    // A FULL source is never authorized under an SRD campaign.
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2014,
+        "--select-feat",
+        "brave-strike",
+        "--select-source",
+        "full-2014-phb",
+    ]);
+    assert!(!ok);
+    assert_eq!(row_status(&report, "candidate_authorized"), "not_met");
+}
+
+#[test]
+fn repeatable_grants_split_known_conditional_and_unproven() {
+    let fixture = Fixture::new(10, "5.5e-srd");
+    fixture.pack_many(
+        "2024",
+        Distribution::Srd,
+        "srd-5.2.1-feats",
+        &[
+            feat_with(
+                "repeatable-strike",
+                "general",
+                json!({
+                    "prerequisites": {"minimum_level": 4},
+                    "repeatable": "You can take this feat more than once.",
+                }),
+            ),
+            feat_with(
+                "conditional-strike",
+                "origin",
+                json!({
+                    "repeatable": "You can take this feat more than once, but you must choose a different spell list each time.",
+                }),
+            ),
+            feat_with("silent-strike", "general", json!({
+                "prerequisites": {"minimum_level": 4},
+            })),
+        ],
+    );
+    fixture.sheet("2024", 3, &["repeatable-strike", "conditional-strike", "silent-strike"]);
+
+    // Explicitly repeatable: a recorded earlier taking is not illegal.
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2024,
+        "--select-feat",
+        "repeatable-strike",
+    ]);
+    assert!(ok);
+    assert_eq!(report["selection"]["decision"], "verified");
+    assert_eq!(row_status(&report, "known_duplicate"), "met");
+    assert!(Fixture::condition(&report, "known_duplicate")["detail"]
+        .as_str()
+        .unwrap()
+        .contains("明示可重复"));
+
+    // Conditional repeatability: the extra terms cannot be verified from the
+    // sheet; unknown, rejected without a basis, continued with one.
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2024,
+        "--select-feat",
+        "conditional-strike",
+    ]);
+    assert!(!ok);
+    assert_eq!(row_status(&report, "known_duplicate"), "unknown");
+    assert!(Fixture::condition(&report, "known_duplicate")["detail"]
+        .as_str()
+        .unwrap()
+        .contains("受条件限制"));
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2024,
+        "--select-feat",
+        "conditional-strike",
+        "--dm-confirm",
+        "第二次选取的法术列表已核对",
+    ]);
+    assert!(ok);
+    assert_eq!(report["selection"]["decision"], "confirmed_unknown");
+    assert_eq!(report["selection"]["not_program_verified"], true);
+
+    // No repeatability statement: absence never becomes a known-illegal
+    // duplicate; the duplicate condition stays unknown.
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2024,
+        "--select-feat",
+        "silent-strike",
+    ]);
+    assert!(!ok);
+    assert_eq!(row_status(&report, "known_duplicate"), "unknown");
+    assert!(Fixture::condition(&report, "known_duplicate")["detail"]
+        .as_str()
+        .unwrap()
+        .contains("重复性表述"));
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2024,
+        "--select-feat",
+        "silent-strike",
+        "--dm-confirm",
+        "DM 核对未重复选取",
+    ]);
+    assert!(ok);
+    assert_eq!(report["selection"]["decision"], "confirmed_unknown");
+
+    // A feat not recorded on the sheet never trips the duplicate rule.
+    fixture.sheet("2024", 3, &[]);
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2024,
+        "--select-feat",
+        "repeatable-strike",
+    ]);
+    assert!(ok);
+    assert_eq!(row_status(&report, "known_duplicate"), "met");
+}
 
 #[test]
 fn known_illegal_candidates_reject_with_condition_rows() {
@@ -469,23 +713,34 @@ fn known_illegal_candidates_reject_with_condition_rows() {
         .iter()
         .any(|id| id == "prerequisite_minimum_level"));
 
-    // Wrong edition: the feat only exists in the 2024 catalog.
+    // Wrong edition: declaring the other edition's catalog rejects on the
+    // declaration alone; no foreign pack is opened to prove it.
     let fixture = Fixture::new(10, "5e-srd");
-    fixture.pack(
-        "2024",
-        Distribution::Srd,
-        "srd-5.2.1-feats",
-        feat("wrong-edition-only", "general", 4),
-    );
     fixture.sheet("2014", 3, &[]);
     let (ok, report) = fixture.select(&[
         "--select-opportunity",
         ASI_2014,
         "--select-feat",
         "wrong-edition-only",
+        "--select-source",
+        "srd-5.2.1-feats",
     ]);
     assert!(!ok);
+    assert_eq!(report["selection"]["decision"], "rejected");
     assert_eq!(row_status(&report, "candidate_authorized"), "not_met");
+
+    // The same bare id without a declaration stays unprovable and rejects even
+    // with a DM basis.
+    let (ok, report) = fixture.select(&[
+        "--select-opportunity",
+        ASI_2014,
+        "--select-feat",
+        "wrong-edition-only",
+        "--dm-confirm",
+        "reviewed",
+    ]);
+    assert!(!ok);
+    assert_eq!(row_status(&report, "candidate_authorized"), "unknown");
 
     // Known duplicate: the structured sheet already records the feat.
     let fixture = Fixture::new(10, "5e-srd");
@@ -700,8 +955,9 @@ fn unrecognized_feats_mark_manual_only_after_the_three_rules_pass() {
     );
     assert_eq!(row_status(&report, "prerequisites_verifiable"), "unknown");
 
-    // Without a declared source the authorization condition stays unknown, so
-    // the marking is withheld even when the DM confirms the unknowns.
+    // Without a declared source the attribution cannot be proven inside the
+    // authorized scope: the authorization stays unknown and rejects, and the
+    // DM basis cannot upgrade it into a continuation.
     let (ok, report) = fixture.select(&[
         "--select-opportunity",
         ASI_2014,
@@ -710,14 +966,10 @@ fn unrecognized_feats_mark_manual_only_after_the_three_rules_pass() {
         "--dm-confirm",
         "来源由 DM 核对",
     ]);
-    assert!(ok);
-    assert_eq!(report["selection"]["decision"], "confirmed_unknown");
+    assert!(!ok);
+    assert_eq!(report["selection"]["decision"], "rejected");
     assert!(report["selection"]["unrecognized_marking"].is_null());
-    assert!(report["selection"]["unknowns"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|entry| entry == "unrecognized_marking_requirements"));
+    assert_eq!(row_status(&report, "candidate_authorized"), "unknown");
 
     // A declared wrong source (the other edition's catalog) rejects.
     let (ok, report) = fixture.select(&[
@@ -731,7 +983,8 @@ fn unrecognized_feats_mark_manual_only_after_the_three_rules_pass() {
     assert!(!ok);
     assert_eq!(row_status(&report, "candidate_authorized"), "not_met");
 
-    // An unknown source pack keeps the condition unknown; no marking.
+    // An unknown source pack keeps the authorization unprovable and rejects,
+    // no matter the DM basis; the manual marking never applies.
     let (ok, report) = fixture.select(&[
         "--select-opportunity",
         ASI_2014,
@@ -742,8 +995,10 @@ fn unrecognized_feats_mark_manual_only_after_the_three_rules_pass() {
         "--dm-confirm",
         "来源待查",
     ]);
-    assert!(ok);
+    assert!(!ok);
+    assert_eq!(report["selection"]["decision"], "rejected");
     assert!(report["selection"]["unrecognized_marking"].is_null());
+    assert_eq!(row_status(&report, "candidate_authorized"), "unknown");
 
     // Aliases, display names and malformed specs are input errors.
     for args in [
