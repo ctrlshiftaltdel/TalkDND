@@ -7,19 +7,21 @@
 //! application, no persistence; submission, active-encounter writes and full
 //! feat effects belong to later advancement tasks.
 //!
-//! Reliability rule: a value is proposed for update (`auto`) only when its
-//! current value matches the program's own derivation at the character's
-//! current level, so its provenance is provable. The gate is regeneration
-//! with comparison — the same pure generators (`progress`, `classdata`) that
-//! built the value originally — never the legacy level-up write path. Values
-//! that disagree with the derivation (hand edits, magic bonuses, rolled or
-//! chosen HP history, custom resources, conflicting ability sources) are
-//! preserved verbatim and reported as `dm_review` or `keep` entries with the
-//! reason. Each `auto` entry carries absolute `before`/`after` values, so a
-//! repeated computation is byte-identical and a future application that
-//! checks `before` against the current value cannot stack.
+//! Reliability rule: a value is proposed for update (`auto`) only when two
+//! things are provable from the save and rule data — the current value
+//! matches the program's own derivation at the character's current level,
+//! **and** the governing source (class proficiency table, recorded
+//! background/species grants, weapon proficiency, the card's complete
+//! level-up record chain) supports the shape that matched. A numeric match
+//! alone proves nothing: a hand or item bonus that happens to equal
+//! mod + proficiency would otherwise be promoted on the next proficiency
+//! step. Values whose shape, source or history cannot be proven are
+//! preserved verbatim as `dm_review` or `keep` entries with the reason.
+//! Each `auto` entry carries absolute `before`/`after` values, so a repeated
+//! computation is byte-identical and a future application that checks
+//! `before` against the current value cannot stack.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -165,10 +167,13 @@ impl Entry {
 
 /// One parsed `## 升级记录` line: the provenance record a program level-up
 /// leaves behind (`- <date>：升到 <level> 级；HP +<gain>（d<die> <how>，体质
-/// <con>）→ <total>；熟练 +<prof>`).
+/// <con>）→ <total>；熟练 +<prof>`). `gain` and `con` are needed to verify
+/// the whole accumulation chain, not just the last line.
 struct LevelRecord {
     level: i32,
+    gain: i64,
     die: i32,
+    con: i64,
     mode: RecordMode,
     total: i64,
 }
@@ -190,7 +195,7 @@ fn parse_record(line: &str) -> Option<LevelRecord> {
         .chars()
         .take_while(|c| c.is_ascii_digit())
         .collect();
-    let _gain: i64 = gain_text.parse().ok()?;
+    let gain: i64 = gain_text.parse().ok()?;
     let die_start = line.find("（d")? + "（d".len();
     let die_text: String = line[die_start..]
         .chars()
@@ -210,6 +215,12 @@ fn parse_record(line: &str) -> Option<LevelRecord> {
     } else {
         RecordMode::Rolled
     };
+    let con_start = line.find("体质 ")? + "体质 ".len();
+    let con_text: String = line[con_start..]
+        .chars()
+        .take_while(|c| *c == '+' || *c == '-' || c.is_ascii_digit())
+        .collect();
+    let con: i64 = con_text.parse().ok()?;
     let total_start = line.find("→ ")? + "→ ".len();
     let total_text: String = line[total_start..]
         .chars()
@@ -218,7 +229,9 @@ fn parse_record(line: &str) -> Option<LevelRecord> {
     let total: i64 = total_text.parse().ok()?;
     Some(LevelRecord {
         level,
+        gain,
         die,
+        con,
         mode,
         total,
     })
@@ -302,6 +315,33 @@ fn derive(
     };
     let generation_old = generation_of(preview.current_level);
     let generation_new = generation_of(preview.target_level);
+
+    // Provable proficiency sources, per category:
+    // - saving throws: the built-in class proficiency table;
+    // - skills: the class choosable list plus recorded background/species
+    //   grants (the sheet's structured options; exact ids only);
+    // - attacks: the class weapon-proficiency data through
+    //   `classdata::proficient` (unarmed is always proficient in the
+    //   generator). A numeric match alone never proves proficiency.
+    let class_data = data::class(&class);
+    let mut provable_skills: BTreeSet<&str> = BTreeSet::new();
+    if let Some(class_data) = class_data {
+        provable_skills.extend(class_data.skills.iter().copied());
+    }
+    if let Some(sheet) = facts.sheet.as_ref() {
+        // Structured options: exact ids resolve through the built-in tables;
+        // unresolvable values contribute nothing (their grants stay unproven).
+        if let Some(background) = sheet.info.get("background").map(|value| value.trim()) {
+            if let Some(granted) = data::background(edition, background) {
+                provable_skills.extend(granted.skills.iter().copied());
+            }
+        }
+        if let Some(species) = sheet.info.get("species").map(|value| value.trim()) {
+            if let Some(granted) = data::species(edition, species) {
+                provable_skills.extend(granted.skills.iter().copied());
+            }
+        }
+    }
 
     let mut entries: Vec<Entry> = Vec::new();
 
@@ -424,16 +464,13 @@ fn derive(
         ));
     }
 
-    // Maximum HP. Auto only when the accumulated value is provably the
-    // program's own average-mode chain: level 1 matches the creation formula,
-    // or the card's level-up record for the current level matches the current
-    // value in average mode. When the validated selection raises con, the
-    // 体质 retroactive rule lifts the maximum by the modifier delta for every
-    // level already attained.
+    // Maximum HP: only a fully verifiable accumulation chain allows an
+    // update. See `derive_hp`.
     entries.extend(derive_hp(preview, facts, &book, &class, &block, &mod_of));
 
-    // Saving throws listed in the block: recognized shapes are the plain
-    // modifier (not proficient) and modifier + proficiency (proficient).
+    // Saving throws listed in the block. The class proficiency table is the
+    // only accepted source: a listed save outside it (hand-added entry) keeps
+    // its value, even when the number happens to equal mod + proficiency.
     if let Some(saves) = block.get("saves").and_then(Value::as_mapping) {
         for (key, value) in saves {
             let Some(ability) = key.as_str() else {
@@ -449,17 +486,24 @@ fn derive(
                 continue;
             };
             let id = format!("combat.saves.{ability}");
+            let provable = class_data.is_some_and(|c| c.saves.contains(&ability));
+            if !provable {
+                entries.push(Entry::dm_review(
+                    id,
+                    "save",
+                    Some(serde_json::json!(actual)),
+                    format!(
+                        "职业熟练豁免表不含 {ability}；该条目来源无法证实（手改或自定义记录），数值 {actual} 保持原值"
+                    ),
+                ));
+                continue;
+            }
             match (mod_of(ability, false), mod_of(ability, true)) {
                 (Some(m_old), Some(m_new)) => {
-                    let proficient = actual == m_old + prof_old;
-                    let plain = actual == m_old;
-                    if proficient || plain {
-                        let after = if proficient { m_new + prof_new } else { m_new };
-                        let shape = if proficient {
-                            format!("属性调整值 {m_old} + 熟练 {prof_old}")
-                        } else {
-                            format!("属性调整值 {m_old}")
-                        };
+                    let expected_old = m_old + prof_old;
+                    if actual == expected_old {
+                        let after = m_new + prof_new;
+                        let shape = format!("属性调整值 {m_old} + 熟练 {prof_old}（职业熟练豁免）");
                         if after == actual {
                             entries.push(Entry::keep(
                                 id,
@@ -474,7 +518,7 @@ fn derive(
                                 serde_json::json!(actual),
                                 serde_json::json!(after),
                                 format!("当前值等于{shape}；属性与熟练变化推导为 {actual}→{after}"),
-                                "SRD saving throw proficiency + validated ability change",
+                                "class save proficiency table + validated ability change",
                             ));
                         }
                     } else {
@@ -483,8 +527,7 @@ fn derive(
                             "save",
                             Some(serde_json::json!(actual)),
                             format!(
-                                "存档值 {actual} 与 {ability} 豁免的可推导形态（{m_old} 或 {}）不一致；可能为手改或魔法物品加值，保持原值",
-                                m_old + prof_old
+                                "存档值 {actual} 与 {ability} 熟练豁免的推导（{expected_old}）不一致；可能为手改或魔法物品加值，保持原值"
                             ),
                         ));
                     }
@@ -499,9 +542,9 @@ fn derive(
         }
     }
 
-    // Skills: recognized shapes are mod, mod+prof (proficient) and
-    // mod+2*prof (expertise); anything else (hand bonuses, magic items)
-    // stays untouched.
+    // Skills. The choosable class list plus recorded background/species
+    // grants are the only accepted proficiency sources; the expertise shape
+    // has no persisted record and therefore never auto-updates.
     if let Some(skills) = block.get("skills").and_then(Value::as_mapping) {
         for (key, value) in skills {
             let Some(skill) = key.as_str() else {
@@ -526,25 +569,29 @@ fn derive(
                 ));
                 continue;
             };
+            if !provable_skills.contains(skill) {
+                entries.push(Entry::dm_review(
+                    id,
+                    "skill",
+                    Some(serde_json::json!(actual)),
+                    format!(
+                        "技能 {skill} 不在职业/背景/种族的可核对熟练来源内；该条目来源无法证实（手改或自定义记录），数值 {actual} 保持原值"
+                    ),
+                ));
+                continue;
+            }
             match (mod_of(ability, false), mod_of(ability, true)) {
                 (Some(m_old), Some(m_new)) => {
-                    let variants = [
-                        (m_old, m_new, "属性调整值"),
-                        (m_old + prof_old, m_new + prof_new, "属性调整值+熟练"),
-                        (
-                            m_old + 2 * prof_old,
-                            m_new + 2 * prof_new,
-                            "属性调整值+双倍熟练（专精）",
-                        ),
-                    ];
-                    if let Some((_, after, label)) =
-                        variants.iter().find(|(before, _, _)| *before == actual)
-                    {
-                        if *after == actual {
+                    let expected_old = m_old + prof_old;
+                    if actual == expected_old {
+                        let after = m_new + prof_new;
+                        let shape =
+                            format!("属性调整值 {m_old} + 熟练 {prof_old}（职业/背景/种族熟练）");
+                        if after == actual {
                             entries.push(Entry::keep(
                                 id,
                                 "skill",
-                                format!("技能值与推导一致，且本等级 {skill} 不变"),
+                                format!("技能值等于{shape}，且本等级 {skill} 不变"),
                             ));
                         } else {
                             entries.push(Entry::auto(
@@ -554,20 +601,27 @@ fn derive(
                                 serde_json::json!(actual),
                                 serde_json::json!(after),
                                 format!(
-                                    "当前值等于{label}的可推导值；属性与熟练变化推导为 {actual}→{after}"
+                                    "当前值等于{shape}；属性与熟练变化推导为 {actual}→{after}"
                                 ),
-                                "SRD skill proficiency + validated ability change",
+                                "class/background/species skill proficiency + validated ability change",
                             ));
                         }
+                    } else if actual == m_old + 2 * prof_old {
+                        entries.push(Entry::dm_review(
+                            id,
+                            "skill",
+                            Some(serde_json::json!(actual)),
+                            format!(
+                                "技能值 {actual} 符合专精形态，但专精选择没有存档记录；无法与手改加值区分，保持原值并交 DM 核对"
+                            ),
+                        ));
                     } else {
                         entries.push(Entry::dm_review(
                             id,
                             "skill",
                             Some(serde_json::json!(actual)),
                             format!(
-                                "技能值 {actual} 与 {skill} 的三种可推导形态（{m_old}、{}、{}）不一致；可能为手改或魔法物品加值，保持原值",
-                                m_old + prof_old,
-                                m_old + 2 * prof_old
+                                "技能值 {actual} 与 {skill} 熟练的推导（{expected_old}）不一致；可能为手改或魔法物品加值，保持原值"
                             ),
                         ));
                     }
@@ -582,9 +636,10 @@ fn derive(
         }
     }
 
-    // Attacks: to_hit recognized as mod+prof (proficient) or mod (not
-    // proficient) using the attack's recorded ability; magic bonuses and
-    // hand edits stay untouched.
+    // Attacks: to_hit follows the weapon's provable proficiency from the
+    // class weapon data (`classdata::proficient`); unarmed is always
+    // proficient in the generator. Unknown ids and everything else keep
+    // their value.
     if let Some(attacks) = block.get("attacks").and_then(Value::as_sequence) {
         for attack in attacks {
             let Some(to_hit) = attack.get("to_hit").and_then(Value::as_i64) else {
@@ -605,16 +660,27 @@ fn derive(
                 ));
                 continue;
             };
+            let weapon = attack_proficiency(&book, definition, name, rs);
+            let Some(proficient) = weapon else {
+                entries.push(Entry::dm_review(
+                    id,
+                    "attack",
+                    Some(serde_json::json!(to_hit)),
+                    format!(
+                        "攻击 {name} 不在职业武器熟练可核对的范围内（非已知武器且非徒手）；to_hit 来源无法证实，保持原值"
+                    ),
+                ));
+                continue;
+            };
             match (mod_of(ability, false), mod_of(ability, true)) {
                 (Some(m_old), Some(m_new)) => {
-                    let proficient = to_hit == m_old + prof_old;
-                    let plain = to_hit == m_old;
-                    if proficient || plain {
-                        let after = if proficient { m_new + prof_new } else { m_new };
+                    let expected_old = m_old + if proficient { prof_old } else { 0 };
+                    if to_hit == expected_old {
+                        let after = m_new + if proficient { prof_new } else { 0 };
                         let shape = if proficient {
-                            format!("{ability} 调整值 {m_old} + 熟练 {prof_old}")
+                            format!("{ability} 调整值 {m_old} + 熟练 {prof_old}（武器熟练可核对）")
                         } else {
-                            format!("{ability} 调整值 {m_old}")
+                            format!("{ability} 调整值 {m_old}（该武器不熟练，可核对）")
                         };
                         if after == to_hit {
                             entries.push(Entry::keep(
@@ -629,8 +695,8 @@ fn derive(
                                 format!("combat.attacks.{name}.to_hit"),
                                 serde_json::json!(to_hit),
                                 serde_json::json!(after),
-                                format!("to_hit 等于{shape}的可推导值；推导为 {to_hit}→{after}"),
-                                "SRD attack proficiency + validated ability change",
+                                format!("to_hit 等于{shape}；推导为 {to_hit}→{after}"),
+                                "class weapon proficiency + validated ability change",
                             ));
                         }
                     } else {
@@ -639,8 +705,7 @@ fn derive(
                             "attack",
                             Some(serde_json::json!(to_hit)),
                             format!(
-                                "to_hit {to_hit} 与 {ability} 的可推导形态（{m_old} 或 {}）不一致；可能为魔法武器加值或手改，保持原值",
-                                m_old + prof_old
+                                "to_hit {to_hit} 与 {name} 的可核对推导（{expected_old}）不一致；可能为魔法武器加值或手改，保持原值"
                             ),
                         ));
                     }
@@ -701,7 +766,120 @@ fn derive(
     })
 }
 
+// ------------------------------------------------- provable proficiency --
+
+/// Provable to-hit proficiency of one attack entry: `Some(true)` /
+/// `Some(false)` when the weapon's proficiency can be verified from the
+/// class weapon data, `None` when the source cannot be verified. Unarmed is
+/// always proficient in the generator; `-2h` variants share the base
+/// weapon's proficiency.
+fn attack_proficiency(
+    book: &classdata::Book,
+    definition: Option<&classdata::ClassDef>,
+    attack_id: &str,
+    rs: &str,
+) -> Option<bool> {
+    if attack_id == "unarmed" {
+        return Some(true);
+    }
+    let base = attack_id.strip_suffix("-2h").unwrap_or(attack_id);
+    let weapon = book.weapons.iter().find(|w| w.id == base)?.for_ruleset(rs);
+    Some(classdata::proficient(definition, &weapon))
+}
+
 // -------------------------------------------------------------------- HP --
+
+/// Why the current max HP is or is not provably the program's own
+/// average-mode accumulation. Level 1 must match the creation formula
+/// (the complete one-level chain); later levels must have exactly one
+/// average-mode record per level 2..=N whose gains, Constitution values and
+/// cumulative totals reconcile all the way back to that formula, whose last
+/// total equals the current value, and whose last Constitution still matches
+/// the block's current Constitution.
+fn hp_chain_status(
+    facts: &CharacterFacts,
+    die: i32,
+    hp: i64,
+    current_level: i32,
+    con_now: i64,
+) -> Result<(), String> {
+    let mut records: Vec<LevelRecord> = Vec::new();
+    for line in &facts.level_records {
+        match parse_record(line) {
+            Some(record) => records.push(record),
+            None => return Err("存在无法解析的升级记录".to_owned()),
+        }
+    }
+    let die_average = i64::from(die) / 2 + 1;
+    // The chain starts from the level-1 creation formula: die + the
+    // Constitution modifier the first record shows (a hand-changed pre-L2
+    // Constitution breaks the base and fails the chain).
+    let mut expected: Option<i64> = None;
+    for level in 2..=current_level {
+        let rows: Vec<&LevelRecord> = records
+            .iter()
+            .filter(|record| record.level == level)
+            .collect();
+        let Some(record) = rows.first().copied() else {
+            return Err(format!("升级记录缺少 {level} 级，平均链不完整"));
+        };
+        if rows.len() > 1 {
+            return Err(format!(
+                "升级记录中 {level} 级有 {} 条，相互重复或矛盾",
+                rows.len()
+            ));
+        }
+        if !matches!(record.mode, RecordMode::Average) {
+            return Err(format!(
+                "{level} 级记录不是平均模式（掷骰或自选历史无法程序推算）"
+            ));
+        }
+        if record.die != die {
+            return Err(format!(
+                "{level} 级记录的生命骰 d{} 与职业数据 d{die} 不一致",
+                record.die
+            ));
+        }
+        if record.gain != die_average + record.con {
+            return Err(format!(
+                "{level} 级记录的增量 {} 与平均推导 {}（d{die} 平均 + 体质）不一致",
+                record.gain,
+                die_average + record.con
+            ));
+        }
+        let base = expected.unwrap_or_else(|| i64::from(die) + record.con);
+        let reconciled = base + record.gain;
+        if reconciled != record.total {
+            return Err(format!(
+                "{level} 级记录的累计值 {} 与前序链推导 {reconciled} 不一致",
+                record.total
+            ));
+        }
+        expected = Some(record.total);
+    }
+    if records
+        .iter()
+        .any(|record| record.level < 2 || record.level > current_level)
+    {
+        return Err("升级记录含 2 级至当前等级之外的条目，链不连续".to_owned());
+    }
+    let Some(last) = records.iter().find(|record| record.level == current_level) else {
+        return Err("升级记录缺少当前等级".to_owned());
+    };
+    if last.total != hp {
+        return Err(format!(
+            "当前最大 HP {hp} 与最近一次升级记录的累计值 {} 不一致",
+            last.total
+        ));
+    }
+    if last.con != con_now {
+        return Err(format!(
+            "升级记录的体质调整值 {:+} 与当前体质调整值 {con_now:+} 不一致；最后一次升级后体质被改动",
+            last.con
+        ));
+    }
+    Ok(())
+}
 
 fn derive_hp(
     preview: &Preview,
@@ -712,6 +890,25 @@ fn derive_hp(
     mod_of: &dyn Fn(&str, bool) -> Option<i64>,
 ) -> Vec<Entry> {
     let id = "combat.hp";
+    // A structured card and its rendered Markdown must agree on HP; a
+    // mismatch means one carrier was hand-edited and neither side can be
+    // trusted as the source.
+    if let Some(sheet_combat) = facts.structured_combat.as_ref() {
+        let markdown_hp = facts.markdown_combat.get("hp").and_then(Value::as_i64);
+        let sheet_hp = sheet_combat.get("hp").and_then(Value::as_i64);
+        if let (Some(markdown_hp), Some(sheet_hp)) = (markdown_hp, sheet_hp) {
+            if markdown_hp != sheet_hp {
+                return vec![Entry::dm_review(
+                    id,
+                    "hp",
+                    Some(serde_json::json!(sheet_hp)),
+                    format!(
+                        "两个载体的 HP 不一致（Markdown {markdown_hp} / 结构化角色卡 {sheet_hp}）；来源冲突，保持原值并交 DM 核对"
+                    ),
+                )];
+            }
+        }
+    }
     let Some(hp) = block.get("hp").and_then(Value::as_i64) else {
         return vec![Entry::dm_review(
             id,
@@ -744,34 +941,37 @@ fn derive_hp(
             "体质分数缺失或来源冲突；最大 HP 无法核对，保持原值",
         )];
     };
-    // Provenance: level 1 must match the creation formula; later levels must
-    // match the level-up record for the current level, in average mode.
+    // Provenance: the complete average chain, not just the last record.
     let proven = if preview.current_level == 1 {
-        hp == i64::from(die) + con_old
-    } else {
-        let record = facts
-            .level_records
-            .iter()
-            .filter_map(|line| parse_record(line))
-            .find(|record| record.level == preview.current_level);
-        match record {
-            Some(record) if record.total == hp && record.die == die => {
-                matches!(record.mode, RecordMode::Average)
-            }
-            _ => false,
-        }
-    };
-    if !proven {
-        let hint = if preview.current_level == 1 {
-            format!("1 级最大 HP 应为 d{die}+体质调整值（{con_old:+}）；当前值 {hp} 与其不符")
+        if hp == i64::from(die) + con_old {
+            Ok(())
         } else {
-            format!("没有与当前最大 HP {hp} 一致的平均模式升级记录；可能为手改、掷骰或自选历史")
-        };
+            Err(format!(
+                "1 级最大 HP 应为 d{die}+体质调整值（{con_old:+}）；当前值 {hp} 与其不符"
+            ))
+        }
+    } else {
+        hp_chain_status(facts, die, hp, preview.current_level, con_old)
+    };
+    let chain_note = match &proven {
+        Ok(()) => {
+            if preview.current_level == 1 {
+                "1 级建卡公式逐值吻合（完整链）".to_owned()
+            } else {
+                format!(
+                    "升级记录 {}→{} 级完整平均链逐级吻合",
+                    2, preview.current_level
+                )
+            }
+        }
+        Err(reason) => reason.clone(),
+    };
+    if proven.is_err() {
         return vec![Entry::dm_review(
             id,
             "hp",
             Some(serde_json::json!(hp)),
-            format!("{hint}；最大 HP 保持原值，增量交 DM 核对"),
+            format!("{chain_note}；最大 HP 保持原值，增量交 DM 核对"),
         )];
     }
     let die_average = i64::from(die) / 2 + 1;
@@ -780,11 +980,11 @@ fn derive_hp(
     let after = hp + gain + retro * i64::from(preview.current_level);
     let reason = if retro == 0 {
         format!(
-            "平均 HP 链可证实（{hp} 与建卡公式/升级记录一致）；增量 = d{die} 平均 {die_average} + 新体质 {con_new:+} = +{gain}"
+            "平均 HP 链可证实（{chain_note}）；增量 = d{die} 平均 {die_average} + 新体质 {con_new:+} = +{gain}"
         )
     } else {
         format!(
-            "平均 HP 链可证实（{hp} 与建卡公式/升级记录一致）；增量 = d{die} 平均 {die_average} + 新体质 {con_new:+} = +{gain}，另有体质 {con_old:+}→{con_new:+} 的追溯 {retro}×{} 级 = +{}",
+            "平均 HP 链可证实（{chain_note}）；增量 = d{die} 平均 {die_average} + 新体质 {con_new:+} = +{gain}，另有体质 {con_old:+}→{con_new:+} 的追溯 {retro}×{} 级 = +{}",
             preview.current_level,
             retro * i64::from(preview.current_level)
         )

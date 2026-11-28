@@ -157,15 +157,14 @@ pub(crate) fn inspect(root: &Path, save: &Path, who: &str) -> Result<Inspection>
         .filter(|feature| feature.0 == target_level)
         .map(|feature| feature.1.clone())
         .collect();
-    // The chargen generator applies this standard pattern when the class
-    // book omits an explicit `asi` list (most SRD classes follow it); the
-    // preview follows the same rule instead of failing closed on them.
-    const DEFAULT_ASI_LEVELS: [i32; 5] = [4, 8, 12, 16, 19];
+    // #331 behavior: a class whose book entry carries no explicit `asi`
+    // list fails closed here; enabling the generator's standard pattern is
+    // a separate direction decision, not part of this task.
     let has_asi = definition
         .asi
         .as_ref()
-        .map(|levels| levels.contains(&target_level))
-        .unwrap_or_else(|| DEFAULT_ASI_LEVELS.contains(&target_level));
+        .context("职业升级表缺少属性提升安排")?
+        .contains(&target_level);
     let opportunity = if edition == "2014" && has_asi {
         Some("ability_score_improvement_or_optional_feat")
     } else if class_features.iter().any(|name| name == "Epic Boon") {
