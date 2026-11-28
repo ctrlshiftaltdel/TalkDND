@@ -425,7 +425,7 @@ fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
 /// write tests are Linux-gated anyway).
 #[cfg(target_os = "linux")]
 fn release_leaked_lock_fds(fixture: &Fixture) {
-    use std::os::unix::io::OwnedFd;
+    use std::os::fd::{FromRawFd, OwnedFd};
     let lock_file = fixture.save.join(".talkdnd.advancement.lock");
     let mut closed = Vec::new();
     let own_fds: Vec<_> = match fs::read_dir("/proc/self/fd") {
