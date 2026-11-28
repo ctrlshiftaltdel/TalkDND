@@ -510,12 +510,8 @@ fn feat_outcome(
         .find(|candidate| candidate.id == feat_id)
         .cloned();
     let mut rows = Vec::new();
-    let (authorized_status, authorized_detail, echo_source) = feat_authorization(
-        preview.ruleset,
-        declared_source,
-        recognized.as_ref(),
-        root,
-    );
+    let (authorized_status, authorized_detail, echo_source) =
+        feat_authorization(preview.ruleset, declared_source, recognized.as_ref(), root);
     rows.push(ConditionRow::new(
         "candidate_authorized",
         authorized_status,
@@ -941,6 +937,8 @@ fn append_category_row(
 /// repeatability; its absence is not evidence of a once-only rule, so it must
 /// not become a known-illegal duplicate.
 enum Repeatability {
+    /// The pack states the feat can be taken only once.
+    OnceOnly,
     /// `repeatable` grants another taking with no extra terms.
     Repeatable,
     /// `repeatable` grants another taking subject to terms the sheet cannot
@@ -950,9 +948,10 @@ enum Repeatability {
     NoEvidence,
 }
 
-/// Classifies the tracked `repeatable` text: wording beyond the plain
-/// "take this feat more than once" grant means extra terms; unrecognized
-/// wording also stays conditional rather than being guessed either way.
+/// Classifies the tracked `repeatable` text: an explicit once-only statement
+/// is known non-repeatable; wording beyond the plain "take this feat more than
+/// once" grant means extra terms; unrecognized wording also stays conditional
+/// rather than being guessed either way.
 fn repeatability_of(data: Option<&serde_json::Value>) -> Repeatability {
     let Some(text) = data
         .and_then(|data| data.get("repeatable"))
@@ -961,6 +960,14 @@ fn repeatability_of(data: Option<&serde_json::Value>) -> Repeatability {
         return Repeatability::NoEvidence;
     };
     let normalized = text.to_lowercase();
+    const ONCE_ONLY_MARKERS: [&str; 3] = [
+        "only once",
+        "can't take this feat more than once",
+        "cannot take this feat more than once",
+    ];
+    if ONCE_ONLY_MARKERS.iter().any(|marker| normalized.contains(marker)) {
+        return Repeatability::OnceOnly;
+    }
     const GRANT: &str = "you can take this feat more than once";
     let remainder = match normalized.strip_prefix(GRANT) {
         Some(remainder) => remainder,
@@ -999,6 +1006,10 @@ fn duplicate_status(
     });
     match (recorded, repeatability) {
         (false, _) => (Met, "结构化角色卡未记录该专长".to_owned()),
+        (true, Repeatability::OnceOnly) => (
+            NotMet,
+            "规则数据明示该专长只能选取一次；角色卡已记录此前选取，已知重复".to_owned(),
+        ),
         (true, Repeatability::Repeatable) => (
             Met,
             "该专长在规则数据中明示可重复选取；角色卡已记录的此前选取不构成非法重复".to_owned(),
@@ -1009,7 +1020,8 @@ fn duplicate_status(
         ),
         (true, Repeatability::NoEvidence) => (
             Unknown,
-            "角色卡已记录该专长，但跟踪数据没有重复性表述；不能据此判定已知非法，保持未知".to_owned(),
+            "角色卡已记录该专长，但跟踪数据没有重复性表述；不能据此判定已知非法，保持未知"
+                .to_owned(),
         ),
     }
 }

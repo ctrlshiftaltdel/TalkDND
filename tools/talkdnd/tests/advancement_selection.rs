@@ -759,22 +759,31 @@ fn known_illegal_candidates_reject_with_condition_rows() {
     assert!(!ok);
     assert_eq!(row_status(&report, "candidate_authorized"), "unknown");
 
-    // Known duplicate: the structured sheet already records the feat.
+    // Known duplicate: the pack data states the feat can be taken only once,
+    // so the recorded earlier taking is a known-illegal duplicate.
     let fixture = Fixture::new(10, "5e-srd");
     fixture.pack(
         "2014",
         Distribution::Srd,
         "srd-5.1-feats",
-        feat("brave-strike", "general", 4),
+        feat_with(
+            "once-strike",
+            "general",
+            json!({
+                "prerequisites": {"minimum_level": 4},
+                "repeatable": "You can take this feat only once.",
+            }),
+        ),
     );
-    fixture.sheet("2014", 3, &["brave-strike"]);
+    fixture.sheet("2014", 3, &["once-strike"]);
     let (ok, report) = fixture.select(&[
         "--select-opportunity",
         ASI_2014,
         "--select-feat",
-        "brave-strike",
+        "once-strike",
     ]);
     assert!(!ok);
+    assert_eq!(report["selection"]["decision"], "rejected");
     assert_eq!(row_status(&report, "known_duplicate"), "not_met");
     assert!(report.to_string().contains("已知重复"));
 
