@@ -59,7 +59,7 @@
 - 分支命名：`task/<ID>-<name>`
 - Worktree 根目录：`.worktrees/`
 - 工作目录要求：一个执行实例一个 Worktree；不共享可写工作区。
-- 审查修复轮次：本项目（`edition: github`）的 GitHub 工作流**不设固定轮数上限**，也不使用 `retry_cap` 常量。Master 按 `AGENTS.md` §6 的四项条件（具体缺口、明确范围、可行修复、可复验）决定是否续派，轮次仅用于追踪；重复无进展、没有可行下一步、缺少外部输入时按事实 `BLOCKED` 或拆分，方向未决时进入 `NEEDS_HUMAN_DECISION`。这是 TalkDND 对 AgentOrch 通用默认（默认最多 3 轮，见 `kit/orchestration.md`）的项目级覆盖，只作用于本项目的 GitHub 工作流；`local` 底座的 `retry_cap` 通用语义和套件默认不变。
+- 审查修复轮次：本项目（`edition: github`）的 GitHub 工作流**不设固定轮数上限**，也不使用 `retry_cap` 常量。续派口径以 `AGENTS.md` §6 为准（四项条件：具体缺口、明确范围、可行修复、可复验）；其中「具体缺口」须同时记录未通过的门（G1–G6）与受影响的 AC，纯门禁问题没有对应 AC 时写明 AC 不适用及理由。轮次仅用于追踪；重复无进展、没有可行下一步、缺少外部输入时按事实 `BLOCKED` 或拆分，方向未决时进入 `NEEDS_HUMAN_DECISION`。这是 TalkDND 对 AgentOrch 通用默认（默认最多 3 轮，见 `kit/orchestration.md`）的项目级覆盖，只作用于本项目的 GitHub 工作流；`local` 底座的 `retry_cap` 通用语义和套件默认不变。
 - 本地证据保留方式：github 底座的证据在 Issue、PR 与 CI 日志中，并遵守上面的 PRIVACY RULE。`.orchestration/` 不入库。
 - 备份策略：以 Git 历史与 GitHub 上的 Issue/PR 为准。不把存档、DM 秘密或版权文本复制进备份或日志。
 
