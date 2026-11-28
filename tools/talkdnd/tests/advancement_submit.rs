@@ -1014,25 +1014,6 @@ fn a_publish_fault_keeps_targets_and_records_the_stage() {
 /// stale in-process flock. CI evidence: an in-process fault run kept an
 /// owned, flocked descriptor alive across the following child acquires
 /// (kernel FLOCK entry + IO-safety abort on a forced close).
-#[cfg(target_os = "linux")]
-fn leftover_in_doubt_operation(fixture: &Fixture, operation_id: &str) {
-    let output = Command::new(std::env::current_exe().expect("current test exe"))
-        .arg("advancement_fault_leftover_producer")
-        .arg("--exact")
-        .env(
-            "TALKDND_ADV_PRODUCER_ROOT",
-            fixture.root.display().to_string(),
-        )
-        .env("TALKDND_ADV_PRODUCER_OP", operation_id)
-        .output()
-        .expect("spawn the fault producer child");
-    assert!(
-        output.status.success(),
-        "the fault producer child failed: {}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 /// Producer half of the pair above: only runs when re-executed with the
 /// environment set; otherwise returns immediately so the normal harness
@@ -1127,10 +1108,16 @@ fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
         String::from_utf8_lossy(&migrate.stdout),
         String::from_utf8_lossy(&migrate.stderr)
     );
-    let root_line = String::from_utf8_lossy(&migrate.stdout)
+    let migrate_stdout = String::from_utf8_lossy(&migrate.stdout).to_string();
+    let root_line = migrate_stdout
         .lines()
         .find(|line| line.starts_with("PRODUCER_ROOT="))
-        .expect("producer prints its fixture root")
+        .unwrap_or_else(|| {
+            panic!(
+                "migrate producer printed no fixture root; stdout:
+{migrate_stdout}"
+            )
+        })
         .strip_prefix("PRODUCER_ROOT=")
         .expect("producer root line")
         .to_owned();
