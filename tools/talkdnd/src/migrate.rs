@@ -1310,8 +1310,11 @@ fn run_legacy_chain(
 
 /// One #344 admission observation for the identity step: (admitted, reason).
 /// The backup parent is inspected where it will actually be created; the
-/// approved roots are the play folder's `Saves/` tree. Read-only.
-fn admission_verdict(save: &Path, root: &Path) -> (bool, String) {
+/// approved roots are the play folder's `Saves/` tree. Read-only. Shared
+/// with the advancement submit/recovery entries, which refuse to write on
+/// the same unadmitted environments (ADV-P1-10); the migration's own
+/// behaviour is unchanged.
+pub(crate) fn admission_verdict(save: &Path, root: &Path) -> (bool, String) {
     let saves_root = root.join("Saves");
     let backups_root = saves_root.join(BACKUP_DIR);
     let inspected = if backups_root.is_dir() {

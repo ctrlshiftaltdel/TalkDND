@@ -18,7 +18,11 @@ use crate::{advancement_identity, charsheet, classdata, data, identity_diag, lib
 pub(crate) struct Preview {
     pub(crate) consistency: &'static str,
     pub(crate) write_capability: &'static str,
-    pub(crate) submission_binding: &'static str,
+    /// `unavailable_in_read_only_preview` until the full chain (preview →
+    /// selection → derivation) runs; that chain overwrites this field with
+    /// the submit binding digest a later `advancement submit --preview-id`
+    /// must present verbatim.
+    pub(crate) submission_binding: String,
     pub(crate) identity: &'static str,
     pub(crate) encounter: &'static str,
     pub(crate) ruleset: Ruleset,
@@ -120,7 +124,7 @@ pub(crate) fn inspect(root: &Path, save: &Path, who: &str) -> Result<Inspection>
         .map_err(|_| anyhow::anyhow!("无法读取当前存档 schema"))?
         .context("缺少存档 schema")?
         .schema;
-    ensure!(matches!(schema, 9 | 10), "成长预览支持 schema 9 和 10");
+    ensure!(matches!(schema, 9..=11), "成长预览支持 schema 9、10 和 11");
 
     let diagnostic = identity_diag::diagnose(save);
     ensure!(
@@ -216,7 +220,7 @@ pub(crate) fn inspect(root: &Path, save: &Path, who: &str) -> Result<Inspection>
         preview: Preview {
             consistency: "unverified",
             write_capability: "unverified",
-            submission_binding: "unavailable_in_read_only_preview",
+            submission_binding: "unavailable_in_read_only_preview".to_owned(),
             identity: advancement_identity::binding_status(save, &diagnostic, character),
             encounter,
             ruleset,

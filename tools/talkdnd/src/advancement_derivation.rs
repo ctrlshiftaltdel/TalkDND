@@ -53,11 +53,22 @@ pub(crate) fn run(
             &outcome,
         )?)
     };
-    let report = DeriveReport {
+    let mut report = DeriveReport {
         preview: inspection.preview,
         selection: outcome,
         derived,
     };
+    // ADV-P1-10 wiring: the full chain (preview → selection → derivation)
+    // attests the exact bytes and rule data a later `advancement submit`
+    // re-verifies. A rejected chain has no binding to present.
+    if !rejected {
+        let d_binding = crate::advancement_commit::binding_preview_id(
+            save,
+            &crate::advancement_submit::registered_extra_targets(save)?,
+        )?;
+        let digest = submission_digest(&report, &d_binding)?;
+        report.preview.submission_binding = digest;
+    }
     if json {
         println!("{}", serde_json::to_string(&report)?);
     } else {
@@ -70,43 +81,67 @@ pub(crate) fn run(
 }
 
 #[derive(Serialize)]
-struct DeriveReport {
+pub(crate) struct DeriveReport {
     #[serde(flatten)]
-    preview: Preview,
-    selection: SelectionOutcome,
+    pub(crate) preview: Preview,
+    pub(crate) selection: SelectionOutcome,
     /// Absent when the selection was rejected: a rejected selection has no
     /// candidate to derive from.
-    derived: Option<DerivedCandidate>,
+    pub(crate) derived: Option<DerivedCandidate>,
+}
+
+/// The submit binding digest: a SHA-256 over the canonical report bytes plus
+/// the D protocol's own protected-file binding digest. Nothing here reads or
+/// writes the save; the caller passes the D digest computed at the same
+/// instant. A later submit must present this digest verbatim, so any change
+/// to the reviewed report, the selection args or any protected save file
+/// invalidates the preview.
+pub(crate) fn submission_digest(report: &DeriveReport, d_binding: &str) -> Result<String> {
+    // Serialize with the binding field pinned to the placeholder so the
+    // digest never depends on itself. The value round-trip gives a stable
+    // canonical form (deterministic key order) on both sides of the compare.
+    let mut value = serde_json::to_value(report)?;
+    value["submission_binding"] = serde_json::json!("unavailable_in_read_only_preview");
+    let canonical = serde_json::to_vec(&value)?;
+    let mut acc = Vec::with_capacity(canonical.len() + d_binding.len() + 2);
+    acc.extend_from_slice(b"talkdnd-advancement-submission-v1");
+    acc.push(0);
+    acc.extend_from_slice(&canonical);
+    acc.push(0);
+    acc.extend_from_slice(d_binding.as_bytes());
+    Ok(advancement_lock::save_lock::digest(&acc)
+        .as_str()
+        .to_owned())
 }
 
 #[derive(Serialize)]
-struct DerivedCandidate {
+pub(crate) struct DerivedCandidate {
     /// This step never applies effects; application stays outside it.
-    application: &'static str,
+    pub(crate) application: &'static str,
     /// Echo of the preview's encounter gate; the candidate never touches
     /// encounter state either way.
-    encounter_gate: String,
-    entries: Vec<Entry>,
-    dm_items: Vec<String>,
+    pub(crate) encounter_gate: String,
+    pub(crate) entries: Vec<Entry>,
+    pub(crate) dm_items: Vec<String>,
 }
 
 #[derive(Serialize)]
-struct Entry {
+pub(crate) struct Entry {
     /// Stable id inside the candidate (for example `combat.saves.wis`).
-    id: String,
-    category: &'static str,
+    pub(crate) id: String,
+    pub(crate) category: &'static str,
     /// `auto` = proposed update with provenance proof; `keep` = intentionally
     /// untouched; `dm_review` = preserved verbatim, DM must decide.
-    disposition: &'static str,
+    pub(crate) disposition: &'static str,
     /// Combat-block path an application would write (`auto` entries only).
     #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<String>,
+    pub(crate) target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    before: Option<serde_json::Value>,
+    pub(crate) before: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    after: Option<serde_json::Value>,
-    reason: String,
-    source: String,
+    pub(crate) after: Option<serde_json::Value>,
+    pub(crate) reason: String,
+    pub(crate) source: String,
 }
 
 impl Entry {
@@ -242,7 +277,7 @@ fn after_marker<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
     Some(&line[start..])
 }
 
-fn derive(
+pub(crate) fn derive(
     root: &Path,
     preview: &Preview,
     facts: &CharacterFacts,

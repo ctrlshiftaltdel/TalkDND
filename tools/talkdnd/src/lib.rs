@@ -13,6 +13,7 @@ mod advancement_preview;
 pub mod advancement_recovery;
 mod advancement_selection;
 pub mod advancement_sidecar;
+pub mod advancement_submit;
 pub mod advancement_validation;
 pub mod adventure;
 pub mod audit;
@@ -879,6 +880,72 @@ enum AdvancementCmd {
         #[arg(long, requires = "select_opportunity")]
         derive: bool,
     },
+    /// Submit one player-explicit advancement through the D protocol (ADV-P1-10)
+    ///
+    /// 提交把一次玩家显式选择经 D 协议恰好应用一次：先在准入的本地 Linux ext4
+    /// 上复查协议、schema 11、身份绑定、遭遇门与 XP/里程碑资格，重新执行
+    /// 只读链（预览 → 选择 → 派生），并要求 `--preview-id` 与只读 `--derive`
+    /// 报告输出的提交绑定摘要一致；任何变化、过期摘要、无绑定或不可知都拒绝
+    /// 且不写任何文件。SAVE 锁由 D 协议自身取得并在锁内复核；失败输出已写
+    /// 阶段、备份与证据位置；恢复走 `talkdnd advancement recover`。
+    Submit {
+        /// Preview the next level of one player character, by exact ID or name.
+        #[arg(long, value_name = "CHARACTER")]
+        level_up: String,
+        /// Validate one explicitly selected opportunity (exact id from the preview).
+        #[arg(long, value_name = "OPPORTUNITY")]
+        select_opportunity: String,
+        /// Feat candidate by exact catalog id; pair with --select-source when
+        /// the feat is not in the authorized catalog.
+        #[arg(
+            long,
+            value_name = "FEAT",
+            requires = "select_opportunity",
+            conflicts_with = "select_abilities"
+        )]
+        select_feat: Option<String>,
+        /// Ability-increase candidate, e.g. `str+2` or `str+1,dex+1` (exactly +2).
+        #[arg(
+            long,
+            value_name = "SPEC",
+            requires = "select_opportunity",
+            conflicts_with = "select_feat"
+        )]
+        select_abilities: Option<String>,
+        /// Declared source pack id for an unrecognized feat candidate.
+        #[arg(long, value_name = "SOURCE", requires = "select_feat")]
+        select_source: Option<String>,
+        /// Separate DM confirmation with a non-empty auditable basis for
+        /// unknown conditions; it never substitutes the player selection.
+        #[arg(long, value_name = "BASIS", requires = "select_opportunity")]
+        dm_confirm: Option<String>,
+        /// The submission binding digest from the read-only `--derive` report
+        /// the player reviewed; a stale digest is refused.
+        #[arg(long, value_name = "DIGEST")]
+        preview_id: String,
+        /// Milestone level-up for a major story beat (raises XP to the floor).
+        #[arg(long, requires = "reason")]
+        milestone: bool,
+        /// The story reason for a milestone level-up (audited, deduplicated).
+        #[arg(long, value_name = "REASON", requires = "milestone")]
+        reason: Option<String>,
+    },
+    /// Inspect or explicitly recover an unfinished advancement operation
+    ///
+    /// 不带 `--choice` 时只读检查未完成的成长操作（不建立证据、不写目标）。
+    /// 带 `--choice rollback|continue --confirm` 时先保护当前树并建立恢复
+    /// 工作证据，再由人显式选择回滚到前像或继续到目标；绝不自动续跑或重放。
+    /// 确认恢复只在准入的本地 Linux ext4 上执行；未准入环境拒绝写入。
+    Recover {
+        /// The explicit human choice: `rollback` (回滚到前像) or `continue`
+        /// (继续到目标).
+        #[arg(long, value_name = "CHOICE")]
+        choice: Option<String>,
+        /// Freshly confirm the choice for this invocation; a stored choice is
+        /// evidence, never authorization.
+        #[arg(long, requires = "choice")]
+        confirm: bool,
+    },
 }
 
 /// Transition gate (ADV-P1-1pre): the writer-registry row for this invocation.
@@ -900,6 +967,19 @@ fn gate_entry(cli: &Cli) -> &'static str {
         Cmd::Advancement {
             cmd: AdvancementCmd::IdentityPreview { .. },
         } => "talkdnd:advancement-identity-preview",
+        // ADV-P1-10: the submit entry publishes exactly the registered
+        // level-up target set through the D protocol, which takes SAVE
+        // itself (like the confirmed identity migration) and re-checks the
+        // state with `check_writable`; the shared registry's level-up row
+        // carries the same targets and adopted class. Recovery is the
+        // restore-family row for the same reason. Neither entry ever runs
+        // without the D protocol's own SAVE ordering.
+        Cmd::Advancement {
+            cmd: AdvancementCmd::Submit { .. },
+        } => "talkdnd:level-up",
+        Cmd::Advancement {
+            cmd: AdvancementCmd::Recover { .. },
+        } => "talkdnd:checkpoint-restore",
         Cmd::Chargen { cmd } => match cmd {
             ChargenCmd::Status => "talkdnd:chargen-status",
             ChargenCmd::Validate => "talkdnd:chargen-validate",
@@ -1246,17 +1326,29 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
         ),
         _ => false,
     };
+    // ADV-P1-10: the advancement submit/recover entries are owned by the D
+    // protocol the same way — it opens SAVE itself after its own admission
+    // and protocol preflight. Holding the ordinary wrapper SAVE here would
+    // make the D `open` take a second descriptor on the same lock and block
+    // until timeout. The transition gate above still checked the writer
+    // class; the D `check_writable` re-checks the state before any write.
+    let d_commit = matches!(
+        &cli.cmd,
+        Cmd::Advancement {
+            cmd: AdvancementCmd::Submit { .. } | AdvancementCmd::Recover { .. }
+        }
+    );
     // ADV-P1-1a / 1c / 1d: adopted writers take the SAVE lock before any
     // target write. The lock is held through dispatch and the post-command
     // audit (`audit::after_command`) and dropped only after that returns.
     // Group D (`log`, `check`, `integrity status` / `accept`) uses this same
     // hold; do not drop it earlier and do not open a second time. No auto-init.
-    let save_locks = if gate_class == gate::Class::AdoptedWrite && !identity_migrate {
+    let save_locks = if gate_class == gate::Class::AdoptedWrite && !(identity_migrate || d_commit) {
         hold_adopted_save_locks(root, cli, gate_save.as_deref(), gate_entry)?
     } else {
         Vec::new()
     };
-    let clock_lock = if !identity_migrate
+    let clock_lock = if !(identity_migrate || d_commit)
         && matches!(
             gate_class,
             gate::Class::AdoptedWrite | gate::Class::UnadoptedWrite
@@ -1350,7 +1442,12 @@ fn run_game(root: &Path, cli: &Cli, created: &mut Option<PathBuf>) -> Result<()>
             | Cmd::Options { .. }
             | Cmd::Data { .. }
             | Cmd::Knowledge { .. }
-            | Cmd::Library { .. },
+            | Cmd::Library { .. }
+            // The D commit publishes integrity.yaml itself; an outer audit
+            // pass would double-book the same operation.
+            | Cmd::Advancement {
+                cmd: AdvancementCmd::Submit { .. } | AdvancementCmd::Recover { .. },
+            },
         ) => None,
         _ => save::resolve_slot(root, cli.save.as_deref()).ok(),
     };
@@ -1568,6 +1665,49 @@ fn dispatch(
                     advancement_identity::run(&save, json)?;
                 }
             }
+        }
+        Cmd::Advancement {
+            cmd:
+                AdvancementCmd::Submit {
+                    level_up,
+                    select_opportunity,
+                    select_feat,
+                    select_abilities,
+                    select_source,
+                    dm_confirm,
+                    preview_id,
+                    milestone: _,
+                    reason,
+                },
+        } => {
+            let save = save::resolve_slot(&root, cli.save.as_deref())?;
+            advancement_submit::submit(
+                &root,
+                &save,
+                advancement_submit::SubmitArgs {
+                    who: &level_up,
+                    opportunity: &select_opportunity,
+                    feat: select_feat.as_deref(),
+                    abilities: select_abilities.as_deref(),
+                    declared_source: select_source.as_deref(),
+                    dm_confirm: dm_confirm.as_deref(),
+                    preview_id: &preview_id,
+                    milestone: reason.as_deref(),
+                },
+            )?;
+        }
+        Cmd::Advancement {
+            cmd: AdvancementCmd::Recover { choice, confirm },
+        } => {
+            let save = save::resolve_slot(&root, cli.save.as_deref())?;
+            advancement_submit::recover(
+                &root,
+                &save,
+                advancement_submit::RecoverArgs {
+                    choice: choice.as_deref(),
+                    confirm,
+                },
+            )?;
         }
         Cmd::Char { who, op } => {
             let s = save::resolve_slot(&root, cli.save.as_deref())?;
