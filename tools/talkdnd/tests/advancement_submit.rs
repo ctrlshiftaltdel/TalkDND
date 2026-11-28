@@ -398,7 +398,7 @@ fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
             Ok(()) => "test process COULD take the lock now (holder released between attempts)",
             Err(_) => "test process ALSO cannot take the lock (real persistent holder)",
         },
-        Err(err) => return panic!("cannot even open the lock file: {err}"),
+        Err(err) => panic!("cannot even open the lock file: {err}"),
     };
     panic!(
         "persistent lock holder on {} (inode {inode}):\nkernel locks on this inode:\n{}\nopen descriptors on this file:\n{}\nprobe: {}\nchild stderr:\n{}",
@@ -1064,6 +1064,7 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
     // pass for a completed inspection here.
     assert!(out.contains("原操作 adv-leftover-1"), "{out}");
     assert!(out.contains("未写任何目标"), "{out}");
+    leak_check(&fixture, "after the inspect child");
     assert_eq!(fixture.snapshot_tree(), leftover, "inspect must not write");
 
     // Explicit rollback: targets return to the preimage, the protocol ends
