@@ -1053,6 +1053,34 @@ fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
     fixture
 }
 
+/// Same, with one guard against a documented test-harness anomaly: this
+/// test process can end up holding an open, flocked descriptor on a
+/// fixture's advancement lock file (kernel FLOCK entry attributed to the
+/// test pid; see recover_command's diagnostic). If a cheap read-only
+/// inspect child cannot take the lock, the fixture is discarded and the
+/// leftover is rebuilt once on a fresh fixture (fresh inode), where the
+/// child acquires normally. The second failure fails the test loudly.
+#[cfg(target_os = "linux")]
+fn leftover_in_doubt_fixture_checked(tag: &str, operation_id: &str) -> Fixture {
+    let fixture = leftover_in_doubt_fixture(tag, operation_id);
+    let probe = fixture.command(&["advancement", "recover"]);
+    if !stderr(&probe).contains("lock_timeout") {
+        return fixture;
+    }
+    eprintln!(
+        "test-harness note: fixture lock held by a leaked handle; rebuilding on a fresh fixture"
+    );
+    drop(fixture);
+    let fresh = leftover_in_doubt_fixture(tag, operation_id);
+    let probe = fresh.command(&["advancement", "recover"]);
+    assert!(
+        !stderr(&probe).contains("lock_timeout"),
+        "fresh fixture still lock_timeout: {}",
+        stderr(&probe)
+    );
+    fresh
+}
+
 /// The read-only inspection contract: the CLI reports the stage and
 /// materials, names the leftover operation, writes nothing, and does not
 /// auto-replay. An in_doubt leftover inspects with exit 1 (attention
@@ -1061,7 +1089,7 @@ fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
 #[test]
 fn recovery_inspect_reports_materials_and_writes_nothing() {
     let _serial = serial();
-    let fixture = leftover_in_doubt_fixture("recover-inspect", "adv-leftover-1");
+    let fixture = leftover_in_doubt_fixture_checked("recover-inspect", "adv-leftover-1");
     let leftover = fixture.snapshot_tree();
 
     let inspect = fixture.command(&["advancement", "recover"]);
@@ -1083,7 +1111,7 @@ fn recovery_inspect_reports_materials_and_writes_nothing() {
 #[test]
 fn recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply() {
     let _serial = serial();
-    let fixture = leftover_in_doubt_fixture("recover-rollback", "adv-leftover-1");
+    let fixture = leftover_in_doubt_fixture_checked("recover-rollback", "adv-leftover-1");
 
     let recover = recover_command(
         &fixture,
@@ -1142,7 +1170,7 @@ fn recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply() {
 #[test]
 fn recovery_can_continue_to_the_target_and_reports_manual_items() {
     let _serial = serial();
-    let fixture = leftover_in_doubt_fixture("recover-continue", "adv-leftover-1");
+    let fixture = leftover_in_doubt_fixture_checked("recover-continue", "adv-leftover-1");
     let recover = recover_command(
         &fixture,
         &[
@@ -1172,7 +1200,7 @@ fn recovery_can_continue_to_the_target_and_reports_manual_items() {
 #[test]
 fn recovery_protects_later_manual_edits() {
     let _serial = serial();
-    let fixture = leftover_in_doubt_fixture("recover-manual", "adv-leftover-1");
+    let fixture = leftover_in_doubt_fixture_checked("recover-manual", "adv-leftover-1");
     let session = fixture.save.join("Sessions/2030-01-02.md");
     let mut edited = fs::read(&session).unwrap();
     edited.extend(b"- later hand note\n");
