@@ -599,7 +599,7 @@ fn map_flow(lines: &mut [String], key: &str, f: &dyn Fn(&str, i64) -> i64) {
     }
 }
 
-fn spell_ability(book: &classdata::Book, class: &str) -> Option<String> {
+pub(crate) fn spell_ability(book: &classdata::Book, class: &str) -> Option<String> {
     book.class(class)
         .and_then(|c| c.spell_ability.clone())
         .or_else(|| {

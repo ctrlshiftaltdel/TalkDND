@@ -5,6 +5,7 @@
 pub mod advancement_admission;
 mod advancement_backup_metadata;
 pub mod advancement_commit;
+mod advancement_derivation;
 mod advancement_identity;
 pub mod advancement_inner_lock;
 pub mod advancement_lock;
@@ -873,6 +874,10 @@ enum AdvancementCmd {
         /// unknown conditions; it never substitutes the player selection.
         #[arg(long, value_name = "BASIS", requires = "select_opportunity")]
         dm_confirm: Option<String>,
+        /// After the selection validates, also compute the read-only derived
+        /// candidate (reliable provenance only); writes nothing.
+        #[arg(long, requires = "select_opportunity")]
+        derive: bool,
     },
 }
 
@@ -1520,30 +1525,31 @@ fn dispatch(
                     select_abilities,
                     select_source,
                     dm_confirm,
+                    derive,
                 },
         } => {
             let save = save::resolve_slot(&root, cli.save.as_deref())?;
             match (level_up.as_ref(), select_opportunity.as_ref()) {
                 (Some(who), Some(opportunity)) => {
-                    advancement_selection::run(
-                        &root,
-                        &save,
-                        who,
-                        json,
-                        advancement_selection::SelectionArgs {
-                            opportunity,
-                            feat: select_feat.as_deref(),
-                            abilities: select_abilities.as_deref(),
-                            declared_source: select_source.as_deref(),
-                            dm_confirm: dm_confirm.as_deref(),
-                        },
-                    )?;
+                    let args = advancement_selection::SelectionArgs {
+                        opportunity,
+                        feat: select_feat.as_deref(),
+                        abilities: select_abilities.as_deref(),
+                        declared_source: select_source.as_deref(),
+                        dm_confirm: dm_confirm.as_deref(),
+                    };
+                    if derive {
+                        advancement_derivation::run(&root, &save, who, json, args)?;
+                    } else {
+                        advancement_selection::run(&root, &save, who, json, args)?;
+                    }
                 }
                 (Some(who), None) => {
                     if select_feat.is_some()
                         || select_abilities.is_some()
                         || select_source.is_some()
                         || dm_confirm.is_some()
+                        || derive
                     {
                         anyhow::bail!("缺少玩家选择：请同时给出 --select-opportunity 与候选");
                     }
@@ -1555,6 +1561,7 @@ fn dispatch(
                         || select_abilities.is_some()
                         || select_source.is_some()
                         || dm_confirm.is_some()
+                        || derive
                     {
                         anyhow::bail!("玩家选择需要 --level-up 指定要校验的角色");
                     }

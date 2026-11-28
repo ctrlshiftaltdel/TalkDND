@@ -60,9 +60,8 @@ pub(crate) fn run(
     json: bool,
     args: SelectionArgs<'_>,
 ) -> Result<()> {
-    let selection = parse_selection(&args)?;
     let inspection = advancement_preview::inspect(root, save, who)?;
-    let outcome = validate(root, &inspection.preview, &inspection.facts, selection)?;
+    let outcome = evaluate(root, &inspection.preview, &inspection.facts, args)?;
     let rejected = outcome.decision == "rejected";
     let report = SelectionReport {
         preview: inspection.preview,
@@ -77,6 +76,19 @@ pub(crate) fn run(
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Library-level validation of one selection against one inspection. Exposed
+/// so the derivation step on the same entry reuses the exact same parse and
+/// condition verdicts instead of re-implementing them.
+pub(crate) fn evaluate(
+    root: &Path,
+    preview: &Preview,
+    facts: &CharacterFacts,
+    args: SelectionArgs<'_>,
+) -> Result<SelectionOutcome> {
+    let selection = parse_selection(&args)?;
+    validate(root, preview, facts, selection)
 }
 
 // ------------------------------------------------------------- input parsing --
@@ -192,7 +204,7 @@ fn parse_ability_spec(raw: &str) -> Result<Vec<(String, i32)>> {
 // ------------------------------------------------------------ condition rows --
 
 struct ConditionRow {
-    id: String,
+    pub(crate) id: String,
     status: ConditionStatus,
     source: String,
     edition: String,
@@ -218,7 +230,7 @@ impl ConditionRow {
 }
 
 #[derive(Serialize)]
-struct ConditionRowOut {
+pub(crate) struct ConditionRowOut {
     id: String,
     status: &'static str,
     source: String,
@@ -262,56 +274,56 @@ struct SelectionReport {
 }
 
 #[derive(Serialize)]
-struct SelectionOutcome {
-    player_selection: PlayerSelectionEcho,
-    candidate: CandidateEcho,
-    conditions: Vec<ConditionRowOut>,
-    decision: &'static str,
-    dm_confirmation: DmConfirmation,
+pub(crate) struct SelectionOutcome {
+    pub(crate) player_selection: PlayerSelectionEcho,
+    pub(crate) candidate: CandidateEcho,
+    pub(crate) conditions: Vec<ConditionRowOut>,
+    pub(crate) decision: &'static str,
+    pub(crate) dm_confirmation: DmConfirmation,
     /// True only when unknown conditions were continued via DM confirmation.
-    not_program_verified: bool,
+    pub(crate) not_program_verified: bool,
     /// This entry never applies effects; application stays outside it.
-    application: &'static str,
+    pub(crate) application: &'static str,
     /// AC-3 marking for unrecognized feats; absent when it does not apply.
-    unrecognized_marking: Option<&'static str>,
-    rejection: Option<Rejection>,
-    unknowns: Vec<String>,
+    pub(crate) unrecognized_marking: Option<&'static str>,
+    pub(crate) rejection: Option<Rejection>,
+    pub(crate) unknowns: Vec<String>,
 }
 
 #[derive(Serialize)]
-struct PlayerSelectionEcho {
+pub(crate) struct PlayerSelectionEcho {
     opportunity: String,
     opportunity_source: &'static str,
     declared_source: Option<String>,
 }
 
 #[derive(Serialize)]
-struct CandidateEcho {
-    kind: &'static str,
+pub(crate) struct CandidateEcho {
+    pub(crate) kind: &'static str,
     id: String,
-    name: Option<String>,
-    recognized: bool,
-    source: Option<String>,
-    category: Option<String>,
-    increases: Option<Vec<IncreaseEcho>>,
+    pub(crate) name: Option<String>,
+    pub(crate) recognized: bool,
+    pub(crate) source: Option<String>,
+    pub(crate) category: Option<String>,
+    pub(crate) increases: Option<Vec<IncreaseEcho>>,
 }
 
 #[derive(Serialize)]
-struct IncreaseEcho {
-    ability: String,
-    amount: i32,
-    current_score: Option<i32>,
-    score_after: Option<i32>,
+pub(crate) struct IncreaseEcho {
+    pub(crate) ability: String,
+    pub(crate) amount: i32,
+    pub(crate) current_score: Option<i32>,
+    pub(crate) score_after: Option<i32>,
 }
 
 #[derive(Serialize)]
-struct DmConfirmation {
+pub(crate) struct DmConfirmation {
     provided: bool,
     basis: Option<String>,
 }
 
 #[derive(Serialize)]
-struct Rejection {
+pub(crate) struct Rejection {
     unmet_ids: Vec<String>,
     unknown_ids: Vec<String>,
 }

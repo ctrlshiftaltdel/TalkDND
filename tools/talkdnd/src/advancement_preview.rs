@@ -64,6 +64,13 @@ pub(crate) struct CharacterFacts {
     /// The structured sheet when one exists; legacy Markdown-only cards have
     /// none, so recorded feats and the subclass stay unknown to selection.
     pub(crate) sheet: Option<charsheet::CharFile>,
+    /// The Markdown card's combat block (the block the preview itself reads).
+    pub(crate) markdown_combat: Value,
+    /// `## 升级记录` lines from the card: sheet `tail_md` for structured
+    /// cards, the rendered Markdown section otherwise. Each program level-up
+    /// appends one line, so they are the provenance record for accumulated
+    /// values such as max HP.
+    pub(crate) level_records: Vec<String>,
 }
 
 pub(crate) fn run(root: &Path, save: &Path, who: &str, json: bool) -> Result<()> {
@@ -135,7 +142,8 @@ pub(crate) fn inspect(root: &Path, save: &Path, who: &str) -> Result<Inspection>
     let current_level = level(&combat)?;
     ensure!(current_level < 20, "角色已达 20 级");
     let target_level = current_level + 1;
-    let character_facts = character_facts(save, character, &combat, current_level, ruleset)?;
+    let character_facts =
+        character_facts(save, character, &combat, current_level, ruleset, &markdown)?;
 
     let edition = ruleset.edition();
     let book = classdata::Book::srd(edition);
@@ -149,6 +157,9 @@ pub(crate) fn inspect(root: &Path, save: &Path, who: &str) -> Result<Inspection>
         .filter(|feature| feature.0 == target_level)
         .map(|feature| feature.1.clone())
         .collect();
+    // #331 behavior: a class whose book entry carries no explicit `asi`
+    // list fails closed here; enabling the generator's standard pattern is
+    // a separate direction decision, not part of this task.
     let has_asi = definition
         .asi
         .as_ref()
@@ -256,7 +267,9 @@ fn character_facts(
     combat: &Value,
     current_level: i32,
     ruleset: Ruleset,
+    markdown: &str,
 ) -> Result<CharacterFacts> {
+    let records = level_record_lines(markdown);
     let inferred = charsheet::infer_controller(character.markdown(), combat);
     let Some(path) = character.sheet_path() else {
         ensure!(inferred == charsheet::PLAYER, "未找到该玩家角色");
@@ -277,6 +290,8 @@ fn character_facts(
             class_source: "generated_card",
             structured_combat: None,
             sheet: None,
+            markdown_combat: combat.clone(),
+            level_records: records,
         });
     };
     let text = regular_text(&save.join(path), "结构化角色卡不可读取")?;
@@ -306,7 +321,24 @@ fn character_facts(
         class_source: "structured_sheet",
         structured_combat: Some(sheet.combat.clone()),
         sheet: Some(sheet),
+        markdown_combat: combat.clone(),
+        level_records: records,
     })
+}
+
+/// The `## 升级记录` bullet lines of a card. Structured sheets render their
+/// `tail_md` into the Markdown card, so one parse covers both carriers.
+fn level_record_lines(markdown: &str) -> Vec<String> {
+    let Some(index) = markdown.find("## 升级记录") else {
+        return Vec::new();
+    };
+    markdown[index..]
+        .lines()
+        .skip(1)
+        .skip_while(|line| line.trim().is_empty())
+        .take_while(|line| line.trim_start().starts_with('-'))
+        .map(str::to_owned)
+        .collect()
 }
 
 pub(crate) fn ability_potential(
