@@ -300,7 +300,7 @@ pub(crate) struct PlayerSelectionEcho {
 #[derive(Serialize)]
 pub(crate) struct CandidateEcho {
     pub(crate) kind: &'static str,
-    id: String,
+    pub(crate) id: String,
     pub(crate) name: Option<String>,
     pub(crate) recognized: bool,
     pub(crate) source: Option<String>,
@@ -318,14 +318,14 @@ pub(crate) struct IncreaseEcho {
 
 #[derive(Serialize)]
 pub(crate) struct DmConfirmation {
-    provided: bool,
-    basis: Option<String>,
+    pub(crate) provided: bool,
+    pub(crate) basis: Option<String>,
 }
 
 #[derive(Serialize)]
 pub(crate) struct Rejection {
-    unmet_ids: Vec<String>,
-    unknown_ids: Vec<String>,
+    pub(crate) unmet_ids: Vec<String>,
+    pub(crate) unknown_ids: Vec<String>,
 }
 
 fn validate(
