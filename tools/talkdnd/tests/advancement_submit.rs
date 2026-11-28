@@ -1005,19 +1005,57 @@ fn a_publish_fault_keeps_targets_and_records_the_stage() {
 
 // --------------------------------------------------------------------- AC-4 --
 
-/// Produces a leftover `in_doubt` operation through the library's fault
-/// injection (PublishSync: the log line was appended, its parent sync is
-/// unknown, so the terminal state is in doubt) with the given operation id.
+/// Produces a leftover `in_doubt` operation for one fixture by re-executing
+/// this test binary as a producer child: the child runs the library's fault
+/// run (PublishSync: the log line was appended, its parent sync is unknown,
+/// so the terminal state is in doubt) in its own process and exits, which
+/// releases every handle it held. The parent test process never opens the
+/// fixture's advancement lock file itself, so its children cannot hit a
+/// stale in-process flock. CI evidence: an in-process fault run kept an
+/// owned, flocked descriptor alive across the following child acquires
+/// (kernel FLOCK entry + IO-safety abort on a forced close).
 #[cfg(target_os = "linux")]
 fn leftover_in_doubt_operation(fixture: &Fixture, operation_id: &str) {
-    let backups_root = fixture.root.join("Saves").join("_backups");
+    let output = Command::new(std::env::current_exe().expect("current test exe"))
+        .arg("advancement_fault_leftover_producer")
+        .arg("--exact")
+        .env(
+            "TALKDND_ADV_PRODUCER_ROOT",
+            fixture.root.display().to_string(),
+        )
+        .env("TALKDND_ADV_PRODUCER_OP", operation_id)
+        .output()
+        .expect("spawn the fault producer child");
+    assert!(
+        output.status.success(),
+        "the fault producer child failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Producer half of the pair above: only runs when re-executed with the
+/// environment set; otherwise returns immediately so the normal harness
+/// run is a no-op. The fault run's stop error shape is asserted here.
+#[cfg(target_os = "linux")]
+#[test]
+fn advancement_fault_leftover_producer() {
+    let Ok(root) = std::env::var("TALKDND_ADV_PRODUCER_ROOT") else {
+        return;
+    };
+    let Ok(operation_id) = std::env::var("TALKDND_ADV_PRODUCER_OP") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let save = root.join("Saves/2030-01-02-01");
+    let backups_root = root.join("Saves").join("_backups");
     let evidence_root = backups_root.join(".operations");
     let evidence_dir = evidence_root.join("2030-01-02-01");
     fs::create_dir_all(&evidence_dir).unwrap();
     let request = Request {
-        root: &fixture.root,
-        save_dir: &fixture.save,
-        operation_id,
+        root: &root,
+        save_dir: &save,
+        operation_id: &operation_id,
         evidence_root: &evidence_root,
         evidence_dir: &evidence_dir,
         backup_parent: &backups_root,
@@ -1028,57 +1066,103 @@ fn leftover_in_doubt_operation(fixture: &Fixture, operation_id: &str) {
             "advancement/hero.yaml".to_owned(),
             "save-meta.yaml".to_owned(),
         ],
-        preview_id: Some(fixture.d_binding()),
+        preview_id: Some(
+            binding_preview_id(
+                &save,
+                &[
+                    "advancement/hero.yaml".to_owned(),
+                    "save-meta.yaml".to_owned(),
+                ],
+            )
+            .unwrap(),
+        ),
         instance_tag: "",
         hooks: Default::default(),
         inner_lock: InnerLockOptions::default(),
         ext4_metadata: true,
     };
     let failed = run_to_complete(&request).expect_err("the fault must leave a leftover");
-    leak_check(fixture, "after the leftover fault run");
     let error = failed.report.error.clone().unwrap_or_default();
     assert!(error.contains("日志") || error.contains("停止"), "{error}");
 }
 
-/// A fixture at schema 11 in the admitted environment with one leftover
-/// `in_doubt` operation, ready for the recovery CLI tests.
+/// Producer half of the fixture pair: builds a fresh synthetic fixture and
+/// migrates it to schema 11 through the in-child D run (the parent test
+/// process never opens the fixture's advancement lock file). Prints
+/// `PRODUCER_ROOT=<path>` for the parent; only runs when re-executed with
+/// the tag environment set, otherwise the normal harness run is a no-op.
 #[cfg(target_os = "linux")]
-fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
-    let fixture = Fixture::new(tag);
+#[test]
+fn advancement_fixture_migrate_producer() {
+    let Ok(tag) = std::env::var("TALKDND_ADV_PRODUCER_TAG") else {
+        return;
+    };
+    let fixture = Fixture::new(&tag);
     assert!(
-        fixture.try_migrate_to_schema_11() && admitted_ext4(&fixture),
-        "recovery tests need the admitted env"
+        fixture.try_migrate_to_schema_11(),
+        "the producer environment must admit the migration"
     );
-    leftover_in_doubt_operation(&fixture, operation_id);
-    fixture
+    println!("PRODUCER_ROOT={}", fixture.root.display());
 }
 
-/// Same, with one guard against a documented test-harness anomaly: this
-/// test process can end up holding an open, flocked descriptor on a
-/// fixture's advancement lock file (kernel FLOCK entry attributed to the
-/// test pid; see recover_command's diagnostic). If a cheap read-only
-/// inspect child cannot take the lock, the fixture is discarded and the
-/// leftover is rebuilt once on a fresh fixture (fresh inode), where the
-/// child acquires normally. The second failure fails the test loudly.
+/// A fixture at schema 11 in the admitted environment with one leftover
+/// `in_doubt` operation, ready for the recovery CLI tests.
+///
+/// Both in-process D runs of the fixture chain (the migration and the
+/// fault run) are executed by re-executing this test binary as producer
+/// children, so this test process never opens the fixture's advancement
+/// lock file itself: a leaked handle here would make every spawned
+/// recovery child fail closed (the CI anomaly these helpers document).
 #[cfg(target_os = "linux")]
-fn leftover_in_doubt_fixture_checked(tag: &str, operation_id: &str) -> Fixture {
-    let fixture = leftover_in_doubt_fixture(tag, operation_id);
-    let probe = fixture.command(&["advancement", "recover"]);
-    if !stderr(&probe).contains("lock_timeout") {
-        return fixture;
-    }
-    eprintln!(
-        "test-harness note: fixture lock held by a leaked handle; rebuilding on a fresh fixture"
+fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
+    let migrate = Command::new(std::env::current_exe().expect("current test exe"))
+        .arg("advancement_fixture_migrate_producer")
+        .arg("--exact")
+        .env("TALKDND_ADV_PRODUCER_TAG", tag)
+        .output()
+        .expect("spawn the migrate producer child");
+    assert!(
+        migrate.status.success(),
+        "migrate producer child failed: {}{}",
+        String::from_utf8_lossy(&migrate.stdout),
+        String::from_utf8_lossy(&migrate.stderr)
     );
-    drop(fixture);
-    let fresh = leftover_in_doubt_fixture(tag, operation_id);
-    let probe = fresh.command(&["advancement", "recover"]);
+    let root_line = String::from_utf8_lossy(&migrate.stdout)
+        .lines()
+        .find(|line| line.starts_with("PRODUCER_ROOT="))
+        .expect("producer prints its fixture root")
+        .strip_prefix("PRODUCER_ROOT=")
+        .expect("producer root line")
+        .to_owned();
+    let fixture = Fixture {
+        root: PathBuf::from(&root_line),
+        save: PathBuf::from(&root_line).join("Saves/2030-01-02-01"),
+    };
+    assert!(
+        admitted_ext4(&fixture),
+        "recovery tests need the admitted env"
+    );
+    let fault = Command::new(std::env::current_exe().expect("current test exe"))
+        .arg("advancement_fault_leftover_producer")
+        .arg("--exact")
+        .env("TALKDND_ADV_PRODUCER_ROOT", root_line)
+        .env("TALKDND_ADV_PRODUCER_OP", operation_id)
+        .output()
+        .expect("spawn the fault producer child");
+    assert!(
+        fault.status.success(),
+        "fault producer child failed: {}{}",
+        String::from_utf8_lossy(&fault.stdout),
+        String::from_utf8_lossy(&fault.stderr)
+    );
+    // The parent holds no fixture handle; prove the children acquire.
+    let probe = fixture.command(&["advancement", "recover"]);
     assert!(
         !stderr(&probe).contains("lock_timeout"),
         "fresh fixture still lock_timeout: {}",
         stderr(&probe)
     );
-    fresh
+    fixture
 }
 
 /// The read-only inspection contract: the CLI reports the stage and
@@ -1089,7 +1173,7 @@ fn leftover_in_doubt_fixture_checked(tag: &str, operation_id: &str) -> Fixture {
 #[test]
 fn recovery_inspect_reports_materials_and_writes_nothing() {
     let _serial = serial();
-    let fixture = leftover_in_doubt_fixture_checked("recover-inspect", "adv-leftover-1");
+    let fixture = leftover_in_doubt_fixture("recover-inspect", "adv-leftover-1");
     let leftover = fixture.snapshot_tree();
 
     let inspect = fixture.command(&["advancement", "recover"]);
@@ -1111,7 +1195,7 @@ fn recovery_inspect_reports_materials_and_writes_nothing() {
 #[test]
 fn recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply() {
     let _serial = serial();
-    let fixture = leftover_in_doubt_fixture_checked("recover-rollback", "adv-leftover-1");
+    let fixture = leftover_in_doubt_fixture("recover-rollback", "adv-leftover-1");
 
     let recover = recover_command(
         &fixture,
@@ -1170,7 +1254,7 @@ fn recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply() {
 #[test]
 fn recovery_can_continue_to_the_target_and_reports_manual_items() {
     let _serial = serial();
-    let fixture = leftover_in_doubt_fixture_checked("recover-continue", "adv-leftover-1");
+    let fixture = leftover_in_doubt_fixture("recover-continue", "adv-leftover-1");
     let recover = recover_command(
         &fixture,
         &[
@@ -1200,7 +1284,7 @@ fn recovery_can_continue_to_the_target_and_reports_manual_items() {
 #[test]
 fn recovery_protects_later_manual_edits() {
     let _serial = serial();
-    let fixture = leftover_in_doubt_fixture_checked("recover-manual", "adv-leftover-1");
+    let fixture = leftover_in_doubt_fixture("recover-manual", "adv-leftover-1");
     let session = fixture.save.join("Sessions/2030-01-02.md");
     let mut edited = fs::read(&session).unwrap();
     edited.extend(b"- later hand note\n");
@@ -1235,15 +1319,12 @@ fn recovery_protects_later_manual_edits() {
 #[test]
 fn unknown_recovery_evidence_stops_in_doubt() {
     let _serial = serial();
-    let fixture = Fixture::new("recover-unknown");
-    assert!(
-        fixture.try_migrate_to_schema_11() && admitted_ext4(&fixture),
-        "recovery tests need the admitted env"
-    );
+    let fixture = leftover_in_doubt_fixture("recover-unknown", "adv-leftover-1");
     // A leftover operation plus a corrupt work record that claims to belong
     // to it: re-entry discovery picks that record, the unreadable evidence
     // must stop the recovery in in_doubt for manual handling only.
-    leftover_in_doubt_operation(&fixture, "adv-leftover-1");
+    // (The second fault below reuses the same producer mechanism with a new
+    // operation id on the same fixture.)
     let operations = fixture
         .root
         .join("Saves/_backups/.operations/2030-01-02-01");
