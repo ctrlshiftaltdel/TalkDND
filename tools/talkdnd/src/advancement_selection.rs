@@ -965,7 +965,10 @@ fn repeatability_of(data: Option<&serde_json::Value>) -> Repeatability {
         "can't take this feat more than once",
         "cannot take this feat more than once",
     ];
-    if ONCE_ONLY_MARKERS.iter().any(|marker| normalized.contains(marker)) {
+    if ONCE_ONLY_MARKERS
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
         return Repeatability::OnceOnly;
     }
     const GRANT: &str = "you can take this feat more than once";
