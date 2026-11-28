@@ -1005,35 +1005,6 @@ fn a_publish_fault_keeps_targets_and_records_the_stage() {
 
 // --------------------------------------------------------------------- AC-4 --
 
-/// Produces a leftover `in_doubt` operation for one fixture by re-executing
-/// this test binary as a producer child: the child runs the library's fault
-/// run (PublishSync: the log line was appended, its parent sync is unknown,
-/// so the terminal state is in doubt) in its own process and exits, which
-/// releases every handle it held. The parent test process never opens the
-/// fixture's advancement lock file itself, so its children cannot hit a
-/// stale in-process flock. CI evidence: an in-process fault run kept an
-/// owned, flocked descriptor alive across the following child acquires
-/// (kernel FLOCK entry + IO-safety abort on a forced close).
-#[cfg(target_os = "linux")]
-fn leftover_in_doubt_operation(fixture: &Fixture, operation_id: &str) {
-    let output = Command::new(std::env::current_exe().expect("current test exe"))
-        .arg("advancement_fault_leftover_producer")
-        .arg("--exact")
-        .env(
-            "TALKDND_ADV_PRODUCER_ROOT",
-            fixture.root.display().to_string(),
-        )
-        .env("TALKDND_ADV_PRODUCER_OP", operation_id)
-        .output()
-        .expect("spawn the fault producer child");
-    assert!(
-        output.status.success(),
-        "the fault producer child failed: {}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 /// Producer half of the pair above: only runs when re-executed with the
 /// environment set; otherwise returns immediately so the normal harness
 /// run is a no-op. The fault run's stop error shape is asserted here.
@@ -1118,6 +1089,7 @@ fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
     let migrate = Command::new(std::env::current_exe().expect("current test exe"))
         .arg("advancement_fixture_migrate_producer")
         .arg("--exact")
+        .arg("--nocapture")
         .env("TALKDND_ADV_PRODUCER_TAG", tag)
         .output()
         .expect("spawn the migrate producer child");
