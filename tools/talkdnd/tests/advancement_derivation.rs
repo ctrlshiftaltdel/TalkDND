@@ -145,6 +145,7 @@ impl Fixture {
     /// `legacy`, the structured sheet mirroring it. `info` is the sheet's
     /// `info` mapping content; `sheet_extra` carries the optional `spells`
     /// block; `block_override` splices hand edits into both carriers.
+    #[allow(clippy::too_many_arguments)]
     fn card(
         &self,
         block: &str,
