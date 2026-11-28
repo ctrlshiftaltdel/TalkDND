@@ -1116,9 +1116,19 @@ fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
         root: PathBuf::from(&root_line),
         save: PathBuf::from(&root_line).join("Saves/2030-01-02-01"),
     };
+    let verdict = talkdnd::advancement_admission::inspect(
+        &fixture.save,
+        fixture.root.join("Saves").as_path(),
+        &talkdnd::advancement_admission::ApprovedRoots {
+            saves: fixture.root.join("Saves").as_path(),
+            backups: fixture.root.join("Saves").as_path(),
+            synchronized: &[],
+        },
+    );
     assert!(
-        admitted_ext4(&fixture),
-        "recovery tests need the admitted env"
+        matches!(verdict, talkdnd::advancement_admission::Admission::Admitted),
+        "recovery tests need the admitted env; producer root {}: {verdict:?}",
+        fixture.root.display()
     );
     let fault = Command::new(std::env::current_exe().expect("current test exe"))
         .arg("advancement_fault_leftover_producer")
