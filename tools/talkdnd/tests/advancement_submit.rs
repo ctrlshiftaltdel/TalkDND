@@ -806,15 +806,10 @@ fn a_publish_fault_keeps_targets_and_records_the_stage() {
 // --------------------------------------------------------------------- AC-4 --
 
 /// Produces a leftover `in_doubt` operation through the library's fault
-/// injection (PublishWrite: publish already started, so the terminal state
-/// is in doubt), then drives the explicit recovery through the real CLI.
+/// injection (PublishSync: the log line was appended, its parent sync is
+/// unknown, so the terminal state is in doubt) with the given operation id.
 #[cfg(target_os = "linux")]
-fn leftover_in_doubt_fixture(tag: &str) -> Fixture {
-    let fixture = Fixture::new(tag);
-    assert!(
-        fixture.try_migrate_to_schema_11() && admitted_ext4(&fixture),
-        "recovery tests need the admitted env"
-    );
+fn leftover_in_doubt_operation(fixture: &Fixture, operation_id: &str) {
     let backups_root = fixture.root.join("Saves").join("_backups");
     let evidence_root = backups_root.join(".operations");
     let evidence_dir = evidence_root.join("2030-01-02-01");
@@ -822,7 +817,7 @@ fn leftover_in_doubt_fixture(tag: &str) -> Fixture {
     let request = Request {
         root: &fixture.root,
         save_dir: &fixture.save,
-        operation_id: "adv-leftover-probe",
+        operation_id,
         evidence_root: &evidence_root,
         evidence_dir: &evidence_dir,
         backup_parent: &backups_root,
@@ -840,29 +835,27 @@ fn leftover_in_doubt_fixture(tag: &str) -> Fixture {
         ext4_metadata: true,
     };
     let failed = run_to_complete(&request).expect_err("the fault must leave a leftover");
+    let error = failed.report.error.clone().unwrap_or_default();
+    assert!(error.contains("日志") || error.contains("停止"), "{error}");
+}
+
+/// A fixture at schema 11 in the admitted environment with one leftover
+/// `in_doubt` operation, ready for the recovery CLI tests.
+#[cfg(target_os = "linux")]
+fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
+    let fixture = Fixture::new(tag);
     assert!(
-        failed
-            .report
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("日志")
-            || failed
-                .report
-                .error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("停止"),
-        "{}",
-        failed.report.error.clone().unwrap_or_default()
+        fixture.try_migrate_to_schema_11() && admitted_ext4(&fixture),
+        "recovery tests need the admitted env"
     );
+    leftover_in_doubt_operation(&fixture, operation_id);
     fixture
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
-    let fixture = leftover_in_doubt_fixture("recover-rollback");
+    let fixture = leftover_in_doubt_fixture("recover-rollback", "adv-leftover-1");
     let leftover = fixture.snapshot_tree();
 
     // Inspect first: the CLI reports the stage and materials, writes
@@ -905,7 +898,9 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
     lock.check_ordinary_write()
         .expect("a finished rollback allows ordinary writes again");
 
-    // A repeated recovery has nothing left to recover and must not write.
+    // A repeated recovery is the documented idempotent no-op: every file is
+    // already at its rolled-back state, so nothing is re-applied and no
+    // bytes change.
     let after = fixture.snapshot_tree();
     let repeat = fixture.command(&[
         "advancement",
@@ -914,7 +909,13 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
         "rollback",
         "--confirm",
     ]);
-    assert!(!repeat.status.success(), "{}", stdout(&repeat));
+    assert!(
+        repeat.status.success(),
+        "{}",
+        stdout(&repeat) + &stderr(&repeat)
+    );
+    let out = stdout(&repeat);
+    assert!(out.contains("此前已应用"), "{out}");
     assert_eq!(
         fixture.snapshot_tree(),
         after,
@@ -925,7 +926,7 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
 #[cfg(target_os = "linux")]
 #[test]
 fn recovery_can_continue_to_the_target_and_reports_manual_items() {
-    let fixture = leftover_in_doubt_fixture("recover-continue");
+    let fixture = leftover_in_doubt_fixture("recover-continue", "adv-leftover-1");
     let recover = fixture.command(&[
         "advancement",
         "recover",
@@ -951,7 +952,7 @@ fn recovery_can_continue_to_the_target_and_reports_manual_items() {
 #[cfg(target_os = "linux")]
 #[test]
 fn recovery_protects_later_manual_edits() {
-    let fixture = leftover_in_doubt_fixture("recover-manual");
+    let fixture = leftover_in_doubt_fixture("recover-manual", "adv-leftover-1");
     let session = fixture.save.join("Sessions/2030-01-02.md");
     let mut edited = fs::read(&session).unwrap();
     edited.extend(b"- later hand note\n");
@@ -982,7 +983,22 @@ fn recovery_protects_later_manual_edits() {
 #[cfg(target_os = "linux")]
 #[test]
 fn unknown_recovery_evidence_stops_in_doubt() {
-    let fixture = leftover_in_doubt_fixture("recover-unknown");
+    let fixture = Fixture::new("recover-unknown");
+    assert!(
+        fixture.try_migrate_to_schema_11() && admitted_ext4(&fixture),
+        "recovery tests need the admitted env"
+    );
+    // First leftover + a successful explicit rollback: this leaves a work
+    // record (recovery evidence) in the operations directory.
+    leftover_in_doubt_operation(&fixture, "adv-leftover-1");
+    let done = fixture.command(&[
+        "advancement",
+        "recover",
+        "--choice",
+        "rollback",
+        "--confirm",
+    ]);
+    assert!(done.status.success(), "{}", stdout(&done) + &stderr(&done));
     let operations = fixture
         .root
         .join("Saves/_backups/.operations/2030-01-02-01");
@@ -995,9 +1011,13 @@ fn unknown_recovery_evidence_stops_in_doubt() {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.ends_with("-work.yaml"))
         })
-        .expect("the interrupted recovery must have left a work record");
+        .expect("the finished rollback must have left its work record");
+    // Unknown evidence: corrupt the record, then start a NEW leftover
+    // operation and try to recover it. The unreadable record must stop the
+    // recovery in in_doubt for manual handling only.
     fs::write(&work, b"not: [a, work, record\n").unwrap();
-
+    leftover_in_doubt_operation(&fixture, "adv-leftover-2");
+    let before = fixture.snapshot_tree();
     let recover = fixture.command(&[
         "advancement",
         "recover",
@@ -1010,6 +1030,11 @@ fn unknown_recovery_evidence_stops_in_doubt() {
     assert!(
         combined.contains("in_doubt") || combined.contains("无法判定"),
         "{combined}"
+    );
+    assert_eq!(
+        fixture.snapshot_tree(),
+        before,
+        "unknown evidence must not write"
     );
 }
 
