@@ -308,8 +308,9 @@ fn collect_files(dir: &Path, root: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) 
 /// raced the next child's acquire on loaded CI runners; the entry fails
 /// closed on that contention, so the test retries once after a grace
 /// period. A timeout that survives the retry is persistent: on Linux the
-/// panic then carries the kernel's lock table and the surviving talkdnd
-/// processes so the holder is identifiable instead of guessed.
+/// panic then carries the lock file's inode, the kernel lock entries for
+/// that inode, and every process holding an open descriptor on it, so the
+/// holder is identifiable instead of guessed.
 fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
     let output = fixture.command(args);
     if output.status.success() || !stderr(&output).contains("lock_timeout") {
@@ -320,24 +321,63 @@ fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
     if !stderr(&second).contains("lock_timeout") || !cfg!(target_os = "linux") {
         return second;
     }
-    // Persistent holder: report the kernel lock table and the surviving
-    // talkdnd processes so the holder is identifiable instead of guessed.
-    let locks = fs::read_to_string("/proc/locks").unwrap_or_default();
-    let processes = Command::new("ps")
-        .args(["-eo", "pid,etime,args"])
-        .output()
-        .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+    let lock_file = fixture.save.join(".talkdnd.advancement.lock");
+    #[cfg(target_os = "linux")]
+    let inode = std::fs::metadata(&lock_file)
+        .map(|meta| {
+            use std::os::unix::fs::MetadataExt;
+            meta.ino().to_string()
+        })
         .unwrap_or_default();
-    let relevant: String = processes
+    #[cfg(not(target_os = "linux"))]
+    let inode = String::new();
+    let locks = fs::read_to_string("/proc/locks")
+        .unwrap_or_default()
         .lines()
-        .filter(|line| line.contains("talkdnd") && !line.contains("ps -eo"))
+        .filter(|line| line.contains(&inode))
         .collect::<Vec<_>>()
         .join("\n");
+    let mut holders = Vec::new();
+    if let Ok(entries) = fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let pid = entry.file_name().to_string_lossy().to_string();
+            if !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+                continue;
+            }
+            let fd_dir = entry.path().join("fd");
+            if let Ok(fds) = fs::read_dir(&fd_dir) {
+                for fd in fds.flatten() {
+                    if let Ok(target) = fs::read_link(fd.path()) {
+                        if target == lock_file {
+                            holders.push(format!(
+                                "pid {pid} holds {} -> {}",
+                                fd.path().display(),
+                                target.display()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Can the test process itself take the lock right now?
+    let probe = match fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_file)
+    {
+        Ok(file) => match file.try_lock() {
+            Ok(()) => "test process COULD take the lock now (holder released between attempts)",
+            Err(_) => "test process ALSO cannot take the lock (real persistent holder)",
+        },
+        Err(err) => return panic!("cannot even open the lock file: {err}"),
+    };
     panic!(
-        "persistent lock holder on {}:\nkernel locks:\n{}\nlive talkdnd processes:\n{}\nchild stderr:\n{}",
-        fixture.save.join(".talkdnd.advancement.lock").display(),
+        "persistent lock holder on {} (inode {inode}):\nkernel locks on this inode:\n{}\nopen descriptors on this file:\n{}\nprobe: {}\nchild stderr:\n{}",
+        lock_file.display(),
         locks,
-        relevant,
+        holders.join("\n"),
+        probe,
         stderr(&second)
     );
 }
@@ -990,6 +1030,10 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
     let inspect = fixture.command(&["advancement", "recover"]);
     let out = stdout(&inspect);
     assert!(out.contains("只读检查"), "{out}");
+    // The inspection actually took the lock and read the leftover: naming
+    // the original operation proves it, so a silent lock timeout cannot
+    // pass for a completed inspection here.
+    assert!(out.contains("原操作 adv-leftover-1"), "{out}");
     assert!(out.contains("未写任何目标"), "{out}");
     assert_eq!(fixture.snapshot_tree(), leftover, "inspect must not write");
 
