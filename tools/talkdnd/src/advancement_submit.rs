@@ -748,13 +748,18 @@ pub(crate) fn recover(root: &Path, save: &Path, args: RecoverArgs<'_>) -> Result
             "本次为只读检查。要执行恢复，请再次运行并给出 --choice rollback|continue --confirm（先保护当前树，再由人显式选择）。"
         );
     }
-    // An inspection that only reports the leftover is not a failure; a
-    // determined-but-unfinished operation, human-merge conflicts or an
-    // unfinished confirmed recovery is.
+    // An inspection reporting an in_doubt leftover, human-merge conflicts,
+    // or a confirmed recovery that wrote nothing and still carries an
+    // unresolved note is a failure; a completed recovery may carry an
+    // informational note and is not one.
     let problem = if report.inspect_only {
         report.in_doubt || report.needs_human_merge
     } else {
-        report.error.is_some() || report.in_doubt || report.needs_human_merge
+        report.in_doubt
+            || report.needs_human_merge
+            || (report.error.is_some()
+                && report.written_paths.is_empty()
+                && report.already_done_paths.is_empty())
     };
     if problem {
         std::process::exit(1);
