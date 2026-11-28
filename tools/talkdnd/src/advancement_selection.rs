@@ -510,8 +510,12 @@ fn feat_outcome(
         .find(|candidate| candidate.id == feat_id)
         .cloned();
     let mut rows = Vec::new();
-    let (authorized_status, authorized_detail, echo_source) =
-        feat_authorization(preview.ruleset, feat_id, declared_source, recognized.as_ref(), root);
+    let (authorized_status, authorized_detail, echo_source) = feat_authorization(
+        preview.ruleset,
+        declared_source,
+        recognized.as_ref(),
+        root,
+    );
     rows.push(ConditionRow::new(
         "candidate_authorized",
         authorized_status,
@@ -533,8 +537,12 @@ fn feat_outcome(
             );
             append_category_row(&mut rows, preview, edition, entity.data.as_ref());
             let repeatability = repeatability_of(entity.data.as_ref());
-            let (duplicate, duplicate_detail) =
-                duplicate_status(facts, entity.id.as_str(), entity.name.as_deref(), &repeatability);
+            let (duplicate, duplicate_detail) = duplicate_status(
+                facts,
+                entity.id.as_str(),
+                entity.name.as_deref(),
+                &repeatability,
+            );
             rows.push(ConditionRow::new(
                 "known_duplicate",
                 duplicate,
@@ -607,7 +615,6 @@ fn feat_outcome(
 /// upgrade it (charter: registration cannot bypass content authorization).
 fn feat_authorization(
     ruleset: Ruleset,
-    feat_id: &str,
     declared_source: Option<&str>,
     recognized: Option<&advancement_preview::Candidate>,
     root: &Path,
@@ -1002,7 +1009,7 @@ fn duplicate_status(
         ),
         (true, Repeatability::NoEvidence) => (
             Unknown,
-            "角色卡已记录该专长，但跟踪数据没有重复性表述；不能据此判定已知非法，保持未知",
+            "角色卡已记录该专长，但跟踪数据没有重复性表述；不能据此判定已知非法，保持未知".to_owned(),
         ),
     }
 }
@@ -1087,6 +1094,7 @@ fn ability_outcome(
             ),
         },
         unrecognized: false,
+        unconfirmable_authorization: false,
     }
 }
 

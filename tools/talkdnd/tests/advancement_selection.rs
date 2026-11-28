@@ -484,7 +484,12 @@ fn srd_verdicts_ignore_locked_full_pack_content() {
     ] {
         // Baseline: the SRD campaign sees only its own catalog.
         let base = Fixture::new(10, ruleset);
-        base.pack(edition, Distribution::Srd, srd_pack, feat(srd_id, "general", 4));
+        base.pack(
+            edition,
+            Distribution::Srd,
+            srd_pack,
+            feat(srd_id, "general", 4),
+        );
         base.sheet(edition, 3, &[]);
         let args = vec!["--select-opportunity", opportunity, "--select-feat", srd_id];
         let (ok, expected) = base.select(&args);
@@ -495,7 +500,12 @@ fn srd_verdicts_ignore_locked_full_pack_content() {
         // conflicting data; an SRD campaign must never read it, so the
         // verdict has to stay byte-identical.
         let poisoned = Fixture::new(10, ruleset);
-        poisoned.pack(edition, Distribution::Srd, srd_pack, feat(srd_id, "general", 4));
+        poisoned.pack(
+            edition,
+            Distribution::Srd,
+            srd_pack,
+            feat(srd_id, "general", 4),
+        );
         poisoned.pack(
             edition,
             Distribution::Full,
@@ -512,7 +522,10 @@ fn srd_verdicts_ignore_locked_full_pack_content() {
         poisoned.sheet(edition, 3, &[]);
         let (ok, actual) = poisoned.select(&args);
         assert!(ok);
-        assert_eq!(expected["selection"]["decision"], actual["selection"]["decision"]);
+        assert_eq!(
+            expected["selection"]["decision"],
+            actual["selection"]["decision"]
+        );
         assert_eq!(
             expected["selection"]["conditions"],
             actual["selection"]["conditions"]
@@ -604,7 +617,11 @@ fn repeatable_grants_split_known_conditional_and_unproven() {
             })),
         ],
     );
-    fixture.sheet("2024", 3, &["repeatable-strike", "conditional-strike", "silent-strike"]);
+    fixture.sheet(
+        "2024",
+        3,
+        &["repeatable-strike", "conditional-strike", "silent-strike"],
+    );
 
     // Explicitly repeatable: a recorded earlier taking is not illegal.
     let (ok, report) = fixture.select(&[
