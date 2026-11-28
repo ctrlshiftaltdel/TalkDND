@@ -275,6 +275,44 @@ fn joined_or_none(paths: &[String]) -> String {
     }
 }
 
+/// The recovery id of an existing work record that belongs to this save's
+/// leftover operation, discovered read-only from the evidence directory and
+/// the state file. The library re-validates the record under the lock; a
+/// corrupt record surfaces there as in_doubt for manual handling.
+fn existing_recovery_id(save: &Path, evidence_dir: &Path) -> Option<String> {
+    let state_text = fs::read_to_string(advancement_lock::state_path(save)).ok()?;
+    let operation_id = state_text.lines().find_map(|line| {
+        line.strip_prefix("operation_id:")
+            .map(|value| value.trim().trim_matches('"').to_owned())
+    })?;
+    let mut candidates: Vec<String> = Vec::new();
+    for entry in fs::read_dir(evidence_dir).ok()? {
+        let path = entry.ok()?.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(id) = name.strip_suffix("-work.yaml") else {
+            continue;
+        };
+        let id = id.to_owned();
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let recorded = text.lines().find_map(|line| {
+            line.strip_prefix("original_operation_id:")
+                .map(|value| value.trim().trim_matches('"').to_owned())
+        });
+        if recorded.as_deref() == Some(operation_id.as_str()) {
+            candidates.push(id);
+        }
+    }
+    // Deterministic pick: the newest record name for this operation. Multiple
+    // records for one operation are a human-merge case, and the library's
+    // file-by-file comparison still stops on anything it cannot determine.
+    candidates.sort();
+    candidates.pop()
+}
+
 /// The XP eligibility rule of the existing level-up path, re-checked at
 /// submit time: explicit XP at or above the current level's threshold, or a
 /// milestone with a fresh reason (the old path raises XP to the floor).
@@ -686,10 +724,17 @@ pub(crate) fn recover(root: &Path, save: &Path, args: RecoverArgs<'_>) -> Result
     let backups_root = root.join("Saves").join(migrate::BACKUP_DIR);
     let evidence_root = backups_root.join(".operations");
     let evidence_dir = evidence_root.join(&slot);
-    let recovery_id = format!(
-        "recover-{}",
-        chrono::Local::now().format("%Y%m%d-%H%M%S-%6f")
-    );
+    // Resume an interrupted recovery: reuse the existing work record's id
+    // when it belongs to this save's leftover operation, so re-entry
+    // inspects and continues the same evidence instead of orphaning it.
+    // The match reads the recorded original operation id; the library
+    // re-validates everything under the lock.
+    let recovery_id = existing_recovery_id(save, &evidence_dir).unwrap_or_else(|| {
+        format!(
+            "recover-{}",
+            chrono::Local::now().format("%Y%m%d-%H%M%S-%6f")
+        )
+    });
     let request = RecoveryRequest {
         root,
         save_dir: save,

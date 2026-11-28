@@ -22,6 +22,19 @@ use talkdnd::advancement_lock as adv;
 use talkdnd::advancement_sidecar::BindingConfirm;
 use talkdnd::migrate;
 
+/// Every test here runs in-process D operations and spawns CLI children
+/// against the save's advisory locks. Serializing them removes the cargo
+/// test harness's thread parallelism as a variable in lock-acquisition
+/// timing; per-fixture locks would already be sound, and the suite is small.
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+    static SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
+    SERIAL
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 2014 fighter at level 3, shaped like a real generated combat block (the
 /// `Creature` schema deny-unknown-fields-parses it, so `charsheet::party`
 /// can build the member): str 16, con 14, prof 2, hp 28 (12+8+8 average
@@ -200,7 +213,8 @@ impl Fixture {
         let output = self.command(&args);
         assert!(
             output.status.success(),
-            "{}",
+            "derive failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -376,6 +390,7 @@ fn pending_reaction_state(fixture: &Fixture, id: &str) -> Value {
 
 #[test]
 fn submit_applies_the_reviewed_candidate_once_and_a_repeat_is_refused() {
+    let _serial = serial();
     let fixture = Fixture::new("happy");
     if !fixture.try_migrate_to_schema_11() {
         // Not the admitted environment: the migration itself was refused,
@@ -459,16 +474,18 @@ fn submit_applies_the_reviewed_candidate_once_and_a_repeat_is_refused() {
         hero["resources"]["second-flask"]["current"].as_i64(),
         Some(1)
     );
-    // XP was not deducted (the existing rule) and the logs carry the
-    // operation marker exactly once.
+    // XP was not deducted (the existing rule) and the logs carry exactly one
+    // marker per D operation: the fixture's migration left one, this submit
+    // added the second.
     let progress = fs::read_to_string(fixture.save.join("progress.yaml")).unwrap();
     assert!(progress.contains("hero: 3000"), "{progress}");
     let session = fs::read_to_string(fixture.save.join("Sessions/2030-01-02.md")).unwrap();
     assert_eq!(
         session.matches("advancement applied").count(),
-        1,
+        2,
         "{session}"
     );
+    assert!(session.contains("talkdnd-op:adv-hero-"), "{session}");
 
     // A repeated submit presents a now-stale binding (the first submit
     // changed the protected bytes) and must refuse without writing.
@@ -490,6 +507,7 @@ fn submit_applies_the_reviewed_candidate_once_and_a_repeat_is_refused() {
 
 #[test]
 fn a_stale_preview_a_missing_binding_and_bad_input_refuse_without_writing() {
+    let _serial = serial();
     let fixture = Fixture::new("negatives");
     if !fixture.try_migrate_to_schema_11() {
         let before = fixture.snapshot_tree();
@@ -548,6 +566,7 @@ fn a_stale_preview_a_missing_binding_and_bad_input_refuse_without_writing() {
 #[cfg(target_os = "linux")]
 #[test]
 fn milestone_submit_raises_xp_to_the_floor_exactly_once() {
+    let _serial = serial();
     let fixture = Fixture::new("milestone");
     write(
         &fixture.save,
@@ -607,6 +626,7 @@ fn milestone_submit_raises_xp_to_the_floor_exactly_once() {
 
 #[test]
 fn encounter_states_only_allow_preview_until_the_dm_closes_them() {
+    let _serial = serial();
     let fixture = Fixture::new("encounters");
     if !fixture.try_migrate_to_schema_11() {
         return;
@@ -705,6 +725,7 @@ fn encounter_states_only_allow_preview_until_the_dm_closes_them() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_concurrent_reopen_is_caught_by_the_in_lock_gate() {
+    let _serial = serial();
     let fixture = Fixture::new("reopen");
     if !fixture.try_migrate_to_schema_11() || !admitted_ext4(&fixture) {
         return;
@@ -719,7 +740,8 @@ fn a_concurrent_reopen_is_caught_by_the_in_lock_gate() {
         }),
     );
 
-    let before_targets = snapshot_targets(&fixture);
+    let mut before_targets = snapshot_targets(&fixture);
+    before_targets.remove(&PathBuf::from("combat/fight.state.json"));
     let slot = "2030-01-02-01";
     let backups_root = fixture.root.join("Saves").join("_backups");
     let evidence_root = backups_root.join(".operations");
@@ -772,13 +794,14 @@ fn a_concurrent_reopen_is_caught_by_the_in_lock_gate() {
         failed.report.error.clone().unwrap_or_default()
     );
     // The refusal happened before any target write: all protected targets
-    // are byte-identical. A zero-write stop records `failed`, which allows
+    // are byte-identical. The injected "concurrent" writer rewrote the
+    // encounter state by design, so that one file is excluded from the
+    // comparison; the D control state is already excluded by
+    // `snapshot_targets`. A zero-write stop records `failed`, which allows
     // ordinary writes again.
-    assert_eq!(
-        snapshot_targets(&fixture),
-        before_targets,
-        "no target may change"
-    );
+    let mut after = snapshot_targets(&fixture);
+    after.remove(&PathBuf::from("combat/fight.state.json"));
+    assert_eq!(after, before_targets, "no target may change");
     assert_eq!(failed.report.protocol_state, adv::State::Failed);
     let lock = adv::open(&fixture.root, &fixture.save, &adv::OpenOptions::new()).unwrap();
     lock.check_ordinary_write()
@@ -793,6 +816,7 @@ fn a_concurrent_reopen_is_caught_by_the_in_lock_gate() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_publish_fault_keeps_targets_and_records_the_stage() {
+    let _serial = serial();
     let fixture = Fixture::new("fault");
     if !fixture.try_migrate_to_schema_11() || !admitted_ext4(&fixture) {
         return;
@@ -886,6 +910,7 @@ fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
 #[cfg(target_os = "linux")]
 #[test]
 fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
+    let _serial = serial();
     let fixture = leftover_in_doubt_fixture("recover-rollback", "adv-leftover-1");
     let leftover = fixture.snapshot_tree();
 
@@ -951,6 +976,7 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
 #[cfg(target_os = "linux")]
 #[test]
 fn recovery_can_continue_to_the_target_and_reports_manual_items() {
+    let _serial = serial();
     let fixture = leftover_in_doubt_fixture("recover-continue", "adv-leftover-1");
     let recover = fixture.command(&[
         "advancement",
@@ -977,6 +1003,7 @@ fn recovery_can_continue_to_the_target_and_reports_manual_items() {
 #[cfg(target_os = "linux")]
 #[test]
 fn recovery_protects_later_manual_edits() {
+    let _serial = serial();
     let fixture = leftover_in_doubt_fixture("recover-manual", "adv-leftover-1");
     let session = fixture.save.join("Sessions/2030-01-02.md");
     let mut edited = fs::read(&session).unwrap();
@@ -1008,40 +1035,25 @@ fn recovery_protects_later_manual_edits() {
 #[cfg(target_os = "linux")]
 #[test]
 fn unknown_recovery_evidence_stops_in_doubt() {
+    let _serial = serial();
     let fixture = Fixture::new("recover-unknown");
     assert!(
         fixture.try_migrate_to_schema_11() && admitted_ext4(&fixture),
         "recovery tests need the admitted env"
     );
-    // First leftover + a successful explicit rollback: this leaves a work
-    // record (recovery evidence) in the operations directory.
+    // A leftover operation plus a corrupt work record that claims to belong
+    // to it: re-entry discovery picks that record, the unreadable evidence
+    // must stop the recovery in in_doubt for manual handling only.
     leftover_in_doubt_operation(&fixture, "adv-leftover-1");
-    let done = fixture.command(&[
-        "advancement",
-        "recover",
-        "--choice",
-        "rollback",
-        "--confirm",
-    ]);
-    assert!(done.status.success(), "{}", stdout(&done) + &stderr(&done));
     let operations = fixture
         .root
         .join("Saves/_backups/.operations/2030-01-02-01");
-    let work = fs::read_dir(&operations)
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with("-work.yaml"))
-        })
-        .expect("the finished rollback must have left its work record");
-    // Unknown evidence: corrupt the record, then start a NEW leftover
-    // operation and try to recover it. The unreadable record must stop the
-    // recovery in in_doubt for manual handling only.
-    fs::write(&work, b"not: [a, work, record\n").unwrap();
-    leftover_in_doubt_operation(&fixture, "adv-leftover-2");
+    let work = operations.join("recover-bogus-work.yaml");
+    fs::write(
+        &work,
+        b"# claims this operation, but the body is not a work record\noriginal_operation_id: adv-leftover-1\nnot: [a, work, record\n",
+    )
+    .unwrap();
     let before = snapshot_targets(&fixture);
     let recover = fixture.command(&[
         "advancement",
@@ -1068,6 +1080,7 @@ fn unknown_recovery_evidence_stops_in_doubt() {
 /// Windows) exercises.
 #[test]
 fn a_confirmed_recovery_refuses_writes_outside_the_admitted_environment() {
+    let _serial = serial();
     let fixture = Fixture::new("recover-unadmitted");
     if fixture.try_migrate_to_schema_11() {
         return;
@@ -1095,6 +1108,7 @@ fn a_confirmed_recovery_refuses_writes_outside_the_admitted_environment() {
 /// tests are skipped: an unchanged save binds to the same digest.
 #[test]
 fn the_read_only_chain_reports_a_stable_binding_digest() {
+    let _serial = serial();
     let fixture = Fixture::new("digest");
     let _ = fixture.try_migrate_to_schema_11();
     let first = fixture.derive_binding(&[]);
