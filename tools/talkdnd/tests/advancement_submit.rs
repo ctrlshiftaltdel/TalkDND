@@ -344,6 +344,30 @@ fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
     if output.status.success() || !stderr(&output).contains("lock_timeout") {
         return output;
     }
+    // The holder persists across attempts. Scan our own descriptors right
+    // now: if this process already holds the file, the leak predates the
+    // first attempt (an in-process D-run phase); if it does not, it
+    // appeared while the attempts were in flight.
+    if cfg!(target_os = "linux") {
+        let lock_file = fixture.save.join(".talkdnd.advancement.lock");
+        let mut early = Vec::new();
+        if let Ok(fds) = fs::read_dir("/proc/self/fd") {
+            for fd in fds.flatten() {
+                if let Ok(target) = fs::read_link(fd.path()) {
+                    if target == lock_file {
+                        early.push(format!("{} -> {}", fd.path().display(), target.display()));
+                    }
+                }
+            }
+        }
+        if !early.is_empty() {
+            panic!(
+                "the test process already holds {} before the retry:\n{}",
+                lock_file.display(),
+                early.join("\n")
+            );
+        }
+    }
     std::thread::sleep(std::time::Duration::from_millis(2000));
     let second = fixture.command(args);
     if !stderr(&second).contains("lock_timeout") || !cfg!(target_os = "linux") {
