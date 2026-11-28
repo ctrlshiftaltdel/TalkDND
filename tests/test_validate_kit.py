@@ -953,11 +953,20 @@ class MarkdownLinkScanTests(unittest.TestCase):
             saved_readme.write_text('[broken](missing.md)\n', encoding='utf-8')
             errors, _ = validate.validate_kit(root)
             messages = '\n'.join(errors)
+            # Diagnostics render relative paths with the OS-native separator
+            # (`relative_to` yields backslash paths on Windows), so each
+            # path-bearing assertion must cover both separator forms: the
+            # native form is required to exist (positive) or never to appear
+            # (negative) on either platform.
             self.assertIn('README.md: broken relative link: missing.md', messages)
-            self.assertIn('LetsPlay/Saves/README.md: broken relative link: missing.md', messages)
+            saves_readme = str(Path('LetsPlay', 'Saves', 'README.md'))
+            self.assertIn(f'{saves_readme}: broken relative link: missing.md', messages)
             self.assertNotIn('LetsPlay/Adventures', messages)
+            self.assertNotIn('LetsPlay\\Adventures', messages)
             self.assertNotIn('LetsPlay/Rules', messages)
+            self.assertNotIn('LetsPlay\\Rules', messages)
             self.assertNotIn('.md/example', messages)
+            self.assertNotIn('.md\\example', messages)
 
 
 if __name__ == '__main__':
