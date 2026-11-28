@@ -1045,17 +1045,17 @@ fn leftover_in_doubt_fixture(tag: &str, operation_id: &str) -> Fixture {
     fixture
 }
 
+/// The read-only inspection contract: the CLI reports the stage and
+/// materials, names the leftover operation, writes nothing, and does not
+/// auto-replay. An in_doubt leftover inspects with exit 1 (attention
+/// required).
 #[cfg(target_os = "linux")]
 #[test]
-fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
+fn recovery_inspect_reports_materials_and_writes_nothing() {
     let _serial = serial();
-    let fixture = leftover_in_doubt_fixture("recover-rollback", "adv-leftover-1");
+    let fixture = leftover_in_doubt_fixture("recover-inspect", "adv-leftover-1");
     let leftover = fixture.snapshot_tree();
 
-    // Inspect first: the CLI reports the stage and materials, writes
-    // nothing, and does not auto-replay. An in_doubt leftover inspects with
-    // exit 1 (attention required) — the contract under test is that it
-    // writes nothing and reports the materials.
     let inspect = fixture.command(&["advancement", "recover"]);
     let out = stdout(&inspect);
     assert!(out.contains("只读检查"), "{out}");
@@ -1066,9 +1066,17 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
     assert!(out.contains("未写任何目标"), "{out}");
     leak_check(&fixture, "after the inspect child");
     assert_eq!(fixture.snapshot_tree(), leftover, "inspect must not write");
+}
 
-    // Explicit rollback: targets return to the preimage, the protocol ends
-    // `failed`, and ordinary writes are allowed again.
+/// Explicit rollback: targets return to the preimage, the protocol ends
+/// `failed`, ordinary writes are allowed again, and a repeated recovery is
+/// refused at the terminal write without re-applying anything.
+#[cfg(target_os = "linux")]
+#[test]
+fn recovery_rolls_back_by_explicit_choice_and_repeat_does_not_reapply() {
+    let _serial = serial();
+    let fixture = leftover_in_doubt_fixture("recover-rollback", "adv-leftover-1");
+
     let recover = recover_command(
         &fixture,
         &[
