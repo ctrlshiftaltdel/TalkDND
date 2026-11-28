@@ -635,7 +635,12 @@ fn repeatable_grants_split_known_conditional_and_unproven() {
     fixture.sheet(
         "2024",
         3,
-        &["repeatable-strike", "conditional-strike", "silent-strike"],
+        &[
+            "repeatable-strike",
+            "conditional-strike",
+            "silent-strike",
+            "unextracted-strike",
+        ],
     );
 
     // Explicitly repeatable: a recorded earlier taking is not illegal.
