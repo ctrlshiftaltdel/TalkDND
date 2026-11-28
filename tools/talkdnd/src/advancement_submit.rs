@@ -139,12 +139,6 @@ pub(crate) fn submit(root: &Path, save: &Path, args: SubmitArgs<'_>) -> Result<(
         .as_ref()
         .context("旧式角色卡（无结构化 sheets/<id>.yaml）暂不支持成长提交：请先由 DM 完成结构化迁移；本次未写入任何文件")?;
     let character_id = sheet.id.clone();
-    check_xp_or_milestone(
-        save,
-        &character_id,
-        inspection.preview.current_level,
-        args.milestone,
-    )?;
 
     let selection_args = SelectionArgs {
         opportunity: args.opportunity,
@@ -175,7 +169,9 @@ pub(crate) fn submit(root: &Path, save: &Path, args: SubmitArgs<'_>) -> Result<(
 
     // ---- Phase 2: binding attestation. The digest covers the reviewed
     // report (rules, authorization, conditions, derivation, unknowns) plus
-    // the D protocol's protected-file binding at this instant. ----
+    // the D protocol's protected-file binding at this instant. The stale
+    // attestation check runs before eligibility so a re-preview is always
+    // the first thing a refused submit is told to do. ----
     let extra_targets = registered_extra_targets(save)?;
     let d_binding = advancement_commit::binding_preview_id(save, &extra_targets)?;
     let report = DeriveReport {
@@ -188,6 +184,14 @@ pub(crate) fn submit(root: &Path, save: &Path, args: SubmitArgs<'_>) -> Result<(
         digest == preview_id,
         "绑定变化，原因未知：--preview-id 与当前绑定摘要不一致（预览过期、选择参数不一致或存档/规则数据已变化）。请重新运行 `talkdnd advancement identity-preview --derive …` 并用新的 --preview-id 提交；未写入任何文件"
     );
+
+    // ---- Phase 2b: eligibility (the existing level-up XP rule). ----
+    check_xp_or_milestone(
+        save,
+        &character_id,
+        report.preview.current_level,
+        args.milestone,
+    )?;
 
     // ---- Phase 3: build the reviewed candidate bytes in memory. ----
     let overlays = build_overlays(save, args.who, &report, args.milestone)?;
@@ -277,14 +281,16 @@ fn joined_or_none(paths: &[String]) -> String {
 
 /// The recovery id of an existing work record that belongs to this save's
 /// leftover operation, discovered read-only from the evidence directory and
-/// the state file. The library re-validates the record under the lock; a
-/// corrupt record surfaces there as in_doubt for manual handling.
+/// the state file (JSON, as the lock crate writes it). The library
+/// re-validates the record under the lock; a corrupt record surfaces there
+/// as in_doubt for manual handling.
 fn existing_recovery_id(save: &Path, evidence_dir: &Path) -> Option<String> {
     let state_text = fs::read_to_string(advancement_lock::state_path(save)).ok()?;
-    let operation_id = state_text.lines().find_map(|line| {
-        line.strip_prefix("operation_id:")
-            .map(|value| value.trim().trim_matches('"').to_owned())
-    })?;
+    let state: serde_json::Value = serde_json::from_str(&state_text).ok()?;
+    let operation_id = state
+        .get("operation_id")
+        .and_then(serde_json::Value::as_str)?
+        .to_owned();
     let mut candidates: Vec<String> = Vec::new();
     for entry in fs::read_dir(evidence_dir).ok()? {
         let path = entry.ok()?.path();

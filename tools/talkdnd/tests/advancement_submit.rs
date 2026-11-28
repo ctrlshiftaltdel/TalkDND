@@ -304,6 +304,21 @@ fn collect_files(dir: &Path, root: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) 
     }
 }
 
+/// Runs one recovery CLI invocation. A previous child's lock release has
+/// rarely raced the next child's acquire on loaded CI runners (one observed
+/// 5s lock-timeout in three runs of the inspect→rollback sequence); the
+/// entry fails closed on that contention, so the test retries once after a
+/// grace period and asserts on the final attempt. The lock itself gates
+/// every attempt; nothing about the product changes.
+fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
+    let output = fixture.command(args);
+    if output.status.success() || !stderr(&output).contains("lock_timeout") {
+        return output;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    fixture.command(args)
+}
+
 /// Everything except the D protocol's control state file, which legitimately
 /// changes when an operation admits and stops. The lock file stays in the
 /// comparison: it is immutable by protocol.
@@ -958,13 +973,16 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
 
     // Explicit rollback: targets return to the preimage, the protocol ends
     // `failed`, and ordinary writes are allowed again.
-    let recover = fixture.command(&[
-        "advancement",
-        "recover",
-        "--choice",
-        "rollback",
-        "--confirm",
-    ]);
+    let recover = recover_command(
+        &fixture,
+        &[
+            "advancement",
+            "recover",
+            "--choice",
+            "rollback",
+            "--confirm",
+        ],
+    );
     assert!(
         recover.status.success(),
         "{}",
@@ -984,13 +1002,16 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
     // already resolved) and re-applies nothing: every file is already at
     // its rolled-back state and no byte changes.
     let after = fixture.snapshot_tree();
-    let repeat = fixture.command(&[
-        "advancement",
-        "recover",
-        "--choice",
-        "rollback",
-        "--confirm",
-    ]);
+    let repeat = recover_command(
+        &fixture,
+        &[
+            "advancement",
+            "recover",
+            "--choice",
+            "rollback",
+            "--confirm",
+        ],
+    );
     assert!(
         !repeat.status.success(),
         "{}",
@@ -1010,13 +1031,16 @@ fn recovery_inspects_first_then_rolls_back_by_explicit_choice() {
 fn recovery_can_continue_to_the_target_and_reports_manual_items() {
     let _serial = serial();
     let fixture = leftover_in_doubt_fixture("recover-continue", "adv-leftover-1");
-    let recover = fixture.command(&[
-        "advancement",
-        "recover",
-        "--choice",
-        "continue",
-        "--confirm",
-    ]);
+    let recover = recover_command(
+        &fixture,
+        &[
+            "advancement",
+            "recover",
+            "--choice",
+            "continue",
+            "--confirm",
+        ],
+    );
     assert!(
         recover.status.success(),
         "{}",
@@ -1042,13 +1066,16 @@ fn recovery_protects_later_manual_edits() {
     edited.extend(b"- later hand note\n");
     fs::write(&session, &edited).unwrap();
 
-    let recover = fixture.command(&[
-        "advancement",
-        "recover",
-        "--choice",
-        "rollback",
-        "--confirm",
-    ]);
+    let recover = recover_command(
+        &fixture,
+        &[
+            "advancement",
+            "recover",
+            "--choice",
+            "rollback",
+            "--confirm",
+        ],
+    );
     assert!(!recover.status.success(), "{}", stdout(&recover));
     let combined = stdout(&recover) + &stderr(&recover);
     assert!(
@@ -1087,13 +1114,16 @@ fn unknown_recovery_evidence_stops_in_doubt() {
     )
     .unwrap();
     let before = snapshot_targets(&fixture);
-    let recover = fixture.command(&[
-        "advancement",
-        "recover",
-        "--choice",
-        "rollback",
-        "--confirm",
-    ]);
+    let recover = recover_command(
+        &fixture,
+        &[
+            "advancement",
+            "recover",
+            "--choice",
+            "rollback",
+            "--confirm",
+        ],
+    );
     assert!(!recover.status.success(), "{}", stdout(&recover));
     let combined = stdout(&recover) + &stderr(&recover);
     assert!(
@@ -1118,13 +1148,16 @@ fn a_confirmed_recovery_refuses_writes_outside_the_admitted_environment() {
         return;
     }
     let before = fixture.snapshot_tree();
-    let recover = fixture.command(&[
-        "advancement",
-        "recover",
-        "--choice",
-        "rollback",
-        "--confirm",
-    ]);
+    let recover = recover_command(
+        &fixture,
+        &[
+            "advancement",
+            "recover",
+            "--choice",
+            "rollback",
+            "--confirm",
+        ],
+    );
     assert!(!recover.status.success(), "{}", stdout(&recover));
     // Depending on how far this environment got, the refusal is either the
     // protocol preflight (no control files) or the admission observation.
