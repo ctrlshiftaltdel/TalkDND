@@ -417,13 +417,15 @@ fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
     );
 }
 
-/// Closes this test process's own leaked descriptors on the fixture's
-/// advancement lock file, if any, so the spawned CLI child can acquire it.
-/// Every candidate is verified by `/proc/self/fd/N` readlink to point at
-/// exactly this fixture's lock file before `close`; anything else is left
-/// untouched. Linux only (the write tests are Linux-gated anyway).
+/// Takes ownership of this test process's own leaked descriptors on the
+/// fixture's advancement lock file and closes them, so the spawned CLI
+/// child can acquire the lock. Every candidate is verified by
+/// `/proc/self/fd/N` readlink to point at exactly this fixture's lock file
+/// before the takeover; anything else is left untouched. Linux only (the
+/// write tests are Linux-gated anyway).
 #[cfg(target_os = "linux")]
 fn release_leaked_lock_fds(fixture: &Fixture) {
+    use std::os::unix::io::OwnedFd;
     let lock_file = fixture.save.join(".talkdnd.advancement.lock");
     let mut closed = Vec::new();
     let own_fds: Vec<_> = match fs::read_dir("/proc/self/fd") {
@@ -440,11 +442,11 @@ fn release_leaked_lock_fds(fixture: &Fixture) {
         };
         if let Ok(target) = fs::read_link(&path) {
             if target == lock_file {
-                // Drop the DirectoryEntry's own handle view first; the raw
-                // number still refers to the leaked lock-file descriptor.
-                drop(fd);
+                // Take ownership of the leaked descriptor (single close via
+                // the takeover; the raw number is gone from our table).
+                let owned = unsafe { OwnedFd::from_raw_fd(number) };
+                drop(owned);
                 closed.push(format!("fd {number} -> {}", target.display()));
-                unsafe { libc::close(number) };
             }
         }
     }
