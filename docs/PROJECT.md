@@ -22,7 +22,7 @@
 - 秘密与隐私文件模式：`.local/`（除 `README.md`）、`**/dm-secrets.md`、`LetsPlay/Saves/`（除 `README.md`）、GitHub 凭据、玩家规则书与冒险书文本。
 - 破坏性操作和迁移政策：禁止改写 Git 历史、禁止强推。已有检出里的未跟踪本地书和存档用 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout`（默认 dry-run；真正移动时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- migrate-layout --apply`），不得覆盖已有文件。主持游戏写入 `LetsPlay/Saves/` 豁免开发流程，但那些文件仍然不得提交。
 - 新依赖政策：新增依赖（Rust crate、Python 第三方包、GitHub Action 以外的外部服务）必须先得到人工批准。`tools/talkdnd-dev` 只用 Rust 标准库。AgentOrch 套件保持上游 Python 标准库，不得改写为第三方依赖。
-- 需要人工批准的变化：创建或删除 GitHub 仓库；改写历史或强推；新增依赖；合并到 `main`；规则版本语义变化（`ruleset` 分层、2014/2024 行为差异）；修改 `MANIFEST.json` 基线或重新生成清单。
+- 需要人工批准的变化：创建或删除 GitHub 仓库；改写历史或强推；新增依赖；规则版本语义变化（`ruleset` 分层、2014/2024 行为差异）；修改 `MANIFEST.json` 基线或重新生成清单。「合并到 `main`」不再是逐单人工批准项：通过 G1–G6 的常规 PR 由 Master 审查后决定并执行合并（2026-11-28 所有者决定，见 `docs/PROJECT-CHARTER.md` Decision Log）；方向未决、权限/安全边界变化、不可逆动作等仍按既有决策门与 AGENTS.md 第 5 节处理。
 - 游玩目录自洽：玩游戏需要的一切都在 `LetsPlay/`。根目录只放开发内容（源码、开发文档、CI、套件）。玩家运行的程序是不入库的 `LetsPlay/bin/combat-sim` 与 `LetsPlay/bin/talkdnd`（Windows 加 `.exe`）。`LetsPlay/` 里不得有指向目录外的启动脚本。`cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- check-letsplay` 会在跟踪的玩法文本（md、yaml、cmd、sh）引用了离开 `LetsPlay/` 的路径时失败。存档清单里从 `Saves/<存档>/combat/` 数起的 `../../../Rules` 仍在 `LetsPlay/` 内，必须通过。
 - combat-sim 源码只读约定：修改 `tools/combat-sim/src` 下的文件之前先 `chmod u+w`，改完并验证之后 `chmod a-w`。`src` 没有变化时运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- fetch-binary`（需要已登录的 `gh`），不要在本机编译。只有 `src` 变化时才运行 `cargo run --manifest-path tools/talkdnd-dev/Cargo.toml -- install-local`。
 - **PRIVACY RULE**: never put save contents, DM secrets, or copyrighted text into Issues, PRs, commit messages or CI logs.

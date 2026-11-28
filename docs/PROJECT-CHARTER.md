@@ -147,7 +147,7 @@ There is no prebuilt package for Intel macOS (x86_64). Other machines build `too
 
 - Orchestration is AgentOrch, **github** edition. Issues are the task list. Evidence is the pull request, CI, and the head SHA. Do not run `uv run --no-project python scripts/orchestrator.py init`. Do not keep a parallel local task database.
 - The Execution Agent is a Grok Build session. It implements one dispatched task in its own worktree on a `task/<ID>-<name>` branch. It does not approve or merge its own work.
-- The Master Agent plans, schedules, reviews, and merges. The Master does not implement a task unless the owner writes that exception into the task record.
+- The Master Agent plans, schedules, reviews, and merges. A routine pull request whose gates G1–G6 all pass is reviewed and merged by the Master without per-PR owner confirmation; approval binds the exact head SHA and the merged main branch is re-verified (2026-11-28 decision below). The Master does not implement a task unless the owner writes that exception into the task record.
 - Review uses the merge gates in `kit/orchestration.md`. A green CI run does not replace a criterion-by-criterion review.
 - The project allows edits to `CHANGELOG.md` for release records and to `docs/ADVANCEMENT-*.md` for advancement design and evidence. Each task still lists its permitted paths in its GitHub Issue.
 - **Living charter.** The Master MUST update `docs/PROJECT-CHARTER.md` (the Decision Log and every affected section) in the same pull request whenever a task changes scope, goals, tech stack, rules support, or a user decision. Reviewers check this at the merge gate. If that update is missing, the review fails and the pull request is not merged.
@@ -237,6 +237,10 @@ The smallest end-to-end slice is already the play kit: a player supplies an SRD,
 Validation is the kit check, the full kit test suite and the leak check in Success criteria, plus the combat-sim and talkdnd-dev test commands in `docs/PROJECT.md`. Rollback of a charter edit is a normal Git revert of that commit. Rollback of a product change follows the task's own rollback note and, when the decision changes, a new Decision Log entry.
 
 ## Decision Log
+
+### 2026-11-28 — Owner sets direction; Master reviews and merges routine pull requests (#360)
+
+The owner recorded the TalkDND development division of labor on 2026-11-28 ([#360](https://github.com/ctrlshiftaltdel/TalkDND/issues/360)): the owner owns goal planning, product direction and directional scope changes; the Master independently reviews each pull request and decides on and executes the merge of a routine PR whose gates G1–G6 all pass, with no per-PR owner confirmation; approval binds the exact head SHA and the merged main branch is re-verified; Execution Agents still cannot approve or merge their own work. The guardrails are unchanged: task registration, the G1–G6 gates, the exact-head approval binding, and post-merge re-verification stay mandatory, and no one bypasses task registration, review gates or forbidden paths to write main. A PR with unresolved product direction, a permission/security boundary change, an irreversible action or another AGENTS.md §5 item still goes to `NEEDS_HUMAN_DECISION` and waits for the owner; historical per-PR owner decisions in this log remain valid. In the AgentOrch project configuration `docs/PROJECT.md`, the routine-approval item "merging to `main`" is removed from the human-approval list; the generic AgentOrch workflow already assigns the merge to the Master, so the kit, templates, editions, CI and platform protection stay untouched. Rollback is an independent revert of the three documents (`AGENTS.md`, `docs/PROJECT.md`, this charter); whether to restore per-PR merge approval is a separate owner decision. [Issue #360](https://github.com/ctrlshiftaltdel/TalkDND/issues/360)
 
 ### 2026-11-28 — Read-only selection validation on the registered preview entry (#331)
 
