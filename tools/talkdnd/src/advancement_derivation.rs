@@ -321,19 +321,18 @@ fn derive(
 
     // Provable proficiency sources, per category:
     // - saving throws: the built-in class proficiency table;
-    // - skills: only recorded facts from the save — the chargen state's
-    //   chosen/granted skills when its name matches this character, plus
-    //   background/species grants resolved from the sheet's exact option
-    //   ids. The class choosable list says what a character *could* pick, not
-    //   what it did, so it is not evidence by itself;
+    // - skills: only the character's own explicit grants — background and
+    //   species skills resolved from the identity-checked structured sheet's
+    //   exact option ids. The class choosable list says what a character
+    //   *could* pick, not what it did; the save's `chargen.json` carries only
+    //   a display name, so a same-name draft, a rebuild residue or another
+    //   character's record cannot be attributed to this character and is not
+    //   evidence;
     // - attacks: the class weapon-proficiency data through
     //   `classdata::proficient` (unarmed is always proficient in the
     //   generator). A numeric match alone never proves proficiency.
     let class_data = data::class(&class);
     let mut provable_skills: BTreeSet<&str> = BTreeSet::new();
-    if let Some(recorded) = facts.chargen_skills.as_ref() {
-        provable_skills.extend(recorded.iter().map(|skill| skill.as_str()));
-    }
     if let Some(sheet) = facts.sheet.as_ref() {
         // Structured options: exact ids resolve through the built-in tables;
         // unresolvable values contribute nothing (their grants stay unproven).
@@ -611,7 +610,7 @@ fn derive(
                     "skill",
                     Some(serde_json::json!(actual)),
                     format!(
-                        "技能 {skill} 没有可核对的实际记录（职业可选清单只说明能选什么，不说明选过什么；只有与角色匹配的 chargen 已选记录或背景/种族授予才算来源）；该条目来源无法证实（手改或自定义记录），数值 {actual} 保持原值"
+                        "技能 {skill} 没有可核对的实际授予（职业可选清单只说明能选什么，不说明选过什么；chargen 状态只有显示名、无法可靠归属本角色；只有身份已核对的结构化角色卡上的背景/种族授予才算来源）；该条目来源无法证实，数值 {actual} 保持原值"
                     ),
                 ));
                 continue;
@@ -693,6 +692,15 @@ fn derive(
                     "attack",
                     Some(serde_json::json!(to_hit)),
                     format!("两个载体的 {name} to_hit 不一致；来源冲突，保持原值并交 DM 核对"),
+                ));
+                continue;
+            }
+            if conflicts.contains(&format!("combat.attacks.{name}.ability")) {
+                entries.push(Entry::dm_review(
+                    id,
+                    "attack",
+                    Some(serde_json::json!(to_hit)),
+                    format!("两个载体的 {name} 所依赖的属性不一致；来源冲突，保持原值并交 DM 核对"),
                 ));
                 continue;
             }
@@ -1517,6 +1525,12 @@ fn carrier_conflicts(structured: Option<&Value>, markdown: &Value) -> BTreeSet<S
             {
                 if left_attack.get("to_hit") != right_attack.get("to_hit") {
                     out.insert(format!("combat.attacks.{name}.to_hit"));
+                }
+                // The derivation also depends on which ability the attack
+                // uses: the same to_hit with a different ability derives
+                // different future values, so it is a conflict too.
+                if left_attack.get("ability") != right_attack.get("ability") {
+                    out.insert(format!("combat.attacks.{name}.ability"));
                 }
             }
         }

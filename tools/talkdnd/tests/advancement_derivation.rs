@@ -26,7 +26,7 @@ abilities: {str: 16, dex: 12, con: 14, int: 10, wis: 10, cha: 10}
 hp: 28
 prof: 2
 saves: {str: 5, con: 4}
-skills: {athletics: 5, intimidation: 2, perception: 2, history: 2, sleight-of-hand: 3}
+skills: {athletics: 5, intimidation: 2, perception: 2, history: 2, insight: 2, sleight-of-hand: 3}
 attacks:
   - {id: longsword, name: Longsword, kind: melee, ability: str, to_hit: 5, damage: [{dice: \"1d8+3\", type: slashing}]}
   - {id: unarmed, name: Unarmed Strike, kind: melee, ability: str, to_hit: 5, damage: [{dice: \"1+3\", type: bludgeoning}]}
@@ -351,12 +351,10 @@ fn derivation_auto_updates_reliable_values_on_2014_srd() {
         FIGHTER_2014_RECORDS,
         false,
         "2014",
-        "class: fighter",
+        "class: fighter, background: acolyte",
         "",
         None,
     );
-    // The chargen state records the skill actually chosen at creation.
-    fixture.chargen("Synthetic Hero", "fighter", &["athletics"]);
     let (ok, report) = fixture.derive(&[
         "--select-opportunity",
         "ability_score_improvement_or_optional_feat",
@@ -381,10 +379,6 @@ fn derivation_auto_updates_reliable_values_on_2014_srd() {
         (json!(5), json!(6))
     );
     assert_eq!(
-        auto_values(&report, "combat.skills.athletics"),
-        (json!(5), json!(6))
-    );
-    assert_eq!(
         auto_values(&report, "combat.attacks.longsword.to_hit"),
         (json!(5), json!(6))
     );
@@ -400,8 +394,10 @@ fn derivation_auto_updates_reliable_values_on_2014_srd() {
     // Unchanged-but-proven values are keeps, not rewrites.
     assert_eq!(disposition(&report, "combat.prof"), "keep");
     assert_eq!(disposition(&report, "combat.saves.con"), "keep");
-    // Class-choosable skills without a matching chargen record prove
-    // nothing, even though their values equal mod + proficiency.
+    // Only the acolyte background's grants count: insight is proven (wis
+    // does not move, so it keeps); the other class-choosable skills have no
+    // attributable record in the 2014 tables.
+    assert_eq!(disposition(&report, "combat.skills.insight"), "keep");
     assert_eq!(
         disposition(&report, "combat.skills.perception"),
         "dm_review"
@@ -448,7 +444,6 @@ fn derivation_auto_updates_reliable_values_on_2024_srd() {
         "",
         None,
     );
-    fixture.chargen("Synthetic Hero", "cleric", &["insight", "medicine"]);
     let (ok, report) = fixture.derive(&[
         "--select-opportunity",
         "ability_score_improvement_feat_or_other_qualified_feat",
@@ -474,10 +469,6 @@ fn derivation_auto_updates_reliable_values_on_2024_srd() {
         (json!(6), json!(7))
     );
     assert_eq!(
-        auto_values(&report, "combat.skills.medicine"),
-        (json!(6), json!(7))
-    );
-    assert_eq!(
         auto_values(&report, "combat.spellcasting.attack"),
         (json!(6), json!(7))
     );
@@ -497,6 +488,8 @@ fn derivation_auto_updates_reliable_values_on_2024_srd() {
     assert_eq!(disposition(&report, "combat.prof"), "keep");
     assert_eq!(disposition(&report, "combat.saves.cha"), "keep");
     assert_eq!(disposition(&report, "combat.skills.religion"), "keep");
+    // medicine is only class-choosable: no attributable record, keep for DM.
+    assert_eq!(disposition(&report, "combat.skills.medicine"), "dm_review");
     assert_eq!(
         disposition(&report, "combat.attacks.unarmed.to_hit"),
         "keep"
@@ -548,7 +541,7 @@ fn derivation_covers_2014_full_ruleset() {
         FIGHTER_2014_RECORDS,
         false,
         "5e-full",
-        "class: fighter",
+        "class: fighter, background: acolyte",
         "",
         None,
     );
@@ -617,7 +610,7 @@ fn derivation_applies_the_constitution_retroactive_rule() {
         FIGHTER_2014_RECORDS,
         false,
         "2014",
-        "class: fighter",
+        "class: fighter, background: acolyte",
         "",
         None,
     );
@@ -645,9 +638,10 @@ fn derivation_applies_the_constitution_retroactive_rule() {
         .as_str()
         .unwrap()
         .contains("追溯"));
-    // str stays put and its proven dependent values keep.
+    // str stays put and its proven dependent values keep; athletics has no
+    // attributable source in the 2014 tables.
     assert_eq!(disposition(&report, "combat.saves.str"), "keep");
-    assert_eq!(disposition(&report, "combat.skills.athletics"), "keep");
+    assert_eq!(disposition(&report, "combat.skills.athletics"), "dm_review");
 }
 
 // ------------------------------------------------------------------- AC-2 --
@@ -660,7 +654,7 @@ fn repeated_derivation_is_byte_identical() {
         FIGHTER_2014_RECORDS,
         false,
         "2014",
-        "class: fighter",
+        "class: fighter, background: acolyte",
         "",
         None,
     );
@@ -766,7 +760,6 @@ fn numeric_collisions_without_provable_sources_stay_dm_review() {
         "",
         None,
     );
-    fixture.chargen("Synthetic Hero", "cleric", &["insight", "medicine"]);
     let (ok, report) = fixture.derive(&[
         "--select-opportunity",
         "ability_score_improvement_feat_or_other_qualified_feat",
@@ -798,6 +791,60 @@ fn numeric_collisions_without_provable_sources_stay_dm_review() {
 }
 
 #[test]
+fn attack_ability_carrier_conflicts_stay_unproven() {
+    let fixture = Fixture::new(10, "5e-srd");
+    fixture.card(
+        FIGHTER_2014_BLOCK,
+        FIGHTER_2014_RECORDS,
+        false,
+        "2014",
+        "class: fighter, background: acolyte",
+        "",
+        None,
+    );
+    // Hand-edit only the Markdown card's longsword: same to_hit (5), but the
+    // card says the attack uses dexterity while the structured sheet says
+    // strength. The derivation depends on the ability, so the structured
+    // side alone may not produce an update.
+    let card_path = fixture.save.join("Characters/hero.md");
+    let card = fs::read_to_string(&card_path).unwrap();
+    fs::write(
+        &card_path,
+        card.replace(
+            "{id: longsword, name: Longsword, kind: melee, ability: str, to_hit: 5",
+            "{id: longsword, name: Longsword, kind: melee, ability: dex, to_hit: 5",
+        ),
+    )
+    .unwrap();
+    let (ok, report) = fixture.derive(&[
+        "--select-opportunity",
+        "ability_score_improvement_or_optional_feat",
+        "--select-abilities",
+        "str+2",
+    ]);
+    assert!(ok, "derive failed: {}", report);
+    assert_eq!(
+        disposition(&report, "combat.attacks.longsword.to_hit"),
+        "dm_review"
+    );
+    assert!(entry(&report, "combat.attacks.longsword.to_hit")["reason"]
+        .as_str()
+        .unwrap()
+        .contains("所依赖的属性不一致"));
+    // The conflict is field-local: the unarmed attack (same ability on both
+    // carriers) still derives, and the whole-tree snapshot inside `derive`
+    // proved nothing was written.
+    assert_eq!(
+        auto_values(&report, "combat.attacks.unarmed.to_hit"),
+        (json!(5), json!(6))
+    );
+    assert_eq!(
+        auto_values(&report, "combat.saves.str"),
+        (json!(5), json!(6))
+    );
+}
+
+#[test]
 fn mixed_or_incomplete_hp_history_stays_unproven() {
     let selection = [
         "--select-opportunity",
@@ -811,7 +858,7 @@ fn mixed_or_incomplete_hp_history_stays_unproven() {
             &records_with(lines),
             false,
             "2014",
-            "class: fighter",
+            "class: fighter, background: acolyte",
             "",
             None,
         )
@@ -892,7 +939,7 @@ fn mixed_or_incomplete_hp_history_stays_unproven() {
         FIGHTER_2014_RECORDS,
         false,
         "2014",
-        "class: fighter",
+        "class: fighter, background: acolyte",
         "",
         None,
     );
@@ -919,7 +966,7 @@ fn feat_candidates_apply_no_ability_or_feat_effects() {
         FIGHTER_2014_RECORDS,
         false,
         "5.5e-srd",
-        "class: fighter",
+        "class: fighter, background: acolyte",
         "",
         None,
     );
@@ -1063,36 +1110,17 @@ fn dm_confirmed_conflicts_still_keep_the_conflicted_score() {
 }
 
 #[test]
-fn skill_choices_need_a_matching_record() {
+fn skill_choices_need_a_reliable_source() {
     let selection = [
         "--select-opportunity",
         "ability_score_improvement_or_optional_feat",
         "--select-abilities",
         "str+2",
     ];
-    // (a) No chargen record: a class-choosable skill whose value happens to
-    // equal mod + proficiency is not a proven proficiency — the choosable
-    // list says what the character could pick, not what it picked.
-    let fixture = Fixture::new(10, "5e-srd");
-    fixture.card(
-        FIGHTER_2014_BLOCK,
-        FIGHTER_2014_RECORDS,
-        false,
-        "2014",
-        "class: fighter",
-        "",
-        None,
-    );
-    let (ok, report) = fixture.derive(&selection);
-    assert!(ok, "derive failed: {}", report);
-    assert_eq!(disposition(&report, "combat.skills.athletics"), "dm_review");
-    assert!(entry(&report, "combat.skills.athletics")["reason"]
-        .as_str()
-        .unwrap()
-        .contains("没有可核对的实际记录"));
-
-    // (b) The same skill with a matching chargen record (existing format,
-    // no schema change) is provable and derives normally.
+    // (a) A same-name chargen draft: `chargen.json` carries only a display
+    // name, which cannot attribute it to this character — athletics stays
+    // unproven even though the draft lists it and the value equals mod +
+    // proficiency.
     let fixture = Fixture::new(10, "5e-srd");
     fixture.card(
         FIGHTER_2014_BLOCK,
@@ -1106,12 +1134,15 @@ fn skill_choices_need_a_matching_record() {
     fixture.chargen("Synthetic Hero", "fighter", &["athletics"]);
     let (ok, report) = fixture.derive(&selection);
     assert!(ok, "derive failed: {}", report);
-    assert_eq!(
-        auto_values(&report, "combat.skills.athletics"),
-        (json!(5), json!(6))
-    );
+    assert_eq!(disposition(&report, "combat.skills.athletics"), "dm_review");
+    assert!(entry(&report, "combat.skills.athletics")["reason"]
+        .as_str()
+        .unwrap()
+        .contains("无法可靠归属"));
 
-    // (c) A chargen record naming another character proves nothing here.
+    // (b) A same-name rebuild residue: the leftover state disagrees with the
+    // card (different class), proving it belongs to another character —
+    // still no evidence.
     let fixture = Fixture::new(10, "5e-srd");
     fixture.card(
         FIGHTER_2014_BLOCK,
@@ -1122,10 +1153,35 @@ fn skill_choices_need_a_matching_record() {
         "",
         None,
     );
-    fixture.chargen("Someone Else", "fighter", &["athletics"]);
+    fixture.chargen("Synthetic Hero", "wizard", &["athletics", "arcana"]);
     let (ok, report) = fixture.derive(&selection);
     assert!(ok, "derive failed: {}", report);
     assert_eq!(disposition(&report, "combat.skills.athletics"), "dm_review");
+
+    // (c) A reliable source: the identity-checked structured sheet records
+    // the 2014 acolyte background, whose exact id grants insight; raising
+    // wisdom derives that granted skill normally.
+    let fixture = Fixture::new(10, "5e-srd");
+    fixture.card(
+        FIGHTER_2014_BLOCK,
+        FIGHTER_2014_RECORDS,
+        false,
+        "2014",
+        "class: fighter, background: acolyte",
+        "",
+        None,
+    );
+    let (ok, report) = fixture.derive(&[
+        "--select-opportunity",
+        "ability_score_improvement_or_optional_feat",
+        "--select-abilities",
+        "wis+2",
+    ]);
+    assert!(ok, "derive failed: {}", report);
+    assert_eq!(
+        auto_values(&report, "combat.skills.insight"),
+        (json!(2), json!(3))
+    );
 }
 
 #[test]
@@ -1140,7 +1196,6 @@ fn non_hp_carrier_conflicts_stay_unproven() {
         "",
         None,
     );
-    fixture.chargen("Synthetic Hero", "cleric", &["insight", "medicine"]);
     // Hand-edit only the Markdown card's wisdom save: the structured sheet
     // says 6 (matching the class derivation), the card says 7. Neither side
     // is trusted for that field.
