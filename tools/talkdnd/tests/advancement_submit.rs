@@ -305,18 +305,41 @@ fn collect_files(dir: &Path, root: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) 
 }
 
 /// Runs one recovery CLI invocation. A previous child's lock release has
-/// rarely raced the next child's acquire on loaded CI runners (one observed
-/// 5s lock-timeout in three runs of the inspect→rollback sequence); the
-/// entry fails closed on that contention, so the test retries once after a
-/// grace period and asserts on the final attempt. The lock itself gates
-/// every attempt; nothing about the product changes.
+/// raced the next child's acquire on loaded CI runners; the entry fails
+/// closed on that contention, so the test retries once after a grace
+/// period. A timeout that survives the retry is persistent: on Linux the
+/// panic then carries the kernel's lock table and the surviving talkdnd
+/// processes so the holder is identifiable instead of guessed.
 fn recover_command(fixture: &Fixture, args: &[&str]) -> Output {
     let output = fixture.command(args);
     if output.status.success() || !stderr(&output).contains("lock_timeout") {
         return output;
     }
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    fixture.command(args)
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+    let second = fixture.command(args);
+    if !stderr(&second).contains("lock_timeout") || !cfg!(target_os = "linux") {
+        return second;
+    }
+    // Persistent holder: report the kernel lock table and the surviving
+    // talkdnd processes so the holder is identifiable instead of guessed.
+    let locks = fs::read_to_string("/proc/locks").unwrap_or_default();
+    let processes = Command::new("ps")
+        .args(["-eo", "pid,etime,args"])
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+        .unwrap_or_default();
+    let relevant: String = processes
+        .lines()
+        .filter(|line| line.contains("talkdnd") && !line.contains("ps -eo"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    panic!(
+        "persistent lock holder on {}:\nkernel locks:\n{}\nlive talkdnd processes:\n{}\nchild stderr:\n{}",
+        fixture.save.join(".talkdnd.advancement.lock").display(),
+        locks,
+        relevant,
+        stderr(&second)
+    );
 }
 
 /// Everything except the D protocol's control state file, which legitimately
@@ -514,16 +537,15 @@ fn submit_applies_the_reviewed_candidate_once_and_a_repeat_is_refused() {
     );
     assert!(session.contains("talkdnd-op:adv-hero-"), "{session}");
 
-    // A repeated submit presents a now-stale binding (the first submit
-    // changed the protected bytes) and must refuse without writing.
+    // A repeated submit after the level-up: the character now stands at
+    // level 4 and level 5 registers no opportunity for a 2014 fighter, so
+    // the chain refuses before any submit material exists. Nothing is
+    // written. (The stale-attestation refusal itself is covered by the
+    // negatives test, where the selection would still pass.)
     let after_first = fixture.snapshot_tree();
     let repeat = fixture.submit(&binding);
     assert!(!repeat.status.success(), "{}", stdout(&repeat));
-    assert!(
-        stderr(&repeat).contains("绑定变化，原因未知"),
-        "{}",
-        stderr(&repeat)
-    );
+    assert!(stderr(&repeat).contains("提交拒绝"), "{}", stderr(&repeat));
     assert_eq!(
         fixture.snapshot_tree(),
         after_first,
